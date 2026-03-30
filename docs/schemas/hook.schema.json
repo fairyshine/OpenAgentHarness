@@ -33,22 +33,25 @@
       },
       "uniqueItems": true
     },
+    "matcher": {
+      "type": "string",
+      "minLength": 1
+    },
     "handler": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "type",
-        "entry"
-      ],
-      "properties": {
-        "type": {
-          "const": "code"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/commandHandler"
         },
-        "entry": {
-          "type": "string",
-          "minLength": 1
+        {
+          "$ref": "#/$defs/httpHandler"
+        },
+        {
+          "$ref": "#/$defs/promptHandler"
+        },
+        {
+          "$ref": "#/$defs/agentHandler"
         }
-      }
+      ]
     },
     "capabilities": {
       "type": "array",
@@ -64,6 +67,150 @@
         ]
       },
       "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "promptSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "inline"
+          ]
+        },
+        {
+          "required": [
+            "file"
+          ]
+        }
+      ],
+      "properties": {
+        "inline": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "commandHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "command"
+      ],
+      "properties": {
+        "type": {
+          "const": "command"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "httpHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "url"
+      ],
+      "properties": {
+        "type": {
+          "const": "http"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "promptHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "prompt"
+      ],
+      "properties": {
+        "type": {
+          "const": "prompt"
+        },
+        "prompt": {
+          "$ref": "#/$defs/promptSource"
+        },
+        "model_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "agentHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "agent",
+        "task"
+      ],
+      "properties": {
+        "type": {
+          "const": "agent"
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task": {
+          "$ref": "#/$defs/promptSource"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
     }
   }
 }

@@ -25,11 +25,11 @@
 
 - Action 是单入口命名任务，不是 workflow DSL
 - Action 目录遵循 `actions/*/ACTION.yaml` 规范
-- Action entry 使用 `command`，支持 `string | string[]`
+- Action entry 使用字符串形式的 `command`
 - Workspace 总配置遵循 `.openharness/settings.yaml` 规范
 - Agent 目录遵循 `agents/*.md` 规范，文件名即 agent 名
 - Skill 目录遵循 Agent Skills 的 `SKILL.md` 规范
-- Hook 以代码入口为主
+- Hook 采用 `hooks/*.yaml` 声明，支持 Claude Code 风格的 `matcher` 与统一 JSON 输入输出协议
 - Model entries 支持平台级引用与 workspace 级声明
 - MCP 采用集中式 `settings.yaml` 注册，本地 server 与远程 server 并存
-- 本地 MCP server 使用 `command` 启动，支持 `string | string[]`
+- 本地 MCP server 使用字符串形式的 `command` 启动

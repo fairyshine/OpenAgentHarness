@@ -331,8 +331,6 @@ components:
         executionPolicy:
           type: string
           enum: [local, container, remote_runner]
-        defaultAgent:
-          type: string
         status:
           type: string
           enum: [active, archived, disabled]
@@ -342,10 +340,13 @@ components:
           $ref: '#/components/schemas/Timestamp'
     AgentCatalogItem:
       type: object
-      required: [name]
+      required: [name, source]
       properties:
         name:
           type: string
+        source:
+          type: string
+          enum: [platform, workspace]
         description:
           type: string
     ModelCatalogItem:
@@ -406,6 +407,11 @@ components:
       properties:
         name:
           type: string
+        matcher:
+          type: string
+        handlerType:
+          type: string
+          enum: [command, http, prompt, agent]
         events:
           type: array
           items:
@@ -587,8 +593,6 @@ components:
           type: string
           enum: [local, container, remote_runner]
           default: local
-        defaultAgent:
-          type: string
       additionalProperties: false
     CreateSessionRequest:
       type: object
@@ -664,6 +668,7 @@ components:
           type: string
         agentName:
           type: string
+          description: Optional agent context to associate with this action run
         input:
           oneOf:
             - type: object

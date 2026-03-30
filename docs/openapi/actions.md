@@ -19,7 +19,7 @@
   - 如果提供，则将 action run 挂接到现有 session
 - `agentName`
   - 可选
-  - 用于指定 action 内部 llm step 的默认 agent
+  - 用于将本次 action run 绑定到某个 agent 上下文，便于审计和后续会话衔接
 - `input`
   - action 输入对象
 

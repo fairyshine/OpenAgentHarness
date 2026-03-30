@@ -22,6 +22,10 @@
 - `title`
 - `agentName`
 
+说明：
+
+- `agentName` 可指向当前 workspace 可见 catalog 中的 platform agent 或 workspace agent
+
 ### `GET /sessions/{sessionId}`
 
 用途：

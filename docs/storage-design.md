@@ -49,7 +49,6 @@ PostgreSQL 存放必须可靠落盘、可查询、可审计的数据：
 - `name`
 - `root_path`
 - `execution_policy`
-- `default_agent`
 - `status`
 - `metadata jsonb`
 - `created_at`

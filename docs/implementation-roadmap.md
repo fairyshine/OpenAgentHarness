@@ -22,6 +22,7 @@
 - `.openharness/settings.yaml` 加载
 - `.openharness/` 自动发现与校验
 - AgentRegistry / ModelRegistry / ActionRegistry / SkillRegistry / McpRegistry / HookRegistry
+- 平台内建 agent 注册与装配
 - LocalWorkspaceBackend
 - per-session 串行调度
 - SSE 事件流
@@ -59,19 +60,24 @@
 
 - 实现 workspace 根目录扫描
 - 解析 `AGENTS.md`
+- 加载平台内建 agent 注册表
 - 解析 `.openharness/settings.yaml`
 - 解析 `.openharness/agents/*.md`
 - 解析 agent frontmatter、正文 prompt 与 `system_reminder`
+- 实现 platform agent 与 workspace agent 的同名覆盖规则
 - 解析 `mode`、`switch`、`subagents` 配置
 - 解析 `.openharness/models/*.yaml`
 - 解析 `.openharness/actions/*/ACTION.yaml`
 - 解析 `.openharness/skills/*/SKILL.md`
 - 解析 `settings.skill_dirs` 并扫描额外 skill 目录
+- 实现 skill 同层冲突报错、跨层冲突 warning + 覆盖
+- 实现 skill catalog 注入与 `activate_skill` 工具
 - 解析 `.openharness/mcp/settings.yaml`
 - 发现 `.openharness/mcp/servers/*`
 - 解析 `.openharness/hooks/*.yaml`
 - 实现 agent 切换检测与 `<system_reminder>` 注入
 - 实现 `agent.switch` 与 `agent.delegate` 的 allowlist 校验
+- 实现 `agent.await` 与并发 subagent 调度
 
 ### Phase 5: 执行器与调用分发
 

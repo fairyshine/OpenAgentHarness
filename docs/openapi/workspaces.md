@@ -22,7 +22,6 @@
 - `name`
 - `rootPath`
 - `executionPolicy`
-- `defaultAgent`
 
 ### `GET /workspaces/{workspaceId}`
 
@@ -51,5 +50,7 @@
 - catalog 是“发现结果”，不是原始配置文件回显
 - catalog 便于客户端快速展示当前 workspace 可用能力
 - catalog 中只返回元数据，不返回完整 YAML 内容
+- agent 元数据应包含来源标记，便于区分 `platform` 与 `workspace`
 - model 元数据中的每一项都对应一个具体模型入口
 - model 元数据中的 `provider` 字段对齐 AI SDK provider 标识
+- workspace 默认 agent 来自 `.openharness/settings.yaml` 的发现结果，而不是 `POST /workspaces` 请求体

@@ -1,0 +1,80 @@
+# Context Engine
+
+## 输入
+
+- workspace 元数据
+- workspace settings
+- session 历史消息
+- 平台内建 agent 定义
+- 当前 agent 定义
+- 平台级模型入口清单
+- workspace 级模型入口清单
+- `AGENTS.md`
+- `.openharness` 目录中的声明式配置
+- `settings.skill_dirs` 解析出的额外 skill roots
+
+说明：
+
+- 运行时会同时读取平台内建 agent / model 与当前 workspace 文件
+- 平台模板仅用于初始化 workspace，不参与运行时加载或 merge
+
+## 输出
+
+- 系统 prompt
+- 对话历史
+- 模型参数与 model entry 解析结果
+- 允许暴露给 LLM 的 tools 列表
+- 运行策略
+- hook 管道
+
+## 上下文装配顺序
+
+建议顺序：
+
+1. 按 `system_prompt.compose.order` 组装静态 system prompt 段
+2. session 历史消息
+3. agent 激活或切换时的 `<system_reminder>`
+4. 当前消息输入
+
+静态 system prompt 的默认顺序为：
+
+1. 平台内建基础 system prompt
+2. workspace `system_prompt.base`
+3. workspace `system_prompt.llm_optimized`
+4. agent 主 prompt
+5. `AGENTS.md` 项目说明原文
+6. skills catalog
+7. environment
+
+`AGENTS.md` 注入规则：
+
+- 启用时始终注入根目录 `AGENTS.md` 的原文全文
+- 不做摘要
+- 不做长度裁剪
+- 不做结构化预处理
+
+## agent 选择规则
+
+- 若 run / session 显式指定了 agent，则优先使用显式值
+- 否则使用 `.openharness/settings.yaml` 中的 `default_agent`
+- 若两者都没有，则返回配置错误
+- `default_agent` 可指向当前可见 catalog 中的 platform agent 或 workspace agent
+
+agent 可见性与覆盖规则：
+
+- 当前 workspace 的可见 agent catalog = 平台内建 agent + `.openharness/agents/*.md`
+- 若平台内建 agent 与 workspace agent 同名，则 workspace agent 覆盖 platform agent
+- session / run 显式参数只能选择当前可见 catalog 中存在的 agent
+
+覆盖规则：
+
+- workspace 当前文件是 workspace 层唯一的声明式事实来源
+- API / session / run 的显式参数只允许选择当前可见 catalog 中已有的 agent、model 或能力
+- 未来若支持临时 override，也只允许收窄权限和可见能力，不允许扩展当前可见 catalog 之外的能力
+
+其中 `<system_reminder>` 的触发规则建议为：
+
+- session 创建时显式指定 agent
+- 当前 run 的 `agent_name` 与上一轮 active agent 不同
+- 同一 agent 连续执行时默认不重复注入
+- run 内发生 `agent.switch`，且 `effective_agent_name` 改变
