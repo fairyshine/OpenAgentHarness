@@ -148,6 +148,8 @@ paths:
 规则：
 
 - 模板只用于初始化生成 workspace 文件
+- `POST /workspaces` 创建新 workspace 时，必须从这里选择一个模板作为初始化源
+- 初始化顺序应为：先复制模板，再追加用户传入的 `AGENTS.md`、workspace MCP 和 workspace skills
 - 运行时不会直接把模板目录当作活跃 workspace 加载
 
 ### `paths.models_dir`

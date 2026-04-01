@@ -13,7 +13,12 @@ Open Agent Harness 是一个基于 TypeScript + Node.js 的 headless Agent Runti
 - 通过 REST API 发起请求，通过 SSE 接收流式事件
 - 同时支持常规项目 workspace 和只读普通对话 workspace
 
-调试形态上，建议额外提供一个轻量 `oah` CLI / TUI，用于开发和排障，但它不改变本项目“headless runtime”的产品定位。
+调试形态上，仓库现在额外包含：
+
+- `apps/web`：React 19 调试控制台，优先用于联调 `workspace / session / message / run / SSE`
+- `apps/cli`：CLI / TUI 预留入口，当前先保留最小占位
+
+它们都不改变本项目“headless runtime”的产品定位。
 
 ## 负责什么
 
@@ -38,6 +43,11 @@ Open Agent Harness 是一个基于 TypeScript + Node.js 的 headless Agent Runti
 更合适的边界是：用户系统、认证鉴权、组织关系由外部服务或 API Gateway 管理；Open Agent Harness 只消费调用方身份上下文，并把 `subject_ref` 这类外部引用用于审计、限流和访问判断。这样系统边界更清晰，也更适合独立扩容和分布式部署。
 
 ## Workspace 结构
+
+可直接复制的样例见 [templates/README.md](templates/README.md)：
+
+- `templates/workspace`：常规 `project` workspace 模板
+- `templates/chat-workspace`：只读 `chat` workspace 模板
 
 ```text
 workspace/
@@ -100,3 +110,18 @@ workspace/
 - [docs/workspace/README.md](docs/workspace/README.md)
 - [docs/runtime/README.md](docs/runtime/README.md)
 - [docs/openapi/README.md](docs/openapi/README.md)
+
+## 开发命令
+
+```bash
+pnpm install
+pnpm build
+pnpm test
+pnpm dev:web
+```
+
+说明：
+
+- `pnpm build` 会先构建后端 TypeScript 项目，再构建 `apps/web`
+- `pnpm dev:web` 默认把 `/api`、`/internal`、`/healthz` 代理到 `http://127.0.0.1:8787`
+- 如果后端不在默认端口，可设置环境变量 `OAH_WEB_PROXY_TARGET=http://127.0.0.1:PORT`

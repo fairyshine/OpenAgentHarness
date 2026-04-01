@@ -1,0 +1,21 @@
+{
+  "name": "@oah/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@oah/api-contracts": "workspace:*",
+    "ajv": "8.18.0",
+    "ajv-formats": "3.0.1",
+    "gray-matter": "4.0.3",
+    "yaml": "2.8.3"
+  }
+}

@@ -59,6 +59,7 @@
               "base",
               "llm_optimized",
               "agent",
+              "actions",
               "project_agents_md",
               "skills"
             ]
@@ -66,12 +67,6 @@
           "uniqueItems": true
         },
         "include_environment": {
-          "type": "boolean"
-        },
-        "include_project_agents_md": {
-          "type": "boolean"
-        },
-        "include_skills": {
           "type": "boolean"
         }
       }

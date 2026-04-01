@@ -1,0 +1,23 @@
+default_agent: builder
+
+system_prompt:
+  base:
+    inline: |-
+      You are Open Agent Harness running inside the current workspace.
+      Prefer workspace-local files, conventions, and tools.
+      Be explicit about assumptions and keep outputs actionable.
+
+  llm_optimized:
+    providers:
+      openai:
+        inline: |-
+          Be concise, tool-oriented, and precise with file paths.
+
+  compose:
+    order:
+      - base
+      - llm_optimized
+      - agent
+      - project_agents_md
+      - skills
+      - actions

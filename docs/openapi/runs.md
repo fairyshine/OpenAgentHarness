@@ -5,6 +5,7 @@
 该模块包括：
 
 - run 查询
+- run steps 查询
 - run 取消
 
 ## 接口
@@ -36,6 +37,18 @@
 
 - `runId`
 - `status=cancellation_requested`
+
+### `GET /runs/{runId}/steps`
+
+用途：
+
+- 查询当前 run 的步骤级审计投影
+- 观察 `model_call`、`tool_call`、`agent_switch`、`agent_delegate`、`hook` 等控制流
+
+返回：
+
+- `items`
+- `nextCursor`
 
 ## 状态约定
 

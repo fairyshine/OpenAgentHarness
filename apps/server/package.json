@@ -1,0 +1,20 @@
+{
+  "name": "@oah/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx watch --tsconfig ./tsconfig.json src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@oah/config": "workspace:*",
+    "@oah/api-contracts": "workspace:*",
+    "@oah/runtime-core": "workspace:*",
+    "@oah/model-gateway": "workspace:*",
+    "@oah/storage-memory": "workspace:*",
+    "fastify": "5.8.4"
+  }
+}

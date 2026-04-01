@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/api-contracts" },
+    { "path": "./packages/runtime-core" },
+    { "path": "./packages/config" },
+    { "path": "./packages/storage-memory" },
+    { "path": "./packages/model-gateway" },
+    { "path": "./apps/cli" },
+    { "path": "./apps/server" }
+  ]
+}

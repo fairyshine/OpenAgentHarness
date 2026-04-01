@@ -42,16 +42,13 @@ system_prompt:
 
   compose:
     order:
-      - platform
       - base
       - llm_optimized
       - agent
+      - actions
       - project_agents_md
       - skills
-      - environment
-    include_environment: true
-    include_project_agents_md: true
-    include_skills: true
+    include_environment: false
 ```
 
 ## 顶层字段
@@ -116,13 +113,12 @@ system_prompt:
         file: ./.openharness/prompts/openai-default.md
   compose:
     order:
-      - platform
       - base
       - llm_optimized
       - agent
+      - actions
       - project_agents_md
       - skills
-      - environment
 ```
 
 字段说明：
@@ -191,32 +187,30 @@ llm_optimized:
 ```yaml
 compose:
   order:
-    - platform
     - base
     - llm_optimized
     - agent
+    - actions
     - project_agents_md
     - skills
-    - environment
-  include_environment: true
-  include_project_agents_md: true
-  include_skills: true
+  include_environment: false
 ```
 
 建议支持的段名：
 
 - `base`
 - `llm_optimized`
-- `platform`
 - `agent`
+- `actions`
 - `project_agents_md`
 - `skills`
-- `environment`
 
 规则：
 
 - `system_reminder` 不在这里配置，仍由运行时动态注入
 - `order` 只控制静态 system prompt 段的拼装顺序
-- `include_environment` 控制是否注入运行环境摘要
-- `include_project_agents_md` 控制是否拼入根目录 `AGENTS.md` 原文全文
-- `include_skills` 控制是否拼入技能摘要
+- 运行环境摘要不属于 `order` 段，而是在 `include_environment=true` 时由运行时追加到末尾
+- `include_environment` 控制是否注入运行环境摘要；默认值为 `false`
+- `actions` 段在当前 agent 可见且暴露给 LLM 的 actions 非空时自动拼入，不存在时自动跳过
+- `project_agents_md` 段在根目录存在 `AGENTS.md` 时自动拼入，不存在时自动跳过
+- `skills` 段在当前 agent 可见 skills 非空时自动拼入，不存在时自动跳过

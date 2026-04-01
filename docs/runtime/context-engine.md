@@ -48,13 +48,14 @@
 
 静态 system prompt 的默认顺序为：
 
-1. 平台内建基础 system prompt
-2. workspace `system_prompt.base`
-3. workspace `system_prompt.llm_optimized`
-4. agent 主 prompt
+1. workspace `system_prompt.base`
+2. workspace `system_prompt.llm_optimized`
+3. agent 主 prompt
+4. actions catalog
 5. `AGENTS.md` 项目说明原文
 6. skills catalog
-7. environment
+
+若 `include_environment=true`，运行时会在上述静态段之后追加 environment 摘要；默认不追加。
 
 `AGENTS.md` 注入规则：
 

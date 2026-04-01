@@ -1,0 +1,22 @@
+{
+  "name": "open-agent-harness",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.30.2",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b && pnpm --filter @oah/web build",
+    "clean": "tsc -b --clean && pnpm -r exec rm -rf dist .vite",
+    "dev:server": "tsx watch --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts",
+    "dev:web": "pnpm --filter @oah/web dev",
+    "server": "node ./apps/server/dist/index.js",
+    "typecheck": "pnpm -r exec tsc --noEmit -p tsconfig.json",
+    "test": "pnpm build && vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "25.5.0",
+    "tsx": "4.21.0",
+    "typescript": "6.0.2",
+    "vitest": "4.1.2"
+  }
+}

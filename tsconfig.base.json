@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "paths": {
+      "@oah/config": ["./packages/config/src/index.ts"],
+      "@oah/api-contracts": ["./packages/api-contracts/src/index.ts"],
+      "@oah/runtime-core": ["./packages/runtime-core/src/index.ts"],
+      "@oah/storage-memory": ["./packages/storage-memory/src/index.ts"],
+      "@oah/model-gateway": ["./packages/model-gateway/src/index.ts"]
+    }
+  }
+}

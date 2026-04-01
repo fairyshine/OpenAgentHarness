@@ -1,0 +1,18 @@
+server:
+  host: 127.0.0.1
+  port: 8787
+
+storage:
+  postgres_url: ${env.DATABASE_URL}
+  redis_url: ${env.REDIS_URL}
+
+paths:
+  workspace_dir: ./tmp/workspaces
+  chat_dir: ./tmp/chat-workspaces
+  template_dir: ./tmp/templates
+  models_dir: ./tests/fixtures/models
+  mcp_dir: ./tmp/mcp
+  skill_dir: ./tmp/skills
+
+llm:
+  default_model: openai-default

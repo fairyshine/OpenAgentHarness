@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f5f5f2;
+  --foreground: #171717;
+  --card: rgba(255, 255, 255, 0.94);
+  --muted-foreground: #76736d;
+  --accent: #1c1c1c;
+  --accent-strong: #050505;
+  --accent-foreground: #fbfbf8;
+  --ring: #a6a097;
+  --border: rgba(28, 28, 28, 0.07);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--foreground);
+  font-family:
+    "SF Pro Display",
+    "Avenir Next",
+    "IBM Plex Sans",
+    "Helvetica Neue",
+    sans-serif;
+  background: linear-gradient(180deg, #f8f8f5 0%, #f3f3ef 100%);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0));
+  opacity: 0.9;
+}
+
+body::after {
+  display: none;
+}
+
+#root {
+  position: relative;
+  min-height: 100vh;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+pre,
+code {
+  font-family:
+    "IBM Plex Mono",
+    "SFMono-Regular",
+    monospace;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background: rgba(109, 104, 95, 0.24);
+  background-clip: padding-box;
+}

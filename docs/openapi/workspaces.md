@@ -11,6 +11,16 @@
 
 ## 接口
 
+### `GET /workspace-templates`
+
+用途：
+
+- 列出 `server.paths.template_dir` 下当前可用的 workspace 模板
+
+返回内容：
+
+- `items[].name`
+
 ### `POST /workspaces`
 
 用途：
@@ -21,12 +31,21 @@
 请求体核心字段：
 
 - `name`
-- `rootPath`
+- `template`
 - `executionPolicy`
+
+可选覆盖字段：
+
+- `rootPath`
+- `agentsMd`
+- `mcpServers`
+- `skills`
 
 说明：
 
 - `project` workspace 可通过该接口显式创建
+- 未传 `rootPath` 时，服务端默认在 `server.paths.workspace_dir/<normalized-name>` 下创建目录
+- 创建顺序必须是：先从 `template_dir` 复制模板，再叠加用户传入的 `AGENTS.md`、MCP 和 skills
 - `chat` workspace 更适合由服务端按目录自动发现，不要求调用方逐个创建
 
 ### `GET /workspaces/{workspaceId}`

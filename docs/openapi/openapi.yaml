@@ -24,6 +24,20 @@ tags:
 security:
   - bearerAuth: []
 paths:
+  /workspace-templates:
+    get:
+      tags: [Workspaces]
+      summary: List workspace templates
+      operationId: listWorkspaceTemplates
+      responses:
+        '200':
+          description: Workspace template list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceTemplateList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /workspaces:
     post:
       tags: [Workspaces]
@@ -294,6 +308,24 @@ paths:
                 $ref: '#/components/schemas/Run'
         default:
           $ref: '#/components/responses/ErrorResponse'
+  /runs/{runId}/steps:
+    get:
+      tags: [Runs]
+      summary: List run steps
+      operationId: listRunSteps
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Run step page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStepPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /runs/{runId}/cancel:
     post:
       tags: [Runs]
@@ -377,6 +409,20 @@ components:
     JsonObject:
       type: object
       additionalProperties: true
+    WorkspaceTemplate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    WorkspaceTemplateList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceTemplate'
     Workspace:
       type: object
       required:
@@ -670,16 +716,41 @@ components:
       type: object
       required:
         - name
-        - rootPath
+        - template
       properties:
         externalRef:
           type: string
         name:
           type: string
           minLength: 1
+        template:
+          type: string
+          minLength: 1
         rootPath:
           type: string
           minLength: 1
+        agentsMd:
+          type: string
+          minLength: 1
+        mcpServers:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/JsonObject'
+        skills:
+          type: array
+          items:
+            type: object
+            required:
+              - name
+              - content
+            properties:
+              name:
+                type: string
+                minLength: 1
+              content:
+                type: string
+                minLength: 1
+            additionalProperties: false
         executionPolicy:
           type: string
           enum: [local, container, remote_runner]
@@ -727,6 +798,17 @@ components:
           $ref: '#/components/schemas/Timestamp'
         endedAt:
           $ref: '#/components/schemas/Timestamp'
+    RunStepPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunStep'
+        nextCursor:
+          type: string
     CreateMessageRequest:
       type: object
       required:

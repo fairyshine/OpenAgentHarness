@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/config" },
+    { "path": "../../packages/api-contracts" },
+    { "path": "../../packages/runtime-core" },
+    { "path": "../../packages/storage-memory" },
+    { "path": "../../packages/model-gateway" }
+  ]
+}

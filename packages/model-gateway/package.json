@@ -1,0 +1,21 @@
+{
+  "name": "@oah/model-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@ai-sdk/mcp": "1.0.30",
+    "@ai-sdk/openai": "3.0.49",
+    "@oah/config": "workspace:*",
+    "@oah/runtime-core": "workspace:*",
+    "ai": "6.0.141"
+  }
+}
