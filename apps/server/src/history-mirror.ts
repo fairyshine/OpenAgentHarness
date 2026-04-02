@@ -353,12 +353,18 @@ export class HistoryMirrorSyncer {
 
     try {
       while (true) {
-        const events = await this.#historyEventRepository.listByWorkspaceId(
+        const fetchedEvents = await this.#historyEventRepository.listByWorkspaceId(
           workspace.id,
           this.#batchSize,
           lastAppliedEventId > 0 ? lastAppliedEventId : undefined
         );
+        const events = fetchedEvents.filter((event) => event.id > lastAppliedEventId);
         if (events.length === 0) {
+          if (fetchedEvents.length > 0) {
+            this.#logger.warn?.(
+              `History mirror sync made no forward progress for workspace ${workspace.id}; stopping this pass to avoid a tight loop.`
+            );
+          }
           if (options?.reset || lastAppliedEventId > 0) {
             this.#writeMirrorState(handle.db, workspace.id, lastAppliedEventId, "idle", null);
           }

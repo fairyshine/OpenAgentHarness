@@ -21,8 +21,6 @@ tags:
   - name: Runs
   - name: Actions
   - name: Events
-security:
-  - bearerAuth: []
 paths:
   /workspace-templates:
     get:
@@ -276,7 +274,6 @@ paths:
         CLI. This endpoint is only available from loopback addresses and is not
         intended for external clients or public network exposure.
       operationId: internalGenerateModel
-      security: []
       requestBody:
         required: true
         content:
@@ -301,7 +298,6 @@ paths:
         CLI. This endpoint is only available from loopback addresses and is not
         intended for external clients or public network exposure.
       operationId: internalStreamModel
-      security: []
       requestBody:
         required: true
         content:
@@ -475,16 +471,6 @@ paths:
         default:
           $ref: '#/components/responses/ErrorResponse'
 components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: Bearer
-      description: >
-        Caller context is expected to come from an upstream identity or access
-        service. The standalone server may still enable a dev bearer stub for
-        local development, but production integrations should inject verified
-        caller context from the host application.
   parameters:
     WorkspaceId:
       name: workspaceId
@@ -739,6 +725,9 @@ components:
           type: boolean
         callableByApi:
           type: boolean
+        retryPolicy:
+          type: string
+          enum: [manual, safe]
     SkillCatalogItem:
       type: object
       required: [name]
@@ -749,7 +738,7 @@ components:
           type: string
         exposeToLlm:
           type: boolean
-    McpCatalogItem:
+    ToolCatalogItem:
       type: object
       required: [name]
       properties:
@@ -782,7 +771,7 @@ components:
         - models
         - actions
         - skills
-        - mcp
+        - tools
         - hooks
         - nativeTools
       properties:
@@ -804,10 +793,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SkillCatalogItem'
-        mcp:
+        tools:
           type: array
           items:
-            $ref: '#/components/schemas/McpCatalogItem'
+            $ref: '#/components/schemas/ToolCatalogItem'
+        mcp:
+          description: Legacy compatibility alias for `tools`.
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolCatalogItem'
         hooks:
           type: array
           items:
@@ -967,7 +961,7 @@ components:
         agentsMd:
           type: string
           minLength: 1
-        mcpServers:
+        toolServers:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/JsonObject'

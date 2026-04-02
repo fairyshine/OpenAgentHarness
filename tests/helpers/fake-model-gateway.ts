@@ -1,11 +1,11 @@
-import type { ModelGenerateResponse } from "../../packages/api-contracts/dist/index.js";
+import type { ModelGenerateResponse } from "@oah/api-contracts";
 import type {
   GenerateModelInput,
   ModelGateway,
   ModelStepPreparation,
   ModelStreamOptions,
   StreamedModelResponse
-} from "../../packages/runtime-core/dist/index.js";
+} from "@oah/runtime-core";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -13,10 +13,38 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return sleep(ms);
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      reject(new Error("aborted"));
+    };
+
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export class FakeModelGateway implements ModelGateway {
   readonly invocations: Array<{ model: string; input: GenerateModelInput }> = [];
   readonly delayMs: number;
+  generateDelayMs = 0;
   maxConcurrentStreams = 0;
+  maxConcurrentToolExecutions = 0;
   generateResponseFactory?: ((input: GenerateModelInput) => ModelGenerateResponse | undefined) | undefined;
   streamScenarioFactory?:
     | ((
@@ -31,18 +59,32 @@ export class FakeModelGateway implements ModelGateway {
               toolCallId?: string | undefined;
               delayMs?: number | undefined;
             }> | undefined;
+            toolBatches?:
+              | Array<
+                  Array<{
+                    toolName: string;
+                    input: unknown;
+                    toolCallId?: string | undefined;
+                    delayMs?: number | undefined;
+                  }>
+                >
+              | undefined;
           }
         | undefined)
     | undefined;
   #activeStreams = 0;
+  #activeToolExecutions = 0;
 
   constructor(delayMs = 0) {
     this.delayMs = delayMs;
   }
 
-  async generate(input: GenerateModelInput): Promise<ModelGenerateResponse> {
+  async generate(input: GenerateModelInput, options?: { signal?: AbortSignal }): Promise<ModelGenerateResponse> {
     const modelName = input.model ?? "openai-default";
     this.invocations.push({ model: modelName, input });
+    if (this.generateDelayMs > 0) {
+      await sleepWithSignal(this.generateDelayMs, options?.signal);
+    }
     const generated = this.generateResponseFactory?.(input);
     if (generated) {
       return generated;
@@ -107,56 +149,91 @@ export class FakeModelGateway implements ModelGateway {
       let emitted = "";
 
       try {
-        for (const [index, toolStep] of (scenario?.toolSteps ?? []).entries()) {
+        const toolBatches =
+          scenario?.toolBatches ?? (scenario?.toolSteps ?? []).map((toolStep) => [toolStep]);
+
+        for (const [index, toolBatch] of toolBatches.entries()) {
           if (options?.signal?.aborted) {
             throw new Error("aborted");
           }
 
-          const toolCallId = toolStep.toolCallId ?? `call_${index + 1}`;
-          await options?.onToolCallStart?.({
-            toolCallId,
-            toolName: toolStep.toolName,
-            input: toolStep.input
-          });
+          const executeToolStep = async (
+            toolStep: {
+              toolName: string;
+              input: unknown;
+              toolCallId?: string | undefined;
+              delayMs?: number | undefined;
+            },
+            toolIndex: number
+          ) => {
+            const toolCallId = toolStep.toolCallId ?? `call_${index + 1}_${toolIndex + 1}`;
+            await options?.onToolCallStart?.({
+              toolCallId,
+              toolName: toolStep.toolName,
+              input: toolStep.input
+            });
 
-          if (toolStep.delayMs && toolStep.delayMs > 0) {
-            await sleep(toolStep.delayMs);
-          }
+            gateway.#activeToolExecutions += 1;
+            gateway.maxConcurrentToolExecutions = Math.max(
+              gateway.maxConcurrentToolExecutions,
+              gateway.#activeToolExecutions
+            );
 
-          const toolDefinition = options?.tools?.[toolStep.toolName];
-          const toolResult = toolDefinition
-            ? await toolDefinition.execute(toolStep.input, {
-                abortSignal: options?.signal,
-                toolCallId
-              })
-            : `Error: Tool "${toolStep.toolName}" was not registered.`;
-
-          await options?.onToolCallFinish?.({
-            toolCallId,
-            toolName: toolStep.toolName,
-            output: toolResult
-          });
-
-          await options?.onStepFinish?.({
-            finishReason: "tool-calls",
-            toolCalls: [
-              {
-                toolCallId,
-                toolName: toolStep.toolName,
-                input: toolStep.input
+            try {
+              if (toolStep.delayMs && toolStep.delayMs > 0) {
+                await sleep(toolStep.delayMs);
               }
-            ],
-            toolResults: [
-              {
+
+              const toolDefinition = options?.tools?.[toolStep.toolName];
+              const toolResult = toolDefinition
+                ? await toolDefinition.execute(toolStep.input, {
+                    abortSignal: options?.signal,
+                    toolCallId
+                  })
+                : `Error: Tool "${toolStep.toolName}" was not registered.`;
+
+              await options?.onToolCallFinish?.({
                 toolCallId,
                 toolName: toolStep.toolName,
                 output: toolResult
-              }
-            ]
+              });
+
+              return {
+                toolCall: {
+                  toolCallId,
+                  toolName: toolStep.toolName,
+                  input: toolStep.input
+                },
+                toolResult: {
+                  toolCallId,
+                  toolName: toolStep.toolName,
+                  output: toolResult
+                }
+              };
+            } finally {
+              gateway.#activeToolExecutions -= 1;
+            }
+          };
+
+          const executedBatch =
+            options?.parallelToolCalls === false
+              ? await toolBatch.reduce<Promise<Array<Awaited<ReturnType<typeof executeToolStep>>>>>(
+                  async (previousPromise, toolStep, toolIndex) => {
+                    const previous = await previousPromise;
+                    return [...previous, await executeToolStep(toolStep, toolIndex)];
+                  },
+                  Promise.resolve([])
+                )
+              : await Promise.all(toolBatch.map((toolStep, toolIndex) => executeToolStep(toolStep, toolIndex)));
+
+          await options?.onStepFinish?.({
+            finishReason: "tool-calls",
+            toolCalls: executedBatch.map((entry) => entry.toolCall),
+            toolResults: executedBatch.map((entry) => entry.toolResult)
           });
 
           await applyPreparation(index + 1);
-          text = scenario?.text ?? this.#buildText(currentInput);
+          text = scenario?.text ?? gateway.#buildText(currentInput);
           chunks = text.match(/.{1,4}/g) ?? [text];
           gateway.invocations.push({ model: currentModelName, input: currentInput });
         }

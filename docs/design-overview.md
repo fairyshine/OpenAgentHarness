@@ -6,7 +6,7 @@
 
 ## 建议先建立这 3 个概念
 
-- `workspace`：能力发现边界，决定能看到哪些 agent、model、skill、mcp、hook
+- `workspace`：能力发现边界，决定能看到哪些 agent、model、skill、tool、hook
 - `session`：上下文边界，承接一段连续对话或任务协作
 - `run`：执行边界，每次模型推理与工具循环都落在 run 上
 
@@ -37,7 +37,7 @@
 - [规范索引](./workspace-spec.md)
 - [Models](./workspace/models.md)
 - [Skills](./workspace/skills.md)
-- [MCP](./workspace/mcp.md)
+- [External Tools (MCP-backed)](./workspace/mcp.md)
 - [Hooks](./workspace/hooks.md)
 
 ### Runtime 设计

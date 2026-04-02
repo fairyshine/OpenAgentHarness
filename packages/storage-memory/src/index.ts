@@ -156,6 +156,24 @@ export class InMemoryRunRepository implements RunRepository {
     return input;
   }
 
+  async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
+    return [...this.#items.values()]
+      .filter((run) => {
+        if (run.status !== "running" && run.status !== "waiting_tool") {
+          return false;
+        }
+
+        const candidateTimestamp = run.heartbeatAt ?? run.startedAt ?? run.createdAt;
+        return candidateTimestamp <= staleBefore;
+      })
+      .sort((left, right) => {
+        const leftTimestamp = left.heartbeatAt ?? left.startedAt ?? left.createdAt;
+        const rightTimestamp = right.heartbeatAt ?? right.startedAt ?? right.createdAt;
+        return leftTimestamp.localeCompare(rightTimestamp);
+      })
+      .slice(0, Math.max(1, limit));
+  }
+
   deleteByWorkspaceId(workspaceId: string): string[] {
     const deletedRunIds: string[] = [];
 

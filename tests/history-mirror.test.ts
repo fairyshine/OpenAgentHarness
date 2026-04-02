@@ -5,10 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { HistoryEventRecord } from "../packages/runtime-core/dist/index.js";
-import { createMemoryRuntimePersistence } from "../packages/storage-memory/dist/index.js";
+import type { HistoryEventRecord } from "@oah/runtime-core";
+import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
-import { HistoryMirrorSyncer, historyMirrorDbPath, inspectHistoryMirrorStatus } from "../apps/server/dist/history-mirror.js";
+import { HistoryMirrorSyncer, historyMirrorDbPath, inspectHistoryMirrorStatus } from "../apps/server/src/history-mirror.ts";
 
 const tempRoots: string[] = [];
 
@@ -50,7 +50,7 @@ describe("history mirror syncer", () => {
       agents: {},
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "ws_history_enabled",
@@ -256,7 +256,7 @@ describe("history mirror syncer", () => {
       agents: {},
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "ws_history_status",
@@ -339,7 +339,7 @@ describe("history mirror syncer", () => {
       agents: {},
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "ws_history_disabled",
@@ -395,7 +395,7 @@ describe("history mirror syncer", () => {
       agents: {},
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "ws_history_rebuild",

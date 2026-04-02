@@ -137,6 +137,24 @@ OpenAPI 主规范中的 `components/schemas` 目前主要包括：
 - `parentRunId` 当前已用于表达 subagent / background child run 与父 run 的关系
 - `heartbeatAt` 会在 run 活跃期间持续刷新，供 worker 启动恢复扫描使用
 
+### `ActionCatalogItem`
+
+用于 `GET /workspaces/{workspaceId}/catalog` 中的 `actions[]`。
+
+字段：
+
+- `name`
+- `description`
+- `exposeToLlm`
+- `callableByUser`
+- `callableByApi`
+- `retryPolicy`
+
+说明：
+
+- `retryPolicy=safe` 表示该 action 已显式声明为可安全重试的候选项
+- 缺省或 `manual` 表示只能按人工或外部调用方显式重试对待，不应默认自动恢复
+
 ## 模型网关对象
 
 ### `ChatMessage`

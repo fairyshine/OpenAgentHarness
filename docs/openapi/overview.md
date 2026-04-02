@@ -20,10 +20,9 @@
 
 - 对外 API 位于 `/api/v1`
 - 内部脚本模型网关位于 `/internal/v1/models/*`
-- 对外 API 需要可验证的 caller context
 - 宿主应用可通过 server 注入 caller context resolver 来接管该上下文
-- 当前独立 server 示例默认使用 Bearer Token 作为本地联调 stub，但 workspace 访问授权仍应由上游服务完成
-- `/internal/v1/models/*` 不要求 Bearer Token，且当前只允许 loopback 访问
+- 若未注入 resolver，独立 server 会自动使用最小 caller context 以便本地调试
+- `/internal/v1/models/*` 不要求 `Authorization` 请求头，且当前只允许 loopback 访问
 - 异步执行入口返回 `202`
 - 流式输出统一走 SSE
 - 最终执行状态以 run 资源为准

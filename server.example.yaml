@@ -10,8 +10,8 @@ paths:
   workspace_dir: ./tmp/workspaces
   chat_dir: ./tmp/chat-workspaces
   template_dir: ./tmp/templates
-  models_dir: ./tests/fixtures/models
-  mcp_dir: ./tmp/mcp
+  model_dir: ./tests/fixtures/models
+  tool_dir: ./tmp/tools
   skill_dir: ./tmp/skills
 
 llm:

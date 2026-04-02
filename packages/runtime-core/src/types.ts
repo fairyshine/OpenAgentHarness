@@ -4,6 +4,7 @@ import type {
   CreateMessageRequest,
   CreateSessionRequest,
   CreateWorkspaceRequest,
+  McpCatalogItem,
   Message,
   ModelCatalogItem,
   ModelGenerateRequest,
@@ -21,6 +22,8 @@ export type WorkspaceKind = "project" | "chat";
 export type AgentMode = "primary" | "subagent" | "all";
 export type RunStepType = RunStep["stepType"];
 export type RunStepStatus = RunStep["status"];
+export type ActionRetryPolicy = "manual" | "safe";
+export type RuntimeWorkspaceCatalog = WorkspaceCatalog & { tools?: McpCatalogItem[] | undefined; mcp?: McpCatalogItem[] | undefined };
 export type SessionEventName =
   | "run.queued"
   | "run.started"
@@ -31,6 +34,7 @@ export type SessionEventName =
   | "agent.delegate.started"
   | "agent.delegate.completed"
   | "agent.delegate.failed"
+  | "hook.notice"
   | "tool.started"
   | "tool.completed"
   | "tool.failed"
@@ -75,6 +79,7 @@ export interface RuntimeToolExecutionContext {
 export interface RuntimeToolDefinition {
   description: string;
   inputSchema: ZodTypeAny;
+  retryPolicy?: ActionRetryPolicy | undefined;
   execute(input: unknown, context: RuntimeToolExecutionContext): Promise<unknown> | unknown;
 }
 
@@ -101,8 +106,10 @@ export interface ModelStepResult {
 export interface ModelStreamOptions {
   signal?: AbortSignal | undefined;
   tools?: RuntimeToolSet | undefined;
-  mcpServers?: McpServerDefinition[] | undefined;
+  toolServers?: ToolServerDefinition[] | undefined;
+  mcpServers?: ToolServerDefinition[] | undefined;
   maxSteps?: number | undefined;
+  parallelToolCalls?: boolean | undefined;
   prepareStep?:
     | ((stepNumber: number) => Promise<ModelStepPreparation | undefined> | ModelStepPreparation | undefined)
     | undefined;
@@ -136,7 +143,8 @@ export interface AgentDefinition {
     native: string[];
     actions: string[];
     skills: string[];
-    mcp: string[];
+    external: string[];
+    mcp?: string[] | undefined;
   };
   switch: string[];
   subagents: string[];
@@ -155,6 +163,7 @@ export interface ActionDefinition {
   callableByApi: boolean;
   callableByUser: boolean;
   exposeToLlm: boolean;
+  retryPolicy?: ActionRetryPolicy | undefined;
   inputSchema?: Record<string, unknown> | undefined;
   directory: string;
   entry: {
@@ -174,7 +183,7 @@ export interface SkillDefinition {
   content: string;
 }
 
-export interface McpServerDefinition {
+export interface ToolServerDefinition {
   name: string;
   enabled: boolean;
   transportType: "stdio" | "http";
@@ -188,6 +197,8 @@ export interface McpServerDefinition {
   include?: string[] | undefined;
   exclude?: string[] | undefined;
 }
+
+export type McpServerDefinition = ToolServerDefinition;
 
 export interface HookDefinition {
   name: string;
@@ -235,9 +246,10 @@ export interface WorkspaceRecord extends Workspace {
   agents: Record<string, AgentDefinition>;
   actions: Record<string, ActionDefinition>;
   skills: Record<string, SkillDefinition>;
-  mcpServers: Record<string, McpServerDefinition>;
+  toolServers: Record<string, ToolServerDefinition>;
+  mcpServers?: Record<string, ToolServerDefinition> | undefined;
   hooks: Record<string, HookDefinition>;
-  catalog: WorkspaceCatalog;
+  catalog: RuntimeWorkspaceCatalog;
 }
 
 export interface WorkspaceInitializationResult {
@@ -252,9 +264,10 @@ export interface WorkspaceInitializationResult {
   agents: Record<string, AgentDefinition>;
   actions: Record<string, ActionDefinition>;
   skills: Record<string, SkillDefinition>;
-  mcpServers: Record<string, McpServerDefinition>;
+  toolServers: Record<string, ToolServerDefinition>;
+  mcpServers?: Record<string, ToolServerDefinition> | undefined;
   hooks: Record<string, HookDefinition>;
-  catalog: WorkspaceCatalog;
+  catalog: RuntimeWorkspaceCatalog;
 }
 
 export interface WorkspaceInitializer {
@@ -269,7 +282,7 @@ export interface WorkspaceSettingsManager {
   updateHistoryMirrorEnabled(workspace: WorkspaceRecord, enabled: boolean): Promise<WorkspaceRecord>;
 }
 
-export type ToolCallSourceType = "action" | "skill" | "agent" | "mcp" | "native";
+export type ToolCallSourceType = "action" | "skill" | "agent" | "tool" | "native";
 
 export interface ToolCallAuditRecord {
   id: string;
@@ -350,6 +363,7 @@ export interface HistoryEventRepository {
 export interface RuntimeServiceOptions {
   defaultModel: string;
   modelGateway: ModelGateway;
+  runHeartbeatIntervalMs?: number | undefined;
   platformModels?: Record<string, ModelDefinition> | undefined;
   workspaceRepository: WorkspaceRepository;
   sessionRepository: SessionRepository;
@@ -397,6 +411,7 @@ export interface RunRepository {
   create(input: Run): Promise<Run>;
   getById(id: string): Promise<Run | null>;
   update(input: Run): Promise<Run>;
+  listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]>;
 }
 
 export interface RunStepRepository {
@@ -468,20 +483,21 @@ export interface RunStepListResult {
   nextCursor?: string | undefined;
 }
 
-export function createEmptyCatalog(workspaceId: string, models: ModelCatalogItem[] = []): WorkspaceCatalog {
+export function createEmptyCatalog(workspaceId: string, models: ModelCatalogItem[] = []): RuntimeWorkspaceCatalog {
   return {
     workspaceId,
     agents: [],
     models,
     actions: [],
     skills: [],
-    mcp: [],
+    tools: [],
     hooks: [],
-    nativeTools: []
+    nativeTools: [],
+    mcp: []
   };
 }
 
-export function withCatalogActions(catalog: WorkspaceCatalog, actions: ActionCatalogItem[]): WorkspaceCatalog {
+export function withCatalogActions(catalog: RuntimeWorkspaceCatalog, actions: ActionCatalogItem[]): RuntimeWorkspaceCatalog {
   return {
     ...catalog,
     actions

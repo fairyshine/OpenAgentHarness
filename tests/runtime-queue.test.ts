@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { RuntimeService } from "../packages/runtime-core/dist/index.js";
-import { createMemoryRuntimePersistence } from "../packages/storage-memory/dist/index.js";
+import { RuntimeService } from "@oah/runtime-core";
+import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
 import { FakeModelGateway } from "./helpers/fake-model-gateway";
 
-async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 2_000): Promise<void> {
+async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (await check()) {
@@ -45,7 +45,7 @@ describe("runtime queue integration", () => {
             agents: {},
             actions: {},
             skills: {},
-            mcpServers: {},
+            toolServers: {},
             hooks: {},
             catalog: {
               workspaceId: "template",

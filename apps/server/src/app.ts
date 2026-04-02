@@ -51,6 +51,14 @@ function writeSseEvent(reply: FastifyReply, event: string, data: Record<string, 
   reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) {
+    return false;
+  }
+
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
 function toCallerContext(request: FastifyRequest): CallerContext {
   if (!request.callerContext) {
     throw new AppError(401, "unauthorized", "Missing caller context.");
@@ -59,11 +67,29 @@ function toCallerContext(request: FastifyRequest): CallerContext {
   return request.callerContext;
 }
 
+function createStandaloneCallerContext(): CallerContext {
+  return {
+    subjectRef: "standalone:anonymous",
+    authSource: "standalone_server",
+    scopes: [],
+    workspaceAccess: []
+  };
+}
+
 export interface AppDependencies {
   runtimeService: RuntimeService;
   modelGateway: ModelGateway;
   defaultModel: string;
-  listWorkspaceTemplates: () => Promise<import("@oah/config").WorkspaceTemplateDescriptor[]>;
+  logger?: boolean;
+  workspaceMode?: "multi" | "single";
+  resolveCallerContext?: ((request: FastifyRequest) => Promise<CallerContext | undefined> | CallerContext | undefined) | undefined;
+  listWorkspaceTemplates?: (() => Promise<import("@oah/config").WorkspaceTemplateDescriptor[]>) | undefined;
+  importWorkspace?: (input: {
+    rootPath: string;
+    kind?: "project" | "chat";
+    name?: string;
+    externalRef?: string;
+  }) => Promise<import("@oah/api-contracts").Workspace>;
   healthCheck?: () => Promise<Record<string, unknown>> | Record<string, unknown>;
   readinessCheck?: () => Promise<Record<string, unknown>> | Record<string, unknown>;
   rebuildWorkspaceHistoryMirror?: (workspace: WorkspaceRecord) => Promise<HistoryMirrorStatus>;
@@ -71,8 +97,10 @@ export interface AppDependencies {
 
 export function createApp(dependencies: AppDependencies) {
   const app = Fastify({
-    logger: true
+    logger: dependencies.logger ?? true
   });
+  const hostOwnsCallerContext = Boolean(dependencies.resolveCallerContext);
+  const workspaceMode = dependencies.workspaceMode ?? "multi";
 
   app.setErrorHandler((error, _request, reply) => {
     if (isAppError(error)) {
@@ -85,7 +113,17 @@ export function createApp(dependencies: AppDependencies) {
   });
 
   app.addHook("onRequest", async (request, reply) => {
-    if (request.url === "/healthz" || request.url === "/readyz" || request.url.startsWith("/internal/v1/models/")) {
+    if (request.url === "/healthz" || request.url === "/readyz") {
+      return;
+    }
+
+    if (request.url.startsWith("/internal/v1/models/")) {
+      const remoteAddress = request.ip || request.raw.socket.remoteAddress;
+      if (!isLoopbackAddress(remoteAddress)) {
+        await sendError(reply, 403, "forbidden", "Internal model routes are only available from loopback addresses.");
+        return reply;
+      }
+
       return;
     }
 
@@ -93,19 +131,19 @@ export function createApp(dependencies: AppDependencies) {
       return;
     }
 
-    const authorization = request.headers.authorization;
-    const match = authorization?.match(/^Bearer\s+(.+)$/i);
-    if (!match) {
-      await sendError(reply, 401, "unauthorized", "Missing or invalid bearer token.");
-      return reply;
+    const resolvedCallerContext = await dependencies.resolveCallerContext?.(request);
+    if (resolvedCallerContext) {
+      request.callerContext = resolvedCallerContext;
+      return;
     }
 
-    request.callerContext = {
-      subjectRef: `dev:${match[1]}`,
-      authSource: "bearer_stub",
-      scopes: [],
-      workspaceAccess: []
-    };
+    if (!hostOwnsCallerContext) {
+      request.callerContext = createStandaloneCallerContext();
+      return;
+    }
+
+    await sendError(reply, 401, "unauthorized", "Missing caller context.");
+    return reply;
   });
 
   app.get("/healthz", async () =>
@@ -131,6 +169,10 @@ export function createApp(dependencies: AppDependencies) {
   });
 
   app.get("/api/v1/workspace-templates", async (_request, reply) => {
+    if (workspaceMode === "single" || !dependencies.listWorkspaceTemplates) {
+      throw new AppError(501, "workspace_templates_unavailable", "Workspace templates are not available on this server.");
+    }
+
     const templates = await dependencies.listWorkspaceTemplates();
     return reply.send(
       workspaceTemplateListSchema.parse({
@@ -148,8 +190,35 @@ export function createApp(dependencies: AppDependencies) {
   );
 
   app.post("/api/v1/workspaces", async (request, reply) => {
+    if (workspaceMode === "single") {
+      throw new AppError(501, "workspace_creation_unavailable", "Workspace creation is not available in single-workspace mode.");
+    }
+
     const input = createWorkspaceRequestSchema.parse(request.body);
     const workspace = await dependencies.runtimeService.createWorkspace({ input });
+    return reply.status(201).send(workspace);
+  });
+
+  app.post("/api/v1/workspaces/import", async (request, reply) => {
+    if (workspaceMode === "single" || !dependencies.importWorkspace) {
+      throw new AppError(501, "workspace_import_unavailable", "Workspace import is not available on this server.");
+    }
+
+    const body = request.body as Record<string, unknown> | null;
+    const rootPath = typeof body?.rootPath === "string" ? body.rootPath : undefined;
+    if (!rootPath) {
+      throw new AppError(400, "invalid_request", "rootPath is required.");
+    }
+
+    const kind = body?.kind === "chat" ? "chat" : "project";
+    const name = typeof body?.name === "string" ? body.name : undefined;
+    const externalRef = typeof body?.externalRef === "string" ? body.externalRef : undefined;
+    const workspace = await dependencies.importWorkspace({
+      rootPath,
+      kind,
+      ...(name ? { name } : {}),
+      ...(externalRef ? { externalRef } : {})
+    });
     return reply.status(201).send(workspace);
   });
 
@@ -210,6 +279,10 @@ export function createApp(dependencies: AppDependencies) {
   });
 
   app.delete("/api/v1/workspaces/:workspaceId", async (request, reply) => {
+    if (workspaceMode === "single") {
+      throw new AppError(501, "workspace_deletion_unavailable", "Workspace deletion is not available in single-workspace mode.");
+    }
+
     const params = createParamsSchema("workspaceId").parse(request.params);
     await dependencies.runtimeService.deleteWorkspace(params.workspaceId);
     return reply.status(204).send();

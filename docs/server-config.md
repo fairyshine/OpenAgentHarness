@@ -28,8 +28,8 @@ paths:
   workspace_dir: /srv/openharness/workspaces
   chat_dir: /srv/openharness/chat-workspaces
   template_dir: /srv/openharness/templates
-  models_dir: /srv/openharness/models
-  mcp_dir: /srv/openharness/mcp
+  model_dir: /srv/openharness/models
+  tool_dir: /srv/openharness/tools
   skill_dir: /srv/openharness/skills
 
 llm:
@@ -62,7 +62,6 @@ llm:
 server:
   host: 0.0.0.0
   port: 8787
-  allow_dev_bearer_stub: true
 ```
 
 字段说明：
@@ -71,15 +70,6 @@ server:
   - 服务监听地址
 - `port`
   - 服务监听端口
-- `allow_dev_bearer_stub`
-  - 是否允许独立 server 使用内置 Bearer stub 作为本地联调入口
-
-说明：
-
-- 默认值为 `true`
-- 仅建议用于本地开发或仓库自带 demo 联调
-- 如果你的宿主应用已经通过 `createApp({ resolveCallerContext })` 注入 caller context，建议显式关闭
-- 即使保持 `true`，workspace 访问授权决策仍应放在外部宿主服务
 
 ## `storage`
 
@@ -138,6 +128,21 @@ storage:
 - 最省事：`pnpm dev:server -- --config ./server.example.yaml`
 - 需要前端时再加：`pnpm dev:web`
 
+如果你只想把单个 workspace 直接作为后端服务运行，也可以不走多 workspace 目录配置，而是直接使用 CLI：
+
+```bash
+pnpm dev:server -- \
+  --workspace /absolute/path/to/workspace \
+  --model-dir /absolute/path/to/models \
+  --default-model openai-default
+```
+
+说明：
+
+- 该模式会直接发现并注册这一个 workspace
+- 更接近单仓库、单后端的 `opencode` 风格
+- `GET /workspace-templates`、`POST /workspaces`、`POST /workspaces/import`、`DELETE /workspaces/:id` 等 workspace 管理接口会被禁用
+
 如果你想模拟生产拆分部署，则推荐：
 
 - 一个 API 进程：`pnpm dev:server -- --config ./server.example.yaml --api-only`
@@ -181,10 +186,15 @@ paths:
   workspace_dir: /srv/openharness/workspaces
   chat_dir: /srv/openharness/chat-workspaces
   template_dir: /srv/openharness/templates
-  models_dir: /srv/openharness/models
-  mcp_dir: /srv/openharness/mcp
+  model_dir: /srv/openharness/models
+  tool_dir: /srv/openharness/tools
   skill_dir: /srv/openharness/skills
 ```
+
+兼容性说明：
+
+- 当前推荐统一使用 `model_dir` 与 `tool_dir`
+- `models_dir` 与 `mcp_dir` 仅作为历史兼容别名保留，不建议在新配置中继续使用
 
 ### `paths.workspace_dir`
 
@@ -202,13 +212,15 @@ paths:
 
 用途：
 
-- 存放各种只读 `chat` workspace
+- 存放各种预置的只读 `chat` workspace
 
 规则：
 
 - 每个直接子目录视为一个 `chat` workspace
 - 仅扫描直接子目录，不递归更深层级
 - 子目录内按 `chat` workspace 规则读取
+- 这些目录本身就是直接可用的只读对话空间，不会像 `template_dir` 那样先复制再创建
+- 因为它们不可修改，所以也可以被视为一组可复用的对话模式预设
 
 ### `paths.template_dir`
 
@@ -220,10 +232,10 @@ paths:
 
 - 模板只用于初始化生成 workspace 文件
 - `POST /workspaces` 创建新 workspace 时，必须从这里选择一个模板作为初始化源
-- 初始化顺序应为：先复制模板，再追加用户传入的 `AGENTS.md`、workspace MCP 和 workspace skills
+- 初始化顺序应为：先复制模板，再追加用户传入的 `AGENTS.md`、workspace tools 和 workspace skills
 - 运行时不会直接把模板目录当作活跃 workspace 加载
 
-### `paths.models_dir`
+### `paths.model_dir`
 
 用途：
 
@@ -244,17 +256,17 @@ openai-default:
   name: gpt-5
 ```
 
-### `paths.mcp_dir`
+### `paths.tool_dir`
 
 用途：
 
-- 存放服务端提供的公共 MCP server 定义
+- 存放服务端提供的公共 external tool server 定义
 
 说明：
 
-- 建议目录结构与 workspace `.openharness/mcp` 保持一致
+- 建议目录结构与 workspace `.openharness/tools` 保持一致
 - 例如包含 `settings.yaml` 与 `servers/*`
-- 这些 MCP 不属于 native tool，也不属于 workspace 私有 MCP
+- 这些 external tools 不属于 native tool，也不属于 workspace 私有 tool server
 - 它们由服务端统一加载，并按平台级公共能力参与可见 catalog 组装
 - workspace 内可按策略选择是否暴露给 agent
 
@@ -290,7 +302,7 @@ llm:
 规则：
 
 - 这里直接写模型名，例如 `openai-default`
-- 该模型必须存在于 `paths.models_dir`
+- 该模型必须存在于 `paths.model_dir`
 - 运行时真正对外使用时，会解析为 `platform/openai-default`
 
 ## 自动发现规则
@@ -300,15 +312,15 @@ llm:
 1. 扫描 `paths.workspace_dir`
 2. 扫描 `paths.chat_dir`
 3. 扫描 `paths.template_dir`
-4. 扫描 `paths.models_dir`
-5. 扫描 `paths.mcp_dir`
+4. 扫描 `paths.model_dir`
+5. 扫描 `paths.tool_dir`
 6. 扫描 `paths.skill_dir`
 
 建议原则：
 
 - `workspace_dir` 与 `chat_dir` 负责发现 workspace
 - `template_dir` 只负责初始化模板
-- `models_dir`、`mcp_dir`、`skill_dir` 负责发现平台公共能力
+- `model_dir`、`tool_dir`、`skill_dir` 负责发现平台公共能力
 
 ## 与 workspace 配置的关系
 
@@ -317,17 +329,17 @@ llm:
   - chat 根目录
   - template 目录
   - 平台模型目录
-  - 公共 MCP 目录
+  - 公共 tool 目录
   - 公共 skill 目录
   - 默认模型
 - workspace 配置负责：
-  - 项目自身的 agent、model、action、skill、mcp、hook
+  - 项目自身的 agent、model、action、skill、tool、hook
 
 进入某个 workspace 时：
 
-- `paths.models_dir` 中的平台模型与 workspace 模型合并
+- `paths.model_dir` 中的平台模型与 workspace 模型合并
 - `paths.skill_dir` 中的公共 skill 与 workspace skill 合并
-- `paths.mcp_dir` 中的公共 MCP 与 workspace MCP 合并，再与 native tool / action / skill 一起参与能力投影
+- `paths.tool_dir` 中的公共 external tools 与 workspace tools 合并，再与 native tool / action / skill 一起参与能力投影
 - workspace 同名定义优先级高于服务端公共定义
 
 ## Schema

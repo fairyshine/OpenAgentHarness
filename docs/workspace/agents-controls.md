@@ -32,7 +32,7 @@ tools:
     - code.review
   skills:
     - repo.explorer
-  mcp:
+  external:
     - docs-server
 ```
 
@@ -44,14 +44,14 @@ tools:
   - 允许该 agent 调用的 action 名称列表
 - `skills`
   - 允许该 agent 调用的 skill 名称列表
-- `mcp`
-  - 允许该 agent 使用的 MCP server 名称列表
+- `external`
+  - 允许该 agent 使用的外部 tool server 名称列表
 
 规则：
 
 - `tools` 整体可选
 - 未声明的子字段按空列表处理
-- 保持 `native`、`actions`、`skills`、`mcp` 分开，不合并成统一 registry 名称
+- 保持 `native`、`actions`、`skills`、`external` 分开，不合并成统一 registry 名称
 - `tools` 只表达 allowlist，不承载执行逻辑
 - `kind=chat` workspace 中，即使声明了 `tools`，运行时也必须按空集合处理
 

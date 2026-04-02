@@ -5,7 +5,7 @@
 - 将调用方输入转成可执行的 run
 - 保证 per-session 串行执行
 - 自动发现 workspace 能力并构建上下文
-- 将 LLM tool calls 映射到 Action、Skill、MCP、Native Tool
+- 将 LLM tool calls 映射到 Action、Skill、External Tool、Native Tool
 - 统一处理超时、取消、日志、审计和事件流
 - 将中心历史异步同步到 workspace 下的 `.openharness/data/history.db`
 

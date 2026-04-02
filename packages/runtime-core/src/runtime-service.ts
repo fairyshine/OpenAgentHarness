@@ -19,14 +19,17 @@ import {
   createAgentDelegateTool,
   createAgentSwitchTool
 } from "./agent-control.js";
+import { createNativeToolSet, getNativeToolRetryPolicy, NATIVE_TOOL_NAMES } from "./native-tools.js";
 import { buildAvailableActionsMessage, createRunActionTool } from "./action-dispatch.js";
 import { buildAvailableSkillsMessage, createDynamicActivateSkillTool } from "./skill-activation.js";
 import {
   type ActionRunAcceptedResult,
+  type ActionRetryPolicy,
   type CancelRunResult,
   type CreateSessionMessageParams,
   type CreateSessionParams,
   type CreateWorkspaceParams,
+  type GenerateModelInput,
   type MessageListResult,
   type RuntimeServiceOptions,
   type SessionEvent,
@@ -38,6 +41,8 @@ import {
   type SessionListResult,
   type RunStepStatus,
   type RunStepType,
+  type RuntimeToolExecutionContext,
+  type RuntimeWorkspaceCatalog,
   type WorkspaceListResult,
   toPublicWorkspace,
   type WorkspaceRecord
@@ -140,9 +145,69 @@ function escapeXml(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
+function isActionRetryPolicy(value: unknown): value is ActionRetryPolicy {
+  return value === "manual" || value === "safe";
+}
+
+function timeoutMsFromSeconds(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return Math.floor(value * 1000);
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" ||
+      error.message === "aborted" ||
+      error.message === "This operation was aborted")
+  );
+}
+
+async function withTimeout<T>(
+  operation: (signal: AbortSignal | undefined) => Promise<T>,
+  timeoutMs: number | undefined,
+  timeoutMessage: string
+): Promise<T> {
+  if (timeoutMs === undefined) {
+    return operation(undefined);
+  }
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    abortController.abort();
+  }, timeoutMs);
+
+  try {
+    return await Promise.race([
+      operation(abortController.signal),
+      new Promise<T>((_resolve, reject) => {
+        abortController.signal.addEventListener(
+          "abort",
+          () => {
+            reject(new Error(timeoutMessage));
+          },
+          { once: true }
+        );
+      })
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function createAbortError(): Error {
+  const error = new Error("aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 export class RuntimeService {
   readonly #defaultModel: string;
   readonly #modelGateway: RuntimeServiceOptions["modelGateway"];
+  readonly #runHeartbeatIntervalMs: number;
   readonly #platformModels: Record<string, ModelDefinition>;
   readonly #workspaceRepository: RuntimeServiceOptions["workspaceRepository"];
   readonly #sessionRepository: RuntimeServiceOptions["sessionRepository"];
@@ -162,6 +227,7 @@ export class RuntimeService {
   constructor(options: RuntimeServiceOptions) {
     this.#defaultModel = options.defaultModel;
     this.#modelGateway = options.modelGateway;
+    this.#runHeartbeatIntervalMs = Math.max(50, options.runHeartbeatIntervalMs ?? 5_000);
     this.#platformModels = options.platformModels ?? {};
     this.#workspaceRepository = options.workspaceRepository;
     this.#sessionRepository = options.sessionRepository;
@@ -202,7 +268,8 @@ export class RuntimeService {
       agents: initialized.agents,
       actions: initialized.actions,
       skills: initialized.skills,
-      mcpServers: initialized.mcpServers,
+      toolServers: initialized.toolServers ?? initialized.mcpServers ?? {},
+      ...(initialized.mcpServers ? { mcpServers: initialized.mcpServers } : {}),
       hooks: initialized.hooks,
       catalog: {
         ...initialized.catalog,
@@ -536,6 +603,53 @@ export class RuntimeService {
     await this.#processRun(runId);
   }
 
+  async recoverStaleRuns(options?: { staleBefore?: string | undefined; limit?: number | undefined }): Promise<{ recoveredRunIds: string[] }> {
+    const staleBefore = options?.staleBefore ?? new Date(Date.now() - this.#runHeartbeatIntervalMs * 3).toISOString();
+    const recoverableRuns = await this.#runRepository.listRecoverableActiveRuns(staleBefore, options?.limit ?? 100);
+    const recoveredRunIds: string[] = [];
+
+    for (const run of recoverableRuns) {
+      const currentRun = await this.#runRepository.getById(run.id);
+      if (!currentRun || (currentRun.status !== "running" && currentRun.status !== "waiting_tool")) {
+        continue;
+      }
+
+      const endedAt = nowIso();
+      const failedRun = await this.#updateRun(currentRun, {
+        status: "failed",
+        endedAt,
+        errorCode: "worker_recovery_failed",
+        errorMessage: "Run was recovered as failed after worker heartbeat expired."
+      });
+
+      if (failedRun.sessionId) {
+        await this.#appendEvent({
+          sessionId: failedRun.sessionId,
+          runId: failedRun.id,
+          event: "run.failed",
+          data: {
+            runId: failedRun.id,
+            sessionId: failedRun.sessionId,
+            status: failedRun.status,
+            errorCode: failedRun.errorCode,
+            errorMessage: failedRun.errorMessage,
+            recoveredBy: "worker_startup"
+          }
+        });
+      }
+
+      await this.#recordSystemStep(failedRun, "run.failed", {
+        status: failedRun.status,
+        errorCode: failedRun.errorCode,
+        errorMessage: failedRun.errorMessage,
+        recoveredBy: "worker_startup"
+      });
+      recoveredRunIds.push(failedRun.id);
+    }
+
+    return { recoveredRunIds };
+  }
+
   async #appendEvent(input: Omit<SessionEvent, "id" | "cursor" | "createdAt">): Promise<SessionEvent> {
     return this.#sessionEventStore.append(input);
   }
@@ -577,7 +691,11 @@ export class RuntimeService {
       return;
     }
 
-    run = await this.#setRunStatus(run, "running", { startedAt: nowIso() });
+    const startedAt = nowIso();
+    run = await this.#setRunStatus(run, "running", {
+      startedAt,
+      heartbeatAt: startedAt
+    });
     await this.#recordSystemStep(run, "run.started", {
       status: run.status
     });
@@ -596,7 +714,20 @@ export class RuntimeService {
 
     const abortController = new AbortController();
     this.#runAbortControllers.set(run.id, abortController);
+    const runHeartbeat = setInterval(() => {
+      void this.#refreshRunHeartbeat(run.id);
+    }, this.#runHeartbeatIntervalMs);
+    runHeartbeat.unref?.();
     const modelCallSteps = new Map<number, RunStep>();
+    const runTimeoutMs = timeoutMsFromSeconds(workspace.agents[run.effectiveAgentName]?.policy?.runTimeoutSeconds);
+    let runTimedOut = false;
+    const runTimeout =
+      runTimeoutMs !== undefined
+        ? setTimeout(() => {
+            runTimedOut = true;
+            abortController.abort();
+          }, runTimeoutMs)
+        : undefined;
 
     try {
       if (run.triggerType === "api_action") {
@@ -626,7 +757,11 @@ export class RuntimeService {
       const runtimeTools = this.#buildRuntimeTools(workspace, run, session, executionContext);
       const toolCallStartedAt = new Map<string, number>();
       const toolCallSteps = new Map<string, RunStep>();
+      const activeToolCallIds = new Set<string>();
       let completedModelStepCount = 0;
+      const syncRunStatusFromActiveTools = async () => {
+        await this.#setRunStatusIfPossible(run.id, activeToolCallIds.size > 0 ? "waiting_tool" : "running");
+      };
       const observableRuntimeTools = this.#wrapRuntimeToolsForEvents(
         workspace,
         session,
@@ -636,7 +771,7 @@ export class RuntimeService {
         toolCallStartedAt,
         toolCallSteps
       );
-      const enabledMcpServers = this.#enabledMcpServers(workspace);
+      const enabledToolServers = this.#enabledToolServers(workspace);
       const persistedToolCalls = new Set<string>();
       let assistantMessage: Message | undefined;
       const response = await this.#modelGateway.stream(
@@ -654,12 +789,13 @@ export class RuntimeService {
                 tools: observableRuntimeTools
               }
             : {}),
-          ...(enabledMcpServers.length > 0
+          ...(enabledToolServers.length > 0
             ? {
-                mcpServers: enabledMcpServers
+                toolServers: enabledToolServers
               }
             : {}),
           maxSteps: workspace.agents[executionContext.currentAgentName]?.policy?.maxSteps ?? 8,
+          parallelToolCalls: workspace.agents[executionContext.currentAgentName]?.policy?.parallelToolCalls,
           prepareStep: async (stepNumber) => {
             const activeToolNames = this.#activeToolNamesForAgent(workspace, executionContext.currentAgentName);
             if (stepNumber === 0) {
@@ -718,15 +854,19 @@ export class RuntimeService {
           },
           onToolCallStart: async (toolCall) => {
             toolCallStartedAt.set(toolCall.toolCallId, Date.now());
-            await this.#setRunStatusIfPossible(run.id, "waiting_tool");
+            activeToolCallIds.add(toolCall.toolCallId);
+            await syncRunStatusFromActiveTools();
           },
           onToolCallFinish: async (toolResult) => {
             const startedAt = toolCallStartedAt.get(toolResult.toolCallId);
             toolCallStartedAt.delete(toolResult.toolCallId);
+            activeToolCallIds.delete(toolResult.toolCallId);
             const toolStep = toolCallSteps.get(toolResult.toolCallId);
+            const retryPolicy = toolStep ? this.#runStepRetryPolicy(toolStep) : undefined;
             if (toolStep) {
               const completedToolStep = await this.#completeRunStep(toolStep, "completed", {
                 sourceType: this.#toolSourceType(toolResult.toolName),
+                ...(retryPolicy ? { retryPolicy } : {}),
                 output: this.#normalizeJsonObject(toolResult.output),
                 ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
               });
@@ -743,11 +883,12 @@ export class RuntimeService {
                 toolCallId: toolResult.toolCallId,
                 toolName: toolResult.toolName,
                 sourceType: this.#toolSourceType(toolResult.toolName),
+                ...(retryPolicy ? { retryPolicy } : {}),
                 output: toolResult.output,
                 ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
               }
             });
-            await this.#setRunStatusIfPossible(run.id, "running");
+            await syncRunStatusFromActiveTools();
           },
           onStepFinish: async (step) => {
             const modelCallStep = modelCallSteps.get(completedModelStepCount);
@@ -796,13 +937,38 @@ export class RuntimeService {
       );
       await this.#finalizeSuccessfulRun(session, latestRun, assistantMessage, hookedCompleted);
     } catch (error) {
-      const pendingModelStepStatus = abortController.signal.aborted ? "cancelled" : "failed";
+      const pendingModelStepStatus = runTimedOut ? "failed" : abortController.signal.aborted ? "cancelled" : "failed";
       for (const step of modelCallSteps.values()) {
         await this.#completeRunStep(step, pendingModelStepStatus, {
           errorMessage: error instanceof Error ? error.message : "Unknown model execution error."
         });
       }
       if (abortController.signal.aborted) {
+        if (runTimedOut) {
+          const timedOutRun = await this.#markRunTimedOut(await this.getRun(run.id), runTimeoutMs);
+          if (session) {
+            await this.#appendEvent({
+              sessionId: session.id,
+              runId: timedOutRun.id,
+              event: "run.failed",
+              data: {
+                runId: timedOutRun.id,
+                sessionId: session.id,
+                status: timedOutRun.status,
+                errorCode: timedOutRun.errorCode ?? "run_timed_out",
+                errorMessage: timedOutRun.errorMessage ?? "Run exceeded the configured timeout."
+              }
+            });
+          }
+          await this.#recordSystemStep(timedOutRun, "run.timed_out", {
+            status: timedOutRun.status,
+            ...(timedOutRun.errorCode ? { errorCode: timedOutRun.errorCode } : {}),
+            ...(timedOutRun.errorMessage ? { errorMessage: timedOutRun.errorMessage } : {})
+          });
+          await this.#runLifecycleHooks(workspace, session, timedOutRun, "run_failed");
+          return;
+        }
+
         if (session) {
           await this.#markRunCancelled(session.id, await this.getRun(run.id));
         } else {
@@ -850,6 +1016,10 @@ export class RuntimeService {
 
       await this.#runLifecycleHooks(workspace, session, failedRun, "run_failed");
     } finally {
+      clearInterval(runHeartbeat);
+      if (runTimeout) {
+        clearTimeout(runTimeout);
+      }
       this.#runAbortControllers.delete(run.id);
     }
   }
@@ -935,6 +1105,21 @@ export class RuntimeService {
     });
   }
 
+  async #markRunTimedOut(run: Run, runTimeoutMs: number | undefined): Promise<Run> {
+    if (run.status === "timed_out") {
+      return run;
+    }
+
+    return this.#setRunStatus(run, "timed_out", {
+      endedAt: nowIso(),
+      errorCode: "run_timed_out",
+      errorMessage:
+        runTimeoutMs !== undefined
+          ? `Run exceeded configured timeout of ${runTimeoutMs}ms.`
+          : "Run exceeded the configured timeout."
+    });
+  }
+
   async #setRunStatus(run: Run, nextStatus: Run["status"], patch: Partial<Run>): Promise<Run> {
     if (!canTransitionRunStatus(run.status, nextStatus)) {
       throw new AppError(409, "invalid_run_transition", `Cannot transition run from ${run.status} to ${nextStatus}.`);
@@ -953,6 +1138,17 @@ export class RuntimeService {
     }
 
     await this.#setRunStatus(run, nextStatus, {});
+  }
+
+  async #refreshRunHeartbeat(runId: string): Promise<void> {
+    const run = await this.getRun(runId);
+    if (run.status !== "running" && run.status !== "waiting_tool") {
+      return;
+    }
+
+    await this.#updateRun(run, {
+      heartbeatAt: nowIso()
+    });
   }
 
   async #updateRun(run: Run, patch: Partial<Run>): Promise<Run> {
@@ -1294,9 +1490,10 @@ export class RuntimeService {
 
   #buildEnvironmentMessage(workspace: WorkspaceRecord, activeAgentName: string): string {
     const activeAgent = workspace.agents[activeAgentName];
+    const visibleNativeTools = activeAgent ? this.#visibleNativeToolNames(workspace, activeAgentName) : [];
     const visibleActions = activeAgent ? this.#visibleLlmActions(workspace, activeAgentName).map((action) => action.name) : [];
     const visibleSkills = activeAgent ? this.#visibleLlmSkills(workspace, activeAgentName).map((skill) => skill.name) : [];
-    const visibleMcpServers = activeAgent ? this.#visibleMcpServers(workspace, activeAgentName).map((server) => server.name) : [];
+    const visibleToolServers = activeAgent ? this.#visibleToolServers(workspace, activeAgentName).map((server) => server.name) : [];
 
     return [
       "<environment>",
@@ -1305,9 +1502,10 @@ export class RuntimeService {
       `workspace_kind: ${workspace.kind}`,
       `execution_policy: ${workspace.executionPolicy}`,
       `active_agent: ${activeAgentName}`,
+      `available_native_tools: ${visibleNativeTools.length > 0 ? visibleNativeTools.join(", ") : "none"}`,
       `available_actions: ${visibleActions.length > 0 ? visibleActions.join(", ") : "none"}`,
       `available_skills: ${visibleSkills.length > 0 ? visibleSkills.join(", ") : "none"}`,
-      `available_mcp_servers: ${visibleMcpServers.length > 0 ? visibleMcpServers.join(", ") : "none"}`,
+      `available_tool_servers: ${visibleToolServers.length > 0 ? visibleToolServers.join(", ") : "none"}`,
       "</environment>"
     ].join("\n");
   }
@@ -1323,6 +1521,9 @@ export class RuntimeService {
     }
 
     return {
+      ...createNativeToolSet(workspace.rootPath, () =>
+        this.#visibleNativeToolNames(workspace, executionContext.currentAgentName)
+      ),
       ...createRunActionTool(() => this.#visibleLlmActions(workspace, executionContext.currentAgentName), async (action, input, context) =>
         this.#executeAction(workspace, action, run, context.abortSignal, input)
       ),
@@ -1425,6 +1626,7 @@ export class RuntimeService {
             const currentAgentName = executionContext.currentAgentName;
             const toolStartedAt = context.toolCallId ? (toolCallStartedAt.get(context.toolCallId) ?? Date.now()) : Date.now();
             let executedInput = input;
+            let retryPolicy = this.#toolRetryPolicy(workspace, currentAgentName, toolName, input, definition);
 
             try {
               executedInput = await this.#applyBeforeToolDispatchHooks(
@@ -1436,6 +1638,7 @@ export class RuntimeService {
                 context.toolCallId,
                 input
               );
+              retryPolicy = this.#toolRetryPolicy(workspace, currentAgentName, toolName, executedInput, definition);
 
               if (context.toolCallId) {
                 toolCallStartedAt.set(context.toolCallId, toolStartedAt);
@@ -1449,6 +1652,7 @@ export class RuntimeService {
                     input: {
                       toolCallId: context.toolCallId,
                       sourceType: this.#toolSourceType(toolName),
+                      retryPolicy,
                       input: this.#normalizeJsonObject(executedInput)
                     }
                   })
@@ -1465,12 +1669,22 @@ export class RuntimeService {
                   ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
                   toolName,
                   sourceType: this.#toolSourceType(toolName),
+                  retryPolicy,
                   input: executedInput
                 }
               });
               await this.#setRunStatusIfPossible(run.id, "waiting_tool");
 
-              const output = await definition.execute(executedInput, context);
+              const toolTimeoutMs = timeoutMsFromSeconds(
+                workspace.agents[currentAgentName]?.policy?.toolTimeoutSeconds
+              );
+              const output = await this.#executeRuntimeToolWithPolicy(
+                definition,
+                executedInput,
+                context,
+                toolName,
+                toolTimeoutMs
+              );
               return this.#applyAfterToolDispatchHooks(
                 workspace,
                 session,
@@ -1491,6 +1705,7 @@ export class RuntimeService {
               if (toolStep) {
                 const failedToolStep = await this.#completeRunStep(toolStep, "failed", {
                   sourceType: this.#toolSourceType(toolName),
+                  retryPolicy,
                   errorCode: error instanceof AppError ? error.code : "tool_execution_failed",
                   errorMessage: error instanceof Error ? error.message : "Unknown tool execution error.",
                   ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
@@ -1507,6 +1722,7 @@ export class RuntimeService {
                   ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
                   toolName,
                   sourceType: this.#toolSourceType(toolName),
+                  retryPolicy,
                   errorCode: error instanceof AppError ? error.code : "tool_execution_failed",
                   errorMessage: error instanceof Error ? error.message : "Unknown tool execution error.",
                   ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
@@ -1520,7 +1736,71 @@ export class RuntimeService {
     );
   }
 
-  #toolSourceType(toolName: string): "action" | "skill" | "agent" | "mcp" | "native" {
+  async #executeRuntimeToolWithPolicy(
+    definition: RuntimeToolSet[string],
+    input: unknown,
+    context: RuntimeToolExecutionContext,
+    toolName: string,
+    timeoutMs: number | undefined
+  ): Promise<unknown> {
+    if (timeoutMs === undefined) {
+      return definition.execute(input, context);
+    }
+
+    const abortController = new AbortController();
+    const parentSignal = context.abortSignal;
+    let timedOut = false;
+    const forwardParentAbort = () => {
+      abortController.abort();
+    };
+
+    if (parentSignal) {
+      if (parentSignal.aborted) {
+        abortController.abort();
+      } else {
+        parentSignal.addEventListener("abort", forwardParentAbort, { once: true });
+      }
+    }
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      abortController.abort();
+    }, timeoutMs);
+
+    try {
+      return await Promise.race([
+        Promise.resolve(
+          definition.execute(input, {
+            ...context,
+            abortSignal: abortController.signal
+          })
+        ),
+        new Promise<unknown>((_resolve, reject) => {
+          const rejectForAbort = () => {
+            reject(
+              timedOut
+                ? new AppError(408, "tool_timed_out", `Tool ${toolName} timed out after ${timeoutMs}ms.`)
+                : createAbortError()
+            );
+          };
+
+          if (abortController.signal.aborted) {
+            rejectForAbort();
+            return;
+          }
+
+          abortController.signal.addEventListener("abort", rejectForAbort, { once: true });
+        })
+      ]);
+    } finally {
+      clearTimeout(timeout);
+      if (parentSignal && !parentSignal.aborted) {
+        parentSignal.removeEventListener("abort", forwardParentAbort);
+      }
+    }
+  }
+
+  #toolSourceType(toolName: string): "action" | "skill" | "agent" | "tool" | "native" {
     if (toolName === "run_action") {
       return "action";
     }
@@ -1533,7 +1813,49 @@ export class RuntimeService {
       return "agent";
     }
 
-    return "mcp";
+    if ((NATIVE_TOOL_NAMES as readonly string[]).includes(toolName)) {
+      return "native";
+    }
+
+    return "tool";
+  }
+
+  #toolRetryPolicy(
+    workspace: WorkspaceRecord,
+    _activeAgentName: string,
+    toolName: string,
+    input: unknown,
+    definition?: RuntimeToolSet[string] | undefined
+  ): ActionRetryPolicy {
+    if ((NATIVE_TOOL_NAMES as readonly string[]).includes(toolName)) {
+      return getNativeToolRetryPolicy(toolName as (typeof NATIVE_TOOL_NAMES)[number]);
+    }
+
+    if (toolName === "run_action") {
+      const actionInput =
+        input && typeof input === "object" && !Array.isArray(input) ? (input as { name?: unknown }) : undefined;
+      const actionName = typeof actionInput?.name === "string" ? actionInput.name : undefined;
+      return actionName ? workspace.actions[actionName]?.retryPolicy ?? "manual" : "manual";
+    }
+
+    const definitionRetryPolicy = definition?.retryPolicy;
+    return isActionRetryPolicy(definitionRetryPolicy) ? definitionRetryPolicy : "manual";
+  }
+
+  #runStepRetryPolicy(step: RunStep): ActionRetryPolicy | undefined {
+    const inputPayload = this.#asJsonRecord(step.input);
+    const inputRetryPolicy = inputPayload?.retryPolicy;
+    if (isActionRetryPolicy(inputRetryPolicy)) {
+      return inputRetryPolicy;
+    }
+
+    const outputPayload = this.#asJsonRecord(step.output);
+    const outputRetryPolicy = outputPayload?.retryPolicy;
+    if (isActionRetryPolicy(outputRetryPolicy)) {
+      return outputRetryPolicy;
+    }
+
+    return undefined;
   }
 
   #buildAgentSwitchMessage(workspace: WorkspaceRecord, activeAgentName: string): string | undefined {
@@ -1565,11 +1887,12 @@ export class RuntimeService {
       return undefined;
     }
 
-    if (this.#enabledMcpServers(workspace).length > 0) {
+    if (this.#enabledToolServers(workspace).length > 0) {
       return undefined;
     }
 
     const names: string[] = [];
+    names.push(...this.#visibleNativeToolNames(workspace, activeAgentName));
     if (this.#visibleLlmActions(workspace, activeAgentName).length > 0) {
       names.push("run_action");
     }
@@ -1697,6 +2020,7 @@ export class RuntimeService {
       id: childRunId,
       workspaceId: workspace.id,
       sessionId: childSessionId,
+      parentRunId: parentRun.id,
       initiatorRef: parentRun.initiatorRef ?? parentSession.subjectRef,
       triggerType: "system",
       triggerRef: "agent.delegate",
@@ -1919,6 +2243,32 @@ export class RuntimeService {
     return this.#visibleSkills(workspace, activeAgentName).filter((skill) => skill.exposeToLlm !== false);
   }
 
+  #visibleNativeToolNames(workspace: WorkspaceRecord, activeAgentName: string): string[] {
+    if (workspace.kind === "chat") {
+      return [];
+    }
+
+    const activeAgent = workspace.agents[activeAgentName];
+    const configuredNativeTools = activeAgent?.tools?.native ?? [];
+    const availableNativeTools = [...NATIVE_TOOL_NAMES];
+
+    if (!activeAgent || configuredNativeTools.length === 0) {
+      return availableNativeTools;
+    }
+
+    return configuredNativeTools.map((toolName) => {
+      if (!(NATIVE_TOOL_NAMES as readonly string[]).includes(toolName)) {
+        throw new AppError(
+          404,
+          "native_tool_not_found",
+          `Native tool ${toolName} was not found in workspace ${workspace.id}.`
+        );
+      }
+
+      return toolName;
+    });
+  }
+
   #visibleLlmActions(workspace: WorkspaceRecord, activeAgentName: string): WorkspaceRecord["actions"][string][] {
     return this.#visibleActions(workspace, activeAgentName).filter((action) => action.exposeToLlm);
   }
@@ -1965,37 +2315,37 @@ export class RuntimeService {
     });
   }
 
-  #visibleMcpServers(workspace: WorkspaceRecord, activeAgentName: string): WorkspaceRecord["mcpServers"][string][] {
+  #visibleToolServers(workspace: WorkspaceRecord, activeAgentName: string): WorkspaceRecord["toolServers"][string][] {
     if (workspace.kind === "chat") {
       return [];
     }
 
     const activeAgent = workspace.agents[activeAgentName];
-    const configuredMcpServers = activeAgent?.tools?.mcp ?? [];
-    if (!activeAgent || configuredMcpServers.length === 0) {
-      return Object.values(workspace.mcpServers);
+    const configuredToolServers = activeAgent?.tools?.external ?? activeAgent?.tools?.mcp ?? [];
+    if (!activeAgent || configuredToolServers.length === 0) {
+      return Object.values(workspace.toolServers);
     }
 
-    return configuredMcpServers.map((serverName) => {
-      const server = workspace.mcpServers[serverName];
+    return configuredToolServers.map((serverName) => {
+      const server = workspace.toolServers[serverName];
       if (!server) {
-        throw new AppError(404, "mcp_server_not_found", `MCP server ${serverName} was not found in workspace ${workspace.id}.`);
+        throw new AppError(404, "tool_server_not_found", `Tool server ${serverName} was not found in workspace ${workspace.id}.`);
       }
 
       return server;
     });
   }
 
-  #visibleEnabledMcpServers(workspace: WorkspaceRecord, activeAgentName: string): WorkspaceRecord["mcpServers"][string][] {
-    return this.#visibleMcpServers(workspace, activeAgentName).filter((server) => server.enabled);
+  #visibleEnabledToolServers(workspace: WorkspaceRecord, activeAgentName: string): WorkspaceRecord["toolServers"][string][] {
+    return this.#visibleToolServers(workspace, activeAgentName).filter((server) => server.enabled);
   }
 
-  #enabledMcpServers(workspace: WorkspaceRecord): WorkspaceRecord["mcpServers"][string][] {
+  #enabledToolServers(workspace: WorkspaceRecord): WorkspaceRecord["toolServers"][string][] {
     if (workspace.kind === "chat") {
       return [];
     }
 
-    return Object.values(workspace.mcpServers).filter((server) => server.enabled);
+    return Object.values(workspace.toolServers).filter((server) => server.enabled);
   }
 
   async #applyBeforeModelHooks(
@@ -2534,7 +2884,24 @@ export class RuntimeService {
         errorMessage: error instanceof Error ? error.message : "Unknown hook execution error."
       });
       await this.#recordHookRunAudit(hook, envelope, failedHookStep, "failed", undefined, error);
-      throw error;
+      if (session) {
+        const errorCode = error instanceof AppError ? error.code : "hook_execution_failed";
+        await this.#appendEvent({
+          sessionId: session.id,
+          runId: run.id,
+          event: "hook.notice",
+          data: {
+            runId: run.id,
+            sessionId: session.id,
+            hookName: hook.name,
+            eventName: envelope.hook_event_name,
+            handlerType: handler.type,
+            errorCode,
+            errorMessage: error instanceof Error ? error.message : "Unknown hook execution error."
+          }
+        });
+      }
+      return undefined;
     }
   }
 
@@ -2559,9 +2926,11 @@ export class RuntimeService {
       },
       shell: true
     });
+    const timeoutMs = timeoutMsFromSeconds(handler.timeout_seconds);
 
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
     child.stdin.write(JSON.stringify(envelope));
     child.stdin.end();
     child.stdout.on("data", (chunk: Buffer | string) => {
@@ -2570,11 +2939,26 @@ export class RuntimeService {
     child.stderr.on("data", (chunk: Buffer | string) => {
       stderr += chunk.toString();
     });
+    const killTimer =
+      timeoutMs !== undefined
+        ? setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGTERM");
+          }, timeoutMs)
+        : undefined;
 
     const exitCode = await new Promise<number>((resolve, reject) => {
       child.on("error", reject);
       child.on("close", (code) => resolve(code ?? 0));
+    }).finally(() => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
     });
+
+    if (timedOut) {
+      throw new Error(`Command hook timed out after ${timeoutMs}ms.`);
+    }
 
     if (exitCode === 2) {
       return {
@@ -2583,11 +2967,20 @@ export class RuntimeService {
       };
     }
 
-    if (exitCode !== 0 || stdout.trim().length === 0) {
+    if (exitCode !== 0) {
+      throw new Error(stderr.trim() || `Command hook exited with code ${exitCode}.`);
+    }
+
+    if (stdout.trim().length === 0) {
       return undefined;
     }
 
-    return this.#parseHookResult(stdout);
+    const parsed = this.#parseHookResult(stdout);
+    if (!parsed) {
+      throw new Error("Command hook returned invalid JSON output.");
+    }
+
+    return parsed;
   }
 
   async #executeHttpHook(handler: Record<string, unknown>, envelope: HookEnvelope): Promise<HookResult | undefined> {
@@ -2595,17 +2988,39 @@ export class RuntimeService {
       return undefined;
     }
 
+    const timeoutMs = timeoutMsFromSeconds(handler.timeout_seconds);
+    const abortController = timeoutMs !== undefined ? new AbortController() : undefined;
+    const abortTimer =
+      timeoutMs !== undefined && abortController
+        ? setTimeout(() => {
+            abortController.abort();
+          }, timeoutMs)
+        : undefined;
+
     const response = await fetch(handler.url, {
       method: typeof handler.method === "string" ? handler.method : "POST",
       headers: {
         "content-type": "application/json",
         ...(handler.headers && typeof handler.headers === "object" ? (handler.headers as Record<string, string>) : {})
       },
-      body: JSON.stringify(envelope)
-    }).catch(() => undefined);
+      body: JSON.stringify(envelope),
+      ...(abortController ? { signal: abortController.signal } : {})
+    })
+      .catch((error) => {
+        if (isAbortError(error)) {
+          throw new Error(`HTTP hook timed out after ${timeoutMs}ms.`);
+        }
 
-    if (!response || !response.ok) {
-      return undefined;
+        throw error;
+      })
+      .finally(() => {
+        if (abortTimer) {
+          clearTimeout(abortTimer);
+        }
+      });
+
+    if (!response.ok) {
+      throw new Error(`HTTP hook returned ${response.status}.`);
     }
 
     const body = await response.text();
@@ -2613,7 +3028,12 @@ export class RuntimeService {
       return undefined;
     }
 
-    return this.#parseHookResult(body);
+    const parsed = this.#parseHookResult(body);
+    if (!parsed) {
+      throw new Error("HTTP hook returned invalid JSON output.");
+    }
+
+    return parsed;
   }
 
   async #executePromptHook(
@@ -2631,20 +3051,33 @@ export class RuntimeService {
       workspace,
       typeof handler.model_ref === "string" ? handler.model_ref : this.#defaultModel
     );
-    const result = await this.#modelGateway.generate({
-      model: resolvedModel.model,
-      ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
-      prompt: [
-        prompt,
-        "Return only JSON matching the Open Agent Harness hook output protocol.",
-        JSON.stringify({
-          hook: hook.name,
-          envelope
-        })
-      ].join("\n\n")
-    });
+    const timeoutMs = timeoutMsFromSeconds(handler.timeout_seconds);
+    const result = await withTimeout(
+      async (signal) => {
+        const request = {
+          model: resolvedModel.model,
+          ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
+          prompt: [
+            prompt,
+            "Return only JSON matching the Open Agent Harness hook output protocol.",
+            JSON.stringify({
+              hook: hook.name,
+              envelope
+            })
+          ].join("\n\n")
+        };
+        return this.#modelGateway.generate(request, signal ? { signal } : undefined);
+      },
+      timeoutMs,
+      `Prompt hook timed out after ${timeoutMs}ms.`
+    );
 
-    return this.#parseHookResult(result.text);
+    const parsed = this.#parseHookResult(result.text);
+    if (!parsed) {
+      throw new Error("Prompt hook returned invalid JSON output.");
+    }
+
+    return parsed;
   }
 
   async #executeAgentHook(
@@ -2670,25 +3103,38 @@ export class RuntimeService {
     }
 
     const resolvedModel = this.#resolveModelForRun(workspace, agent.modelRef);
-    const result = await this.#modelGateway.generate({
-      model: resolvedModel.model,
-      ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
-      ...(agent.maxTokens !== undefined ? { maxTokens: agent.maxTokens } : {}),
-      ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
-      messages: [
-        { role: "system", content: agent.prompt },
-        { role: "user", content: task },
-        {
-          role: "user",
-          content: `Return only JSON matching the Open Agent Harness hook output protocol.\n\n${JSON.stringify({
-            hook: hook.name,
-            envelope
-          })}`
-        }
-      ]
-    });
+    const timeoutMs = timeoutMsFromSeconds(handler.timeout_seconds);
+    const result = await withTimeout(
+      async (signal) => {
+        const request: GenerateModelInput = {
+          model: resolvedModel.model,
+          ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
+          ...(agent.maxTokens !== undefined ? { maxTokens: agent.maxTokens } : {}),
+          ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
+          messages: [
+            { role: "system", content: agent.prompt },
+            { role: "user", content: task },
+            {
+              role: "user",
+              content: `Return only JSON matching the Open Agent Harness hook output protocol.\n\n${JSON.stringify({
+                hook: hook.name,
+                envelope
+              })}`
+            }
+          ]
+        };
+        return this.#modelGateway.generate(request, signal ? { signal } : undefined);
+      },
+      timeoutMs,
+      `Agent hook timed out after ${timeoutMs}ms.`
+    );
 
-    return this.#parseHookResult(result.text);
+    const parsed = this.#parseHookResult(result.text);
+    if (!parsed) {
+      throw new Error("Agent hook returned invalid JSON output.");
+    }
+
+    return parsed;
   }
 
   async #resolveHookPromptSource(
@@ -3008,9 +3454,10 @@ export class RuntimeService {
       sourceType === "skill" ||
       sourceType === "agent" ||
       sourceType === "mcp" ||
+      sourceType === "tool" ||
       sourceType === "native"
     ) {
-      return sourceType;
+      return sourceType === "mcp" ? "tool" : sourceType;
     }
 
     return this.#toolSourceType(toolName);
@@ -3051,15 +3498,22 @@ export class RuntimeService {
     });
   }
 
-  #publicWorkspaceCatalog(workspace: WorkspaceRecord): WorkspaceCatalog {
+  #publicWorkspaceCatalog(workspace: WorkspaceRecord): RuntimeWorkspaceCatalog {
+    const tools = workspace.catalog.tools ?? workspace.catalog.mcp ?? [];
     if (workspace.kind !== "chat") {
-      return workspace.catalog;
+      return {
+        ...workspace.catalog,
+        tools,
+        mcp: [...tools],
+        nativeTools: [...NATIVE_TOOL_NAMES]
+      };
     }
 
     return {
       ...workspace.catalog,
       actions: [],
       skills: [],
+      tools: [],
       mcp: [],
       hooks: [],
       nativeTools: []

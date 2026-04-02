@@ -3,7 +3,8 @@ import { bootstrapRuntime, installSignalHandlers } from "./bootstrap.js";
 async function main() {
   const runtime = await bootstrapRuntime({
     argv: process.argv.slice(2),
-    startWorker: true
+    startWorker: true,
+    processKind: "worker"
   });
 
   installSignalHandlers(async () => {
@@ -11,7 +12,7 @@ async function main() {
   });
 
   console.log(
-    `Open Agent Harness worker started for ${runtime.config.server.host}:${runtime.config.server.port}${
+    `Open Agent Harness ${runtime.process.label} started for ${runtime.config.server.host}:${runtime.config.server.port}${
       runtime.config.storage.redis_url ? ` using Redis ${runtime.config.storage.redis_url}` : " without Redis queue"
     }`
   );

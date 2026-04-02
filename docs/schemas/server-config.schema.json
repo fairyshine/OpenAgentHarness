@@ -20,9 +20,6 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535
-        },
-        "allow_dev_bearer_stub": {
-          "type": "boolean"
         }
       }
     },
@@ -44,11 +41,39 @@
         "workspace_dir",
         "chat_dir",
         "template_dir",
-        "models_dir",
-        "mcp_dir",
         "skill_dir"
       ],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "model_dir"
+              ]
+            },
+            {
+              "required": [
+                "models_dir"
+              ]
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "required": [
+                "tool_dir"
+              ]
+            },
+            {
+              "required": [
+                "mcp_dir"
+              ]
+            }
+          ]
+        }
+      ],
       "properties": {
         "workspace_dir": {
           "type": "string"
@@ -59,11 +84,23 @@
         "template_dir": {
           "type": "string"
         },
+        "model_dir": {
+          "type": "string",
+          "description": "Preferred path for platform models."
+        },
         "models_dir": {
-          "type": "string"
+          "type": "string",
+          "description": "Deprecated legacy alias for model_dir.",
+          "deprecated": true
+        },
+        "tool_dir": {
+          "type": "string",
+          "description": "Preferred path for platform external tools."
         },
         "mcp_dir": {
-          "type": "string"
+          "type": "string",
+          "description": "Deprecated legacy alias for tool_dir.",
+          "deprecated": true
         },
         "skill_dir": {
           "type": "string"

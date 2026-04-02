@@ -5,15 +5,16 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { RuntimeService } from "../packages/runtime-core/dist/index.js";
-import { createMemoryRuntimePersistence } from "../packages/storage-memory/dist/index.js";
-import { discoverWorkspace, updateWorkspaceHistoryMirrorSetting } from "../packages/config/dist/index.js";
+import { discoverWorkspace, updateWorkspaceHistoryMirrorSetting } from "@oah/config";
+import type { CallerContext } from "@oah/runtime-core";
+import { RuntimeService } from "@oah/runtime-core";
+import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
-import { createApp } from "../apps/server/dist/app.js";
-import { HistoryMirrorSyncer, historyMirrorDbPath } from "../apps/server/dist/history-mirror.js";
+import { createApp } from "../apps/server/src/app.ts";
+import { HistoryMirrorSyncer, historyMirrorDbPath } from "../apps/server/src/history-mirror.ts";
 import { FakeModelGateway } from "./helpers/fake-model-gateway";
 
-async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 2_000): Promise<void> {
+async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (await check()) {
@@ -109,7 +110,7 @@ async function createStartedApp() {
           agents: {},
           actions: {},
           skills: {},
-          mcpServers: {},
+          toolServers: {},
           hooks: {},
           catalog: {
             workspaceId: "template",
@@ -134,14 +135,28 @@ async function createStartedAppWithRuntimeService(
   gateway: FakeModelGateway,
   options?: {
     rebuildWorkspaceHistoryMirror?: (workspace: any) => Promise<any>;
+    importWorkspace?: (input: {
+      rootPath: string;
+      kind?: "project" | "chat";
+      name?: string;
+      externalRef?: string;
+    }) => Promise<any>;
+    workspaceMode?: "multi" | "single";
+    resolveCallerContext?: (request: import("fastify").FastifyRequest) => Promise<CallerContext | undefined> | CallerContext | undefined;
   }
 ) {
   const app = createApp({
     runtimeService,
     modelGateway: gateway,
     defaultModel: "openai-default",
+    logger: false,
     listWorkspaceTemplates: async () => [{ name: "workspace" }],
-    rebuildWorkspaceHistoryMirror: options?.rebuildWorkspaceHistoryMirror
+    ...(options?.workspaceMode ? { workspaceMode: options.workspaceMode } : {}),
+    ...(options?.resolveCallerContext ? { resolveCallerContext: options.resolveCallerContext } : {}),
+    ...(options?.rebuildWorkspaceHistoryMirror
+      ? { rebuildWorkspaceHistoryMirror: options.rebuildWorkspaceHistoryMirror }
+      : {}),
+    ...(options?.importWorkspace ? { importWorkspace: options.importWorkspace } : {})
   });
 
   await app.listen({ host: "127.0.0.1", port: 0 });
@@ -206,11 +221,7 @@ describe("http api", () => {
   it("lists workspace templates from template_dir", async () => {
     activeApp = await createStartedApp();
 
-    const response = await fetch(`${activeApp.baseUrl}/api/v1/workspace-templates`, {
-      headers: {
-        authorization: "Bearer token-1"
-      }
-    });
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/workspace-templates`);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -218,10 +229,27 @@ describe("http api", () => {
     });
   });
 
+  it("accepts standalone requests without authorization when no host caller context resolver is configured", async () => {
+    activeApp = await createStartedApp();
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        name: "no-auth-workspace",
+        template: "workspace",
+        rootPath: "/tmp/no-auth-workspace"
+      })
+    });
+
+    expect(response.status).toBe(201);
+  });
+
   it("lists workspaces and sessions over HTTP", async () => {
     activeApp = await createStartedApp();
     const authHeaders = {
-      authorization: "Bearer token-1",
       "content-type": "application/json"
     };
 
@@ -316,6 +344,106 @@ describe("http api", () => {
     expect(sessionPage.nextCursor).toBeUndefined();
   });
 
+  it("imports existing workspaces over HTTP", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-http-import-"));
+    await mkdir(path.join(tempDir, ".openharness"), { recursive: true });
+    await writeFile(path.join(tempDir, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    activeApp = await createStartedAppWithRuntimeService(runtimeService, gateway, {
+      async importWorkspace(input) {
+        const discovered = await discoverWorkspace(input.rootPath, input.kind ?? "project", {
+          platformModels: {}
+        });
+        const persisted = await persistence.workspaceRepository.upsert({
+          ...discovered,
+          name: input.name ?? discovered.name,
+          externalRef: input.externalRef
+        });
+        return runtimeService.getWorkspace(persisted.id);
+      }
+    });
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/import`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer token-1",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        rootPath: tempDir,
+        name: "Imported Workspace",
+        externalRef: "educlaw-agent-123"
+      })
+    });
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      name: "Imported Workspace",
+      rootPath: tempDir,
+      kind: "project"
+    });
+
+    const persistedWorkspaces = await runtimeService.listWorkspaces(10);
+    expect(persistedWorkspaces.items).toHaveLength(1);
+    expect(persistedWorkspaces.items[0]).toMatchObject({
+      name: "Imported Workspace",
+      rootPath: tempDir
+    });
+  });
+
+  it("locks workspace management routes in single-workspace mode", async () => {
+    activeApp = await createStartedAppWithRuntimeService(
+      new RuntimeService({
+        defaultModel: "openai-default",
+        modelGateway: new FakeModelGateway(20),
+        ...createMemoryRuntimePersistence()
+      }),
+      new FakeModelGateway(20),
+      {
+        workspaceMode: "single"
+      }
+    );
+
+    const [templatesResponse, createResponse, importResponse, deleteResponse] = await Promise.all([
+      fetch(`${activeApp.baseUrl}/api/v1/workspace-templates`),
+      fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: "blocked-workspace",
+          template: "workspace"
+        })
+      }),
+      fetch(`${activeApp.baseUrl}/api/v1/workspaces/import`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          rootPath: "/tmp/blocked-workspace"
+        })
+      }),
+      fetch(`${activeApp.baseUrl}/api/v1/workspaces/blocked`, {
+        method: "DELETE"
+      })
+    ]);
+
+    expect(templatesResponse.status).toBe(501);
+    expect(createResponse.status).toBe(501);
+    expect(importResponse.status).toBe(501);
+    expect(deleteResponse.status).toBe(501);
+  });
+
   it("deletes workspace records and managed workspace directories over HTTP", async () => {
     const managedRoot = await mkdtemp(path.join(os.tmpdir(), "oah-http-delete-root-"));
     const workspaceRoot = path.join(managedRoot, "workspace-a");
@@ -354,7 +482,7 @@ describe("http api", () => {
             agents: {},
             actions: {},
             skills: {},
-            mcpServers: {},
+            toolServers: {},
             hooks: {},
             catalog: {
               workspaceId: "template",
@@ -501,7 +629,7 @@ describe("http api", () => {
       agents: {},
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "ws_http_history_status",
@@ -581,7 +709,7 @@ describe("http api", () => {
       agents: {},
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "ws_http_history_rebuild",
@@ -695,7 +823,7 @@ describe("http api", () => {
       agents: {},
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "ws_http_run_steps_scalar",
@@ -806,7 +934,7 @@ describe("http api", () => {
           content: "# Repo Explorer"
         }
       },
-      mcpServers: {
+      toolServers: {
         docs: {
           name: "docs",
           enabled: true,
@@ -863,10 +991,10 @@ describe("http api", () => {
     });
   });
 
-  it("requires bearer auth on public routes and skips it for internal model routes", async () => {
+  it("accepts standalone public routes without authorization and still skips auth on internal model routes", async () => {
     activeApp = await createStartedApp();
 
-    const unauthorized = await fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
+    const standalone = await fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
       method: "POST",
       headers: {
         "content-type": "application/json"
@@ -877,7 +1005,7 @@ describe("http api", () => {
         rootPath: "/tmp/demo"
       })
     });
-    expect(unauthorized.status).toBe(401);
+    expect(standalone.status).toBe(201);
 
     const internal = await fetch(`${activeApp.baseUrl}/internal/v1/models/generate`, {
       method: "POST",
@@ -893,6 +1021,175 @@ describe("http api", () => {
     await expect(internal.json()).resolves.toMatchObject({
       model: "openai-default",
       text: "generated:hello"
+    });
+  });
+
+  it("accepts host-injected caller context without relying on the bearer stub", async () => {
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      workspaceInitializer: {
+        async initialize(input) {
+          return {
+            rootPath: input.rootPath,
+            settings: {
+              defaultAgent: "default",
+              skillDirs: []
+            },
+            defaultAgent: "default",
+            workspaceModels: {},
+            agents: {},
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "template",
+              agents: [],
+              models: [],
+              actions: [],
+              skills: [],
+              mcp: [],
+              hooks: [],
+              nativeTools: []
+            }
+          };
+        }
+      }
+    });
+
+    activeApp = await createStartedAppWithRuntimeService(runtimeService, gateway, {
+      resolveCallerContext: (request) => {
+        if (request.headers["x-test-auth"] !== "ok") {
+          return undefined;
+        }
+
+        return {
+          subjectRef: "external:user-1",
+          authSource: "external_gateway",
+          scopes: ["workspace:read"],
+          workspaceAccess: []
+        };
+      }
+    });
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-test-auth": "ok"
+      },
+      body: JSON.stringify({
+        name: "resolver-demo",
+        template: "workspace",
+        rootPath: "/tmp/resolver-demo"
+      })
+    });
+
+    expect(response.status).toBe(201);
+
+    const created = (await response.json()) as { id: string };
+    const sessionResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${created.id}/sessions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-test-auth": "ok"
+      },
+      body: JSON.stringify({})
+    });
+
+    expect(sessionResponse.status).toBe(201);
+    const session = (await sessionResponse.json()) as { id: string };
+    const storedSession = await persistence.sessionRepository.getById(session.id);
+    expect(storedSession?.subjectRef).toBe("external:user-1");
+  });
+
+  it("returns missing caller context when host auth owns the boundary", async () => {
+    activeApp = await createStartedAppWithRuntimeService(
+      new RuntimeService({
+        defaultModel: "openai-default",
+        modelGateway: new FakeModelGateway(20),
+        ...createMemoryRuntimePersistence(),
+        workspaceInitializer: {
+          async initialize(input) {
+            return {
+              rootPath: input.rootPath,
+              settings: {
+                defaultAgent: "default",
+                skillDirs: []
+              },
+              defaultAgent: "default",
+              workspaceModels: {},
+              agents: {},
+              actions: {},
+              skills: {},
+              toolServers: {},
+              hooks: {},
+              catalog: {
+                workspaceId: "template",
+                agents: [],
+                models: [],
+                actions: [],
+                skills: [],
+                mcp: [],
+                hooks: [],
+                nativeTools: []
+              }
+            };
+          }
+        }
+      }),
+      new FakeModelGateway(20),
+      {
+        resolveCallerContext: () => undefined
+      }
+    );
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer token-1"
+      },
+      body: JSON.stringify({
+        name: "no-context",
+        template: "workspace",
+        rootPath: "/tmp/no-context"
+      })
+    });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "unauthorized",
+        message: "Missing caller context."
+      }
+    });
+  });
+
+  it("rejects non-loopback access to internal model routes", async () => {
+    activeApp = await createStartedApp();
+
+    const response = await activeApp.app.inject({
+      method: "POST",
+      url: "/internal/v1/models/generate",
+      remoteAddress: "203.0.113.10",
+      headers: {
+        "content-type": "application/json"
+      },
+      payload: {
+        prompt: "hello"
+      }
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({
+      error: {
+        code: "forbidden"
+      }
     });
   });
 

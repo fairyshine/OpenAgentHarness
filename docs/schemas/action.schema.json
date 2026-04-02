@@ -34,6 +34,19 @@
         }
       }
     },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "retry_policy": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "safe"
+          ]
+        }
+      }
+    },
     "input_schema": {
       "type": "object"
     },

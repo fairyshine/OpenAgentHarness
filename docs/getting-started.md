@@ -7,6 +7,7 @@
 | 目标 | 建议路径 |
 | --- | --- |
 | 先把项目跑起来 | 按本文从上到下操作 |
+| 只想服务一个固定 workspace | 看本文第 3 节里的 single-workspace 启动方式 |
 | 想理解模式差异 | 先看 [部署与运行](./deploy.md) |
 | 只想跑文档站 | 直接看本文后半部分的“本地预览文档站”章节 |
 
@@ -57,6 +58,23 @@ pnpm infra:down
 pnpm dev:server -- --config ./server.example.yaml
 ```
 
+如果你只想把一个 workspace 直接作为专属后端运行，可以使用 single-workspace 模式：
+
+```bash
+pnpm dev:server -- \
+  --workspace /absolute/path/to/workspace \
+  --model-dir /absolute/path/to/models \
+  --default-model openai-default
+```
+
+常见补充参数：
+
+- `--workspace-kind chat`
+- `--tool-dir /absolute/path/to/tools`
+- `--skill-dir /absolute/path/to/skills`
+- `--host 127.0.0.1`
+- `--port 8787`
+
 如果你要模拟生产拆分部署，可以分开启动：
 
 ```bash
@@ -67,6 +85,7 @@ pnpm dev:worker -- --config ./server.example.yaml
 两种方式怎么选：
 
 - 只是本地开发、联调、验证功能：用默认 `server`
+- 只服务一个固定 workspace：用 single-workspace 模式
 - 想模拟生产架构或分离 API 与执行资源：用 `--api-only` + `worker`
 
 ## 4. 启动调试 Web 控制台
@@ -93,6 +112,7 @@ OAH_WEB_PROXY_TARGET=http://127.0.0.1:8787 pnpm dev:web
 2. 前端能打开 [http://localhost:5174](http://localhost:5174)
 3. 发起 message 后，run 能从 `queued` 进入执行
 4. 如果是拆分部署，`worker` 日志里能看到队列消费
+5. 如果是 single-workspace 模式，Web 控制台会自动进入唯一的 workspace
 
 ## 6. 验证构建与测试
 
@@ -159,6 +179,7 @@ mkdocs build --strict
 pnpm install
 pnpm infra:up
 pnpm dev:server -- --config ./server.example.yaml
+pnpm dev:server -- --workspace /absolute/path/to/workspace --model-dir /absolute/path/to/models --default-model openai-default
 pnpm dev:worker -- --config ./server.example.yaml
 pnpm dev:web
 pnpm build

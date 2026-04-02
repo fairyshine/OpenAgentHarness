@@ -224,7 +224,7 @@ PostgreSQL 存放以下核心实体：
 
 说明：
 
-- `source_type` 可取 `native`、`action`、`skill`、`mcp`
+- `source_type` 可取 `native`、`action`、`skill`、`tool`
 
 ### 5.7 action_run
 

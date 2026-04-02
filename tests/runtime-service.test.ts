@@ -1,16 +1,16 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { RuntimeService } from "../packages/runtime-core/dist/index.js";
-import type { HookRunAuditRecord, ToolCallAuditRecord } from "../packages/runtime-core/dist/index.js";
-import { createMemoryRuntimePersistence } from "../packages/storage-memory/dist/index.js";
+import { RuntimeService } from "@oah/runtime-core";
+import type { HookRunAuditRecord, ToolCallAuditRecord } from "@oah/runtime-core";
+import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
 import { FakeModelGateway } from "./helpers/fake-model-gateway";
 
-async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 2_000): Promise<void> {
+async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (await check()) {
@@ -43,7 +43,7 @@ async function createRuntime(delayMs = 0) {
           agents: {},
           actions: {},
           skills: {},
-          mcpServers: {},
+          toolServers: {},
           hooks: {},
           catalog: {
             workspaceId: "template",
@@ -108,7 +108,7 @@ describe("runtime service", () => {
             },
             actions: {},
             skills: {},
-            mcpServers: {},
+            toolServers: {},
             hooks: {},
             catalog: {
               workspaceId: "template",
@@ -170,7 +170,7 @@ describe("runtime service", () => {
             agents: {},
             actions: {},
             skills: {},
-            mcpServers: {},
+            toolServers: {},
             hooks: {},
             catalog: {
               workspaceId: "template",
@@ -222,7 +222,7 @@ describe("runtime service", () => {
     const { runtimeService, workspace } = await createRuntime(30);
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -261,7 +261,7 @@ describe("runtime service", () => {
     const { runtimeService, workspace } = await createRuntime();
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -293,7 +293,7 @@ describe("runtime service", () => {
     const { runtimeService, workspace, gateway } = await createRuntime(60);
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -330,7 +330,7 @@ describe("runtime service", () => {
     const { runtimeService, workspace } = await createRuntime(80);
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -405,7 +405,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_demo",
@@ -423,7 +423,7 @@ describe("runtime service", () => {
       workspaceId: "project_demo",
       caller: {
         subjectRef: "dev:test",
-        authSource: "bearer_stub",
+        authSource: "standalone_server",
         scopes: [],
         workspaceAccess: []
       },
@@ -478,7 +478,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_prompt",
@@ -494,7 +494,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -572,7 +572,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_prompt_default_agent",
@@ -588,7 +588,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -683,7 +683,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_agent_switch",
@@ -702,7 +702,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -851,7 +851,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_agent_delegate",
@@ -870,7 +870,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -919,6 +919,7 @@ describe("runtime service", () => {
     );
 
     expect(childRun.triggerType).toBe("system");
+    expect(childRun.parentRunId).toBe(accepted.runId);
     expect(childRun.metadata).toMatchObject({
       parentRunId: accepted.runId,
       parentSessionId: session.id,
@@ -978,7 +979,7 @@ describe("runtime service", () => {
         }
       },
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_action",
@@ -1005,7 +1006,7 @@ describe("runtime service", () => {
       actionName: "debug.echo",
       caller: {
         subjectRef: "dev:test",
-        authSource: "bearer_stub",
+        authSource: "standalone_server",
         scopes: [],
         workspaceAccess: []
       }
@@ -1076,7 +1077,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_workspace_model",
@@ -1100,7 +1101,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -1168,7 +1169,7 @@ describe("runtime service", () => {
         }
       },
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_timeout_action",
@@ -1195,7 +1196,7 @@ describe("runtime service", () => {
       actionName: "debug.sleep",
       caller: {
         subjectRef: "dev:test",
-        authSource: "bearer_stub",
+        authSource: "standalone_server",
         scopes: [],
         workspaceAccess: []
       }
@@ -1215,6 +1216,669 @@ describe("runtime service", () => {
     expect(runSteps.items.some((step) => step.stepType === "tool_call" && step.name === "debug.sleep")).toBe(true);
     expect(runSteps.items.find((step) => step.name === "debug.sleep")?.status).toBe("failed");
     expect(runSteps.items.some((step) => step.stepType === "system" && step.name === "run.timed_out")).toBe(true);
+  });
+
+  it("enforces agent run_timeout_seconds with a terminal timed_out status", async () => {
+    const gateway = new FakeModelGateway(40);
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_run_timeout_policy",
+      name: "run-timeout-policy",
+      rootPath: "/tmp/run-timeout-policy",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Be quick.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: [],
+          policy: {
+            runTimeoutSeconds: 0.02
+          }
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_run_timeout_policy",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_run_timeout_policy",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "This response should time out." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "timed_out";
+    });
+
+    await waitFor(async () => {
+      const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+      return events.some((event) => event.event === "run.failed");
+    });
+
+    const run = await runtimeService.getRun(accepted.runId);
+    expect(run.errorCode).toBe("run_timed_out");
+
+    const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+    expect(events.find((event) => event.event === "run.failed")?.data).toMatchObject({
+      status: "timed_out",
+      errorCode: "run_timed_out"
+    });
+
+    const runSteps = await runtimeService.listRunSteps(accepted.runId);
+    expect(runSteps.items.some((step) => step.stepType === "model_call" && step.status === "failed")).toBe(true);
+    expect(runSteps.items.some((step) => step.stepType === "system" && step.name === "run.timed_out")).toBe(true);
+  });
+
+  it("enforces agent tool_timeout_seconds for native tools", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-tool-timeout-"));
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = () => ({
+      toolSteps: [
+        {
+          toolName: "shell.exec",
+          input: {
+            command: "sleep 1"
+          },
+          toolCallId: "call_shell_timeout"
+        }
+      ]
+    });
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_tool_timeout_policy",
+      name: "tool-timeout-policy",
+      rootPath: workspaceRoot,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Use the shell tool when needed.",
+          tools: {
+            native: ["shell.exec"],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: [],
+          policy: {
+            toolTimeoutSeconds: 0.01
+          }
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_tool_timeout_policy",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [],
+        nativeTools: ["shell.exec"]
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_tool_timeout_policy",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Run the shell command." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "failed";
+    });
+
+    const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+    expect(events.map((event) => event.event)).toEqual(expect.arrayContaining(["tool.started", "tool.failed", "run.failed"]));
+    expect(events.find((event) => event.event === "tool.failed")?.data).toMatchObject({
+      toolCallId: "call_shell_timeout",
+      toolName: "shell.exec",
+      sourceType: "native",
+      errorCode: "tool_timed_out"
+    });
+
+    const runSteps = await runtimeService.listRunSteps(accepted.runId);
+    expect(runSteps.items.find((step) => step.name === "shell.exec")?.status).toBe("failed");
+    expect(runSteps.items.find((step) => step.name === "shell.exec")?.output).toMatchObject({
+      errorCode: "tool_timed_out"
+    });
+  });
+
+  it("persists heartbeatAt while a run is active", async () => {
+    const gateway = new FakeModelGateway(120);
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      runHeartbeatIntervalMs: 30,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_run_heartbeat",
+      name: "run-heartbeat",
+      rootPath: "/tmp/run-heartbeat",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Reply slowly.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_run_heartbeat",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_run_heartbeat",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Please answer." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return typeof run.startedAt === "string" && typeof run.heartbeatAt === "string" && run.heartbeatAt > run.startedAt;
+    });
+
+    const activeRun = await runtimeService.getRun(accepted.runId);
+    expect(activeRun.heartbeatAt).toBeDefined();
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    const completedRun = await runtimeService.getRun(accepted.runId);
+    expect(completedRun.heartbeatAt).toBeDefined();
+  });
+
+  it("recovers stale active runs as failed", async () => {
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(),
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_run_recovery",
+      name: "run-recovery",
+      rootPath: "/tmp/run-recovery",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Recover stale runs safely.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_run_recovery",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    await persistence.sessionRepository.create({
+      id: "ses_recovery",
+      workspaceId: "project_run_recovery",
+      subjectRef: "dev:test",
+      activeAgentName: "builder",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+
+    await persistence.runRepository.create({
+      id: "run_stale",
+      workspaceId: "project_run_recovery",
+      sessionId: "ses_recovery",
+      initiatorRef: "dev:test",
+      triggerType: "message",
+      triggerRef: "msg_1",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "running",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:10.000Z",
+      heartbeatAt: "2026-04-01T00:00:20.000Z"
+    });
+
+    await persistence.runRepository.create({
+      id: "run_recent",
+      workspaceId: "project_run_recovery",
+      sessionId: "ses_recovery",
+      initiatorRef: "dev:test",
+      triggerType: "message",
+      triggerRef: "msg_2",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "waiting_tool",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:30.000Z",
+      heartbeatAt: "2026-04-01T00:00:55.000Z"
+    });
+
+    const recovered = await runtimeService.recoverStaleRuns({
+      staleBefore: "2026-04-01T00:00:40.000Z"
+    });
+
+    expect(recovered.recoveredRunIds).toEqual(["run_stale"]);
+
+    const staleRun = await runtimeService.getRun("run_stale");
+    expect(staleRun.status).toBe("failed");
+    expect(staleRun.errorCode).toBe("worker_recovery_failed");
+    expect(staleRun.endedAt).toBeDefined();
+
+    const recentRun = await runtimeService.getRun("run_recent");
+    expect(recentRun.status).toBe("waiting_tool");
+
+    const events = await runtimeService.listSessionEvents("ses_recovery", undefined, "run_stale");
+    expect(events.find((event) => event.event === "run.failed")?.data).toMatchObject({
+      status: "failed",
+      errorCode: "worker_recovery_failed",
+      recoveredBy: "worker_startup"
+    });
+
+    const runSteps = await runtimeService.listRunSteps("run_stale");
+    expect(runSteps.items.some((step) => step.stepType === "system" && step.name === "run.failed")).toBe(true);
+  });
+
+  it("keeps runs in waiting_tool until all parallel tool calls finish", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-parallel-tools-"));
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = () => ({
+      toolBatches: [
+        [
+          {
+            toolName: "file.list",
+            input: {
+              path: "."
+            },
+            toolCallId: "call_list_fast",
+            delayMs: 150
+          },
+          {
+            toolName: "file.list",
+            input: {
+              path: "."
+            },
+            toolCallId: "call_list_slow",
+            delayMs: 450
+          }
+        ]
+      ]
+    });
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_parallel_tools",
+      name: "parallel-tools",
+      rootPath: workspaceRoot,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Use file.list when needed.",
+          tools: {
+            native: ["file.list"],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: [],
+          policy: {
+            parallelToolCalls: true
+          }
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_parallel_tools",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [],
+        nativeTools: ["file.list"]
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_parallel_tools",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "List the workspace twice." }
+    });
+
+    await waitFor(async () => {
+      const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+      return events.filter((event) => event.event === "tool.completed").length === 1;
+    });
+
+    const inFlightRun = await runtimeService.getRun(accepted.runId);
+    expect(inFlightRun.status).toBe("waiting_tool");
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    expect(gateway.maxConcurrentToolExecutions).toBeGreaterThan(1);
+  });
+
+  it("respects agent parallel_tool_calls false by serializing tool batches", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-serial-tools-"));
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = () => ({
+      toolBatches: [
+        [
+          {
+            toolName: "file.list",
+            input: {
+              path: "."
+            },
+            toolCallId: "call_list_one",
+            delayMs: 120
+          },
+          {
+            toolName: "file.list",
+            input: {
+              path: "."
+            },
+            toolCallId: "call_list_two",
+            delayMs: 120
+          }
+        ]
+      ]
+    });
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_serial_tools",
+      name: "serial-tools",
+      rootPath: workspaceRoot,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Use file.list when needed.",
+          tools: {
+            native: ["file.list"],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: [],
+          policy: {
+            parallelToolCalls: false
+          }
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_serial_tools",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [],
+        nativeTools: ["file.list"]
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_serial_tools",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "List the workspace twice." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    expect(gateway.maxConcurrentToolExecutions).toBe(1);
   });
 
   it("composes system prompts with llm-optimized prompt, actions catalog, skills catalog, and environment summary", async () => {
@@ -1304,7 +1968,7 @@ describe("runtime service", () => {
           content: "# Repo Explorer"
         }
       },
-      mcpServers: {
+      toolServers: {
         "docs-server": {
           name: "docs-server",
           enabled: true,
@@ -1326,7 +1990,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -1358,7 +2022,7 @@ describe("runtime service", () => {
         expect.stringContaining("call `activate_skill`"),
         expect.stringContaining("available_actions: debug.echo"),
         expect.stringContaining("available_skills: repo-explorer"),
-        expect.stringContaining("available_mcp_servers: docs-server")
+        expect.stringContaining("available_tool_servers: docs-server")
       ])
     );
 
@@ -1446,7 +2110,7 @@ describe("runtime service", () => {
           content: "# Repo Explorer\n\nStart with a quick tree and then inspect focused files."
         }
       },
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_skill_activation",
@@ -1462,7 +2126,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -1589,7 +2253,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_tool_failed",
@@ -1608,7 +2272,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -1704,6 +2368,7 @@ describe("runtime service", () => {
           callableByApi: true,
           callableByUser: true,
           exposeToLlm: true,
+          retryPolicy: "safe",
           directory: "/tmp",
           entry: {
             command:
@@ -1712,7 +2377,7 @@ describe("runtime service", () => {
         }
       },
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_action_tool",
@@ -1724,7 +2389,8 @@ describe("runtime service", () => {
             description: "Echo the provided mode.",
             callableByApi: true,
             callableByUser: true,
-            exposeToLlm: true
+            exposeToLlm: true,
+            retryPolicy: "safe"
           }
         ],
         skills: [],
@@ -1736,7 +2402,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -1765,6 +2431,276 @@ describe("runtime service", () => {
     expect(page.items[1]?.content).toContain('<action_result name="debug.echo" exit_code="0">');
     expect(page.items[1]?.content).toContain("mode:quick");
     expect(page.items[2]?.content).toBe("I ran the debug.echo action.");
+
+    const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+    expect(events.find((event) => event.event === "tool.started")?.data).toMatchObject({
+      toolCallId: "call_action",
+      toolName: "run_action",
+      retryPolicy: "safe"
+    });
+    expect(events.find((event) => event.event === "tool.completed")?.data).toMatchObject({
+      toolCallId: "call_action",
+      toolName: "run_action",
+      retryPolicy: "safe"
+    });
+
+    const runSteps = await runtimeService.listRunSteps(accepted.runId);
+    expect(runSteps.items.find((step) => step.name === "run_action")?.input).toMatchObject({
+      retryPolicy: "safe",
+      input: {
+        name: "debug.echo",
+        input: {
+          mode: "quick"
+        }
+      }
+    });
+  });
+
+  it("projects native tool visibility per agent and exposes them in the workspace catalog", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_native_catalog",
+      name: "native-catalog",
+      rootPath: "/tmp/native-catalog",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: [],
+        systemPrompt: {
+          compose: {
+            order: ["agent"],
+            includeEnvironment: true
+          }
+        }
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Use native tools when helpful.",
+          tools: {
+            native: ["shell.exec", "file.read"],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_native_catalog",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const catalog = await runtimeService.getWorkspaceCatalog("project_native_catalog");
+    expect(catalog.nativeTools).toEqual(["shell.exec", "file.read", "file.write", "file.list"]);
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_native_catalog",
+      caller,
+      input: {}
+    });
+
+    await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Inspect the workspace." }
+    });
+
+    await waitFor(() => gateway.invocations.length > 0);
+    const systemMessages = gateway.invocations.at(0)?.input.messages?.filter((message) => message.role === "system") ?? [];
+    const environmentMessage = systemMessages.find((message) => message.content.includes("<environment>"))?.content ?? "";
+
+    expect(environmentMessage).toContain("available_native_tools: shell.exec, file.read");
+    expect(environmentMessage).not.toContain("file.write");
+    expect(environmentMessage).not.toContain("file.list");
+  });
+
+  it("executes native tools and persists their tool results", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-native-tools-"));
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = () => ({
+      text: "Native tools completed.",
+      toolSteps: [
+        {
+          toolName: "file.write",
+          input: {
+            path: "notes/summary.txt",
+            content: "hello native tools"
+          },
+          toolCallId: "call_file_write"
+        },
+        {
+          toolName: "file.read",
+          input: {
+            path: "notes/summary.txt"
+          },
+          toolCallId: "call_file_read"
+        },
+        {
+          toolName: "file.list",
+          input: {
+            path: "notes"
+          },
+          toolCallId: "call_file_list"
+        },
+        {
+          toolName: "shell.exec",
+          input: {
+            command: "printf shell-ok"
+          },
+          toolCallId: "call_shell_exec"
+        }
+      ]
+    });
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_native_tools",
+      name: "native-tools",
+      rootPath: workspaceRoot,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Use native tools when useful.",
+          tools: {
+            native: ["file.write", "file.read", "file.list", "shell.exec"],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_native_tools",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_native_tools",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Use the native tools." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    const writtenContent = await readFile(path.join(workspaceRoot, "notes", "summary.txt"), "utf8");
+    expect(writtenContent).toBe("hello native tools");
+
+    const page = await runtimeService.listSessionMessages(session.id, 20);
+    expect(page.items.map((message) => message.toolName ?? message.role)).toEqual([
+      "user",
+      "file.write",
+      "file.read",
+      "file.list",
+      "shell.exec",
+      "assistant"
+    ]);
+    expect(page.items[1]?.content).toContain('<file_write path="notes/summary.txt"');
+    expect(page.items[2]?.content).toContain("<file_read path=\"notes/summary.txt\">");
+    expect(page.items[2]?.content).toContain("hello native tools");
+    expect(page.items[3]?.content).toContain('<file_list path="notes" recursive="false">');
+    expect(page.items[3]?.content).toContain('<file path="notes/summary.txt" />');
+    expect(page.items[4]?.content).toContain("<shell_exec exit_code=\"0\">");
+    expect(page.items[4]?.content).toContain("shell-ok");
+    expect(page.items[5]?.content).toBe("Native tools completed.");
+
+    const runSteps = await runtimeService.listRunSteps(accepted.runId);
+    expect(runSteps.items.find((step) => step.name === "file.write")?.input).toMatchObject({
+      retryPolicy: "manual"
+    });
+    expect(runSteps.items.find((step) => step.name === "file.read")?.input).toMatchObject({
+      retryPolicy: "safe"
+    });
+    expect(runSteps.items.find((step) => step.name === "file.list")?.input).toMatchObject({
+      retryPolicy: "safe"
+    });
+    expect(runSteps.items.find((step) => step.name === "shell.exec")?.input).toMatchObject({
+      retryPolicy: "manual"
+    });
   });
 
   it("writes hook and tool call audit records when hooks and actions run", async () => {
@@ -1845,6 +2781,7 @@ describe("runtime service", () => {
           callableByApi: true,
           callableByUser: true,
           exposeToLlm: true,
+          retryPolicy: "safe",
           directory: "/tmp",
           entry: {
             command:
@@ -1853,7 +2790,7 @@ describe("runtime service", () => {
         }
       },
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {
         "rewrite-request": {
           name: "rewrite-request",
@@ -1879,7 +2816,8 @@ describe("runtime service", () => {
             description: "Echo the provided mode for auditing.",
             callableByApi: true,
             callableByUser: true,
-            exposeToLlm: true
+            exposeToLlm: true,
+            retryPolicy: "safe"
           }
         ],
         skills: [],
@@ -1891,7 +2829,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -1936,6 +2874,7 @@ describe("runtime service", () => {
       request: {
         toolCallId: "call_audit_action",
         sourceType: "action",
+        retryPolicy: "safe",
         input: {
           name: "debug.echo",
           input: {
@@ -1946,6 +2885,7 @@ describe("runtime service", () => {
     });
     expect(recordedToolCalls[0]?.response).toMatchObject({
       sourceType: "action",
+      retryPolicy: "safe",
       output: {
         value: expect.stringContaining("audit:audit")
       }
@@ -2020,7 +2960,7 @@ describe("runtime service", () => {
           content: "# Repo Explorer"
         }
       },
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_waiting_tool",
@@ -2036,7 +2976,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -2113,7 +3053,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "chat_prompt_compose",
@@ -2129,7 +3069,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -2161,7 +3101,7 @@ describe("runtime service", () => {
     let capturedMcpNames: string[] = [];
     gateway.streamScenarioFactory = (_input, options) => {
       capturedToolNames = Object.keys(options?.tools ?? {});
-      capturedMcpNames = (options?.mcpServers ?? []).map((server) => server.name);
+      capturedMcpNames = (options?.toolServers ?? []).map((server) => server.name);
       return {
         text: "chat-only reply"
       };
@@ -2235,7 +3175,7 @@ describe("runtime service", () => {
           content: "# Repo Explorer"
         }
       },
-      mcpServers: {
+      toolServers: {
         docs: {
           name: "docs",
           enabled: true,
@@ -2273,13 +3213,13 @@ describe("runtime service", () => {
     const catalog = await runtimeService.getWorkspaceCatalog("chat_locked_down");
     expect(catalog.actions).toEqual([]);
     expect(catalog.skills).toEqual([]);
-    expect(catalog.mcp).toEqual([]);
+    expect(catalog.tools).toEqual([]);
     expect(catalog.hooks).toEqual([]);
     expect(catalog.nativeTools).toEqual([]);
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -2359,7 +3299,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {
         "rewrite-request": {
           name: "rewrite-request",
@@ -2389,7 +3329,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -2425,6 +3365,223 @@ describe("runtime service", () => {
     expect(
       gateway.invocations.at(0)?.input.messages?.some((message) => message.content === "Check secrets before answering.")
     ).toBe(true);
+  });
+
+  it("treats command hook timeout_seconds as a non-blocking timeout and emits a notice", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_before_hook_timeout",
+      name: "before-hook-timeout",
+      rootPath: "/tmp",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Hook-timeout-aware builder.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {
+        "slow-before-hook": {
+          name: "slow-before-hook",
+          events: ["before_model_call"],
+          handlerType: "command",
+          capabilities: ["rewrite_model_request"],
+          definition: {
+            handler: {
+              type: "command",
+              timeout_seconds: 1,
+              command:
+                "cat >/dev/null; node -e 'setTimeout(() => process.stdout.write(JSON.stringify({systemMessage:\"too late\"})), 2000)'"
+            }
+          }
+        }
+      },
+      catalog: {
+        workspaceId: "project_before_hook_timeout",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [{ name: "slow-before-hook", handlerType: "command", events: ["before_model_call"] }],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+    const session = await runtimeService.createSession({
+      workspaceId: "project_before_hook_timeout",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "hello" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    }, 5_000);
+
+    const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+    const runSteps = await runtimeService.listRunSteps(accepted.runId);
+    expect(runSteps.items.some((step) => step.stepType === "hook" && step.name === "slow-before-hook")).toBe(true);
+    expect(runSteps.items.find((step) => step.stepType === "hook" && step.name === "slow-before-hook")?.status).toBe("failed");
+    expect(events.find((event) => event.event === "hook.notice")?.data).toMatchObject({
+      hookName: "slow-before-hook",
+      eventName: "before_model_call",
+      errorCode: "hook_execution_failed"
+    });
+    expect(gateway.invocations.at(0)?.input.messages?.some((message) => message.content === "too late")).toBe(false);
+  });
+
+  it("treats prompt hook timeout_seconds as a non-blocking timeout and emits a notice", async () => {
+    const gateway = new FakeModelGateway();
+    gateway.generateDelayMs = 2_000;
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_prompt_hook_timeout",
+      name: "prompt-hook-timeout",
+      rootPath: "/tmp",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Prompt-hook-timeout-aware builder.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            mcp: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {
+        "slow-prompt-hook": {
+          name: "slow-prompt-hook",
+          events: ["after_model_call"],
+          handlerType: "prompt",
+          capabilities: ["rewrite_model_response"],
+          definition: {
+            handler: {
+              type: "prompt",
+              timeout_seconds: 1,
+              prompt: {
+                inline: "return a JSON patch"
+              }
+            }
+          }
+        }
+      },
+      catalog: {
+        workspaceId: "project_prompt_hook_timeout",
+        agents: [{ name: "builder", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        mcp: [],
+        hooks: [{ name: "slow-prompt-hook", handlerType: "prompt", events: ["after_model_call"] }],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+    const session = await runtimeService.createSession({
+      workspaceId: "project_prompt_hook_timeout",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "hello" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    }, 5_000);
+
+    const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+    const runSteps = await runtimeService.listRunSteps(accepted.runId);
+    const assistantMessages = await runtimeService.listSessionMessages(session.id, 50);
+
+    expect(runSteps.items.find((step) => step.stepType === "hook" && step.name === "slow-prompt-hook")?.status).toBe("failed");
+    expect(events.find((event) => event.event === "hook.notice")?.data).toMatchObject({
+      hookName: "slow-prompt-hook",
+      eventName: "after_model_call",
+      errorCode: "hook_execution_failed"
+    });
+    expect(assistantMessages.items.find((message) => message.role === "assistant")?.content).toBe("reply:hello");
   });
 
   it("applies context build hooks before and after composing model messages", async () => {
@@ -2470,7 +3627,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {
         "rewrite-context": {
           name: "rewrite-context",
@@ -2516,7 +3673,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -2625,7 +3782,7 @@ describe("runtime service", () => {
         }
       },
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {
         "rewrite-tool-input": {
           name: "rewrite-tool-input",
@@ -2691,7 +3848,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };
@@ -2790,7 +3947,7 @@ describe("runtime service", () => {
       },
       actions: {},
       skills: {},
-      mcpServers: {},
+      toolServers: {},
       hooks: {
         "rewrite-output": {
           name: "rewrite-output",
@@ -2821,7 +3978,7 @@ describe("runtime service", () => {
 
     const caller = {
       subjectRef: "dev:test",
-      authSource: "bearer_stub",
+      authSource: "standalone_server",
       scopes: [],
       workspaceAccess: []
     };

@@ -70,7 +70,7 @@
     <text x="28" y="34" class="cardtitle">Context Engine</text>
     <text x="28" y="58" class="body">在 run 开始时装配 prompt、历史消息、agent 配置和能力目录。</text>
     <text x="28" y="86" class="small">- 读取 workspace `AGENTS.md`、`.openharness/settings.yaml`、agents / models</text>
-    <text x="28" y="108" class="small">- 读取 actions、skills、MCP、hooks，并与平台公共目录合并</text>
+    <text x="28" y="108" class="small">- 读取 actions、skills、tools、hooks，并与平台公共目录合并</text>
     <text x="28" y="130" class="small">- 输出最终 system prompt、tool catalog、运行策略与环境摘要</text>
     <text x="28" y="152" class="small">- `chat` workspace 只加载只读对话配置，不暴露执行型工具</text>
     <rect x="346" y="28" width="146" height="34" rx="17" fill="#E7F6EC"/>
@@ -81,7 +81,7 @@
     <rect width="452" height="188" rx="28" fill="#FFFFFF" stroke="#C7D8EA" filter="url(#shadow)"/>
     <text x="28" y="34" class="cardtitle">LLM Loop + Invocation Dispatcher</text>
     <text x="28" y="58" class="body">统一处理模型推理、tool calling、路由与结果回填。</text>
-    <text x="28" y="86" class="small">- 将 action / skill / mcp / native tool 保持领域分离</text>
+    <text x="28" y="86" class="small">- 将 action / skill / tool / native tool 保持领域分离</text>
     <text x="28" y="108" class="small">- 对 LLM 暴露统一 tool schema 和调用协议</text>
     <text x="28" y="130" class="small">- 根据来源路由到不同执行器，回收结构化结果</text>
     <text x="28" y="152" class="small">- 允许在同一 run 中切换 agent 配置与 system_reminder</text>
@@ -117,7 +117,7 @@
     </g>
     <g transform="translate(652 92)">
       <rect width="186" height="92" rx="20" fill="#EEF5FF"/>
-      <text x="20" y="28" class="cardtitle">MCP</text>
+      <text x="20" y="28" class="cardtitle">Tools</text>
       <text x="20" y="50" class="small">`settings.yaml` + `servers/*`</text>
       <text x="20" y="70" class="small">支持本地 command 与远程 URL</text>
     </g>
@@ -147,11 +147,11 @@
     <rect width="376" height="262" rx="30" fill="#FFFFFF" stroke="#C7D8EA" filter="url(#shadow)"/>
     <text x="24" y="34" class="cardtitle">Server Config Paths</text>
     <text x="24" y="58" class="mono">workspace_dir / chat_dir / template_dir</text>
-    <text x="24" y="78" class="mono">models_dir / mcp_dir / skill_dir</text>
+    <text x="24" y="78" class="mono">model_dir / tool_dir / skill_dir</text>
 
     <rect x="24" y="98" width="328" height="60" rx="18" fill="#FFF4DE"/>
     <text x="44" y="124" class="cardtitle">project workspace</text>
-    <text x="44" y="146" class="small">可写，可执行，可启用 shell / action / skill / MCP / hook</text>
+    <text x="44" y="146" class="small">可写，可执行，可启用 shell / action / skill / tool / hook</text>
 
     <rect x="24" y="174" width="328" height="60" rx="18" fill="#F2F6FA"/>
     <text x="44" y="200" class="cardtitle">chat workspace</text>

@@ -15,10 +15,10 @@ import type {
   StreamedModelResponse
 } from "@oah/runtime-core";
 import { AppError } from "@oah/runtime-core";
-import { prepareMcpTools } from "./mcp-tools.js";
+import { prepareToolServers } from "./mcp-tools.js";
 import { formatSupportedModelProviders } from "./providers.js";
 
-export { prepareMcpTools } from "./mcp-tools.js";
+export { prepareToolServers } from "./mcp-tools.js";
 export {
   SUPPORTED_MODEL_PROVIDERS,
   SUPPORTED_MODEL_PROVIDER_IDS,
@@ -60,10 +60,29 @@ function toPrompt(input: GenerateModelInput): { prompt: string } | { messages: M
   return { messages };
 }
 
-function toAiTools(tools: RuntimeToolSet | undefined, signal: AbortSignal | undefined): ToolSet | undefined {
+function createSerialToolExecutor(): <T>(operation: () => Promise<T>) => Promise<T> {
+  let queue = Promise.resolve();
+
+  return async <T>(operation: () => Promise<T>) => {
+    const next = queue.then(operation, operation);
+    queue = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
+  };
+}
+
+function toAiTools(
+  tools: RuntimeToolSet | undefined,
+  signal: AbortSignal | undefined,
+  parallelToolCalls: boolean | undefined
+): ToolSet | undefined {
   if (!tools || Object.keys(tools).length === 0) {
     return undefined;
   }
+
+  const runSerially = parallelToolCalls === false ? createSerialToolExecutor() : undefined;
 
   return Object.fromEntries(
     Object.entries(tools).map(([name, definition]) => [
@@ -71,11 +90,15 @@ function toAiTools(tools: RuntimeToolSet | undefined, signal: AbortSignal | unde
       tool({
         description: definition.description,
         inputSchema: definition.inputSchema,
-        execute: async (input, options) =>
-          definition.execute(input, {
-            abortSignal: signal,
-            toolCallId: options.toolCallId
-          })
+        execute: async (input, options) => {
+          const executeTool = async () =>
+            definition.execute(input, {
+              abortSignal: signal,
+              toolCallId: options.toolCallId
+            });
+
+          return runSerially ? runSerially(executeTool) : executeTool();
+        }
       })
     ])
   );
@@ -185,9 +208,12 @@ export class AiSdkModelGateway implements ModelGateway {
   async stream(input: GenerateModelInput, options?: ModelStreamOptions): Promise<StreamedModelResponse> {
     const modelName = input.model ?? this.#defaultModelName;
     const model = this.#resolveModel(modelName, input.modelDefinition);
-    const runtimeTools = toAiTools(options?.tools, options?.signal);
-    const preparedMcpTools = await prepareMcpTools(options?.mcpServers as McpServerDefinition[] | undefined);
-    const aiTools = mergeToolSets(runtimeTools, preparedMcpTools.tools);
+    const runtimeTools = toAiTools(options?.tools, options?.signal, options?.parallelToolCalls);
+    const preparedToolServers = await prepareToolServers(
+      (((options as ModelStreamOptions & { toolServers?: McpServerDefinition[] | undefined })?.toolServers ??
+        options?.mcpServers) as McpServerDefinition[] | undefined)
+    );
+    const aiTools = mergeToolSets(runtimeTools, preparedToolServers.tools);
     let cleanedUp = false;
     const cleanup = async () => {
       if (cleanedUp) {
@@ -195,7 +221,7 @@ export class AiSdkModelGateway implements ModelGateway {
       }
 
       cleanedUp = true;
-      await preparedMcpTools.close();
+      await preparedToolServers.close();
     };
     let observedStreamError: Error | undefined;
 

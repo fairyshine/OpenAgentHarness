@@ -10,7 +10,7 @@
 
 - 多用户共享一个实例
 - 多 workspace 自动发现本地能力
-- Agent 可在 workspace 中执行 shell、文件操作、Action、Skill、MCP
+- Agent 可在 workspace 中执行 shell、文件操作、Action、Skill、Tool
 - 提供 OpenAPI + SSE
 - 具备基础审计、队列、取消和超时能力
 
@@ -32,7 +32,7 @@
 - `.openharness/settings.yaml` 加载
 - `.openharness/` 自动发现与校验
 - 服务端配置文件加载
-- AgentRegistry / ModelRegistry / ActionRegistry / SkillRegistry / McpRegistry / HookRegistry
+- AgentRegistry / ModelRegistry / ActionRegistry / SkillRegistry / ToolRegistry / HookRegistry
 - 平台内建 agent 注册与装配
 - LocalWorkspaceBackend
 - per-session 串行调度
@@ -94,8 +94,8 @@
 - 解析 `settings.skill_dirs` 并扫描额外 skill 目录
 - 实现 skill 同层冲突报错、跨层冲突 warning + 覆盖
 - 实现 skill catalog 注入与 `activate_skill` 工具
-- 解析 `.openharness/mcp/settings.yaml`
-- 发现 `.openharness/mcp/servers/*`
+- 解析 `.openharness/tools/settings.yaml`
+- 发现 `.openharness/tools/servers/*`
 - 解析 `.openharness/hooks/*.yaml`
 - 实现 agent 切换检测与 `<system_reminder>` 注入
 - 实现 `agent.switch` 与 `agent.delegate` 的 allowlist 校验
@@ -116,7 +116,7 @@
 - 实现 NativeToolExecutor
 - 实现 ActionExecutor
 - 实现 SkillExecutor
-- 实现 MCP Executor
+- 实现 Tool Executor
 - 实现 invocation projection 与 dispatcher
 
 ### Phase 6: 流式输出与前端接入协议
@@ -155,7 +155,7 @@ packages/
   agents/
   actions/
   skills/
-  mcp/
+  tools/
   hooks/
   execution/
   storage/
@@ -187,9 +187,9 @@ Hook 如果能力边界过大，会让调试和安全控制都变差。建议当
 
 当前使用本地 backend，默认前提是可信内网环境。若后续对外开放，需优先补 sandbox backend。
 
-### 6.4 MCP 不稳定性
+### 6.4 Tool Server 不稳定性
 
-外部 MCP server 可能存在延迟、失败或协议兼容性问题，需要：
+外部 tool server 可能存在延迟、失败或协议兼容性问题，需要：
 
 - 连接健康检查
 - 调用超时

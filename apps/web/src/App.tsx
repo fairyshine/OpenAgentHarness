@@ -52,6 +52,7 @@ interface SavedWorkspaceRecord {
   rootPath: string;
   template?: string;
   status: Workspace["status"];
+  createdAt?: string;
   lastOpenedAt: string;
 }
 
@@ -95,6 +96,11 @@ interface HealthReportResponse {
     events: "redis" | "memory";
     runQueue: "redis" | "in_process";
   };
+  process: {
+    mode: "api_embedded_worker" | "api_only" | "standalone_worker";
+    label: "API + embedded worker" | "API only" | "standalone worker";
+    execution: "redis_queue" | "local_inline" | "none";
+  };
   checks: {
     postgres: "up" | "down" | "not_configured";
     redisEvents: "up" | "down" | "not_configured";
@@ -102,7 +108,7 @@ interface HealthReportResponse {
     historyMirror: "up" | "degraded" | "not_configured";
   };
   worker: {
-    mode: "inline" | "external" | "disabled";
+    mode: "embedded" | "external" | "disabled";
   };
   mirror: {
     worker: "running" | "disabled";
@@ -348,7 +354,7 @@ async function consumeSse(
 export function App() {
   const [connection, setConnection] = usePersistentState<ConnectionSettings>(storageKeys.connection, {
     baseUrl: "",
-    token: "debug-token"
+    token: ""
   });
   const [workspaceDraft, setWorkspaceDraft] = usePersistentState<WorkspaceDraft>(storageKeys.workspaceDraft, {
     name: "debug-playground",
@@ -400,6 +406,7 @@ export function App() {
   const [showConnectionPanel, setShowConnectionPanel] = useState(false);
   const [mirrorToggleBusy, setMirrorToggleBusy] = useState(false);
   const [mirrorRebuildBusy, setMirrorRebuildBusy] = useState(false);
+  const [workspaceManagementEnabled, setWorkspaceManagementEnabled] = useState(true);
 
   const deferredEvents = useDeferredValue(events);
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -416,19 +423,23 @@ export function App() {
 
       return right.id.localeCompare(left.id);
     });
+  const orderedSavedWorkspaces = [...savedWorkspaces].sort((left, right) => {
+    const timestampComparison = compareIsoTimestampDesc(left.createdAt, right.createdAt);
+    if (timestampComparison !== 0) {
+      return timestampComparison;
+    }
+
+    return right.id.localeCompare(left.id);
+  });
   const selectedRunIdValue = selectedRunId.trim();
   const streamRunId = filterSelectedRun ? selectedRunIdValue : "";
 
   async function request<T>(path: string, init?: RequestInit, options?: { auth?: boolean }) {
     const headers = new Headers(init?.headers);
     const authRequired = options?.auth ?? true;
+    const token = connection.token.trim();
 
-    if (authRequired) {
-      const token = connection.token.trim();
-      if (!token) {
-        throw new Error("Bearer token 不能为空。");
-      }
-
+    if (authRequired && token) {
       headers.set("authorization", `Bearer ${token}`);
     }
 
@@ -459,6 +470,7 @@ export function App() {
         name: workspaceRecord.name,
         rootPath: workspaceRecord.rootPath,
         status: workspaceRecord.status,
+        createdAt: workspaceRecord.createdAt ?? existing?.createdAt,
         lastOpenedAt: now
       };
       const templateValue = options?.template ?? existing?.template;
@@ -466,10 +478,11 @@ export function App() {
         nextRecord.template = templateValue;
       }
 
-      return [
-        nextRecord,
-        ...current.filter((entry) => entry.id !== workspaceRecord.id)
-      ].slice(0, 24);
+      if (existing) {
+        return current.map((entry) => (entry.id === workspaceRecord.id ? nextRecord : entry));
+      }
+
+      return [...current, nextRecord].slice(-24);
     });
   }
 
@@ -521,6 +534,7 @@ export function App() {
         method: "DELETE"
       });
       forgetWorkspace(workspaceToRemoveId);
+      void refreshWorkspaceIndex(true);
       setActivity(`Workspace ${workspaceToRemoveId} 已删除`);
       setErrorMessage("");
     } catch (error) {
@@ -637,10 +651,68 @@ export function App() {
     try {
       const response = await request<WorkspaceTemplateList>("/api/v1/workspace-templates");
       startTransition(() => {
+        setWorkspaceManagementEnabled(true);
         setWorkspaceTemplates(response.items.map((item) => item.name));
       });
       if (!quiet) {
         setActivity(`已加载 ${response.items.length} 个模板`);
+        setErrorMessage("");
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message.includes("workspace_templates_unavailable") ||
+          error.message.toLowerCase().includes("workspace templates are not available"))
+      ) {
+        startTransition(() => {
+          setWorkspaceManagementEnabled(false);
+          setWorkspaceTemplates([]);
+        });
+        if (!quiet) {
+          setErrorMessage("");
+        }
+        return;
+      }
+
+      if (!quiet) {
+        setErrorMessage(toErrorMessage(error));
+      }
+    }
+  }
+
+  async function refreshWorkspaceIndex(quiet = false) {
+    try {
+      const response = await request<{ items: Workspace[]; nextCursor?: string }>("/api/v1/workspaces?pageSize=200");
+      startTransition(() => {
+        setSavedWorkspaces((current) => {
+          const currentById = new Map(current.map((entry) => [entry.id, entry]));
+          return response.items.map((item) => {
+            const existing = currentById.get(item.id);
+            return {
+              id: item.id,
+              name: item.name,
+              rootPath: item.rootPath,
+              status: item.status,
+              createdAt: item.createdAt,
+              lastOpenedAt: existing?.lastOpenedAt ?? item.updatedAt,
+              ...(existing?.template ? { template: existing.template } : {})
+            } satisfies SavedWorkspaceRecord;
+          });
+        });
+      });
+
+      if (response.items.length === 1) {
+        const onlyWorkspace = response.items[0]!;
+        if (!sessionId.trim() && workspaceId !== onlyWorkspace.id) {
+          setSidebarMode("sessions");
+          void refreshWorkspace(onlyWorkspace.id, true);
+        }
+      } else if (workspaceId.trim() && !response.items.some((item) => item.id === workspaceId)) {
+        clearWorkspaceSelection(workspaceId);
+      }
+
+      if (!quiet) {
+        setActivity(`已同步 ${response.items.length} 个 workspace`);
         setErrorMessage("");
       }
     } catch (error) {
@@ -673,22 +745,27 @@ export function App() {
     }
 
     try {
-      const [workspaceResponse, catalogResponse, mirrorStatusResponse] = await Promise.all([
-        request<Workspace>(`/api/v1/workspaces/${targetId}`),
+      const workspaceResponse = await request<Workspace>(`/api/v1/workspaces/${targetId}`);
+      const [catalogResponse, mirrorStatusResponse] = await Promise.allSettled([
         request<WorkspaceCatalog>(`/api/v1/workspaces/${targetId}/catalog`),
         request<WorkspaceHistoryMirrorStatus>(`/api/v1/workspaces/${targetId}/history-mirror`)
       ]);
+      const refreshWarnings = [catalogResponse, mirrorStatusResponse]
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => toErrorMessage(result.reason));
 
       startTransition(() => {
         setWorkspace(workspaceResponse);
-        setCatalog(catalogResponse);
-        setMirrorStatus(mirrorStatusResponse);
+        setCatalog(catalogResponse.status === "fulfilled" ? catalogResponse.value : null);
+        setMirrorStatus(mirrorStatusResponse.status === "fulfilled" ? mirrorStatusResponse.value : null);
         setWorkspaceId(targetId);
         setRecentWorkspaces((current) => addRecentId(current, targetId));
       });
       rememberWorkspace(workspaceResponse);
       setActivity(`Workspace ${targetId} 已加载`);
-      if (!quiet) {
+      if (!quiet && refreshWarnings.length > 0) {
+        setErrorMessage(refreshWarnings.join(" | "));
+      } else if (!quiet) {
         setErrorMessage("");
       }
     } catch (error) {
@@ -738,6 +815,7 @@ export function App() {
       setShowWorkspaceCreator(false);
       setSidebarMode("sessions");
       await refreshWorkspace(created.id, true);
+      await refreshWorkspaceIndex(true);
       setActivity(`Workspace ${created.id} 已创建`);
       setErrorMessage("");
     } catch (error) {
@@ -818,16 +896,24 @@ export function App() {
         request<Session>(`/api/v1/sessions/${targetId}`),
         request<{ items: Message[] }>(`/api/v1/sessions/${targetId}/messages?pageSize=200`)
       ]);
+      const nextWorkspaceId = sessionResponse.workspaceId;
+      const workspaceChanged = workspace?.id !== nextWorkspaceId;
 
       startTransition(() => {
         setSession(sessionResponse);
         setSessionId(targetId);
+        setWorkspaceId(nextWorkspaceId);
         setMessages(messagePage.items);
         setRecentSessions((current) => addRecentId(current, targetId));
+        if (workspaceChanged) {
+          setWorkspace(null);
+          setCatalog(null);
+          setMirrorStatus(null);
+        }
       });
       rememberSession(sessionResponse);
-      if (workspaceId !== sessionResponse.workspaceId) {
-        void refreshWorkspace(sessionResponse.workspaceId, true);
+      if (workspaceChanged) {
+        void refreshWorkspace(nextWorkspaceId, true);
       }
       setActivity(`Session ${targetId} 已加载`);
       if (!quiet) {
@@ -1103,6 +1189,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    void refreshWorkspaceIndex(true);
     void refreshWorkspaceTemplates(true);
     void refreshModelProviders(true);
   }, [connection.baseUrl, connection.token]);
@@ -1119,7 +1206,7 @@ export function App() {
   }, [connection.baseUrl, connection.token]);
 
   useEffect(() => {
-    if (!sessionId.trim() || !autoStream) {
+    if (!sessionId.trim() || !autoStream || session?.id !== sessionId) {
       streamAbortRef.current?.abort();
       setStreamState("idle");
       return;
@@ -1145,13 +1232,16 @@ export function App() {
 
     void (async () => {
       try {
+        const headers = new Headers();
+        const token = connection.token.trim();
+        if (token) {
+          headers.set("authorization", `Bearer ${token}`);
+        }
         const response = await fetch(
           buildUrl(connection.baseUrl, `/api/v1/sessions/${sessionId}/events${query.size > 0 ? `?${query.toString()}` : ""}`),
           {
             signal: controller.signal,
-            headers: {
-              authorization: `Bearer ${connection.token.trim()}`
-            }
+            headers
           }
         );
 
@@ -1169,6 +1259,8 @@ export function App() {
           if (isNotFoundError(error)) {
             clearSessionSelection(sessionId);
             setActivity(`Session ${sessionId} 不存在，已清除本地选择`);
+            setErrorMessage("");
+            return;
           }
           setStreamState("error");
           setErrorMessage(toErrorMessage(error));
@@ -1185,6 +1277,7 @@ export function App() {
     connection.baseUrl,
     connection.token,
     filterSelectedRun,
+    session?.id,
     streamRunId,
     sessionId,
     streamRevision
@@ -1202,7 +1295,10 @@ export function App() {
     });
   }
 
-  const currentWorkspaceName = workspace?.name ?? "No workspace";
+  const activeWorkspaceId = session?.workspaceId || workspaceId;
+  const activeSavedWorkspace = savedWorkspaces.find((entry) => entry.id === activeWorkspaceId);
+  const activeWorkspace = workspace?.id === activeWorkspaceId ? workspace : null;
+  const currentWorkspaceName = activeWorkspace?.name ?? activeSavedWorkspace?.name ?? activeWorkspaceId ?? "No workspace";
   const currentSessionName = session?.title?.trim() || session?.id || "No session";
   const latestEvent = deferredEvents[0];
 
@@ -1252,14 +1348,16 @@ export function App() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-[color:var(--foreground)]">Navigator</p>
-                      <p className="text-xs text-[color:var(--muted-foreground)]">{savedWorkspaces.length} workspaces · {activeWorkspaceSessions.length} sessions</p>
+                      <p className="text-xs text-[color:var(--muted-foreground)]">{orderedSavedWorkspaces.length} workspaces · {activeWorkspaceSessions.length} sessions</p>
                     </div>
-                    <button
-                      className="inline-flex h-9 items-center justify-center rounded-xl border border-[color:var(--border)] bg-white px-3 text-sm text-[color:var(--foreground)] transition hover:bg-[#f7f7f4]"
-                      onClick={() => (sidebarMode === "workspaces" ? setShowWorkspaceCreator((current) => !current) : setShowSessionCreator((current) => !current))}
-                    >
-                      + New
-                    </button>
+                    {sidebarMode === "workspaces" && !workspaceManagementEnabled ? null : (
+                      <button
+                        className="inline-flex h-9 items-center justify-center rounded-xl border border-[color:var(--border)] bg-white px-3 text-sm text-[color:var(--foreground)] transition hover:bg-[#f7f7f4]"
+                        onClick={() => (sidebarMode === "workspaces" ? setShowWorkspaceCreator((current) => !current) : setShowSessionCreator((current) => !current))}
+                      >
+                        + New
+                      </button>
+                    )}
                   </div>
                   <div className="mt-4 flex gap-2 rounded-2xl bg-[#f3f2ed] p-1">
                     <button
@@ -1287,7 +1385,7 @@ export function App() {
                   {sidebarMode === "workspaces" ? (
                     <>
                       <div className="px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">Workspace List</div>
-                      {showWorkspaceCreator ? (
+                      {showWorkspaceCreator && workspaceManagementEnabled ? (
                         <div className="rounded-[20px] border border-[color:var(--border)] bg-[#f7f6f2] p-3">
                           <div className="mb-3 flex items-center justify-between gap-2">
                             <p className="text-sm font-medium text-[color:var(--foreground)]">New Workspace</p>
@@ -1350,15 +1448,16 @@ export function App() {
                       ) : null}
 
                       <div className="space-y-1">
-                        {savedWorkspaces.length === 0 ? (
+                        {orderedSavedWorkspaces.length === 0 ? (
                           <EmptyState title="No workspaces" description="Create or load one." />
                         ) : (
-                          savedWorkspaces.map((entry) => (
+                          orderedSavedWorkspaces.map((entry) => (
                             <WorkspaceSidebarItem
                               key={entry.id}
                               entry={entry}
                               active={entry.id === workspaceId}
                               sessionCount={savedSessions.filter((sessionEntry) => sessionEntry.workspaceId === entry.id).length}
+                              canRemove={workspaceManagementEnabled}
                               onSelect={() => {
                                 setWorkspaceId(entry.id);
                                 void refreshWorkspace(entry.id);
@@ -1469,7 +1568,7 @@ export function App() {
                             token: event.target.value
                           }))
                         }
-                        placeholder="Bearer token"
+                        placeholder="Bearer token (optional)"
                       />
                       <div className="flex gap-2">
                         <Button className="flex-1" variant="secondary" onClick={() => void pingHealth()}>
@@ -1508,9 +1607,13 @@ export function App() {
                             />
                             <StatusTile
                               icon={Bot}
-                              label="Worker"
-                              value={healthReport?.worker.mode ?? "unknown"}
-                              tone={probeTone(healthReport?.worker.mode === "disabled" ? "degraded" : "ok")}
+                              label="Process"
+                              value={
+                                healthReport
+                                  ? `${healthReport.process.label} · ${healthReport.process.execution}`
+                                  : "unknown"
+                              }
+                              tone={probeTone(healthReport?.process.execution === "none" ? "degraded" : "ok")}
                             />
                             <StatusTile
                               icon={Database}
@@ -1833,7 +1936,7 @@ export function App() {
                           <CatalogLine label="models" value={catalog.models.length} />
                           <CatalogLine label="actions" value={catalog.actions.length} />
                           <CatalogLine label="skills" value={catalog.skills.length} />
-                          <CatalogLine label="mcp" value={catalog.mcp.length} />
+                          <CatalogLine label="tools" value={catalog.tools?.length ?? catalog.mcp?.length ?? 0} />
                           <CatalogLine label="hooks" value={catalog.hooks.length} />
                           <CatalogLine label="nativeTools" value={catalog.nativeTools.length} />
                         </div>
@@ -1888,6 +1991,7 @@ function WorkspaceSidebarItem(props: {
   entry: SavedWorkspaceRecord;
   active: boolean;
   sessionCount: number;
+  canRemove: boolean;
   onSelect: () => void;
   onRemove: () => void;
 }) {
@@ -1916,13 +2020,15 @@ function WorkspaceSidebarItem(props: {
           </p>
         </div>
       </button>
-      <button
-        className="rounded-lg p-2 text-[color:var(--muted-foreground)] opacity-0 transition hover:bg-black/4 hover:text-[color:var(--foreground)] group-hover:opacity-100"
-        onClick={props.onRemove}
-        title="删除 workspace"
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
+      {props.canRemove ? (
+        <button
+          className="rounded-lg p-2 text-[color:var(--muted-foreground)] opacity-0 transition hover:bg-black/4 hover:text-[color:var(--foreground)] group-hover:opacity-100"
+          onClick={props.onRemove}
+          title="删除 workspace"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      ) : null}
     </div>
   );
 }

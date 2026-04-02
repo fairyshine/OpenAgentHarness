@@ -29,6 +29,10 @@ function toInputSchemaSummary(action: ActionDefinition): string | undefined {
   }
 }
 
+function resolvedActionRetryPolicy(action: ActionDefinition): "manual" | "safe" {
+  return action.retryPolicy ?? "manual";
+}
+
 export function buildAvailableActionsMessage(actions: ActionDefinition[]): string {
   if (actions.length === 0) {
     return "";
@@ -40,6 +44,7 @@ export function buildAvailableActionsMessage(actions: ActionDefinition[]): strin
         "  <action>",
         `    <name>${escapeXml(action.name)}</name>`,
         ...(action.description ? [`    <description>${escapeXml(action.description)}</description>`] : []),
+        `    <retry_policy>${escapeXml(resolvedActionRetryPolicy(action))}</retry_policy>`,
         ...(toInputSchemaSummary(action)
           ? [`    <input_schema>${escapeXml(toInputSchemaSummary(action) ?? "")}</input_schema>`]
           : []),
@@ -56,6 +61,7 @@ export function buildAvailableActionsMessage(actions: ActionDefinition[]): strin
     "</available_actions>",
     "",
     "The actions listed above are named task entry points with stronger audit boundaries than normal text generation.",
+    "Only actions marked with `<retry_policy>safe</retry_policy>` should be considered safe candidates for future automatic recovery.",
     "When one of them matches the task, call `run_action` with the action name and optional structured input.",
     "Do not invent action names or input fields that are not shown in the catalog."
   ].join("\n");

@@ -15,7 +15,8 @@
     "infra:up": "docker compose -f docker-compose.dev.yml up -d",
     "infra:down": "docker compose -f docker-compose.dev.yml down",
     "typecheck": "pnpm -r exec tsc --noEmit -p tsconfig.json",
-    "test": "pnpm build && vitest run"
+    "test": "vitest run",
+    "test:dist": "pnpm build && vitest run"
   },
   "devDependencies": {
     "@types/node": "25.5.0",

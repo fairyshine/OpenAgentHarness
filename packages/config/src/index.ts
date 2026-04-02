@@ -27,6 +27,9 @@ function createAjv() {
   return ajv;
 }
 
+type ActionRetryPolicy = "manual" | "safe";
+type DiscoveredWorkspaceCatalog = WorkspaceCatalog & { tools?: McpCatalogItem[] | undefined; mcp?: McpCatalogItem[] | undefined };
+
 export interface ServerConfig {
   server: {
     host: string;
@@ -40,8 +43,10 @@ export interface ServerConfig {
     workspace_dir: string;
     chat_dir: string;
     template_dir: string;
-    models_dir: string;
-    mcp_dir: string;
+    model_dir: string;
+    models_dir?: string | undefined;
+    tool_dir: string;
+    mcp_dir?: string | undefined;
     skill_dir: string;
   };
   llm: {
@@ -66,7 +71,7 @@ export interface DiscoveredSkill {
   content: string;
 }
 
-export interface DiscoveredMcpServer {
+export interface DiscoveredToolServer {
   name: string;
   enabled: boolean;
   transportType: "stdio" | "http";
@@ -133,7 +138,8 @@ export interface DiscoveredAgent {
     native: string[];
     actions: string[];
     skills: string[];
-    mcp: string[];
+    external: string[];
+    mcp?: string[] | undefined;
   };
   switch: string[];
   subagents: string[];
@@ -152,6 +158,7 @@ export interface DiscoveredAction {
   callableByApi: boolean;
   callableByUser: boolean;
   exposeToLlm: boolean;
+  retryPolicy?: ActionRetryPolicy | undefined;
   inputSchema?: Record<string, unknown> | undefined;
   directory: string;
   entry: {
@@ -181,12 +188,13 @@ export interface DiscoveredWorkspace {
   agents: Record<string, DiscoveredAgent>;
   actions: Record<string, DiscoveredAction>;
   skills: Record<string, DiscoveredSkill>;
-  mcpServers: Record<string, DiscoveredMcpServer>;
+  toolServers: Record<string, DiscoveredToolServer>;
   hooks: Record<string, DiscoveredHook>;
-  catalog: WorkspaceCatalog;
+  catalog: DiscoveredWorkspaceCatalog;
 }
 
 export type PlatformModelRegistry = Record<string, PlatformModelDefinition>;
+export type PlatformAgentRegistry = Record<string, DiscoveredAgent>;
 
 export interface WorkspaceTemplateSkill {
   name: string;
@@ -202,6 +210,7 @@ export interface InitializeWorkspaceFromTemplateInput {
   templateName: string;
   rootPath: string;
   agentsMd?: string | undefined;
+  toolServers?: Record<string, Record<string, unknown>> | undefined;
   mcpServers?: Record<string, Record<string, unknown>> | undefined;
   skills?: WorkspaceTemplateSkill[] | undefined;
 }
@@ -260,6 +269,15 @@ function resolvePathInsideRoot(rootPath: string, relativePath: string, label: st
 
 function resolveConfigPaths(config: ServerConfig, configPath: string): ServerConfig {
   const configDir = path.dirname(configPath);
+  const modelDir = config.paths.model_dir ?? config.paths.models_dir;
+  const toolDir = config.paths.tool_dir ?? config.paths.mcp_dir;
+  if (!modelDir) {
+    throw new Error("Invalid server config: paths.model_dir is required.");
+  }
+  if (!toolDir) {
+    throw new Error("Invalid server config: paths.tool_dir is required.");
+  }
+
   return {
     ...config,
     storage: {
@@ -269,8 +287,8 @@ function resolveConfigPaths(config: ServerConfig, configPath: string): ServerCon
       workspace_dir: path.resolve(configDir, config.paths.workspace_dir),
       chat_dir: path.resolve(configDir, config.paths.chat_dir),
       template_dir: path.resolve(configDir, config.paths.template_dir),
-      models_dir: path.resolve(configDir, config.paths.models_dir),
-      mcp_dir: path.resolve(configDir, config.paths.mcp_dir),
+      model_dir: path.resolve(configDir, modelDir),
+      tool_dir: path.resolve(configDir, toolDir),
       skill_dir: path.resolve(configDir, config.paths.skill_dir)
     }
   };
@@ -317,23 +335,27 @@ async function loadModelRegistryFromDirectory(modelsDir: string): Promise<Platfo
   return registry;
 }
 
-function createWorkspaceCatalog(workspaceId: string, models: ModelCatalogItem[]): WorkspaceCatalog {
+function createWorkspaceCatalog(workspaceId: string, models: ModelCatalogItem[]): DiscoveredWorkspaceCatalog {
   return {
     workspaceId,
     agents: [],
     models,
     actions: [],
     skills: [],
+    tools: [],
     mcp: [],
     hooks: [],
     nativeTools: []
   };
 }
 
-function toAgentCatalogItems(agents: Record<string, DiscoveredAgent>): AgentCatalogItem[] {
+function toAgentCatalogItems(
+  agents: Record<string, DiscoveredAgent>,
+  sources?: Record<string, "platform" | "workspace">
+): AgentCatalogItem[] {
   return Object.values(agents).map((agent) => ({
     name: agent.name,
-    source: "workspace",
+    source: sources?.[agent.name] ?? "workspace",
     ...(agent.description ? { description: agent.description } : {})
   }));
 }
@@ -344,7 +366,8 @@ function toActionCatalogItems(actions: Record<string, DiscoveredAction>): Action
     description: action.description,
     exposeToLlm: action.exposeToLlm,
     callableByUser: action.callableByUser,
-    callableByApi: action.callableByApi
+    callableByApi: action.callableByApi,
+    ...(action.retryPolicy ? { retryPolicy: action.retryPolicy } : {})
   }));
 }
 
@@ -356,8 +379,8 @@ function toSkillCatalogItems(skills: Record<string, DiscoveredSkill>): SkillCata
   }));
 }
 
-function toMcpCatalogItems(mcpServers: Record<string, DiscoveredMcpServer>): McpCatalogItem[] {
-  return Object.values(mcpServers).map((server) => ({
+function toToolCatalogItems(toolServers: Record<string, DiscoveredToolServer>): McpCatalogItem[] {
+  return Object.values(toolServers).map((server) => ({
     name: server.name,
     transportType: server.transportType,
     ...(server.toolPrefix ? { toolPrefix: server.toolPrefix } : {})
@@ -527,6 +550,7 @@ export async function loadServerConfig(configPath: string): Promise<ServerConfig
   return resolveConfigPaths(
     {
       ...expanded,
+      server: expanded.server as ServerConfig["server"],
       storage:
         expanded.storage && typeof expanded.storage === "object" && !Array.isArray(expanded.storage)
           ? (expanded.storage as ServerConfig["storage"])
@@ -552,17 +576,17 @@ async function appendAgentsMd(rootPath: string, agentsMd: string): Promise<void>
   await writeFile(agentsPath, mergedContent, "utf8");
 }
 
-async function mergeWorkspaceMcpSettings(
+async function mergeWorkspaceToolSettings(
   rootPath: string,
-  mcpServers: Record<string, Record<string, unknown>>
+  toolServers: Record<string, Record<string, unknown>>
 ): Promise<void> {
-  if (Object.keys(mcpServers).length === 0) {
+  if (Object.keys(toolServers).length === 0) {
     return;
   }
 
-  const mcpRoot = path.join(rootPath, ".openharness", "mcp");
-  const settingsPath = path.join(mcpRoot, "settings.yaml");
-  await mkdir(mcpRoot, { recursive: true });
+  const toolsRoot = path.join(rootPath, ".openharness", "tools");
+  const settingsPath = path.join(toolsRoot, "settings.yaml");
+  await mkdir(toolsRoot, { recursive: true });
 
   const currentSettingsRaw = (await pathExists(settingsPath)) ? YAML.parse(await readFile(settingsPath, "utf8")) : {};
   if (!currentSettingsRaw || typeof currentSettingsRaw !== "object" || Array.isArray(currentSettingsRaw)) {
@@ -573,7 +597,7 @@ async function mergeWorkspaceMcpSettings(
     settingsPath,
     YAML.stringify({
       ...(currentSettingsRaw as Record<string, unknown>),
-      ...mcpServers
+      ...toolServers
     }),
     "utf8"
   );
@@ -617,8 +641,8 @@ export async function initializeWorkspaceFromTemplate(input: InitializeWorkspace
     await appendAgentsMd(input.rootPath, input.agentsMd);
   }
 
-  if (input.mcpServers) {
-    await mergeWorkspaceMcpSettings(input.rootPath, input.mcpServers);
+  if (input.toolServers || input.mcpServers) {
+    await mergeWorkspaceToolSettings(input.rootPath, input.toolServers ?? input.mcpServers ?? {});
   }
 
   if (input.skills) {
@@ -784,21 +808,28 @@ export async function loadProjectAgentsMd(workspaceRoot: string): Promise<string
   return readFile(agentsPath, "utf8");
 }
 
-export async function loadWorkspaceMcpServers(mcpRoot: string): Promise<Record<string, DiscoveredMcpServer>> {
-  const settingsPath = path.join(mcpRoot, "settings.yaml");
-  if (!(await pathExists(settingsPath))) {
+export async function loadWorkspaceToolServers(toolRoot: string): Promise<Record<string, DiscoveredToolServer>> {
+  const settingsPath = path.join(toolRoot, "settings.yaml");
+  const legacySettingsPath = path.join(path.dirname(toolRoot), "mcp", "settings.yaml");
+  const effectiveSettingsPath = (await pathExists(settingsPath))
+    ? settingsPath
+    : (await pathExists(legacySettingsPath))
+      ? legacySettingsPath
+      : undefined;
+
+  if (!effectiveSettingsPath) {
     return {};
   }
 
   const [schema, fileContent] = await Promise.all([
     loadSchema<object>("../../../docs/schemas/mcp-settings.schema.json"),
-    readFile(settingsPath, "utf8")
+    readFile(effectiveSettingsPath, "utf8")
   ]);
 
   const parsed = expandEnv(YAML.parse(fileContent) ?? {});
   const validate = createAjv().compile<Record<string, unknown>>(schema);
   if (!validate(parsed)) {
-    throw new Error(`Invalid MCP settings in ${settingsPath}: ${validationMessage(validate.errors)}`);
+    throw new Error(`Invalid tool settings in ${effectiveSettingsPath}: ${validationMessage(validate.errors)}`);
   }
 
   return Object.fromEntries(
@@ -833,14 +864,14 @@ export async function loadWorkspaceMcpServers(mcpRoot: string): Promise<Record<s
           ...(definition.oauth !== undefined ? { oauth: definition.oauth } : {}),
           ...(Array.isArray(definition.expose?.include) ? { include: definition.expose.include } : {}),
           ...(Array.isArray(definition.expose?.exclude) ? { exclude: definition.expose.exclude } : {})
-        } satisfies DiscoveredMcpServer
+        } satisfies DiscoveredToolServer
       ];
     })
   );
 }
 
-export async function loadPlatformMcpServers(mcpDir: string): Promise<Record<string, DiscoveredMcpServer>> {
-  return loadWorkspaceMcpServers(mcpDir);
+export async function loadPlatformToolServers(toolDir: string): Promise<Record<string, DiscoveredToolServer>> {
+  return loadWorkspaceToolServers(toolDir);
 }
 
 export async function loadWorkspaceAgents(workspaceRoot: string): Promise<Record<string, DiscoveredAgent>> {
@@ -869,6 +900,12 @@ export async function loadWorkspaceAgents(workspaceRoot: string): Promise<Record
     const tools = data.tools && typeof data.tools === "object" ? (data.tools as Record<string, unknown>) : undefined;
     const policy = data.policy && typeof data.policy === "object" ? (data.policy as Record<string, unknown>) : undefined;
 
+    const externalTools = Array.isArray(tools?.external)
+      ? tools.external.filter((item): item is string => typeof item === "string")
+      : Array.isArray(tools?.mcp)
+        ? tools.mcp.filter((item): item is string => typeof item === "string")
+        : [];
+
     agents[name] = {
       name,
       mode,
@@ -882,7 +919,8 @@ export async function loadWorkspaceAgents(workspaceRoot: string): Promise<Record
         native: Array.isArray(tools?.native) ? tools.native.filter((item): item is string => typeof item === "string") : [],
         actions: Array.isArray(tools?.actions) ? tools.actions.filter((item): item is string => typeof item === "string") : [],
         skills: Array.isArray(tools?.skills) ? tools.skills.filter((item): item is string => typeof item === "string") : [],
-        mcp: Array.isArray(tools?.mcp) ? tools.mcp.filter((item): item is string => typeof item === "string") : []
+        external: externalTools,
+        ...(externalTools.length > 0 ? { mcp: externalTools } : {})
       },
       switch: Array.isArray(data.switch) ? data.switch.filter((item): item is string => typeof item === "string") : [],
       subagents: Array.isArray(data.subagents)
@@ -945,6 +983,9 @@ export async function loadWorkspaceActions(workspaceRoot: string): Promise<Recor
         callable_by_user?: boolean;
         callable_by_api?: boolean;
       };
+      recovery?: {
+        retry_policy?: ActionRetryPolicy;
+      };
       input_schema?: Record<string, unknown>;
       entry: {
         command: string;
@@ -964,6 +1005,7 @@ export async function loadWorkspaceActions(workspaceRoot: string): Promise<Recor
       callableByApi: actionData.expose?.callable_by_api ?? true,
       callableByUser: actionData.expose?.callable_by_user ?? true,
       exposeToLlm: actionData.expose?.to_llm ?? true,
+      ...(actionData.recovery?.retry_policy ? { retryPolicy: actionData.recovery.retry_policy } : {}),
       inputSchema: actionData.input_schema,
       directory: actionDirectory,
       entry: {
@@ -1035,15 +1077,21 @@ export async function discoverWorkspace(
   kind: "project" | "chat",
   input: {
     platformModels: PlatformModelRegistry;
+    platformAgents?: PlatformAgentRegistry;
     platformSkills?: Record<string, DiscoveredSkill>;
-    platformMcpServers?: Record<string, DiscoveredMcpServer>;
+    platformToolServers?: Record<string, DiscoveredToolServer>;
     platformSkillDir?: string;
-    platformMcpDir?: string;
+    platformToolDir?: string;
   }
 ) {
   const settings = await loadWorkspaceSettings(rootPath);
   const workspaceModels = await loadWorkspaceModels(rootPath);
-  const agents = await loadWorkspaceAgents(rootPath);
+  const workspaceAgents = await loadWorkspaceAgents(rootPath);
+  const agents = input.platformAgents ? mergeWithPrecedence(workspaceAgents, input.platformAgents) : workspaceAgents;
+  const agentSources = Object.fromEntries([
+    ...Object.keys(input.platformAgents ?? {}).map((name) => [name, "platform" as const]),
+    ...Object.keys(workspaceAgents).map((name) => [name, "workspace" as const])
+  ]);
   const actions = kind === "chat" ? {} : await loadWorkspaceActions(rootPath);
   const workspaceSkillRoots = [
     path.join(rootPath, ".openharness", "skills"),
@@ -1060,23 +1108,23 @@ export async function discoverWorkspace(
               ? resolveSkillRoots(rootPath, settings, input.platformSkillDir)
               : [path.join(rootPath, ".openharness", "skills")]
           );
-  const discoveredWorkspaceMcpServers =
-    kind === "chat" ? {} : await loadWorkspaceMcpServers(path.join(rootPath, ".openharness", "mcp"));
-  const mcpServers =
+  const discoveredWorkspaceToolServers =
+    kind === "chat" ? {} : await loadWorkspaceToolServers(path.join(rootPath, ".openharness", "tools"));
+  const toolServers =
     kind === "chat"
       ? {}
-      : input.platformMcpServers
-        ? mergeWithPrecedence(discoveredWorkspaceMcpServers, input.platformMcpServers)
-        : input.platformMcpDir
+      : input.platformToolServers
+        ? mergeWithPrecedence(discoveredWorkspaceToolServers, input.platformToolServers)
+        : input.platformToolDir
         ? {
-            ...discoveredWorkspaceMcpServers,
+            ...discoveredWorkspaceToolServers,
             ...Object.fromEntries(
-              Object.entries(await loadPlatformMcpServers(input.platformMcpDir)).filter(
-                ([name]) => !(name in discoveredWorkspaceMcpServers)
+              Object.entries(await loadPlatformToolServers(input.platformToolDir)).filter(
+                ([name]) => !(name in discoveredWorkspaceToolServers)
               )
             )
           }
-        : discoveredWorkspaceMcpServers;
+        : discoveredWorkspaceToolServers;
   const hooks = kind === "chat" ? {} : await loadWorkspaceHooks(rootPath);
   const projectAgentsMd = await loadProjectAgentsMd(rootPath);
   const name = path.basename(rootPath);
@@ -1084,10 +1132,11 @@ export async function discoverWorkspace(
   const models = [...toPlatformModelCatalogItems(input.platformModels), ...toWorkspaceModelCatalogItems(workspaceModels)];
   const timestamp = nowIso();
   const catalog = createWorkspaceCatalog(id, models);
-  catalog.agents = toAgentCatalogItems(agents);
+  catalog.agents = toAgentCatalogItems(agents, agentSources);
   catalog.actions = toActionCatalogItems(actions);
   catalog.skills = toSkillCatalogItems(skills);
-  catalog.mcp = toMcpCatalogItems(mcpServers);
+  catalog.tools = toToolCatalogItems(toolServers);
+  catalog.mcp = [...catalog.tools];
   catalog.hooks = toHookCatalogItems(hooks);
 
   return {
@@ -1108,19 +1157,20 @@ export async function discoverWorkspace(
     agents,
     actions,
     skills,
-    mcpServers,
+    toolServers,
     hooks,
     catalog
   } satisfies DiscoveredWorkspace;
 }
 
 export async function discoverWorkspaces(input: {
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir" | "mcp_dir" | "skill_dir">;
+  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir" | "tool_dir" | "skill_dir">;
   platformModels: PlatformModelRegistry;
+  platformAgents?: PlatformAgentRegistry;
 }): Promise<DiscoveredWorkspace[]> {
-  const [platformSkills, platformMcpServers] = await Promise.all([
+  const [platformSkills, platformToolServers] = await Promise.all([
     loadPlatformSkills(input.paths.skill_dir),
-    loadPlatformMcpServers(input.paths.mcp_dir)
+    loadPlatformToolServers(input.paths.tool_dir)
   ]);
   const projectEntries = await readDirectoryEntriesIfExists(input.paths.workspace_dir);
   const chatEntries = await readDirectoryEntriesIfExists(input.paths.chat_dir);
@@ -1131,8 +1181,9 @@ export async function discoverWorkspaces(input: {
       .map((entry) =>
         discoverWorkspace(path.join(input.paths.workspace_dir, entry.name), "project", {
           platformModels: input.platformModels,
+          ...(input.platformAgents ? { platformAgents: input.platformAgents } : {}),
           platformSkills,
-          platformMcpServers
+          platformToolServers
         })
       )
   );
@@ -1143,8 +1194,9 @@ export async function discoverWorkspaces(input: {
       .map((entry) =>
         discoverWorkspace(path.join(input.paths.chat_dir, entry.name), "chat", {
           platformModels: input.platformModels,
+          ...(input.platformAgents ? { platformAgents: input.platformAgents } : {}),
           platformSkills,
-          platformMcpServers
+          platformToolServers
         })
       )
   );

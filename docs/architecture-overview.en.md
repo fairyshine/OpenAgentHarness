@@ -23,7 +23,7 @@ The system is responsible for:
 
 - multi-workspace management
 - session and run orchestration
-- loading agents, models, actions, skills, MCP, and hooks
+- loading agents, models, actions, skills, external tools, and hooks
 - exposing REST APIs and SSE streams
 - queueing, cancellation, timeout, recovery, and audit
 - syncing central history into per-workspace local mirrors
@@ -53,4 +53,3 @@ The system does not try to be:
 ## Note
 
 The detailed architecture documents under this section remain the source of truth. Some sub-pages may still fall back to Chinese until they are translated.
-

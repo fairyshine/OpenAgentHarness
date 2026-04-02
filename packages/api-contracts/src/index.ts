@@ -51,12 +51,15 @@ export const modelCatalogItemSchema = z.object({
   url: z.string().optional()
 });
 
+export const actionRetryPolicySchema = z.enum(["manual", "safe"]);
+
 export const actionCatalogItemSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   exposeToLlm: z.boolean().optional(),
   callableByUser: z.boolean().optional(),
-  callableByApi: z.boolean().optional()
+  callableByApi: z.boolean().optional(),
+  retryPolicy: actionRetryPolicySchema.optional()
 });
 
 export const skillCatalogItemSchema = z.object({
@@ -65,7 +68,7 @@ export const skillCatalogItemSchema = z.object({
   exposeToLlm: z.boolean().optional()
 });
 
-export const mcpCatalogItemSchema = z.object({
+export const toolCatalogItemSchema = z.object({
   name: z.string(),
   transportType: z.string().optional(),
   toolPrefix: z.string().optional()
@@ -84,7 +87,8 @@ export const workspaceCatalogSchema = z.object({
   models: z.array(modelCatalogItemSchema),
   actions: z.array(actionCatalogItemSchema),
   skills: z.array(skillCatalogItemSchema),
-  mcp: z.array(mcpCatalogItemSchema),
+  tools: z.array(toolCatalogItemSchema).optional(),
+  mcp: z.array(toolCatalogItemSchema).optional(),
   hooks: z.array(hookCatalogItemSchema),
   nativeTools: z.array(z.string())
 });
@@ -128,6 +132,7 @@ export const runSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
   sessionId: z.string().optional(),
+  parentRunId: z.string().optional(),
   initiatorRef: z.string().optional(),
   triggerType: z.enum(["message", "manual_action", "api_action", "hook", "system"]),
   triggerRef: z.string().optional(),
@@ -137,6 +142,7 @@ export const runSchema = z.object({
   status: z.enum(["queued", "running", "waiting_tool", "completed", "failed", "cancelled", "timed_out"]),
   cancelRequestedAt: timestampSchema.optional(),
   startedAt: timestampSchema.optional(),
+  heartbeatAt: timestampSchema.optional(),
   endedAt: timestampSchema.optional(),
   createdAt: timestampSchema,
   errorCode: z.string().optional(),
@@ -194,6 +200,7 @@ export const createWorkspaceRequestSchema = z.object({
   template: z.string().min(1),
   rootPath: z.string().min(1).optional(),
   agentsMd: z.string().min(1).optional(),
+  toolServers: z.record(z.string(), jsonObjectSchema).optional(),
   mcpServers: z.record(z.string(), jsonObjectSchema).optional(),
   skills: z.array(workspaceSkillInputSchema).optional(),
   executionPolicy: z.enum(["local", "container", "remote_runner"]).default("local")
@@ -309,6 +316,7 @@ export const sessionEventSchema = z.object({
     "agent.delegate.started",
     "agent.delegate.completed",
     "agent.delegate.failed",
+    "hook.notice",
     "tool.started",
     "tool.completed",
     "tool.failed",
@@ -326,9 +334,11 @@ export type WorkspaceHistoryMirrorStatus = z.infer<typeof workspaceHistoryMirror
 export type WorkspaceCatalog = z.infer<typeof workspaceCatalogSchema>;
 export type AgentCatalogItem = z.infer<typeof agentCatalogItemSchema>;
 export type ModelCatalogItem = z.infer<typeof modelCatalogItemSchema>;
+export type ActionRetryPolicy = z.infer<typeof actionRetryPolicySchema>;
 export type ActionCatalogItem = z.infer<typeof actionCatalogItemSchema>;
 export type SkillCatalogItem = z.infer<typeof skillCatalogItemSchema>;
-export type McpCatalogItem = z.infer<typeof mcpCatalogItemSchema>;
+export type ToolCatalogItem = z.infer<typeof toolCatalogItemSchema>;
+export type McpCatalogItem = ToolCatalogItem;
 export type HookCatalogItem = z.infer<typeof hookCatalogItemSchema>;
 export type Session = z.infer<typeof sessionSchema>;
 export type SessionPage = z.infer<typeof sessionPageSchema>;

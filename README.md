@@ -10,9 +10,9 @@ It is designed for teams that need a deployable runtime, not just an adapter lay
 
 - Enterprise-grade runtime architecture for multi-user, high-concurrency agent workloads
 - Headless and embeddable: integrate it behind your own web app, desktop app, CLI, automation system, or API gateway
-- Workspace-first loading of agents, models, actions, skills, MCP servers, and hooks
+- Workspace-first loading of agents, models, actions, skills, external tool servers, and hooks
 - Horizontal scaling with `API only + standalone worker` deployment
-- Unified tool-calling projection for LLMs while keeping `action`, `skill`, `mcp`, and native tools separate at the domain layer
+- Unified tool-calling projection for LLMs while keeping `action`, `skill`, `tool`, and native tools separate at the domain layer
 - Structured lifecycle management for workspaces, sessions, messages, runs, audit logs, cancellation, timeouts, and recovery
 - Supports both full execution workspaces and read-only chat workspaces
 
@@ -25,7 +25,7 @@ It is responsible for:
 - Managing the lifecycle of `workspace`, `session`, `message`, and `run`
 - Discovering `.openharness/` configuration from workspaces
 - Loading platform-level and workspace-level agents and models
-- Executing shell, local scripts, `action`, `skill`, `mcp`, and `hook`
+- Executing shell, local scripts, `action`, `skill`, `tool`, and `hook`
 - Exposing REST APIs and SSE event streams for clients and upstream services
 - Coordinating queueing, reliability, and distributed workers
 - Mirroring workspace history into a local `.openharness/data/history.db` database
@@ -86,7 +86,7 @@ Clients / Upstream Systems
  Context Engine        Invocation Dispatcher      Hook Runtime
  (workspace loading,   (maps LLM tool calls       (lifecycle and
  agent/model/action/    to native tools /          interceptor
- skill/mcp assembly)    action / skill / mcp)      extensions)
+ skill/tool assembly)   action / skill / tool)     extensions)
       |                       |                       |
       +-----------------------+-----------------------+
                               |
@@ -98,7 +98,7 @@ Clients / Upstream Systems
           +-------------------+-------------------+------------------+
           |                   |                   |                  |
           v                   v                   v                  v
-     Native Tools          Actions              Skills          MCP Servers
+     Native Tools          Actions              Skills      External Tool Servers
 
 Data / Coordination Layer
   PostgreSQL  -> source of truth for sessions, messages, runs, audit
@@ -115,7 +115,7 @@ Deployment Modes
 Open Agent Harness supports two workspace kinds:
 
 - `project`: a normal workspace with tools, execution, and local history mirror
-- `chat`: a read-only conversation workspace with static prompts, agents, and models only
+- `chat`: a read-only conversation workspace with static prompts, agents, and models only; directories under `paths.chat_dir` are directly usable workspaces and can also be managed as reusable presets
 
 Example structure:
 
@@ -136,7 +136,7 @@ workspace/
     skills/
       repo-explorer/
         SKILL.md
-    mcp/
+    tools/
       settings.yaml
       servers/
         docs-server/
@@ -177,6 +177,15 @@ Run the default local backend:
 pnpm dev:server -- --config ./server.example.yaml
 ```
 
+Run a single workspace directly:
+
+```bash
+pnpm dev:server -- \
+  --workspace /absolute/path/to/workspace \
+  --model-dir /absolute/path/to/models \
+  --default-model openai-default
+```
+
 Run the standalone worker:
 
 ```bash
@@ -204,8 +213,8 @@ paths:
   workspace_dir: ./tmp/workspaces
   chat_dir: ./tmp/chat-workspaces
   template_dir: ./tmp/templates
-  models_dir: ./tests/fixtures/models
-  mcp_dir: ./tmp/mcp
+  model_dir: ./tests/fixtures/models
+  tool_dir: ./tmp/tools
   skill_dir: ./tmp/skills
 
 llm:
@@ -233,6 +242,14 @@ llm:
 - Consumes the Redis run queue
 - Executes queued runs and history mirror sync
 - Best for horizontal scaling and resource isolation
+
+### `single workspace`
+
+- Enabled by passing `--workspace`
+- Boots exactly one workspace and serves it as a dedicated backend
+- Useful for an `opencode`-style deployment around one repo or one read-only chat workspace
+- Reuses the same HTTP API and runtime core
+- Disables workspace template listing, workspace creation/import, and workspace deletion routes
 
 ## Documentation
 

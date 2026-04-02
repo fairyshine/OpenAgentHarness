@@ -5,7 +5,9 @@ import type { ToolSet } from "ai";
 import type { McpServerDefinition } from "@oah/runtime-core";
 import { AppError } from "@oah/runtime-core";
 
-export interface PreparedMcpTools {
+type ToolServerDefinition = McpServerDefinition;
+
+export interface PreparedToolServers {
   tools: ToolSet;
   close(): Promise<void>;
 }
@@ -44,18 +46,18 @@ function shouldIncludeTool(toolName: string, include: string[] | undefined, excl
   return true;
 }
 
-async function createClient(server: McpServerDefinition): Promise<MCPClient> {
+async function createClient(server: ToolServerDefinition): Promise<MCPClient> {
   if (server.oauth) {
     throw new AppError(
       501,
       "mcp_oauth_not_implemented",
-      `MCP server ${server.name} requests OAuth, which is not implemented yet.`
+      `Tool server ${server.name} requests OAuth over MCP, which is not implemented yet.`
     );
   }
 
   if (server.transportType === "stdio") {
     if (!server.command) {
-      throw new AppError(400, "invalid_mcp_server", `MCP server ${server.name} is missing command.`);
+      throw new AppError(400, "invalid_mcp_server", `Tool server ${server.name} is missing command.`);
     }
 
     const wrapped = createShellWrappedCommand(server.command);
@@ -74,7 +76,7 @@ async function createClient(server: McpServerDefinition): Promise<MCPClient> {
   }
 
   if (!server.url) {
-    throw new AppError(400, "invalid_mcp_server", `MCP server ${server.name} is missing url.`);
+    throw new AppError(400, "invalid_mcp_server", `Tool server ${server.name} is missing url.`);
   }
 
   return createMCPClient({
@@ -86,8 +88,8 @@ async function createClient(server: McpServerDefinition): Promise<MCPClient> {
   });
 }
 
-export async function prepareMcpTools(mcpServers: McpServerDefinition[] | undefined): Promise<PreparedMcpTools> {
-  const enabledServers = (mcpServers ?? []).filter((server) => server.enabled);
+export async function prepareToolServers(toolServers: ToolServerDefinition[] | undefined): Promise<PreparedToolServers> {
+  const enabledServers = (toolServers ?? []).filter((server) => server.enabled);
   if (enabledServers.length === 0) {
     return {
       tools: {},
@@ -117,7 +119,7 @@ export async function prepareMcpTools(mcpServers: McpServerDefinition[] | undefi
           throw new AppError(
             409,
             "duplicate_mcp_tool_name",
-            `Duplicate MCP tool name detected: ${exposedToolName}. Adjust tool_prefix/include/exclude settings.`
+            `Duplicate external tool name detected: ${exposedToolName}. Adjust tool_prefix/include/exclude settings.`
           );
         }
 

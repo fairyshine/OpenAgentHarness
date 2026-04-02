@@ -8,7 +8,7 @@
 
 - 平台级模型入口
   - 由服务端配置并注册
-  - 具体配置方式见 [../server-config.md](../server-config.md) 中的 `paths.models_dir`
+  - 具体配置方式见 [../server-config.md](../server-config.md) 中的 `paths.model_dir`
   - 平台模型文件与 workspace 模型文件复用同一套 YAML 结构
 - workspace 级模型入口
   - 由 `.openharness/models/*.yaml` 声明

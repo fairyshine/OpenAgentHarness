@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createPostgresRuntimePersistence, ensurePostgresSchema } from "../packages/storage-postgres/dist/index.js";
+import { createPostgresRuntimePersistence, ensurePostgresSchema } from "@oah/storage-postgres";
 
 describe("storage postgres", () => {
   it("creates all expected schema statements", async () => {
@@ -15,6 +15,8 @@ describe("storage postgres", () => {
     expect(statements.some((statement) => statement.includes("create table if not exists workspaces"))).toBe(true);
     expect(statements.some((statement) => statement.includes("create table if not exists sessions"))).toBe(true);
     expect(statements.some((statement) => statement.includes("create table if not exists runs"))).toBe(true);
+    expect(statements.some((statement) => statement.includes("parent_run_id"))).toBe(true);
+    expect(statements.some((statement) => statement.includes("heartbeat_at"))).toBe(true);
     expect(statements.some((statement) => statement.includes("create table if not exists messages"))).toBe(true);
     expect(statements.some((statement) => statement.includes("create table if not exists run_steps"))).toBe(true);
     expect(statements.some((statement) => statement.includes("create table if not exists tool_calls"))).toBe(true);

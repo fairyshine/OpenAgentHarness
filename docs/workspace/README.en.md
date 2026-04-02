@@ -23,7 +23,7 @@ When a user opens a project, the runtime should discover as much capability as p
 
 - read-only conversational workspace
 - only loads static prompt, agent, and model configuration
-- does not execute shell, actions, skills, MCP, or hooks
+- does not execute shell, actions, skills, tools, or hooks
 - does not create a local history database
 
 ## Minimal Workspace Shape
@@ -49,8 +49,8 @@ At run startup, the runtime looks for:
 - `.openharness/models/*.yaml`
 - `.openharness/actions/*/ACTION.yaml`
 - `.openharness/skills/*/SKILL.md`
-- `.openharness/mcp/settings.yaml`
-- `.openharness/mcp/servers/*`
+- `.openharness/tools/settings.yaml`
+- `.openharness/tools/servers/*`
 - `.openharness/hooks/*.yaml`
 
 ## Read Next
@@ -60,11 +60,10 @@ At run startup, the runtime looks for:
 3. [Models](./models.md)
 4. [Actions](./actions.md)
 5. [Skills](./skills.md)
-6. [MCP](./mcp.md)
+6. [External Tools (MCP-backed)](./mcp.md)
 7. [Hooks](./hooks.md)
 8. [Loading and Validation](./loading-and-validation.md)
 
 ## Translation Note
 
 This page is translated. Some deeper workspace pages may still fall back to Chinese.
-

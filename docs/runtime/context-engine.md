@@ -7,8 +7,8 @@
 - session 历史消息
 - 平台内建 agent 定义
 - 当前 agent 定义
-- 服务端 `paths.models_dir` 中的平台模型入口清单
-- 服务端 `paths.mcp_dir` 中的公共 MCP 定义
+- 服务端 `paths.model_dir` 中的平台模型入口清单
+- 服务端 `paths.tool_dir` 中的公共 external tool 定义
 - 服务端 `paths.skill_dir` 中的公共 skill 定义
 - workspace 级模型入口清单
 - `AGENTS.md`
@@ -19,6 +19,7 @@
 
 - 运行时会同时读取服务端公共能力目录与当前 workspace 文件
 - 平台模板仅用于初始化 workspace，不参与运行时加载或 merge
+- `paths.chat_dir` 下的只读对话空间不属于“先复制后使用”的模板；它们会被直接发现并按 workspace 加载
 - `kind=chat` workspace 仍沿用同一套加载入口，但只装配只读对话所需的静态配置
 
 ## 输出
@@ -33,7 +34,7 @@
 `kind=chat` workspace 的额外约束：
 
 - 只读取 `AGENTS.md`、`.openharness/settings.yaml`、`.openharness/agents/*.md`、`.openharness/models/*.yaml`
-- 不装配 `actions`、`skills`、`mcp`、`hooks`
+- 不装配 `actions`、`skills`、`tools`、`hooks`
 - 输出的 tool 列表固定为空
 - 不生成执行 backend 所需的运行环境摘要
 

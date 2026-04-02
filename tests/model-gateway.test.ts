@@ -4,7 +4,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { AiSdkModelGateway, prepareMcpTools } from "../packages/model-gateway/dist/index.js";
+import { AiSdkModelGateway, prepareToolServers } from "@oah/model-gateway";
+
+const globalWithAiSdkWarnings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
+globalWithAiSdkWarnings.AI_SDK_LOG_WARNINGS = false;
 
 const MCP_SERVER_SOURCE = String.raw`
 const readline = require("node:readline");
@@ -102,7 +105,7 @@ describe("model gateway mcp tools", () => {
     const serverPath = path.join(tempDir, "fake-mcp.cjs");
     await writeFile(serverPath, `${MCP_SERVER_SOURCE}\n`, "utf8");
 
-    const prepared = await prepareMcpTools([
+    const prepared = await prepareToolServers([
       {
         name: "docs-server",
         enabled: true,
@@ -129,7 +132,7 @@ describe("model gateway mcp tools", () => {
         }
       ]
     });
-  });
+  }, 15_000);
 });
 
 describe("AiSdkModelGateway openai-compatible provider", () => {

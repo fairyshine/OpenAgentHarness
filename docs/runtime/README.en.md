@@ -7,7 +7,7 @@ The runtime is responsible for turning an incoming request into a traceable, rec
 - transform caller input into executable runs
 - enforce per-session serialization
 - discover workspace capabilities and build context
-- map model tool calls to Actions, Skills, MCP, and native tools
+- map model tool calls to Actions, Skills, external tools, and native tools
 - handle timeout, cancellation, logging, audit, and streaming
 - sync central history into `.openharness/data/history.db`
 
@@ -33,4 +33,3 @@ The runtime is responsible for turning an incoming request into a traceable, rec
 ## Translation Note
 
 This page is translated. Some lower-level runtime design pages may still fall back to Chinese.
-

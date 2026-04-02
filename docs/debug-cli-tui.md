@@ -69,7 +69,7 @@ oah
 - `oah workspace list`
   - 列出已发现 workspace
 - `oah catalog show --workspace <id>`
-  - 查看当前 workspace 的 agents / models / actions / skills / mcp / hooks
+  - 查看当前 workspace 的 agents / models / actions / skills / tools / hooks
 - `oah session chat --workspace <id>`
   - 直接发起交互式对话
 - `oah action run --workspace <id> --action <name>`
@@ -111,7 +111,7 @@ oah
 - models
 - actions
 - skills
-- mcp
+- tools
 - hooks
 
 用途：

@@ -38,7 +38,7 @@ tools:
   skills:
     - repo.explorer
     - docs.reader
-  mcp:
+  external:
     - docs-server
 switch:
   - plan
@@ -109,7 +109,7 @@ subagents:
 - `system_reminder`
   - 可选；定义 agent 激活或切换时的提醒段内容
 - `tools`
-  - 可选；声明该 agent 可见的 native tools、actions、skills、mcp
+  - 可选；声明该 agent 可见的 native tools、actions、skills、external tools
 - `switch`
   - 可选；声明该 agent 在当前 run 内允许切换到的其他 agent 名称列表
 - `subagents`

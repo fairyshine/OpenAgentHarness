@@ -20,7 +20,7 @@
 2. 根据 agent 配置解析可用的 native tools
 3. 解析可用的 actions 元数据
 4. 解析可用的 skills 元数据
-5. 解析 `mcp/settings.yaml` 和本地 server 目录
+5. 解析 `tools/settings.yaml` 和本地 server 目录
 6. 将上述能力投影为模型可消费的 tool definitions
 
 `model_ref` 解析规则：
@@ -119,9 +119,9 @@ Skill 采用按需加载：
 - skills
   - 按需加载的指令集和资源包
 
-MCP 采用集中式注册：
+External tool servers 采用集中式注册：
 
-- 从 `mcp/settings.yaml` 读取 server 定义
+- 从 `tools/settings.yaml` 读取 server 定义
 - 本地 server 按字符串形式的 `command` 启动
 - 远程 server 通过 `url` 连接
 
@@ -132,13 +132,13 @@ Action 采用目录式注册：
 - `command` 为字符串
 - shell 命令和本地脚本都通过 `command` 表达
 
-公共 MCP 建议由服务端 `paths.mcp_dir` 统一加载。
+公共 tool servers 建议由服务端 `paths.tool_dir` 统一加载。
 
 它们的语义是：
 
 - 不属于 native tool
-- 不属于 workspace 私有 action / skill / mcp
-- 属于服务端提供的公共 MCP 能力
+- 不属于 workspace 私有 action / skill / tool
+- 属于服务端提供的公共 external tool 能力
 
 脚本若需要调用服务端预设模型，建议不要直接访问第三方 provider。
 
@@ -185,7 +185,7 @@ Action 采用目录式注册：
 - `SkillExecutor`
   - 执行技能型能力
 - `McpExecutor`
-  - 调用 MCP server 对应工具
+  - 调用外部 tool server 对应工具
 
 ### Action 与 Skill 的区别
 

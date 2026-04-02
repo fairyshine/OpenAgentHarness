@@ -28,7 +28,7 @@ If you keep those three concepts clear, the runtime, queueing, API, and audit do
 - [Workspace Spec Index](./workspace-spec.md)
 - [Models](./workspace/models.md)
 - [Skills](./workspace/skills.md)
-- [MCP](./workspace/mcp.md)
+- [External Tools (MCP-backed)](./workspace/mcp.md)
 - [Hooks](./workspace/hooks.md)
 
 ### Runtime
@@ -72,4 +72,3 @@ If you keep those three concepts clear, the runtime, queueing, API, and audit do
 ## Translation Note
 
 Not every deep design page is translated yet. When no English page exists, the English site currently falls back to the Chinese source page.
-

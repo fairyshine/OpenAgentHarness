@@ -43,10 +43,12 @@ export interface RedisRunWorkerOptions {
   queue: SessionRunQueue;
   runtimeService: {
     processQueuedRun(runId: string): Promise<void>;
+    recoverStaleRuns?(options?: { staleBefore?: string | undefined; limit?: number | undefined }): Promise<{ recoveredRunIds: string[] }>;
   };
   workerId?: string | undefined;
   lockTtlMs?: number | undefined;
   pollTimeoutMs?: number | undefined;
+  recoveryGraceMs?: number | undefined;
   logger?: RedisRunWorkerLogger | undefined;
 }
 
@@ -252,6 +254,7 @@ export class RedisRunWorker {
   readonly #workerId: string;
   readonly #lockTtlMs: number;
   readonly #pollTimeoutMs: number;
+  readonly #recoveryGraceMs: number;
   readonly #logger?: RedisRunWorkerLogger | undefined;
   #loop: Promise<void> | undefined;
   #active = false;
@@ -262,6 +265,7 @@ export class RedisRunWorker {
     this.#workerId = options.workerId ?? createId("worker");
     this.#lockTtlMs = Math.max(1_000, options.lockTtlMs ?? 30_000);
     this.#pollTimeoutMs = Math.max(250, options.pollTimeoutMs ?? 1_000);
+    this.#recoveryGraceMs = Math.max(this.#lockTtlMs, options.recoveryGraceMs ?? this.#lockTtlMs * 2);
     this.#logger = options.logger;
   }
 
@@ -280,6 +284,16 @@ export class RedisRunWorker {
   }
 
   async #runLoop(): Promise<void> {
+    if (this.#runtimeService.recoverStaleRuns) {
+      try {
+        await this.#runtimeService.recoverStaleRuns({
+          staleBefore: new Date(Date.now() - this.#recoveryGraceMs).toISOString()
+        });
+      } catch (error) {
+        this.#logger?.warn("Failed to recover stale runs during worker startup.", error);
+      }
+    }
+
     while (this.#active) {
       let sessionId: string | undefined;
       try {

@@ -7,7 +7,7 @@
 
 它最适合两类需求：
 - 大量 workspace 并行使用，而不是只服务一个本地 agent
-- 高自由度定制，你可以自己决定 agent、model、action、skill、mcp、hook 怎么组织
+- 高自由度定制，你可以自己决定 agent、model、action、skill、tool、hook 怎么组织
 
 [5 分钟上手](./getting-started.md){ .md-button .md-button--primary }
 [查看架构](./architecture-overview.md){ .md-button }
@@ -24,7 +24,7 @@
 通常你很快会遇到这些问题：
 
 - 怎么让很多 workspace 同时运行，而不是一个一个手工开
-- 怎么让不同 workspace 拥有不同 agent、model、skill、mcp 组合
+- 怎么让不同 workspace 拥有不同 agent、model、skill、tool 组合
 - 怎么在企业环境里保持统一运行，又允许每个团队高度定制
 - 怎么避免被某个固定 UI 或固定工作流绑死
 - 怎么在规模上去之后还保持可部署、可扩展、可治理
@@ -53,7 +53,7 @@ Open Agent Harness 就是专门解决这些问题的。
 
 - 接什么前端
 - 用什么 agent 组织方式
-- 怎么组合 model、action、skill、mcp、hook
+- 怎么组合 model、action、skill、tool、hook
 - 怎么部署成一体模式或拆分模式
 
 ## 为什么叫 Harness
@@ -80,7 +80,7 @@ Open Agent Harness 的定位就是这一层。
 Open Agent Harness 反过来，它更像一个运行时框架：
 
 - 不绑死 UI，你可以接自己的 Web、桌面端、CLI 或自动化系统
-- 不绑死能力模型，agent、model、action、skill、mcp、hook 都可以自己组织
+- 不绑死能力模型，agent、model、action、skill、tool、hook 都可以自己组织
 - 不绑死部署方式，本地可以一体跑，生产可以拆成 API + Worker
 - 不强迫你走单一路径，更适合企业内部集成和深度定制
 
@@ -92,7 +92,7 @@ Open Agent Harness 反过来，它更像一个运行时框架：
 - 你需要支撑大量 workspace 并行，而不是单项目单实例
 - 你已经有自己的前端，缺的是可扩展的 Agent Harness
 - 你不想把能力全写死在一个本地脚本或固定产品里
-- 你希望模型、工具、Action、Skill、MCP 的组合方式足够自由
+- 你希望模型、工具、Action、Skill、Tool 的组合方式足够自由
 
 ## 什么时候不适合
 
@@ -105,6 +105,7 @@ Open Agent Harness 反过来，它更像一个运行时框架：
 | 你现在想做什么 | 从这里开始 |
 | --- | --- |
 | 先把项目跑起来 | [快速开始](./getting-started.md) |
+| 只想把一个 workspace 直接跑成后端 | [部署与运行](./deploy.md) 中的 single workspace |
 | 看本地和生产怎么部署 | [部署与运行](./deploy.md) |
 | 看这个系统怎么支撑大规模 workspace | [架构总览](./architecture-overview.md) |
 | 配 workspace、agent、model、skill | [Workspace 导航](./workspace/README.md) |

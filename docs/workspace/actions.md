@@ -38,6 +38,9 @@ expose:
   callable_by_user: true
   callable_by_api: true
 
+recovery:
+  retry_policy: manual
+
 input_schema:
   type: object
   properties:
@@ -64,6 +67,7 @@ entry:
 - `description`
 - `expose`
 - `input_schema`
+- `recovery`
 - `entry`
 
 ## `ACTION.yaml` 规范
@@ -98,6 +102,26 @@ entry:
   - 可选，工作目录
 - `timeout_seconds`
   - 可选，当前 action 超时
+
+## `recovery` 字段
+
+可选结构：
+
+```yaml
+recovery:
+  retry_policy: safe
+```
+
+字段说明：
+
+- `retry_policy`
+  - `manual`
+    - 默认值
+    - 只能视为人工或外部调用方显式重试
+    - 不应默认进入未来的自动恢复 / 自动续跑路径
+  - `safe`
+    - 仅用于已明确幂等、可安全重放的 action
+    - 为后续自动恢复策略提供显式信号
 
 规则：
 

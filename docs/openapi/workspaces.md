@@ -40,15 +40,16 @@
 
 - `rootPath`
 - `agentsMd`
-- `mcpServers`
+- `toolServers`
 - `skills`
 
 说明：
 
 - `project` workspace 可通过该接口显式创建
 - 未传 `rootPath` 时，服务端默认在 `server.paths.workspace_dir/<normalized-name>` 下创建目录
-- 创建顺序必须是：先从 `template_dir` 复制模板，再叠加用户传入的 `AGENTS.md`、MCP 和 skills
+- 创建顺序必须是：先从 `template_dir` 复制模板，再叠加用户传入的 `AGENTS.md`、workspace tools 和 skills
 - `chat` workspace 更适合由服务端按目录自动发现，不要求调用方逐个创建
+- `paths.chat_dir` 下的目录本身就是可直接使用的只读 workspace，而不是需要再复制一次的模板实例
 
 ### `POST /workspaces/import`
 
@@ -173,13 +174,13 @@
 - models
 - actions
 - skills
-- mcp
+- tools
 - hooks
 - nativeTools
 
 对于 `kind=chat` workspace：
 
-- `actions`、`skills`、`mcp`、`hooks`、`nativeTools` 均返回空列表
+- `actions`、`skills`、`tools`、`hooks`、`nativeTools` 均返回空列表
 - `readOnly=true`
 - `historyMirrorEnabled=false`
 
@@ -188,8 +189,10 @@
 - catalog 是“发现结果”，不是原始配置文件回显
 - catalog 便于客户端快速展示当前 workspace 可用能力
 - catalog 中只返回元数据，不返回完整 YAML 内容
+- action 元数据当前可带 `retryPolicy`，用于表达是否适合作为未来自动恢复的候选项
 - agent 元数据应包含来源标记，便于区分 `platform` 与 `workspace`
 - model 元数据中的每一项都对应一个具体模型入口
 - model 元数据中的 `provider` 字段对齐 AI SDK provider 标识
 - workspace 默认 agent 来自 `.openharness/settings.yaml` 的发现结果，而不是 `POST /workspaces` 请求体
 - 服务端配置文件可通过 `paths.chat_dir` 指定一个“对话模式目录”，其下每个直接子目录自动发现为只读 `chat` workspace
+- 这些目录既可以被当作预置对话模式来管理，也会直接作为可进入的 workspace 暴露给调用方

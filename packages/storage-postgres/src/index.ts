@@ -1,6 +1,6 @@
 import { Pool, type PoolConfig } from "pg";
 
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { boolean, integer, jsonb, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
 
@@ -30,6 +30,14 @@ import type {
 } from "@oah/runtime-core";
 import { AppError, createId, nowIso, parseCursor } from "@oah/runtime-core";
 
+type CompatibleWorkspaceRecord = WorkspaceRecord & {
+  toolServers?: WorkspaceRecord["mcpServers"] | undefined;
+};
+
+function readToolServers(input: WorkspaceRecord): WorkspaceRecord["mcpServers"] {
+  return (input as CompatibleWorkspaceRecord).toolServers ?? input.mcpServers;
+}
+
 const workspaces = pgTable("workspaces", {
   id: text("id").primaryKey(),
   externalRef: text("external_ref"),
@@ -47,7 +55,7 @@ const workspaces = pgTable("workspaces", {
   agents: jsonb("agents").$type<WorkspaceRecord["agents"]>().notNull(),
   actions: jsonb("actions").$type<WorkspaceRecord["actions"]>().notNull(),
   skills: jsonb("skills").$type<WorkspaceRecord["skills"]>().notNull(),
-  mcpServers: jsonb("mcp_servers").$type<WorkspaceRecord["mcpServers"]>().notNull(),
+  toolServers: jsonb("mcp_servers").$type<WorkspaceRecord["mcpServers"]>().notNull(),
   hooks: jsonb("hooks").$type<WorkspaceRecord["hooks"]>().notNull(),
   catalog: jsonb("catalog").$type<WorkspaceRecord["catalog"]>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
@@ -75,6 +83,7 @@ const runs = pgTable("runs", {
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
   sessionId: text("session_id").references(() => sessions.id, { onDelete: "cascade" }),
+  parentRunId: text("parent_run_id"),
   initiatorRef: text("initiator_ref"),
   triggerType: text("trigger_type").notNull(),
   triggerRef: text("trigger_ref"),
@@ -84,6 +93,7 @@ const runs = pgTable("runs", {
   status: text("status").notNull(),
   cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true, mode: "string" }),
   startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+  heartbeatAt: timestamp("heartbeat_at", { withTimezone: true, mode: "string" }),
   endedAt: timestamp("ended_at", { withTimezone: true, mode: "string" }),
   errorCode: text("error_code"),
   errorMessage: text("error_message"),
@@ -247,7 +257,7 @@ function buildWorkspaceRow(input: WorkspaceRecord) {
     agents: input.agents,
     actions: input.actions,
     skills: input.skills,
-    mcpServers: input.mcpServers,
+    toolServers: readToolServers(input),
     hooks: input.hooks,
     catalog: input.catalog,
     createdAt: input.createdAt,
@@ -256,6 +266,8 @@ function buildWorkspaceRow(input: WorkspaceRecord) {
 }
 
 function toWorkspaceRecord(row: typeof workspaces.$inferSelect): WorkspaceRecord {
+  const toolServers = row.toolServers ?? {};
+
   return {
     id: row.id,
     ...(row.externalRef ? { externalRef: row.externalRef } : {}),
@@ -275,7 +287,8 @@ function toWorkspaceRecord(row: typeof workspaces.$inferSelect): WorkspaceRecord
     agents: row.agents,
     actions: row.actions,
     skills: row.skills,
-    mcpServers: row.mcpServers,
+    toolServers,
+    mcpServers: toolServers,
     hooks: row.hooks,
     catalog: row.catalog
   };
@@ -344,6 +357,7 @@ function buildRunRow(input: Run) {
     id: input.id,
     workspaceId: input.workspaceId,
     sessionId: input.sessionId ?? null,
+    parentRunId: input.parentRunId ?? null,
     initiatorRef: input.initiatorRef ?? null,
     triggerType: input.triggerType,
     triggerRef: input.triggerRef ?? null,
@@ -353,6 +367,7 @@ function buildRunRow(input: Run) {
     status: input.status,
     cancelRequestedAt: input.cancelRequestedAt ?? null,
     startedAt: input.startedAt ?? null,
+    heartbeatAt: input.heartbeatAt ?? null,
     endedAt: input.endedAt ?? null,
     errorCode: input.errorCode ?? null,
     errorMessage: input.errorMessage ?? null,
@@ -366,6 +381,7 @@ function toRun(row: typeof runs.$inferSelect): Run {
     id: row.id,
     workspaceId: row.workspaceId,
     ...(row.sessionId ? { sessionId: row.sessionId } : {}),
+    ...(row.parentRunId ? { parentRunId: row.parentRunId } : {}),
     ...(row.initiatorRef ? { initiatorRef: row.initiatorRef } : {}),
     triggerType: row.triggerType as Run["triggerType"],
     ...(row.triggerRef ? { triggerRef: row.triggerRef } : {}),
@@ -375,6 +391,7 @@ function toRun(row: typeof runs.$inferSelect): Run {
     status: row.status as Run["status"],
     ...(row.cancelRequestedAt ? { cancelRequestedAt: normalizeTimestamp(row.cancelRequestedAt) ?? row.cancelRequestedAt } : {}),
     ...(row.startedAt ? { startedAt: normalizeTimestamp(row.startedAt) ?? row.startedAt } : {}),
+    ...(row.heartbeatAt ? { heartbeatAt: normalizeTimestamp(row.heartbeatAt) ?? row.heartbeatAt } : {}),
     ...(row.endedAt ? { endedAt: normalizeTimestamp(row.endedAt) ?? row.endedAt } : {}),
     createdAt: normalizeTimestamp(row.createdAt) ?? row.createdAt,
     ...(row.errorCode ? { errorCode: row.errorCode } : {}),
@@ -585,7 +602,7 @@ class PostgresWorkspaceRepository implements WorkspaceRepository {
           agents: values.agents,
           actions: values.actions,
           skills: values.skills,
-          mcpServers: values.mcpServers,
+          toolServers: values.toolServers,
           hooks: values.hooks,
           catalog: values.catalog,
           updatedAt: values.updatedAt
@@ -773,6 +790,22 @@ class PostgresRunRepository implements RunRepository {
       });
       return updated;
     });
+  }
+
+  async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
+    const rows = await this.db
+      .select()
+      .from(runs)
+      .where(
+        and(
+          inArray(runs.status, ["running", "waiting_tool"]),
+          sql`coalesce(${runs.heartbeatAt}, ${runs.startedAt}, ${runs.createdAt}) <= ${staleBefore}`
+        )
+      )
+      .orderBy(asc(sql`coalesce(${runs.heartbeatAt}, ${runs.startedAt}, ${runs.createdAt})`), asc(runs.id))
+      .limit(Math.max(1, limit));
+
+    return rows.map(toRun);
   }
 }
 
@@ -1056,6 +1089,7 @@ const schemaStatements = [
     id text primary key,
     workspace_id text not null references workspaces(id) on delete cascade,
     session_id text references sessions(id) on delete cascade,
+    parent_run_id text,
     initiator_ref text,
     trigger_type text not null,
     trigger_ref text,
@@ -1065,6 +1099,7 @@ const schemaStatements = [
     status text not null,
     cancel_requested_at timestamptz,
     started_at timestamptz,
+    heartbeat_at timestamptz,
     ended_at timestamptz,
     error_code text,
     error_message text,

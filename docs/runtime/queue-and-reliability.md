@@ -44,7 +44,7 @@
 - 调用方可通过 API 取消 run
 - worker / 运行时会检查取消标记
 - 对 shell 子进程发送终止信号
-- 对 MCP 调用和子流程做 best-effort cancellation
+- 对外部 tool 调用和子流程做 best-effort cancellation
 
 ### 超时
 

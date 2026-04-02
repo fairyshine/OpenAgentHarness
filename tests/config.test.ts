@@ -15,7 +15,7 @@ import {
   loadWorkspaceSettings,
   loadServerConfig,
   updateWorkspaceHistoryMirrorSetting
-} from "../packages/config/dist/index.js";
+} from "@oah/config";
 
 const tempDirs: string[] = [];
 
@@ -32,7 +32,7 @@ describe("config loading", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-"));
     tempDirs.push(tempDir);
 
-    for (const dirName of ["workspaces", "chat", "templates", "models", "mcp", "skills"]) {
+    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
       await mkdir(path.join(tempDir, dirName), { recursive: true });
     }
 
@@ -53,8 +53,8 @@ paths:
   workspace_dir: ./workspaces
   chat_dir: ./chat
   template_dir: ./templates
-  models_dir: ./models
-  mcp_dir: ./mcp
+  model_dir: ./models
+  tool_dir: ./tools
   skill_dir: ./skills
 llm:
   default_model: openai-default
@@ -64,15 +64,15 @@ llm:
 
     const config = await loadServerConfig(configPath);
     expect(config.storage.postgres_url).toBe("postgres://local/test");
-    expect(config.paths.models_dir).toBe(path.join(tempDir, "models"));
+    expect(config.paths.model_dir).toBe(path.join(tempDir, "models"));
     expect(config.llm.default_model).toBe("openai-default");
   });
 
-  it("accepts server config without storage urls for local development", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-no-storage-"));
+  it("accepts legacy models_dir while normalizing to model_dir", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-legacy-model-dir-"));
     tempDirs.push(tempDir);
 
-    for (const dirName of ["workspaces", "chat", "templates", "models", "mcp", "skills"]) {
+    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
       await mkdir(path.join(tempDir, dirName), { recursive: true });
     }
 
@@ -89,7 +89,40 @@ paths:
   chat_dir: ./chat
   template_dir: ./templates
   models_dir: ./models
-  mcp_dir: ./mcp
+  tool_dir: ./tools
+  skill_dir: ./skills
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const config = await loadServerConfig(configPath);
+    expect(config.paths.model_dir).toBe(path.join(tempDir, "models"));
+  });
+
+  it("accepts server config without storage urls for local development", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-no-storage-"));
+    tempDirs.push(tempDir);
+
+    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+paths:
+  workspace_dir: ./workspaces
+  chat_dir: ./chat
+  template_dir: ./templates
+  model_dir: ./models
+  tool_dir: ./tools
   skill_dir: ./skills
 llm:
   default_model: openai-default
@@ -122,8 +155,8 @@ paths:
   workspace_dir: ./workspaces
   chat_dir: ./chat
   template_dir: ./templates
-  models_dir: ./models
-  mcp_dir: ./mcp
+  model_dir: ./models
+  tool_dir: ./tools
   skill_dir: ./skills
 llm:
   default_model: openai-default
@@ -291,7 +324,7 @@ system_prompt:
     const chatDir = path.join(tempDir, "chat");
     const modelsDir = path.join(tempDir, "models");
     const skillDir = path.join(tempDir, "skills");
-    const mcpDir = path.join(tempDir, "mcp");
+    const toolDir = path.join(tempDir, "tools");
     const projectRoot = path.join(workspaceDir, "demo-app");
     const chatRoot = path.join(chatDir, "pair-mode");
 
@@ -299,12 +332,12 @@ system_prompt:
     await mkdir(path.join(projectRoot, ".openharness", "agents"), { recursive: true });
     await mkdir(path.join(projectRoot, ".openharness", "actions", "echo"), { recursive: true });
     await mkdir(path.join(projectRoot, ".openharness", "skills", "repo-explorer"), { recursive: true });
-    await mkdir(path.join(projectRoot, ".openharness", "mcp"), { recursive: true });
+    await mkdir(path.join(projectRoot, ".openharness", "tools"), { recursive: true });
     await mkdir(path.join(projectRoot, ".openharness", "hooks"), { recursive: true });
     await mkdir(path.join(chatRoot, ".openharness", "models"), { recursive: true });
     await mkdir(modelsDir, { recursive: true });
     await mkdir(path.join(skillDir, "shared-skill"), { recursive: true });
-    await mkdir(mcpDir, { recursive: true });
+    await mkdir(toolDir, { recursive: true });
 
     await writeFile(
       path.join(modelsDir, "platform.yaml"),
@@ -351,6 +384,14 @@ mode: primary
 description: Build things
 model:
   model_ref: platform/openai-default
+tools:
+  native:
+    - shell.exec
+policy:
+  run_timeout_seconds: 120
+  tool_timeout_seconds: 30
+  parallel_tool_calls: false
+  max_concurrent_subagents: 2
 system_reminder: Stay in build mode.
 ---
 
@@ -370,6 +411,8 @@ expose:
   to_llm: false
   callable_by_user: true
   callable_by_api: true
+recovery:
+  retry_policy: safe
 entry:
   command: printf "action-ok"
 `,
@@ -401,7 +444,7 @@ Platform-provided helper.
     );
 
     await writeFile(
-      path.join(projectRoot, ".openharness", "mcp", "settings.yaml"),
+      path.join(projectRoot, ".openharness", "tools", "settings.yaml"),
       `
 docs-server:
   command: node ./servers/docs.js
@@ -413,7 +456,7 @@ docs-server:
     );
 
     await writeFile(
-      path.join(mcpDir, "settings.yaml"),
+      path.join(toolDir, "settings.yaml"),
       `
 shared-browser:
   url: https://example.com/mcp
@@ -449,14 +492,32 @@ default_agent: assistant
     );
 
     const platformModels = await loadPlatformModels(modelsDir);
+    const platformAgents = {
+      assistant: {
+        name: "assistant",
+        mode: "primary" as const,
+        description: "Platform assistant",
+        prompt: "# Assistant\n\nHelp with general tasks.",
+        modelRef: "platform/openai-default",
+        tools: {
+          native: [],
+          actions: [],
+          skills: [],
+          external: []
+        },
+        switch: [],
+        subagents: []
+      }
+    };
     const discovered = await discoverWorkspaces({
       paths: {
         workspace_dir: workspaceDir,
         chat_dir: chatDir,
         skill_dir: skillDir,
-        mcp_dir: mcpDir
+        tool_dir: toolDir
       },
-      platformModels
+      platformModels,
+      platformAgents
     });
 
     expect(discovered).toHaveLength(2);
@@ -475,9 +536,29 @@ default_agent: assistant
       name: "builder",
       mode: "primary",
       description: "Build things",
+      modelRef: "platform/openai-default",
+      tools: {
+        native: ["shell.exec"],
+        actions: [],
+        skills: [],
+        external: []
+      },
+      policy: {
+        runTimeoutSeconds: 120,
+        toolTimeoutSeconds: 30,
+        parallelToolCalls: false,
+        maxConcurrentSubagents: 2
+      }
+    });
+    expect(project?.agents.assistant).toMatchObject({
+      name: "assistant",
+      description: "Platform assistant",
       modelRef: "platform/openai-default"
     });
-    expect(project?.catalog.agents).toEqual([{ name: "builder", source: "workspace", description: "Build things" }]);
+    expect(project?.catalog.agents).toEqual([
+      { name: "builder", source: "workspace", description: "Build things" },
+      { name: "assistant", source: "platform", description: "Platform assistant" }
+    ]);
     expect(project?.catalog.models.map((model) => model.ref)).toEqual(["platform/openai-default", "workspace/repo-model"]);
     expect(project?.workspaceModels["repo-model"]).toMatchObject({
       provider: "openai",
@@ -489,7 +570,8 @@ default_agent: assistant
         description: "Echo debug output",
         exposeToLlm: false,
         callableByUser: true,
-        callableByApi: true
+        callableByApi: true,
+        retryPolicy: "safe"
       }
     ]);
     expect(project?.catalog.skills).toEqual([
@@ -504,7 +586,7 @@ default_agent: assistant
         exposeToLlm: true
       }
     ]);
-    expect(project?.catalog.mcp).toEqual([
+    expect(project?.catalog.tools).toEqual([
       {
         name: "docs-server",
         transportType: "stdio",
@@ -526,12 +608,13 @@ default_agent: assistant
     ]);
     expect(project?.actions["debug.echo"]).toMatchObject({
       name: "debug.echo",
+      retryPolicy: "safe",
       directory: expect.stringContaining("/.openharness/actions/echo")
     });
     expect(project?.skills["repo-explorer"]).toMatchObject({
       name: "repo-explorer"
     });
-    expect(project?.mcpServers["docs-server"]).toMatchObject({
+    expect(project?.toolServers["docs-server"]).toMatchObject({
       transportType: "stdio"
     });
     expect(project?.hooks["redact-secrets"]).toMatchObject({
@@ -544,10 +627,15 @@ default_agent: assistant
       defaultAgent: "assistant",
       readOnly: true
     });
+    expect(chat?.agents.assistant).toMatchObject({
+      name: "assistant",
+      description: "Platform assistant"
+    });
+    expect(chat?.catalog.agents).toEqual([{ name: "assistant", source: "platform", description: "Platform assistant" }]);
     expect(chat?.catalog.models.map((model) => model.ref)).toEqual(["platform/openai-default"]);
     expect(chat?.catalog.actions).toEqual([]);
     expect(chat?.catalog.skills).toEqual([]);
-    expect(chat?.catalog.mcp).toEqual([]);
+    expect(chat?.catalog.tools).toEqual([]);
     expect(chat?.catalog.hooks).toEqual([]);
   });
 
@@ -600,6 +688,91 @@ Use the workspace model.
     });
   });
 
+  it("lets a workspace default agent point at a platform agent and preserves workspace override precedence", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-discovery-platform-agent-"));
+    tempDirs.push(tempDir);
+
+    await mkdir(path.join(tempDir, ".openharness", "agents"), { recursive: true });
+    await writeFile(
+      path.join(tempDir, ".openharness", "settings.yaml"),
+      `
+default_agent: assistant
+`,
+      "utf8"
+    );
+
+    const platformModels = {
+      "openai-default": {
+        provider: "openai",
+        name: "gpt-4o-mini"
+      }
+    };
+
+    const platformAgents = {
+      assistant: {
+        name: "assistant",
+        mode: "primary" as const,
+        description: "Platform assistant",
+        prompt: "# Assistant\n\nHandle general help.",
+        modelRef: "platform/openai-default",
+        tools: {
+          native: [],
+          actions: [],
+          skills: [],
+          external: []
+        },
+        switch: [],
+        subagents: []
+      },
+      builder: {
+        name: "builder",
+        mode: "primary" as const,
+        description: "Platform builder",
+        prompt: "# Builder\n\nPlatform implementation prompt.",
+        modelRef: "platform/openai-default",
+        tools: {
+          native: [],
+          actions: [],
+          skills: [],
+          external: []
+        },
+        switch: [],
+        subagents: []
+      }
+    };
+
+    await writeFile(
+      path.join(tempDir, ".openharness", "agents", "builder.md"),
+      `---
+description: Workspace builder
+model:
+  model_ref: platform/openai-default
+---
+
+# Builder
+
+Workspace implementation prompt.
+`,
+      "utf8"
+    );
+
+    const workspace = await discoverWorkspace(tempDir, "project", {
+      platformModels,
+      platformAgents
+    });
+
+    expect(workspace.defaultAgent).toBe("assistant");
+    expect(workspace.catalog.agents).toEqual([
+      { name: "builder", source: "workspace", description: "Workspace builder" },
+      { name: "assistant", source: "platform", description: "Platform assistant" }
+    ]);
+    expect(workspace.agents.builder).toMatchObject({
+      description: "Workspace builder",
+      prompt: "# Builder\n\nWorkspace implementation prompt."
+    });
+    expect(workspace.agents.builder.prompt).not.toContain("Platform implementation prompt.");
+  });
+
   it("initializes a workspace from template_dir before overlaying user AGENTS, MCP, and skills", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-template-init-"));
     tempDirs.push(tempDir);
@@ -608,7 +781,7 @@ Use the workspace model.
     const workspaceRoot = path.join(tempDir, "workspaces", "demo");
     const templateRoot = path.join(templateDir, "workspace");
 
-    await mkdir(path.join(templateRoot, ".openharness", "mcp"), { recursive: true });
+    await mkdir(path.join(templateRoot, ".openharness", "tools"), { recursive: true });
     await mkdir(path.join(templateRoot, ".openharness", "skills", "repo-explorer"), { recursive: true });
     await mkdir(path.join(templateRoot, ".openharness", "agents"), { recursive: true });
     await mkdir(path.join(templateRoot, ".openharness", "models"), { recursive: true });
@@ -638,7 +811,7 @@ repo-model:
       "utf8"
     );
     await writeFile(
-      path.join(templateRoot, ".openharness", "mcp", "settings.yaml"),
+      path.join(templateRoot, ".openharness", "tools", "settings.yaml"),
       `
 docs-server:
   command: node ./servers/docs.js
@@ -661,7 +834,7 @@ Explore the repository.
       templateName: "workspace",
       rootPath: workspaceRoot,
       agentsMd: "## User Rules\n\nAlways mention assumptions.",
-      mcpServers: {
+      toolServers: {
         "docs-server": {
           url: "https://example.com/mcp",
           enabled: true
@@ -693,11 +866,11 @@ Explore the repository.
     expect(agentsMd).toContain("Follow template rules.");
     expect(agentsMd).toContain("Always mention assumptions.");
     expect(workspace.defaultAgent).toBe("builder");
-    expect(workspace.mcpServers["docs-server"]).toMatchObject({
+    expect(workspace.toolServers["docs-server"]).toMatchObject({
       transportType: "http",
       url: "https://example.com/mcp"
     });
-    expect(workspace.mcpServers.browser).toMatchObject({
+    expect(workspace.toolServers.browser).toMatchObject({
       transportType: "stdio",
       command: "node ./servers/browser.js"
     });

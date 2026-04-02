@@ -24,7 +24,7 @@
 - `settings` 使用 `settings.yaml` 管理 workspace 默认 agent 和公共 system prompt
 - `settings` 也可声明额外 skill 目录
 - `skill` 不走本地 YAML schema，而是采用目录式 `SKILL.md` 规范
-- `mcp` 采用 `mcp/settings.yaml` + `mcp/servers/*`
+- `tool` 采用 `tools/settings.yaml` + `tools/servers/*`
 - `server-config` 用于校验服务端部署级 `server.yaml`
 - schema 目标是约束当前 DSL，而不是一次性覆盖未来所有扩展
 
@@ -38,5 +38,5 @@
 - Skill 目录遵循 Agent Skills 的 `SKILL.md` 规范
 - Hook 采用 `hooks/*.yaml` 声明，支持 Claude Code 风格的 `matcher` 与统一 JSON 输入输出协议
 - Model entries 支持平台级引用与 workspace 级声明
-- MCP 采用集中式 `settings.yaml` 注册，本地 server 与远程 server 并存
-- 本地 MCP server 使用字符串形式的 `command` 启动
+- Tool server 采用集中式 `settings.yaml` 注册，本地 server 与远程 server 并存
+- 本地 tool server 使用字符串形式的 `command` 启动

@@ -6,7 +6,7 @@
 
 设计目标：
 
-- 复用服务端 `paths.models_dir` 中的平台模型
+- 复用服务端 `paths.model_dir` 中的平台模型
 - 支持 `curl` 直接调用
 - 支持一个简单 CLI 调用
 - 与 `vercel/ai` 的 AI SDK 兼容
@@ -63,7 +63,7 @@
 规则：
 
 - `model` 直接取服务端模型名，例如 `openai-default`
-- 仅允许访问服务端 `paths.models_dir` 中已注册的平台模型
+- 仅允许访问服务端 `paths.model_dir` 中已注册的平台模型
 - 若未传 `model`，则优先使用当前运行时注入的默认模型名
 - 该接口是内部接口，不要求 token 认证
 - 不对外暴露到公网入口
@@ -80,7 +80,7 @@
 因此当前的真值边界是：
 
 - 不挂在公开 API Gateway 入口下
-- 不走外部 Bearer Token 鉴权
+- 不依赖外部 `Authorization` 请求头鉴权
 - 仅供本机 action、脚本和 CLI 调用
 - 若请求不来自 loopback 地址，服务端直接拒绝
 
@@ -89,7 +89,7 @@
 长期原则：
 
 - 不挂在公开 API Gateway 入口下
-- 不走外部 Bearer Token 鉴权
+- 不依赖外部 `Authorization` 请求头鉴权
 - 仅供本机 action、脚本和 CLI 调用
 - 如果未来切到 Unix Socket，主要收益会是：
 
@@ -189,7 +189,7 @@ AI SDK 主要放在服务端使用。
 
 服务端内部流程建议为：
 
-1. 根据 `model` 从 `paths.models_dir` 中解析服务端模型入口
+1. 根据 `model` 从 `paths.model_dir` 中解析服务端模型入口
 2. 将模型入口转换成 AI SDK 的 language model
 3. 调用：
    - `generateText`

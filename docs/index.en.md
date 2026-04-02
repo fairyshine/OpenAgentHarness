@@ -8,7 +8,7 @@ If you're building an agent product for teams or organizations, this project giv
 
 It is most useful for two things:
 - large-scale parallel workspace usage instead of a single local agent loop
-- a flexible harness design where you decide how agents, models, actions, skills, MCP, and hooks are composed
+- a flexible harness design where you decide how agents, models, actions, skills, tools, and hooks are composed
 
 [Get Started in 5 Minutes](./getting-started.md){ .md-button .md-button--primary }
 [See the Architecture](./architecture-overview.md){ .md-button }
@@ -25,7 +25,7 @@ Imagine you're building an internal platform or a team-facing enterprise agent p
 You will quickly run into questions like:
 
 - How do we support many workspaces in parallel?
-- How do we let different workspaces use different agent, model, skill, and MCP combinations?
+- How do we let different workspaces use different agent, model, skill, and tool combinations?
 - How do we keep one shared runtime while still allowing deep customization?
 - How do we avoid being locked into one UI or one fixed workflow?
 - How do we stay deployable and governable as scale grows?
@@ -54,7 +54,7 @@ You decide:
 
 - what frontend sits on top
 - how agents are organized
-- how models, actions, skills, MCP, and hooks are combined
+- how models, actions, skills, tools, and hooks are combined
 - whether deployment stays unified or splits into API and Worker processes
 
 ## Why We Call It a Harness
@@ -93,7 +93,7 @@ In short: it is a better fit when you want to build your own product, but do not
 - You need to support many workspaces in parallel
 - You already have a frontend and need a flexible agent harness underneath
 - You want something beyond a single local script or fixed product workflow
-- You want models, Actions, Skills, tools, and MCP to stay composable and customizable
+- You want models, Actions, Skills, and tools to stay composable and customizable
 
 ## When It Does Not Fit
 

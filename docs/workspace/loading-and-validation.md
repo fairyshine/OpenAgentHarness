@@ -26,7 +26,7 @@
 
 - YAML 语法错误时，标记该定义加载失败
 - 单个定义失败不应导致整个 workspace 不可用
-- Agent 启动时若引用不存在的 action / skill / mcp / hook，则该 run 失败并返回明确错误
+- Agent 启动时若引用不存在的 action / skill / tool / hook，则该 run 失败并返回明确错误
 - `history.db` 同步失败不应导致 workspace 配置加载失败
 
 ## 配置校验
@@ -45,7 +45,7 @@
 - `settings` -> [../schemas/settings.schema.json](../schemas/settings.schema.json)
 - `models` -> [../schemas/models.schema.json](../schemas/models.schema.json)
 - `action` -> [../schemas/action.schema.json](../schemas/action.schema.json)
-- `mcp settings` -> [../schemas/mcp-settings.schema.json](../schemas/mcp-settings.schema.json)
+- `tool settings (MCP-backed)` -> [../schemas/mcp-settings.schema.json](../schemas/mcp-settings.schema.json)
 - `hook` -> [../schemas/hook.schema.json](../schemas/hook.schema.json)
 
 说明：
