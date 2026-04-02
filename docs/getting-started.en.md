@@ -32,7 +32,7 @@ pnpm install
 Run commands from the repository root:
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <project-root>
 ```
 
 ## 2. Start Local Infrastructure
@@ -130,4 +130,3 @@ mkdocs build --strict
 5. [Workspace Overview](./workspace/README.md)
 6. [Runtime Overview](./runtime/README.md)
 7. [OpenAPI Overview](./openapi/README.md)
-

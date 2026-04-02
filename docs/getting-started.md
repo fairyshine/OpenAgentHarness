@@ -32,7 +32,7 @@ pnpm install
 建议在仓库根目录执行所有命令：
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <项目根目录>
 ```
 
 ## 2. 启动本地基础设施

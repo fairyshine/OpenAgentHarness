@@ -60,21 +60,21 @@ Use 3 terminals:
 ### Terminal 1: infrastructure
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <project-root>
 pnpm infra:up
 ```
 
 ### Terminal 2: backend
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <project-root>
 pnpm dev:server -- --config ./server.example.yaml
 ```
 
 ### Terminal 3: frontend
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <project-root>
 pnpm dev:web
 ```
 
@@ -97,4 +97,3 @@ Use 4 terminals:
 2. The frontend opens successfully
 3. A run does not stay in `queued` forever
 4. In split mode, the worker logs show queue consumption
-

@@ -113,7 +113,7 @@ pnpm infra:down
 ### Tab 1：基础设施
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <项目根目录>
 pnpm infra:up
 ```
 
@@ -125,7 +125,7 @@ pnpm infra:up
 ### Tab 2：后端
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <项目根目录>
 pnpm dev:server -- --config ./server.example.yaml
 ```
 
@@ -142,7 +142,7 @@ pnpm dev:server -- --config ./server.example.yaml
 ### Tab 3：前端
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <项目根目录>
 pnpm dev:web
 ```
 
@@ -159,14 +159,14 @@ pnpm dev:web
 ### Tab 1：基础设施
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <项目根目录>
 pnpm infra:up
 ```
 
 ### Tab 2：API
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <项目根目录>
 pnpm dev:server -- --config ./server.example.yaml --api-only
 ```
 
@@ -182,7 +182,7 @@ pnpm dev:server -- --config ./server.example.yaml --api-only
 ### Tab 3：Worker
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <项目根目录>
 pnpm dev:worker -- --config ./server.example.yaml
 ```
 
@@ -199,7 +199,7 @@ pnpm dev:worker -- --config ./server.example.yaml
 ### Tab 4：前端
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
+cd <项目根目录>
 pnpm dev:web
 ```
 
