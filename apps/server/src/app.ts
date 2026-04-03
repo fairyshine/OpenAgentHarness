@@ -11,6 +11,15 @@ import {
   modelGenerateResponseSchema,
   modelProviderListSchema,
   pageQuerySchema,
+  storageOverviewSchema,
+  storagePostgresTableNameSchema,
+  storagePostgresTablePageSchema,
+  storageRedisDeleteKeyResponseSchema,
+  storageRedisKeyDetailSchema,
+  storageRedisKeyPageSchema,
+  storageRedisKeyQuerySchema,
+  storageRedisKeysQuerySchema,
+  storageTableQuerySchema,
   runEventsQuerySchema,
   runStepPageSchema,
   sessionPageSchema,
@@ -23,6 +32,7 @@ import { SUPPORTED_MODEL_PROVIDERS } from "@oah/model-gateway";
 import type { CallerContext, ModelGateway, RuntimeService, SessionEvent, WorkspaceRecord } from "@oah/runtime-core";
 import { AppError, isAppError } from "@oah/runtime-core";
 import { inspectHistoryMirrorStatus, type HistoryMirrorStatus } from "./history-mirror.js";
+import type { StorageAdmin } from "./storage-admin.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -93,6 +103,7 @@ export interface AppDependencies {
   healthCheck?: () => Promise<Record<string, unknown>> | Record<string, unknown>;
   readinessCheck?: () => Promise<Record<string, unknown>> | Record<string, unknown>;
   rebuildWorkspaceHistoryMirror?: (workspace: WorkspaceRecord) => Promise<HistoryMirrorStatus>;
+  storageAdmin?: StorageAdmin;
 }
 
 export function createApp(dependencies: AppDependencies) {
@@ -188,6 +199,54 @@ export function createApp(dependencies: AppDependencies) {
       })
     )
   );
+
+  app.get("/api/v1/storage/overview", async (_request, reply) => {
+    if (!dependencies.storageAdmin) {
+      throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
+    }
+
+    return reply.send(storageOverviewSchema.parse(await dependencies.storageAdmin.overview()));
+  });
+
+  app.get("/api/v1/storage/postgres/tables/:table", async (request, reply) => {
+    if (!dependencies.storageAdmin) {
+      throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
+    }
+
+    const params = createParamsSchema("table").parse(request.params);
+    const query = storageTableQuerySchema.parse(request.query);
+    const table = storagePostgresTableNameSchema.parse(params.table);
+    return reply.send(storagePostgresTablePageSchema.parse(await dependencies.storageAdmin.postgresTable(table, query.limit)));
+  });
+
+  app.get("/api/v1/storage/redis/keys", async (request, reply) => {
+    if (!dependencies.storageAdmin) {
+      throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
+    }
+
+    const query = storageRedisKeysQuerySchema.parse(request.query);
+    return reply.send(
+      storageRedisKeyPageSchema.parse(await dependencies.storageAdmin.redisKeys(query.pattern, query.cursor, query.pageSize))
+    );
+  });
+
+  app.get("/api/v1/storage/redis/key", async (request, reply) => {
+    if (!dependencies.storageAdmin) {
+      throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
+    }
+
+    const query = storageRedisKeyQuerySchema.parse(request.query);
+    return reply.send(storageRedisKeyDetailSchema.parse(await dependencies.storageAdmin.redisKeyDetail(query.key)));
+  });
+
+  app.delete("/api/v1/storage/redis/key", async (request, reply) => {
+    if (!dependencies.storageAdmin) {
+      throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
+    }
+
+    const query = storageRedisKeyQuerySchema.parse(request.query);
+    return reply.send(storageRedisDeleteKeyResponseSchema.parse(await dependencies.storageAdmin.deleteRedisKey(query.key)));
+  });
 
   app.post("/api/v1/workspaces", async (request, reply) => {
     if (workspaceMode === "single") {

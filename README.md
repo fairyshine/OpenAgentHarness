@@ -2,182 +2,124 @@
 
 [中文版本](./README.zh-CN.md) | English
 
-Open Agent Harness is an enterprise-grade, headless agent runtime built for products and internal platforms that need to serve many users, sessions, and runs concurrently.
+Open Agent Harness is a headless, workspace-first agent runtime for teams building agent products, internal AI platforms, and embedded copilots.
 
-It is designed for teams that need a deployable runtime, not just an adapter layer or a single-user local agent loop: horizontally scalable API and worker processes, PostgreSQL as the source of truth, Redis-backed queues and coordination, structured audit trails, SSE streaming, and workspace-scoped capability loading.
+It is designed for the part that gets difficult fast in real systems: serving many workspaces, sessions, and runs while keeping behavior flexible, governable, and easy to embed into your own product.
+
+## In One Sentence
+
+Build your own agent product on top of a reusable runtime, instead of rebuilding the runtime itself.
+
+## At a Glance
+
+| Question | Answer |
+| --- | --- |
+| What is it? | A deployable backend runtime for agent conversations and task execution. |
+| Who is it for? | Teams building internal AI platforms, team-facing agent products, or embedded copilots. |
+| What is the core idea? | Let each workspace define its own agents, prompts, skills, actions, hooks, and tools while sharing one runtime core. |
+| What is it not? | Not a ready-made chat product, identity system, or SaaS control plane. |
 
 ## Why Open Agent Harness
 
-- Enterprise-grade runtime architecture for multi-user, high-concurrency agent workloads
-- Headless and embeddable: integrate it behind your own web app, desktop app, CLI, automation system, or API gateway
-- Workspace-first loading of agents, models, actions, skills, external tool servers, and hooks
-- Horizontal scaling with `API only + standalone worker` deployment
-- Unified tool-calling projection for LLMs while keeping `action`, `skill`, `tool`, and native tools separate at the domain layer
-- Structured lifecycle management for workspaces, sessions, messages, runs, audit logs, cancellation, timeouts, and recovery
-- Supports both full execution workspaces and read-only chat workspaces
+- Headless and embeddable behind your own web app, desktop app, CLI, automation system, or API gateway
+- Workspace-first customization instead of one fixed global agent setup
+- Supports both executable `project` workspaces and read-only `chat` workspaces
+- Flexible capability model with separate `agent`, `skill`, `action`, `tool`, `hook`, and context layers
+- One runtime that works for single-workspace setups and multi-workspace platform deployments
 
-## What It Is
+## What Makes It Different
 
-Open Agent Harness is a TypeScript + Node.js runtime kernel for running agent conversations and task execution inside a workspace.
+| Dimension | Open Agent Harness focuses on... |
+| --- | --- |
+| Product boundary | A backend runtime kernel you embed into your own product |
+| Customization model | Workspace-level composition instead of one fixed workflow |
+| Capability design | Separate layers for roles, methods, tasks, tools, hooks, and context |
+| Platform fit | Integration into existing identity, policy, and product surfaces |
+| Deployment path | Easy local startup and production-friendly split deployment |
 
-It is responsible for:
+## A Flexible Capability Model
 
-- Managing the lifecycle of `workspace`, `session`, `message`, and `run`
-- Discovering `.openharness/` configuration from workspaces
-- Loading platform-level and workspace-level agents and models
-- Executing shell, local scripts, `action`, `skill`, `tool`, and `hook`
-- Exposing REST APIs and SSE event streams for clients and upstream services
-- Coordinating queueing, reliability, and distributed workers
-- Mirroring workspace history into a local `.openharness/data/history.db` database
+The main strength of Open Agent Harness is not just that it supports many concepts, but that those concepts stay separate so you can combine them differently per workspace.
 
-The repository also includes:
+| Capability | What it is for |
+| --- | --- |
+| `agent` | Defines the role, behavior, and permissions of a working persona |
+| `primary agent` / `subagent` | Supports both user-facing specialists and delegated background specialists |
+| `tool` | Gives an agent access to built-in or external execution capabilities |
+| `skill` | Packages reusable know-how for a class of tasks |
+| `action` | Exposes a stable named task that users, APIs, or agents can trigger |
+| `hook` | Adds lifecycle interception, policy, or extension logic around runtime events |
+| `context` | Controls how prompts and workspace instructions are assembled for the model |
 
-- `apps/web`: a React 19 debugging console for `workspace / session / message / run / SSE` flows
-- `apps/cli`: a reserved CLI / TUI entrypoint
+This gives you a lot of freedom in practice:
 
-These are debugging surfaces, not the product boundary. The core product remains a headless runtime.
+- Different workspaces can use different agent sets and prompt strategies.
+- Different agents can see different tools, actions, skills, and subagents.
+- Skills can capture reusable methods without turning into hard-coded product logic.
+- Actions can represent stable product tasks without becoming a workflow DSL.
+- Hooks can add governance and extension points without changing the core runtime behavior.
 
-## What It Is Not
+## Workspace-First Customization
 
-Open Agent Harness does not try to be:
+The workspace is the main customization boundary. A single runtime can host many workspaces, and each workspace can bring its own combination of:
 
-- A full SaaS product with user accounts, organizations, billing, and admin back office
-- A code hosting platform, CI/CD system, or secret-management product
-- A public zero-trust sandbox platform
-- A UI-first chat application
+- agents
+- prompts and shared instructions
+- skills
+- actions
+- hooks
+- models
+- tool servers
 
-Identity, authentication, organization membership, and access policy are expected to come from your upstream gateway or external services. Open Agent Harness consumes caller context and uses references such as `subject_ref` for audit, rate limiting, and access decisions.
+That means two workspaces can share the same runtime but still behave very differently for different teams, repos, or product scenarios.
 
-## Architecture Highlights
+## Best Fit
 
-- `PostgreSQL`: system of record for sessions, messages, runs, tool calls, and audit data
-- `Redis`: queues, locks, rate-limit counters, and short-lived event coordination
-- `.openharness/data/history.db`: asynchronous local history mirror for backup and offline inspection
-- Default runtime mode: `API + embedded worker`
-- Production runtime mode: `API only + standalone worker`
-- Execution backend abstraction from day one, with room for future sandbox or remote executors
+Open Agent Harness is a strong fit when:
 
-Design principles:
+- you are building an internal AI platform or a team-facing agent product
+- you need one backend to serve many workspaces in parallel
+- you want to keep your own frontend, auth, and product experience
+- you need more control than a fixed agent UI or a thin local agent loop can provide
 
-- `Workspace First`
-- `Session Serial, System Parallel`
-- `Domain Separate, Invocation Unified`
-- `Local First, Sandbox Ready`
-- `Identity Externalized`
-- `Auditable by Default`
+It is less suitable when:
 
-## Technical Architecture
+- you only want a ready-made chat UI
+- you only need a tiny single-user local script
+- you do not need workspace isolation or runtime lifecycle management
 
-```text
-Clients / Upstream Systems
-  Web App / Desktop App / CLI / Automation / Internal Services
-                  |
-                  v
-        API Gateway + SSE Streaming
-                  |
-                  v
-         Session Orchestrator / Run Engine
-      (session lifecycle, queueing, cancellation,
-       timeout, recovery, audit, event emission)
-                  |
-      +-----------+-----------+-----------+-----------+
-      |                       |                       |
-      v                       v                       v
- Context Engine        Invocation Dispatcher      Hook Runtime
- (workspace loading,   (maps LLM tool calls       (lifecycle and
- agent/model/action/    to native tools /          interceptor
- skill/tool assembly)   action / skill / tool)     extensions)
-      |                       |                       |
-      +-----------------------+-----------------------+
-                              |
-                              v
-                    Execution Backend Abstraction
-                 (local backend today, sandbox/remote
-                    executors can be added later)
-                              |
-          +-------------------+-------------------+------------------+
-          |                   |                   |                  |
-          v                   v                   v                  v
-     Native Tools          Actions              Skills      External Tool Servers
+## Typical Use Cases
 
-Data / Coordination Layer
-  PostgreSQL  -> source of truth for sessions, messages, runs, audit
-  Redis       -> queues, locks, fanout events, distributed coordination
-  history.db  -> per-workspace local history mirror for backup/inspection
-
-Deployment Modes
-  1. API + embedded worker
-  2. API only + standalone worker
-```
-
-## Workspace Model
-
-Open Agent Harness supports two workspace kinds:
-
-- `project`: a normal workspace with tools, execution, and local history mirror
-- `chat`: a read-only conversation workspace with static prompts, agents, and models only; directories under `paths.chat_dir` are directly usable workspaces and can also be managed as reusable presets
-
-Example structure:
-
-```text
-workspace/
-  AGENTS.md
-  .openharness/
-    settings.yaml
-    data/
-      history.db
-    agents/
-      builder.md
-    models/
-      openai.yaml
-    actions/
-      test-run/
-        ACTION.yaml
-    skills/
-      repo-explorer/
-        SKILL.md
-    tools/
-      settings.yaml
-      servers/
-        docs-server/
-    hooks/
-      redact-secrets.yaml
-```
-
-Copyable examples live in [templates/README.md](./templates/README.md):
-
-- `templates/workspace`
-- `templates/chat-workspace`
+| Scenario | Why it fits |
+| --- | --- |
+| Internal engineering copilot | Different repos or teams can have different agent setups on one shared runtime |
+| Team-facing agent product | You keep your own UX and policy layer while reusing the runtime |
+| Embedded copilot inside an existing product | The runtime stays headless and fits behind your existing app |
+| Dedicated backend for one repo or one chat preset | `single workspace` mode gives you a focused deployment path |
 
 ## Quick Start
 
-Install dependencies:
-
 ```bash
 pnpm install
-```
-
-Start local PostgreSQL and Redis:
-
-```bash
 pnpm infra:up
+pnpm dev:server -- --config ./server.example.yaml
+pnpm dev:web
 ```
 
-Build and test:
+Common local addresses:
+
+- Debug web console: `http://localhost:5174`
+- Default backend address: `http://127.0.0.1:8787`
+
+Useful commands:
 
 ```bash
 pnpm build
 pnpm test
-pnpm test:dist
+pnpm dev:worker -- --config ./server.example.yaml
 ```
 
-Run the default local backend:
-
-```bash
-pnpm dev:server -- --config ./server.example.yaml
-```
-
-Run a single workspace directly:
+Run a dedicated backend for one workspace:
 
 ```bash
 pnpm dev:server -- \
@@ -186,91 +128,11 @@ pnpm dev:server -- \
   --default-model openai-default
 ```
 
-Run the standalone worker:
-
-```bash
-pnpm dev:worker -- --config ./server.example.yaml
-```
-
-Run the debugging web console:
-
-```bash
-pnpm dev:web
-```
-
-Default example config:
-
-```yaml
-server:
-  host: 127.0.0.1
-  port: 8787
-
-storage:
-  # postgres_url: ${env.DATABASE_URL}
-  # redis_url: ${env.REDIS_URL}
-
-paths:
-  workspace_dir: ./tmp/workspaces
-  chat_dir: ./tmp/chat-workspaces
-  template_dir: ./tmp/templates
-  model_dir: ./tests/fixtures/models
-  tool_dir: ./tmp/tools
-  skill_dir: ./tmp/skills
-
-llm:
-  default_model: openai-default
-```
-
-## Runtime Modes
-
-### `API + embedded worker`
-
-- Default mode
-- Best for local development, PoC, and single-node self-hosting
-- If Redis is configured, the embedded worker consumes the Redis queue
-- If Redis is not configured, runs execute in-process
-
-### `API only`
-
-- Explicitly enabled with `--api-only` or `--no-worker`
-- Best for production split deployment
-- When Redis is configured, use it together with standalone workers
-
-### `standalone worker`
-
-- Separate worker process
-- Consumes the Redis run queue
-- Executes queued runs and history mirror sync
-- Best for horizontal scaling and resource isolation
-
-### `single workspace`
-
-- Enabled by passing `--workspace`
-- Boots exactly one workspace and serves it as a dedicated backend
-- Useful for an `opencode`-style deployment around one repo or one read-only chat workspace
-- Reuses the same HTTP API and runtime core
-- Disables workspace template listing, workspace creation/import, and workspace deletion routes
-
 ## Documentation
 
-Detailed design docs are currently primarily in Chinese.
-
 - [docs/README.md](./docs/README.md)
-- [docs/deploy.md](./docs/deploy.md)
-- [docs/architecture-overview.md](./docs/architecture-overview.md)
-- [docs/workspace/README.md](./docs/workspace/README.md)
-- [docs/runtime/README.md](./docs/runtime/README.md)
-- [docs/openapi/README.md](./docs/openapi/README.md)
-
-## Development Commands
-
-```bash
-pnpm install
-pnpm infra:up
-pnpm build
-pnpm test
-pnpm test:dist
-pnpm dev:server
-pnpm dev:worker
-pnpm dev:web
-```
+- [docs/getting-started.en.md](./docs/getting-started.en.md)
+- [docs/deploy.en.md](./docs/deploy.en.md)
+- [docs/architecture-overview.en.md](./docs/architecture-overview.en.md)
+- [docs/workspace/README.en.md](./docs/workspace/README.en.md)
+- [templates/README.md](./templates/README.md)

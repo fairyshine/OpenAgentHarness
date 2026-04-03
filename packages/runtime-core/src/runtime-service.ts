@@ -48,6 +48,7 @@ import {
   type WorkspaceRecord
 } from "./types.js";
 import { createId, nowIso, parseCursor } from "./utils.js";
+import { z } from "zod";
 
 function canTransitionRunStatus(from: Run["status"], to: Run["status"]): boolean {
   if (from === to) {
@@ -772,6 +773,7 @@ export class RuntimeService {
         toolCallSteps
       );
       const enabledToolServers = this.#enabledToolServers(workspace);
+      const runtimeToolNames = Object.keys(observableRuntimeTools);
       const persistedToolCalls = new Set<string>();
       let assistantMessage: Message | undefined;
       const response = await this.#modelGateway.stream(
@@ -806,11 +808,13 @@ export class RuntimeService {
                   stepType: "model_call",
                   name: hookedModelInput.model,
                   agentName: executionContext.currentAgentName,
-                  input: {
-                    model: hookedModelInput.model,
-                    canonicalModelRef: hookedModelInput.canonicalModelRef,
-                    messageCount: hookedModelInput.messages.length
-                  }
+                  input: this.#serializeModelCallStepInput(
+                    hookedModelInput,
+                    activeToolNames,
+                    enabledToolServers,
+                    runtimeToolNames,
+                    runtimeTools
+                  )
                 })
               );
               return activeToolNames ? { activeToolNames } : undefined;
@@ -835,11 +839,13 @@ export class RuntimeService {
                 stepType: "model_call",
                 name: hookedNextInput.model,
                 agentName: executionContext.currentAgentName,
-                input: {
-                  model: hookedNextInput.model,
-                  canonicalModelRef: hookedNextInput.canonicalModelRef,
-                  messageCount: hookedNextInput.messages.length
-                }
+                input: this.#serializeModelCallStepInput(
+                  hookedNextInput,
+                  activeToolNames,
+                  enabledToolServers,
+                  runtimeToolNames,
+                  runtimeTools
+                )
               })
             );
 
@@ -893,11 +899,7 @@ export class RuntimeService {
           onStepFinish: async (step) => {
             const modelCallStep = modelCallSteps.get(completedModelStepCount);
             if (modelCallStep) {
-              await this.#completeRunStep(modelCallStep, "completed", {
-                finishReason: step.finishReason ?? "unknown",
-                toolCallsCount: step.toolCalls.length,
-                toolResultsCount: step.toolResults.length
-              });
+              await this.#completeRunStep(modelCallStep, "completed", this.#serializeModelCallStepOutput(step));
               modelCallSteps.delete(completedModelStepCount);
             }
             completedModelStepCount += 1;
@@ -1291,7 +1293,7 @@ export class RuntimeService {
       ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
       ...(activeAgent?.temperature !== undefined ? { temperature: activeAgent.temperature } : {}),
       ...(activeAgent?.maxTokens !== undefined ? { maxTokens: activeAgent.maxTokens } : {}),
-      messages: contextMessages
+      messages: this.#collapseLeadingSystemMessages(contextMessages)
     };
   }
 
@@ -2686,12 +2688,36 @@ export class RuntimeService {
   ): Array<{ role: "system" | "user" | "assistant" | "tool"; content: string }> {
     const firstNonSystemIndex = messages.findIndex((message) => message.role !== "system");
     if (firstNonSystemIndex === -1) {
-      return [...messages, ...extraSystemMessages];
+      return this.#collapseLeadingSystemMessages([...messages, ...extraSystemMessages]);
+    }
+
+    return this.#collapseLeadingSystemMessages([
+      ...messages.slice(0, firstNonSystemIndex),
+      ...extraSystemMessages,
+      ...messages.slice(firstNonSystemIndex)
+    ]);
+  }
+
+  #collapseLeadingSystemMessages(
+    messages: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string }>
+  ): Array<{ role: "system" | "user" | "assistant" | "tool"; content: string }> {
+    const leadingSystemMessages: string[] = [];
+    let firstNonSystemIndex = 0;
+
+    while (firstNonSystemIndex < messages.length && messages[firstNonSystemIndex]?.role === "system") {
+      leadingSystemMessages.push(messages[firstNonSystemIndex]!.content);
+      firstNonSystemIndex += 1;
+    }
+
+    if (leadingSystemMessages.length <= 1) {
+      return messages;
     }
 
     return [
-      ...messages.slice(0, firstNonSystemIndex),
-      ...extraSystemMessages,
+      {
+        role: "system",
+        content: leadingSystemMessages.join("\n\n")
+      },
       ...messages.slice(firstNonSystemIndex)
     ];
   }
@@ -2700,9 +2726,65 @@ export class RuntimeService {
     return {
       model: modelInput.model,
       canonicalModelRef: modelInput.canonicalModelRef,
-      temperature: modelInput.temperature,
-      maxTokens: modelInput.maxTokens,
+      ...(modelInput.temperature !== undefined ? { temperature: modelInput.temperature } : {}),
+      ...(modelInput.maxTokens !== undefined ? { maxTokens: modelInput.maxTokens } : {}),
       messages: modelInput.messages
+    };
+  }
+
+  #serializeModelCallStepInput(
+    modelInput: ModelExecutionInput,
+    activeToolNames: string[] | undefined,
+    toolServers: WorkspaceRecord["toolServers"][string][],
+    runtimeToolNames: string[],
+    runtimeTools?: RuntimeToolSet | undefined
+  ): Record<string, unknown> {
+    return {
+      ...this.#serializeModelRequest(modelInput),
+      ...(modelInput.provider ? { provider: modelInput.provider } : {}),
+      messageCount: modelInput.messages.length,
+      runtimeToolNames,
+      ...(runtimeTools ? { runtimeTools: this.#serializeRuntimeTools(runtimeTools) } : {}),
+      ...(activeToolNames ? { activeToolNames } : {}),
+      ...(toolServers.length > 0
+        ? {
+            toolServers: toolServers.map((server) => ({
+              name: server.name,
+              transportType: server.transportType,
+              ...(server.toolPrefix ? { toolPrefix: server.toolPrefix } : {}),
+              ...(server.timeout !== undefined ? { timeout: server.timeout } : {}),
+              ...(server.include ? { include: server.include } : {}),
+              ...(server.exclude ? { exclude: server.exclude } : {})
+            }))
+          }
+        : {})
+    };
+  }
+
+  #serializeRuntimeTools(runtimeTools: RuntimeToolSet): Array<Record<string, unknown>> {
+    return Object.entries(runtimeTools).map(([name, definition]) => ({
+      name,
+      description: definition.description,
+      ...(definition.retryPolicy ? { retryPolicy: definition.retryPolicy } : {}),
+      inputSchema: JSON.parse(JSON.stringify(z.toJSONSchema(definition.inputSchema))) as Record<string, unknown>
+    }));
+  }
+
+  #serializeModelCallStepOutput(step: ModelStepResult): Record<string, unknown> {
+    return {
+      finishReason: step.finishReason ?? "unknown",
+      toolCallsCount: step.toolCalls.length,
+      toolResultsCount: step.toolResults.length,
+      toolCalls: step.toolCalls.map((toolCall) => ({
+        toolCallId: toolCall.toolCallId,
+        toolName: toolCall.toolName,
+        input: toolCall.input
+      })),
+      toolResults: step.toolResults.map((toolResult) => ({
+        toolCallId: toolResult.toolCallId,
+        toolName: toolResult.toolName,
+        output: toolResult.output
+      }))
     };
   }
 
@@ -2733,7 +2815,8 @@ export class RuntimeService {
       next.maxTokens = patch.maxTokens;
     }
     if (Array.isArray(patch.messages)) {
-      next.messages = patch.messages
+      next.messages = this.#collapseLeadingSystemMessages(
+        patch.messages
         .filter(
           (message): message is { role: "system" | "user" | "assistant" | "tool"; content: string } =>
             typeof message === "object" &&
@@ -2744,7 +2827,8 @@ export class RuntimeService {
         .map((message) => ({
           role: message.role,
           content: message.content
-        }));
+        }))
+      );
     }
 
     return next;

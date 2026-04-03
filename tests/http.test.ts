@@ -12,6 +12,7 @@ import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
 import { createApp } from "../apps/server/src/app.ts";
 import { HistoryMirrorSyncer, historyMirrorDbPath } from "../apps/server/src/history-mirror.ts";
+import type { StorageAdmin } from "../apps/server/src/storage-admin.ts";
 import { FakeModelGateway } from "./helpers/fake-model-gateway";
 
 async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
@@ -143,6 +144,7 @@ async function createStartedAppWithRuntimeService(
     }) => Promise<any>;
     workspaceMode?: "multi" | "single";
     resolveCallerContext?: (request: import("fastify").FastifyRequest) => Promise<CallerContext | undefined> | CallerContext | undefined;
+    storageAdmin?: StorageAdmin;
   }
 ) {
   const app = createApp({
@@ -153,6 +155,7 @@ async function createStartedAppWithRuntimeService(
     listWorkspaceTemplates: async () => [{ name: "workspace" }],
     ...(options?.workspaceMode ? { workspaceMode: options.workspaceMode } : {}),
     ...(options?.resolveCallerContext ? { resolveCallerContext: options.resolveCallerContext } : {}),
+    ...(options?.storageAdmin ? { storageAdmin: options.storageAdmin } : {}),
     ...(options?.rebuildWorkspaceHistoryMirror
       ? { rebuildWorkspaceHistoryMirror: options.rebuildWorkspaceHistoryMirror }
       : {}),
@@ -226,6 +229,136 @@ describe("http api", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       items: [{ name: "workspace" }]
+    });
+  });
+
+  it("exposes storage admin endpoints", async () => {
+    const storageAdmin: StorageAdmin = {
+      async overview() {
+        return {
+          postgres: {
+            configured: true,
+            available: true,
+            primaryStorage: true,
+            database: "oah_test",
+            tables: [
+              {
+                name: "runs",
+                rowCount: 12,
+                orderBy: "created_at desc, id asc",
+                description: "Run lifecycle records and status."
+              }
+            ]
+          },
+          redis: {
+            configured: true,
+            available: true,
+            keyPrefix: "oah",
+            eventBusEnabled: true,
+            runQueueEnabled: true,
+            dbSize: 8,
+            readyQueue: {
+              key: "oah:runs:ready",
+              length: 2
+            },
+            sessionQueues: [],
+            sessionLocks: [],
+            eventBuffers: []
+          }
+        };
+      },
+      async postgresTable() {
+        return {
+          table: "runs",
+          rowCount: 12,
+          orderBy: "created_at desc, id asc",
+          columns: ["id", "status"],
+          rows: [
+            {
+              id: "run_1",
+              status: "completed"
+            }
+          ]
+        };
+      },
+      async redisKeys() {
+        return {
+          pattern: "oah:*",
+          items: [
+            {
+              key: "oah:runs:ready",
+              type: "list",
+              size: 2
+            }
+          ]
+        };
+      },
+      async redisKeyDetail() {
+        return {
+          key: "oah:runs:ready",
+          type: "list",
+          size: 2,
+          value: ["run_1", "run_2"]
+        };
+      },
+      async deleteRedisKey() {
+        return {
+          key: "oah:runs:ready",
+          deleted: true
+        };
+      },
+      async close() {}
+    };
+
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+    activeApp = await createStartedAppWithRuntimeService(runtimeService, gateway, {
+      storageAdmin
+    });
+
+    const [overviewResponse, tableResponse, keysResponse, keyResponse, deleteResponse] = await Promise.all([
+      fetch(`${activeApp.baseUrl}/api/v1/storage/overview`),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20`),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/redis/keys?pattern=oah:*`),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/redis/key?key=oah:runs:ready`),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/redis/key?key=oah:runs:ready`, {
+        method: "DELETE"
+      })
+    ]);
+
+    expect(overviewResponse.status).toBe(200);
+    expect(tableResponse.status).toBe(200);
+    expect(keysResponse.status).toBe(200);
+    expect(keyResponse.status).toBe(200);
+    expect(deleteResponse.status).toBe(200);
+
+    await expect(overviewResponse.json()).resolves.toMatchObject({
+      postgres: {
+        database: "oah_test"
+      },
+      redis: {
+        dbSize: 8
+      }
+    });
+    await expect(tableResponse.json()).resolves.toMatchObject({
+      table: "runs",
+      rowCount: 12
+    });
+    await expect(keysResponse.json()).resolves.toMatchObject({
+      items: [{ key: "oah:runs:ready" }]
+    });
+    await expect(keyResponse.json()).resolves.toMatchObject({
+      key: "oah:runs:ready",
+      value: ["run_1", "run_2"]
+    });
+    await expect(deleteResponse.json()).resolves.toEqual({
+      key: "oah:runs:ready",
+      deleted: true
     });
   });
 
@@ -1258,12 +1391,36 @@ describe("http api", () => {
     });
     expect(runStepsResponse.status).toBe(200);
     const runStepsPage = (await runStepsResponse.json()) as {
-      items: Array<{ stepType: string; status: string }>;
+      items: Array<{
+        stepType: string;
+        status: string;
+        input?: {
+          model?: string;
+          messages?: Array<{ role: string; content: string }>;
+          runtimeToolNames?: string[];
+        };
+        output?: {
+          finishReason?: string;
+          toolCalls?: Array<{ toolName?: string }>;
+          toolResults?: Array<{ toolName?: string }>;
+        };
+      }>;
       nextCursor?: string;
     };
     expect(runStepsPage.items.some((step) => step.stepType === "model_call")).toBe(true);
     expect(runStepsPage.items.some((step) => step.stepType === "system")).toBe(true);
     expect(runStepsPage.items.every((step) => typeof step.status === "string")).toBe(true);
+    expect(runStepsPage.items.find((step) => step.stepType === "model_call")).toMatchObject({
+      input: {
+        model: "openai-default",
+        messages: expect.arrayContaining([{ role: "user", content: "hello there" }])
+      },
+      output: {
+        finishReason: "stop",
+        toolCalls: [],
+        toolResults: []
+      }
+    });
     expect(runStepsPage.nextCursor).toBeUndefined();
 
     await waitFor(async () => {

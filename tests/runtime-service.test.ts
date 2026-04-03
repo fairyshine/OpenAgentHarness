@@ -519,13 +519,10 @@ describe("runtime service", () => {
       .at(0)
       ?.input.messages?.filter((message) => message.role === "system")
       .map((message) => message.content);
-    expect(systemMessages).toEqual(
-      expect.arrayContaining([
-        "Repository rule: always add tests.",
-        "You are the builder agent.",
-        expect.stringContaining("Stay focused on implementation.")
-      ])
-    );
+    expect(systemMessages).toHaveLength(1);
+    expect(systemMessages?.[0]).toContain("Repository rule: always add tests.");
+    expect(systemMessages?.[0]).toContain("You are the builder agent.");
+    expect(systemMessages?.[0]).toContain("Stay focused on implementation.");
   });
 
   it("does not inject system reminder for default-agent sessions unless the agent was explicitly selected", async () => {
@@ -746,12 +743,14 @@ describe("runtime service", () => {
     expect(events.map((event) => event.event)).toEqual(
       expect.arrayContaining(["agent.switch.requested", "agent.switched", "run.completed"])
     );
-    expect(initialSystemMessages).toEqual(expect.arrayContaining(["You are the planning agent."]));
+    expect(initialSystemMessages).toHaveLength(1);
+    expect(initialSystemMessages?.[0]).toContain("You are the planning agent.");
     expect(switchedInvocation?.model).toBe("build-model");
-    expect(switchedSystemMessages).toEqual(expect.arrayContaining(["You are the build agent."]));
-    expect(switchedSystemMessages?.some((message) => message.includes("You are the planning agent."))).toBe(false);
-    expect(switchedSystemMessages?.some((message) => message.includes("<system_reminder>"))).toBe(true);
-    expect(switchedSystemMessages?.some((message) => message.includes("Take over implementation"))).toBe(true);
+    expect(switchedSystemMessages).toHaveLength(1);
+    expect(switchedSystemMessages?.[0]).toContain("You are the build agent.");
+    expect(switchedSystemMessages?.[0]).not.toContain("You are the planning agent.");
+    expect(switchedSystemMessages?.[0]).toContain("<system_reminder>");
+    expect(switchedSystemMessages?.[0]).toContain("Take over implementation");
 
     const runSteps = await runtimeService.listRunSteps(accepted.runId);
     expect(runSteps.items.some((step) => step.stepType === "agent_switch" && step.status === "completed")).toBe(true);
@@ -2009,32 +2008,24 @@ describe("runtime service", () => {
 
     await waitFor(() => gateway.invocations.length > 0);
     const systemMessages = gateway.invocations.at(0)?.input.messages?.filter((message) => message.role === "system") ?? [];
+    expect(systemMessages).toHaveLength(1);
+    const composedSystemPrompt = systemMessages[0]?.content ?? "";
 
-    expect(systemMessages.map((message) => message.content)).toEqual(
-      expect.arrayContaining([
-        "Workspace base prompt.",
-        "Model-specific guidance.",
-        "You are the builder.",
-        "Repository conventions live here.",
-        expect.stringContaining("<available_actions>"),
-        expect.stringContaining("call `run_action`"),
-        expect.stringContaining("<available_skills>"),
-        expect.stringContaining("call `activate_skill`"),
-        expect.stringContaining("available_actions: debug.echo"),
-        expect.stringContaining("available_skills: repo-explorer"),
-        expect.stringContaining("available_tool_servers: docs-server")
-      ])
+    expect(composedSystemPrompt).toContain("Workspace base prompt.");
+    expect(composedSystemPrompt).toContain("Model-specific guidance.");
+    expect(composedSystemPrompt).toContain("You are the builder.");
+    expect(composedSystemPrompt).toContain("Repository conventions live here.");
+    expect(composedSystemPrompt).toContain("<available_actions>");
+    expect(composedSystemPrompt).toContain("call `run_action`");
+    expect(composedSystemPrompt).toContain("<available_skills>");
+    expect(composedSystemPrompt).toContain("call `activate_skill`");
+    expect(composedSystemPrompt).toContain("available_actions: debug.echo");
+    expect(composedSystemPrompt).toContain("available_skills: repo-explorer");
+    expect(composedSystemPrompt).toContain("available_tool_servers: docs-server");
+    expect(composedSystemPrompt.indexOf("<available_actions>")).toBeLessThan(composedSystemPrompt.indexOf("<available_skills>"));
+    expect(composedSystemPrompt.indexOf("<available_skills>")).toBeLessThan(
+      composedSystemPrompt.indexOf("Repository conventions live here.")
     );
-
-    const actionMessageIndex = systemMessages.findIndex((message) => message.content.includes("<available_actions>"));
-    const skillsMessageIndex = systemMessages.findIndex((message) => message.content.includes("<available_skills>"));
-    const agentsMessageIndex = systemMessages.findIndex((message) => message.content === "Repository conventions live here.");
-
-    expect(actionMessageIndex).toBeGreaterThan(-1);
-    expect(skillsMessageIndex).toBeGreaterThan(-1);
-    expect(agentsMessageIndex).toBeGreaterThan(-1);
-    expect(actionMessageIndex).toBeLessThan(skillsMessageIndex);
-    expect(skillsMessageIndex).toBeLessThan(agentsMessageIndex);
   });
 
   it("activates skills through tool calls and persists tool messages before the final assistant reply", async () => {
@@ -2185,6 +2176,70 @@ describe("runtime service", () => {
     expect(modelCallSteps).toHaveLength(3);
     expect(modelCallSteps.every((step) => step.status === "completed")).toBe(true);
     expect(modelCallSteps.map((step) => step.name)).toEqual(["openai-default", "openai-default", "openai-default"]);
+    expect(modelCallSteps[0]?.input).toMatchObject({
+      model: "openai-default",
+      canonicalModelRef: "platform/openai-default",
+      messageCount: 2,
+      runtimeToolNames: expect.arrayContaining(["activate_skill"]),
+      runtimeTools: expect.arrayContaining([
+        expect.objectContaining({
+          name: "activate_skill",
+          description: expect.any(String),
+          inputSchema: expect.any(Object)
+        })
+      ]),
+      activeToolNames: expect.arrayContaining(["activate_skill"]),
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("Use repo skills when needed.")
+        }),
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("<available_skills>")
+        }),
+        { role: "user", content: "Figure out how to explore the repo safely." }
+      ])
+    });
+    expect(modelCallSteps[0]?.output).toMatchObject({
+      finishReason: "tool-calls",
+      toolCallsCount: 1,
+      toolResultsCount: 1,
+      toolCalls: [
+        {
+          toolCallId: "call_activate",
+          toolName: "activate_skill",
+          input: { name: "repo-explorer" }
+        }
+      ],
+      toolResults: [
+        expect.objectContaining({
+          toolCallId: "call_activate",
+          toolName: "activate_skill"
+        })
+      ]
+    });
+    expect(
+      modelCallSteps.some((step) =>
+        (step.output as { toolCalls?: Array<{ toolCallId?: string; toolName?: string; input?: unknown }> } | undefined)?.toolCalls?.some(
+          (toolCall) =>
+            toolCall.toolCallId === "call_resource" &&
+            toolCall.toolName === "activate_skill" &&
+            typeof toolCall.input === "object" &&
+            toolCall.input !== null &&
+            (toolCall.input as { name?: unknown }).name === "repo-explorer" &&
+            (toolCall.input as { resource_path?: unknown }).resource_path === "references/guide.md"
+        ) ?? false
+      )
+    ).toBe(true);
+    expect(
+      modelCallSteps.some((step) =>
+        (step.output as { toolResults?: Array<{ toolCallId?: string; toolName?: string; output?: unknown }> } | undefined)?.toolResults?.some(
+          (toolResult) => toolResult.toolCallId === "call_resource" && toolResult.toolName === "activate_skill"
+        ) ?? false
+      )
+    ).toBe(true);
+    expect(modelCallSteps.some((step) => (step.output as { finishReason?: string } | undefined)?.finishReason === "stop")).toBe(true);
   });
 
   it("emits tool.failed when a tool execution throws and then fails the run", async () => {
@@ -3089,10 +3144,9 @@ describe("runtime service", () => {
     await waitFor(() => gateway.invocations.length > 0);
     const systemMessages = gateway.invocations.at(0)?.input.messages?.filter((message) => message.role === "system") ?? [];
 
-    expect(systemMessages.map((message) => message.content)).toEqual(
-      expect.arrayContaining(["You are a chat-only assistant."])
-    );
-    expect(systemMessages.some((message) => message.content.includes("<environment>"))).toBe(false);
+    expect(systemMessages).toHaveLength(1);
+    expect(systemMessages[0]?.content).toContain("You are a chat-only assistant.");
+    expect(systemMessages[0]?.content.includes("<environment>")).toBe(false);
   });
 
   it("disables execution-only capabilities for chat workspaces even when records are dirty", async () => {
@@ -3241,12 +3295,11 @@ describe("runtime service", () => {
     });
 
     const systemMessages = gateway.invocations.at(0)?.input.messages?.filter((message) => message.role === "system") ?? [];
-    expect(systemMessages.map((message) => message.content)).toEqual(
-      expect.arrayContaining(["You are a chat-only assistant."])
-    );
-    expect(systemMessages.some((message) => message.content.includes("<available_actions>"))).toBe(false);
-    expect(systemMessages.some((message) => message.content.includes("<available_skills>"))).toBe(false);
-    expect(systemMessages.some((message) => message.content.includes("Hook warning."))).toBe(false);
+    expect(systemMessages).toHaveLength(1);
+    expect(systemMessages[0]?.content).toContain("You are a chat-only assistant.");
+    expect(systemMessages[0]?.content.includes("<available_actions>")).toBe(false);
+    expect(systemMessages[0]?.content.includes("<available_skills>")).toBe(false);
+    expect(systemMessages[0]?.content.includes("Hook warning.")).toBe(false);
     expect(gateway.invocations.at(0)?.input.temperature).toBeUndefined();
     expect(capturedToolNames).toEqual([]);
     expect(capturedMcpNames).toEqual([]);
@@ -3361,9 +3414,9 @@ describe("runtime service", () => {
       runSteps.items.find((step) => step.stepType === "hook" && step.name === "rewrite-request")?.status
     ).toBe("completed");
     expect(gateway.invocations.at(0)?.input.temperature).toBe(0.7);
-    expect(gateway.invocations.at(0)?.input.messages?.some((message) => message.content === "Hook warning.")).toBe(true);
+    expect(gateway.invocations.at(0)?.input.messages?.some((message) => message.content.includes("Hook warning."))).toBe(true);
     expect(
-      gateway.invocations.at(0)?.input.messages?.some((message) => message.content === "Check secrets before answering.")
+      gateway.invocations.at(0)?.input.messages?.some((message) => message.content.includes("Check secrets before answering."))
     ).toBe(true);
   });
 
@@ -3697,7 +3750,7 @@ describe("runtime service", () => {
 
     expect(messages.some((message) => message.role === "user" && message.content === "rewritten hello")).toBe(true);
     expect(messages.some((message) => message.role === "user" && message.content === "hello")).toBe(false);
-    expect(messages.some((message) => message.role === "system" && message.content === "Context assembled.")).toBe(true);
+    expect(messages.some((message) => message.role === "system" && message.content.includes("Context assembled."))).toBe(true);
     expect(runSteps.items.some((step) => step.stepType === "hook" && step.name === "rewrite-context")).toBe(true);
     expect(runSteps.items.some((step) => step.stepType === "hook" && step.name === "annotate-context")).toBe(true);
   });

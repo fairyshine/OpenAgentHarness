@@ -194,6 +194,100 @@ export const modelProviderListSchema = z.object({
   items: z.array(modelProviderSchema)
 });
 
+export const storagePostgresTableNameSchema = z.enum([
+  "workspaces",
+  "sessions",
+  "runs",
+  "messages",
+  "run_steps",
+  "session_events",
+  "tool_calls",
+  "hook_runs",
+  "artifacts",
+  "history_events"
+]);
+
+export const storagePostgresTableSummarySchema = z.object({
+  name: storagePostgresTableNameSchema,
+  rowCount: z.number().int().min(0),
+  orderBy: z.string(),
+  description: z.string()
+});
+
+export const storageRedisKeySummarySchema = z.object({
+  key: z.string(),
+  type: z.string(),
+  ttlMs: z.number().int().optional(),
+  size: z.number().int().min(0).optional()
+});
+
+export const storageRedisQueueSummarySchema = z.object({
+  key: z.string(),
+  sessionId: z.string(),
+  length: z.number().int().min(0)
+});
+
+export const storageRedisLockSummarySchema = z.object({
+  key: z.string(),
+  sessionId: z.string(),
+  ttlMs: z.number().int().optional(),
+  owner: z.string().optional()
+});
+
+export const storageOverviewSchema = z.object({
+  postgres: z.object({
+    configured: z.boolean(),
+    available: z.boolean(),
+    primaryStorage: z.boolean(),
+    database: z.string().optional(),
+    tables: z.array(storagePostgresTableSummarySchema)
+  }),
+  redis: z.object({
+    configured: z.boolean(),
+    available: z.boolean(),
+    keyPrefix: z.string(),
+    eventBusEnabled: z.boolean(),
+    runQueueEnabled: z.boolean(),
+    dbSize: z.number().int().min(0).optional(),
+    readyQueue: z
+      .object({
+        key: z.string(),
+        length: z.number().int().min(0)
+      })
+      .optional(),
+    sessionQueues: z.array(storageRedisQueueSummarySchema),
+    sessionLocks: z.array(storageRedisLockSummarySchema),
+    eventBuffers: z.array(storageRedisQueueSummarySchema)
+  })
+});
+
+export const storagePostgresTablePageSchema = z.object({
+  table: storagePostgresTableNameSchema,
+  rowCount: z.number().int().min(0),
+  orderBy: z.string(),
+  columns: z.array(z.string()),
+  rows: z.array(z.record(z.string(), jsonValueSchema))
+});
+
+export const storageRedisKeyPageSchema = z.object({
+  pattern: z.string(),
+  items: z.array(storageRedisKeySummarySchema),
+  nextCursor: z.string().optional()
+});
+
+export const storageRedisKeyDetailSchema = z.object({
+  key: z.string(),
+  type: z.string(),
+  ttlMs: z.number().int().optional(),
+  size: z.number().int().min(0).optional(),
+  value: jsonValueSchema.optional()
+});
+
+export const storageRedisDeleteKeyResponseSchema = z.object({
+  key: z.string(),
+  deleted: z.boolean()
+});
+
 export const createWorkspaceRequestSchema = z.object({
   externalRef: z.string().optional(),
   name: z.string().min(1),
@@ -301,6 +395,20 @@ export const runEventsQuerySchema = z.object({
   cursor: z.string().optional()
 });
 
+export const storageTableQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50)
+});
+
+export const storageRedisKeysQuerySchema = z.object({
+  pattern: z.string().optional().default("oah:*"),
+  cursor: z.string().optional(),
+  pageSize: z.coerce.number().int().min(1).max(200).default(100)
+});
+
+export const storageRedisKeyQuerySchema = z.object({
+  key: z.string().min(1)
+});
+
 export const sessionEventSchema = z.object({
   id: z.string(),
   cursor: z.string(),
@@ -349,6 +457,16 @@ export type RunStep = z.infer<typeof runStepSchema>;
 export type RunStepPage = z.infer<typeof runStepPageSchema>;
 export type WorkspaceTemplate = z.infer<typeof workspaceTemplateSchema>;
 export type WorkspaceTemplateList = z.infer<typeof workspaceTemplateListSchema>;
+export type StoragePostgresTableName = z.infer<typeof storagePostgresTableNameSchema>;
+export type StoragePostgresTableSummary = z.infer<typeof storagePostgresTableSummarySchema>;
+export type StorageRedisKeySummary = z.infer<typeof storageRedisKeySummarySchema>;
+export type StorageRedisQueueSummary = z.infer<typeof storageRedisQueueSummarySchema>;
+export type StorageRedisLockSummary = z.infer<typeof storageRedisLockSummarySchema>;
+export type StorageOverview = z.infer<typeof storageOverviewSchema>;
+export type StoragePostgresTablePage = z.infer<typeof storagePostgresTablePageSchema>;
+export type StorageRedisKeyPage = z.infer<typeof storageRedisKeyPageSchema>;
+export type StorageRedisKeyDetail = z.infer<typeof storageRedisKeyDetailSchema>;
+export type StorageRedisDeleteKeyResponse = z.infer<typeof storageRedisDeleteKeyResponseSchema>;
 export type WorkspaceSkillInput = z.infer<typeof workspaceSkillInputSchema>;
 export type CreateWorkspaceRequest = z.infer<typeof createWorkspaceRequestSchema>;
 export type UpdateWorkspaceSettingsRequest = z.infer<typeof updateWorkspaceSettingsRequestSchema>;
@@ -366,4 +484,7 @@ export type ModelGenerateResponse = z.infer<typeof modelGenerateResponseSchema>;
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
 export type PageQuery = z.infer<typeof pageQuerySchema>;
 export type RunEventsQuery = z.infer<typeof runEventsQuerySchema>;
+export type StorageTableQuery = z.infer<typeof storageTableQuerySchema>;
+export type StorageRedisKeysQuery = z.infer<typeof storageRedisKeysQuerySchema>;
+export type StorageRedisKeyQuery = z.infer<typeof storageRedisKeyQuerySchema>;
 export type SessionEventContract = z.infer<typeof sessionEventSchema>;

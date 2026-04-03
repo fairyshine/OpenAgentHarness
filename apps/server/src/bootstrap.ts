@@ -32,6 +32,7 @@ import {
 } from "@oah/storage-redis";
 import { HistoryMirrorSyncer, inspectHistoryMirrorStatus } from "./history-mirror.js";
 import { createBuiltInPlatformAgents } from "./platform-agents.js";
+import { createStorageAdmin, type StorageAdmin } from "./storage-admin.js";
 
 type PlatformAgentRegistry = Record<string, import("@oah/config").DiscoveredAgent>;
 
@@ -73,6 +74,7 @@ export interface BootstrappedRuntime {
   rebuildWorkspaceHistoryMirror(workspace: import("@oah/runtime-core").WorkspaceRecord): Promise<
     import("./history-mirror.js").HistoryMirrorStatus
   >;
+  storageAdmin: StorageAdmin;
   healthReport(): Promise<{
     status: "ok" | "degraded";
     storage: {
@@ -497,6 +499,13 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         })
       : undefined;
   const redisConfigured = Boolean(config.storage.redis_url && config.storage.redis_url.trim().length > 0);
+  const storageAdmin = createStorageAdmin({
+    ...("pool" in persistence ? { postgresPool: persistence.pool } : {}),
+    redisUrl: config.storage.redis_url,
+    redisAvailable: redisConfigured,
+    redisEventBusEnabled: Boolean(redisBus),
+    redisRunQueueEnabled: Boolean(redisRunQueue)
+  });
   const runtimeProcess = describeRuntimeProcess({
     processKind,
     startWorker,
@@ -762,6 +771,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
 
       return historyMirrorSyncer.rebuildWorkspace(workspace);
     },
+    storageAdmin,
     async healthReport() {
       const mirror = await historyMirrorSummary();
       const checks = {
@@ -802,6 +812,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       await Promise.all([
         historyMirrorSyncer?.close() ?? Promise.resolve(),
         redisRunWorker?.close() ?? Promise.resolve(),
+        storageAdmin.close(),
         closePersistence(),
         redisBus?.close() ?? Promise.resolve(),
         redisRunQueue?.close() ?? Promise.resolve()

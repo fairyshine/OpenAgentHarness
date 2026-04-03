@@ -16,6 +16,7 @@ async function main() {
     healthCheck: () => runtime.healthReport(),
     readinessCheck: () => runtime.readinessReport(),
     rebuildWorkspaceHistoryMirror: runtime.rebuildWorkspaceHistoryMirror,
+    storageAdmin: runtime.storageAdmin,
     ...(runtime.listWorkspaceTemplates ? { listWorkspaceTemplates: runtime.listWorkspaceTemplates } : {}),
     ...(runtime.importWorkspace ? { importWorkspace: runtime.importWorkspace } : {})
   });
