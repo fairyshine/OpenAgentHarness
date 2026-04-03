@@ -15,10 +15,14 @@ import {
   storagePostgresTableNameSchema,
   storagePostgresTablePageSchema,
   storageRedisDeleteKeyResponseSchema,
+  storageRedisDeleteKeysRequestSchema,
+  storageRedisDeleteKeysResponseSchema,
   storageRedisKeyDetailSchema,
   storageRedisKeyPageSchema,
   storageRedisKeyQuerySchema,
   storageRedisKeysQuerySchema,
+  storageRedisMaintenanceRequestSchema,
+  storageRedisMaintenanceResponseSchema,
   storageTableQuerySchema,
   runEventsQuerySchema,
   runStepPageSchema,
@@ -216,7 +220,18 @@ export function createApp(dependencies: AppDependencies) {
     const params = createParamsSchema("table").parse(request.params);
     const query = storageTableQuerySchema.parse(request.query);
     const table = storagePostgresTableNameSchema.parse(params.table);
-    return reply.send(storagePostgresTablePageSchema.parse(await dependencies.storageAdmin.postgresTable(table, query.limit)));
+    return reply.send(
+      storagePostgresTablePageSchema.parse(
+        await dependencies.storageAdmin.postgresTable(table, {
+          limit: query.limit,
+          offset: query.offset,
+          ...(query.q ? { q: query.q } : {}),
+          ...(query.workspaceId ? { workspaceId: query.workspaceId } : {}),
+          ...(query.sessionId ? { sessionId: query.sessionId } : {}),
+          ...(query.runId ? { runId: query.runId } : {})
+        })
+      )
+    );
   });
 
   app.get("/api/v1/storage/redis/keys", async (request, reply) => {
@@ -246,6 +261,37 @@ export function createApp(dependencies: AppDependencies) {
 
     const query = storageRedisKeyQuerySchema.parse(request.query);
     return reply.send(storageRedisDeleteKeyResponseSchema.parse(await dependencies.storageAdmin.deleteRedisKey(query.key)));
+  });
+
+  app.post("/api/v1/storage/redis/keys/delete", async (request, reply) => {
+    if (!dependencies.storageAdmin) {
+      throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
+    }
+
+    const body = storageRedisDeleteKeysRequestSchema.parse(request.body);
+    return reply.send(storageRedisDeleteKeysResponseSchema.parse(await dependencies.storageAdmin.deleteRedisKeys(body.keys)));
+  });
+
+  app.post("/api/v1/storage/redis/session-queue/clear", async (request, reply) => {
+    if (!dependencies.storageAdmin) {
+      throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
+    }
+
+    const body = storageRedisMaintenanceRequestSchema.parse(request.body);
+    return reply.send(
+      storageRedisMaintenanceResponseSchema.parse(await dependencies.storageAdmin.clearRedisSessionQueue(body.key))
+    );
+  });
+
+  app.post("/api/v1/storage/redis/session-lock/release", async (request, reply) => {
+    if (!dependencies.storageAdmin) {
+      throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
+    }
+
+    const body = storageRedisMaintenanceRequestSchema.parse(request.body);
+    return reply.send(
+      storageRedisMaintenanceResponseSchema.parse(await dependencies.storageAdmin.releaseRedisSessionLock(body.key))
+    );
   });
 
   app.post("/api/v1/workspaces", async (request, reply) => {

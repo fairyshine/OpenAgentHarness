@@ -267,12 +267,24 @@ describe("http api", () => {
           }
         };
       },
-      async postgresTable() {
+      async postgresTable(_table, options) {
         return {
           table: "runs",
           rowCount: 12,
           orderBy: "created_at desc, id asc",
+          offset: options.offset ?? 0,
+          limit: options.limit,
           columns: ["id", "status"],
+          ...(options.q || options.workspaceId || options.sessionId || options.runId
+            ? {
+                appliedFilters: {
+                  ...(options.q ? { q: options.q } : {}),
+                  ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+                  ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+                  ...(options.runId ? { runId: options.runId } : {})
+                }
+              }
+            : {}),
           rows: [
             {
               id: "run_1",
@@ -307,6 +319,26 @@ describe("http api", () => {
           deleted: true
         };
       },
+      async deleteRedisKeys(keys) {
+        return {
+          items: keys.map((key) => ({
+            key,
+            deleted: true
+          }))
+        };
+      },
+      async clearRedisSessionQueue(key) {
+        return {
+          key,
+          changed: true
+        };
+      },
+      async releaseRedisSessionLock(key) {
+        return {
+          key,
+          changed: true
+        };
+      },
       async close() {}
     };
 
@@ -321,21 +353,63 @@ describe("http api", () => {
       storageAdmin
     });
 
-    const [overviewResponse, tableResponse, keysResponse, keyResponse, deleteResponse] = await Promise.all([
+    const [
+      overviewResponse,
+      tableResponse,
+      filteredTableResponse,
+      keysResponse,
+      keyResponse,
+      deleteResponse,
+      batchDeleteResponse,
+      clearQueueResponse,
+      releaseLockResponse
+    ] = await Promise.all([
       fetch(`${activeApp.baseUrl}/api/v1/storage/overview`),
-      fetch(`${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20`),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20&offset=40`),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20&q=completed&runId=run_1`),
       fetch(`${activeApp.baseUrl}/api/v1/storage/redis/keys?pattern=oah:*`),
       fetch(`${activeApp.baseUrl}/api/v1/storage/redis/key?key=oah:runs:ready`),
       fetch(`${activeApp.baseUrl}/api/v1/storage/redis/key?key=oah:runs:ready`, {
         method: "DELETE"
+      }),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/redis/keys/delete`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          keys: ["oah:runs:ready", "oah:session:ses_1:queue"]
+        })
+      }),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/redis/session-queue/clear`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          key: "oah:session:ses_1:queue"
+        })
+      }),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/redis/session-lock/release`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          key: "oah:session:ses_1:lock"
+        })
       })
     ]);
 
     expect(overviewResponse.status).toBe(200);
     expect(tableResponse.status).toBe(200);
+    expect(filteredTableResponse.status).toBe(200);
     expect(keysResponse.status).toBe(200);
     expect(keyResponse.status).toBe(200);
     expect(deleteResponse.status).toBe(200);
+    expect(batchDeleteResponse.status).toBe(200);
+    expect(clearQueueResponse.status).toBe(200);
+    expect(releaseLockResponse.status).toBe(200);
 
     await expect(overviewResponse.json()).resolves.toMatchObject({
       postgres: {
@@ -347,7 +421,15 @@ describe("http api", () => {
     });
     await expect(tableResponse.json()).resolves.toMatchObject({
       table: "runs",
-      rowCount: 12
+      rowCount: 12,
+      offset: 40,
+      limit: 20
+    });
+    await expect(filteredTableResponse.json()).resolves.toMatchObject({
+      appliedFilters: {
+        q: "completed",
+        runId: "run_1"
+      }
     });
     await expect(keysResponse.json()).resolves.toMatchObject({
       items: [{ key: "oah:runs:ready" }]
@@ -359,6 +441,20 @@ describe("http api", () => {
     await expect(deleteResponse.json()).resolves.toEqual({
       key: "oah:runs:ready",
       deleted: true
+    });
+    await expect(batchDeleteResponse.json()).resolves.toEqual({
+      items: [
+        { key: "oah:runs:ready", deleted: true },
+        { key: "oah:session:ses_1:queue", deleted: true }
+      ]
+    });
+    await expect(clearQueueResponse.json()).resolves.toEqual({
+      key: "oah:session:ses_1:queue",
+      changed: true
+    });
+    await expect(releaseLockResponse.json()).resolves.toEqual({
+      key: "oah:session:ses_1:lock",
+      changed: true
     });
   });
 

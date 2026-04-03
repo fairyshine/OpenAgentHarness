@@ -7,8 +7,10 @@ import type {
   StoragePostgresTableName,
   StoragePostgresTablePage,
   StorageRedisDeleteKeyResponse,
+  StorageRedisDeleteKeysResponse,
   StorageRedisKeyDetail,
-  StorageRedisKeyPage
+  StorageRedisKeyPage,
+  StorageRedisMaintenanceResponse
 } from "@oah/api-contracts";
 
 type RedisInspectorClient = ReturnType<typeof createClient>;
@@ -57,6 +59,51 @@ const POSTGRES_TABLE_CONFIG = {
   }
 } satisfies Record<StoragePostgresTableName, { orderBy: string; description: string }>;
 
+const POSTGRES_TABLE_FILTER_COLUMNS: Record<
+  StoragePostgresTableName,
+  {
+    workspaceId?: string;
+    sessionId?: string;
+    runId?: string;
+  }
+> = {
+  workspaces: {
+    workspaceId: "id"
+  },
+  sessions: {
+    workspaceId: "workspace_id",
+    sessionId: "id"
+  },
+  runs: {
+    workspaceId: "workspace_id",
+    sessionId: "session_id",
+    runId: "id"
+  },
+  messages: {
+    sessionId: "session_id",
+    runId: "run_id"
+  },
+  run_steps: {
+    runId: "run_id"
+  },
+  session_events: {
+    sessionId: "session_id",
+    runId: "run_id"
+  },
+  tool_calls: {
+    runId: "run_id"
+  },
+  hook_runs: {
+    runId: "run_id"
+  },
+  artifacts: {
+    runId: "run_id"
+  },
+  history_events: {
+    workspaceId: "workspace_id"
+  }
+};
+
 function decodeJsonish(value: string): unknown {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -102,12 +149,33 @@ function extractSessionId(key: string): string {
   return match?.[1] ?? "unknown";
 }
 
+function isSessionQueueKey(key: string, keyPrefix: string): boolean {
+  return key.startsWith(`${keyPrefix}:session:`) && key.endsWith(":queue");
+}
+
+function isSessionLockKey(key: string, keyPrefix: string): boolean {
+  return key.startsWith(`${keyPrefix}:session:`) && key.endsWith(":lock");
+}
+
 export interface StorageAdmin {
   overview(): Promise<StorageOverview>;
-  postgresTable(table: StoragePostgresTableName, limit: number): Promise<StoragePostgresTablePage>;
+  postgresTable(
+    table: StoragePostgresTableName,
+    options: {
+      limit: number;
+      offset?: number | undefined;
+      q?: string | undefined;
+      workspaceId?: string | undefined;
+      sessionId?: string | undefined;
+      runId?: string | undefined;
+    }
+  ): Promise<StoragePostgresTablePage>;
   redisKeys(pattern: string, cursor: string | undefined, pageSize: number): Promise<StorageRedisKeyPage>;
   redisKeyDetail(key: string): Promise<StorageRedisKeyDetail>;
   deleteRedisKey(key: string): Promise<StorageRedisDeleteKeyResponse>;
+  deleteRedisKeys(keys: string[]): Promise<StorageRedisDeleteKeysResponse>;
+  clearRedisSessionQueue(key: string): Promise<StorageRedisMaintenanceResponse>;
+  releaseRedisSessionLock(key: string): Promise<StorageRedisMaintenanceResponse>;
   close(): Promise<void>;
 }
 
@@ -253,21 +321,50 @@ export function createStorageAdmin(options: {
       };
     },
 
-    async postgresTable(table, limit) {
+    async postgresTable(table, options) {
       const pool = await requirePostgresPool();
       const config = POSTGRES_TABLE_CONFIG[table as PostgresTableConfigName];
-      const safeLimit = Math.max(1, Math.min(200, limit));
+      const filterColumns = POSTGRES_TABLE_FILTER_COLUMNS[table];
+      const safeLimit = Math.max(1, Math.min(200, options.limit));
+      const safeOffset = Math.max(0, options.offset ?? 0);
+      const whereClauses: string[] = [];
+      const values: string[] = [];
+      const pushFilter = (column: string | undefined, value: string | undefined) => {
+        if (!column || !value?.trim()) {
+          return;
+        }
+
+        values.push(value.trim());
+        whereClauses.push(`${column} = $${values.length}`);
+      };
+
+      pushFilter(filterColumns.workspaceId, options.workspaceId);
+      pushFilter(filterColumns.sessionId, options.sessionId);
+      pushFilter(filterColumns.runId, options.runId);
+
+      if (options.q?.trim()) {
+        values.push(`%${options.q.trim()}%`);
+        whereClauses.push(`row_to_json(${table})::text ilike $${values.length}`);
+      }
+
+      const whereSql = whereClauses.length > 0 ? ` where ${whereClauses.join(" and ")}` : "";
       const [countResult, rowsResult] = await Promise.all([
-        pool.query<{ count: string }>(`select count(*)::text as count from ${table}`),
-        pool.query<Record<string, unknown>>(`select * from ${table} order by ${config.orderBy} limit ${safeLimit}`)
+        pool.query<{ count: string }>(`select count(*)::text as count from ${table}${whereSql}`, values),
+        pool.query<Record<string, unknown>>(
+          `select * from ${table}${whereSql} order by ${config.orderBy} limit ${safeLimit} offset ${safeOffset}`,
+          values
+        )
       ]);
 
       const columns = Array.from(new Set(rowsResult.fields.map((field) => field.name)));
+      const rowCount = Number.parseInt(countResult.rows[0]?.count ?? "0", 10);
 
       return {
         table,
-        rowCount: Number.parseInt(countResult.rows[0]?.count ?? "0", 10),
+        rowCount,
         orderBy: config.orderBy,
+        offset: safeOffset,
+        limit: safeLimit,
         columns,
         rows: rowsResult.rows.map((row) =>
           Object.fromEntries(
@@ -276,7 +373,19 @@ export function createStorageAdmin(options: {
               value instanceof Date ? value.toISOString() : value === undefined ? null : value
             ])
           )
-        )
+        ),
+        ...(options.q?.trim() || options.workspaceId?.trim() || options.sessionId?.trim() || options.runId?.trim()
+          ? {
+              appliedFilters: {
+                ...(options.q?.trim() ? { q: options.q.trim() } : {}),
+                ...(options.workspaceId?.trim() ? { workspaceId: options.workspaceId.trim() } : {}),
+                ...(options.sessionId?.trim() ? { sessionId: options.sessionId.trim() } : {}),
+                ...(options.runId?.trim() ? { runId: options.runId.trim() } : {})
+              }
+            }
+          : {})
+        ,
+        ...(safeOffset + rowsResult.rows.length < rowCount ? { nextOffset: safeOffset + rowsResult.rows.length } : {})
       };
     },
 
@@ -362,6 +471,55 @@ export function createStorageAdmin(options: {
       return {
         key,
         deleted
+      };
+    },
+
+    async deleteRedisKeys(keys) {
+      const client = await requireRedisClient();
+      const uniqueKeys = [...new Set(keys.map((key) => key.trim()).filter(Boolean))].slice(0, 200);
+      if (uniqueKeys.length === 0) {
+        return {
+          items: []
+        };
+      }
+
+      return {
+        items: await Promise.all(
+          uniqueKeys.map(async (key) => ({
+            key,
+            deleted: (await client.del(key)) > 0
+          }))
+        )
+      };
+    },
+
+    async clearRedisSessionQueue(key) {
+      const client = await requireRedisClient();
+      if (!isSessionQueueKey(key, keyPrefix)) {
+        throw new AppError(400, "invalid_redis_queue_key", `Redis key ${key} is not a session queue key.`);
+      }
+
+      const sessionId = extractSessionId(key);
+      const [deleted, readyRemoved] = await Promise.all([
+        client.del(key),
+        client.lRem(`${keyPrefix}:runs:ready`, 0, sessionId)
+      ]);
+
+      return {
+        key,
+        changed: deleted > 0 || readyRemoved > 0
+      };
+    },
+
+    async releaseRedisSessionLock(key) {
+      const client = await requireRedisClient();
+      if (!isSessionLockKey(key, keyPrefix)) {
+        throw new AppError(400, "invalid_redis_lock_key", `Redis key ${key} is not a session lock key.`);
+      }
+
+      return {
+        key,
+        changed: (await client.del(key)) > 0
       };
     },
 

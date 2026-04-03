@@ -265,8 +265,19 @@ export const storagePostgresTablePageSchema = z.object({
   table: storagePostgresTableNameSchema,
   rowCount: z.number().int().min(0),
   orderBy: z.string(),
+  offset: z.number().int().min(0),
+  limit: z.number().int().min(1).max(200),
   columns: z.array(z.string()),
-  rows: z.array(z.record(z.string(), jsonValueSchema))
+  rows: z.array(z.record(z.string(), jsonValueSchema)),
+  appliedFilters: z
+    .object({
+      q: z.string().optional(),
+      workspaceId: z.string().optional(),
+      sessionId: z.string().optional(),
+      runId: z.string().optional()
+    })
+    .optional(),
+  nextOffset: z.number().int().min(0).optional()
 });
 
 export const storageRedisKeyPageSchema = z.object({
@@ -286,6 +297,28 @@ export const storageRedisKeyDetailSchema = z.object({
 export const storageRedisDeleteKeyResponseSchema = z.object({
   key: z.string(),
   deleted: z.boolean()
+});
+
+export const storageRedisDeleteKeysRequestSchema = z.object({
+  keys: z.array(z.string().min(1)).min(1).max(200)
+});
+
+export const storageRedisDeleteKeysResponseSchema = z.object({
+  items: z.array(
+    z.object({
+      key: z.string(),
+      deleted: z.boolean()
+    })
+  )
+});
+
+export const storageRedisMaintenanceRequestSchema = z.object({
+  key: z.string().min(1)
+});
+
+export const storageRedisMaintenanceResponseSchema = z.object({
+  key: z.string(),
+  changed: z.boolean()
 });
 
 export const createWorkspaceRequestSchema = z.object({
@@ -396,7 +429,12 @@ export const runEventsQuerySchema = z.object({
 });
 
 export const storageTableQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).default(50)
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+  q: z.string().optional(),
+  workspaceId: z.string().optional(),
+  sessionId: z.string().optional(),
+  runId: z.string().optional()
 });
 
 export const storageRedisKeysQuerySchema = z.object({
@@ -467,6 +505,10 @@ export type StoragePostgresTablePage = z.infer<typeof storagePostgresTablePageSc
 export type StorageRedisKeyPage = z.infer<typeof storageRedisKeyPageSchema>;
 export type StorageRedisKeyDetail = z.infer<typeof storageRedisKeyDetailSchema>;
 export type StorageRedisDeleteKeyResponse = z.infer<typeof storageRedisDeleteKeyResponseSchema>;
+export type StorageRedisDeleteKeysRequest = z.infer<typeof storageRedisDeleteKeysRequestSchema>;
+export type StorageRedisDeleteKeysResponse = z.infer<typeof storageRedisDeleteKeysResponseSchema>;
+export type StorageRedisMaintenanceRequest = z.infer<typeof storageRedisMaintenanceRequestSchema>;
+export type StorageRedisMaintenanceResponse = z.infer<typeof storageRedisMaintenanceResponseSchema>;
 export type WorkspaceSkillInput = z.infer<typeof workspaceSkillInputSchema>;
 export type CreateWorkspaceRequest = z.infer<typeof createWorkspaceRequestSchema>;
 export type UpdateWorkspaceSettingsRequest = z.infer<typeof updateWorkspaceSettingsRequestSchema>;
