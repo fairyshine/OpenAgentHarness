@@ -1,4 +1,6 @@
-import { Download, RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
+
+import { Database, Download, KeyRound, Lock, RefreshCw, Rows3, Search, Workflow } from "lucide-react";
 
 import type {
   StorageOverview,
@@ -29,8 +31,223 @@ import {
   toModelCallTrace,
   type StorageBrowserTab
 } from "./support";
-import { CatalogLine, EmptyState, InsightRow, InspectorTabButton, JsonBlock, PayloadValueView, modelMessageTone } from "./primitives";
+import { EmptyState, InsightRow, InspectorTabButton, JsonBlock, PayloadValueView, modelMessageTone } from "./primitives";
 import { InspectorPanelHeader, MessageContentDetail, MessageToolRefChips, ModelCallTraceCard } from "./inspector-panels";
+
+const STORAGE_TABLE_META: Record<
+  StoragePostgresTableName,
+  {
+    label: string;
+    description: string;
+  }
+> = {
+  workspaces: {
+    label: "Workspaces",
+    description: "Workspace records and resolved settings."
+  },
+  sessions: {
+    label: "Sessions",
+    description: "Session headers, titles, agents, and lifecycle timestamps."
+  },
+  runs: {
+    label: "Runs",
+    description: "Run execution records, status, and timing."
+  },
+  messages: {
+    label: "Messages",
+    description: "Stored conversation history and tool-related content parts."
+  },
+  run_steps: {
+    label: "Run Steps",
+    description: "Structured runtime steps and model-call state."
+  },
+  session_events: {
+    label: "Session Events",
+    description: "Persisted SSE frames and replayable event payloads."
+  },
+  tool_calls: {
+    label: "Tool Calls",
+    description: "Audited tool request and response payloads."
+  },
+  hook_runs: {
+    label: "Hook Runs",
+    description: "Hook execution records triggered during orchestration."
+  },
+  artifacts: {
+    label: "Artifacts",
+    description: "Generated artifact metadata and file references."
+  },
+  history_events: {
+    label: "History Events",
+    description: "Append-only mirror history for downstream sync."
+  }
+};
+
+function storageStatusVariant(status: string) {
+  return statusTone(status === "connected" ? "completed" : status === "degraded" ? "failed" : "queued");
+}
+
+function storageAppliedFilterCount(values: string[]) {
+  return values.filter((value) => value.trim().length > 0).length;
+}
+
+function StorageWorkspaceHeader(props: {
+  browserTab: StorageBrowserTab;
+  onBrowserTabChange: (tab: StorageBrowserTab) => void;
+  onRefreshOverview: () => void;
+  busy: boolean;
+  postgresTableCount: number;
+  redisDbSize?: number;
+}) {
+  return (
+    <header className="border-b border-border/70 pb-4">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div className="space-y-2">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Storage</p>
+          <div className="space-y-1">
+            <h2 className="text-[24px] font-semibold tracking-tight text-foreground">Inspect persisted rows and live runtime state</h2>
+            <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+              Browse relational records and runtime keyspace from one calm workbench instead of hopping between stacked cards.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="segmented-shell">
+            <InspectorTabButton
+              label={`Postgres${props.postgresTableCount > 0 ? ` · ${props.postgresTableCount}` : ""}`}
+              active={props.browserTab === "postgres"}
+              onClick={() => props.onBrowserTabChange("postgres")}
+            />
+            <InspectorTabButton
+              label={`Redis${props.redisDbSize !== undefined ? ` · ${props.redisDbSize}` : ""}`}
+              active={props.browserTab === "redis"}
+              onClick={() => props.onBrowserTabChange("redis")}
+            />
+          </div>
+          <Button variant="secondary" size="sm" onClick={props.onRefreshOverview} disabled={props.busy}>
+            <RefreshCw className="h-4 w-4" />
+            Refresh Overview
+          </Button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function StorageBackendSummaryCard(props: {
+  icon: ReactNode;
+  title: string;
+  status: string;
+  description: string;
+  details: Array<{ label: string; value: string | number }>;
+}) {
+  return (
+    <section className="rounded-[22px] border border-border/70 bg-background/75 px-4 py-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-muted/35 text-foreground">
+            {props.icon}
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold text-foreground">{props.title}</p>
+              <Badge className={storageStatusVariant(props.status)}>{props.status}</Badge>
+            </div>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{props.description}</p>
+          </div>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        {props.details.map((detail) => (
+          <div key={`${props.title}:${detail.label}`} className="border-t border-border/60 pt-2">
+            <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">{detail.label}</p>
+            <p className="mt-1 text-sm font-medium text-foreground">{detail.value}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function StoragePanelShell(props: { children: ReactNode }) {
+  return (
+    <section className="grid overflow-hidden rounded-[24px] border border-border/70 bg-background/75 xl:grid-cols-[280px_minmax(0,1fr)]">
+      {props.children}
+    </section>
+  );
+}
+
+function StorageRailSection(props: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-3">
+      <div>
+        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">{props.eyebrow}</p>
+        <p className="mt-1 text-sm font-semibold text-foreground">{props.title}</p>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">{props.description}</p>
+      </div>
+      {props.children}
+    </section>
+  );
+}
+
+function StorageTableNavItem(props: {
+  label: string;
+  description: string;
+  orderBy: string;
+  rowCount: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={cn(
+        "w-full rounded-[18px] border px-3 py-3 text-left transition",
+        props.active
+          ? "border-foreground/12 bg-foreground/[0.045]"
+          : "border-transparent bg-transparent hover:border-border/70 hover:bg-muted/26"
+      )}
+      onClick={props.onClick}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-foreground">{props.label}</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{props.description}</p>
+        </div>
+        <span className="shrink-0 text-xs font-medium tabular-nums text-muted-foreground">{props.rowCount}</span>
+      </div>
+      <p className="mt-2 truncate text-[11px] uppercase tracking-[0.14em] text-muted-foreground">{props.orderBy}</p>
+    </button>
+  );
+}
+
+function StorageFilterField(props: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <label className="grid gap-1.5">
+      <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{props.label}</span>
+      <Input value={props.value} onChange={(event) => props.onChange(event.target.value)} placeholder={props.placeholder} />
+    </label>
+  );
+}
+
+function StorageToolbarMeta(props: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-full border border-border/70 px-2.5 py-1 text-xs text-muted-foreground">
+      <span className="uppercase tracking-[0.12em]">{props.label}</span>
+      <span className="ml-1.5 font-medium tracking-normal text-foreground">{props.value}</span>
+    </div>
+  );
+}
 
 function StorageWorkbench(props: {
   browserTab: StorageBrowserTab;
@@ -72,131 +289,98 @@ function StorageWorkbench(props: {
   onReleaseRedisSessionLock: (key: string) => void;
   busy: boolean;
 }) {
+  const postgresTableCount = props.overview?.postgres.tables.length ?? 0;
+  const redisDbSize = props.overview?.redis.dbSize;
+
   return (
-    <section className="space-y-3">
-      <div className="ob-section p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="segmented-shell">
-            <InspectorTabButton
-              label={`Postgres${props.overview?.postgres.available ? ` · ${props.overview.postgres.tables.length}` : ""}`}
-              active={props.browserTab === "postgres"}
-              onClick={() => props.onBrowserTabChange("postgres")}
-            />
-            <InspectorTabButton
-              label={`Redis${props.overview?.redis.available ? ` · ${props.overview.redis.dbSize ?? 0}` : ""}`}
-              active={props.browserTab === "redis"}
-              onClick={() => props.onBrowserTabChange("redis")}
-            />
-          </div>
-          <Button variant="secondary" size="sm" onClick={props.onRefreshOverview} disabled={props.busy}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </Button>
-        </div>
-        <div className="mt-4 grid gap-3 xl:grid-cols-2">
-          <StorageBackendSummaryCard
-            title="Postgres"
-            status={props.overview?.postgres.available ? "connected" : props.overview?.postgres.configured ? "degraded" : "not configured"}
-            description={
-              props.overview?.postgres.database
-                ? `database ${props.overview.postgres.database}`
-                : "当前服务没有启用 Postgres 持久化。"
-            }
-            details={[
-              `configured: ${props.overview?.postgres.configured ? "yes" : "no"}`,
-              `primary: ${props.overview?.postgres.primaryStorage ? "yes" : "no"}`,
-              `tables: ${props.overview?.postgres.tables.length ?? 0}`
-            ]}
-          />
-          <StorageBackendSummaryCard
-            title="Redis"
-            status={props.overview?.redis.available ? "connected" : props.overview?.redis.configured ? "degraded" : "not configured"}
-            description={
-              props.overview?.redis.available
-                ? `prefix ${props.overview.redis.keyPrefix} · dbsize ${props.overview.redis.dbSize ?? 0}`
-                : "当前服务没有启用 Redis 或 Redis 当前不可达。"
-            }
-            details={[
-              `configured: ${props.overview?.redis.configured ? "yes" : "no"}`,
-              `event bus: ${props.overview?.redis.eventBusEnabled ? "yes" : "no"}`,
-              `run queue: ${props.overview?.redis.runQueueEnabled ? "yes" : "no"}`
-            ]}
-          />
-        </div>
+    <section className="flex min-h-0 flex-col gap-5">
+      <StorageWorkspaceHeader
+        browserTab={props.browserTab}
+        onBrowserTabChange={props.onBrowserTabChange}
+        onRefreshOverview={props.onRefreshOverview}
+        busy={props.busy}
+        postgresTableCount={postgresTableCount}
+        redisDbSize={redisDbSize}
+      />
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <StorageBackendSummaryCard
+          icon={<Database className="h-4 w-4" />}
+          title="Postgres"
+          status={props.overview?.postgres.available ? "connected" : props.overview?.postgres.configured ? "degraded" : "not configured"}
+          description={
+            props.overview?.postgres.database
+              ? `Primary relational storage on ${props.overview.postgres.database}. Browse recent rows by entity and drill into payload detail.`
+              : "Postgres persistence is not configured or not reachable from the current server."
+          }
+          details={[
+            { label: "Configured", value: props.overview?.postgres.configured ? "yes" : "no" },
+            { label: "Primary", value: props.overview?.postgres.primaryStorage ? "yes" : "no" },
+            { label: "Tables", value: props.overview?.postgres.tables.length ?? 0 }
+          ]}
+        />
+        <StorageBackendSummaryCard
+          icon={<KeyRound className="h-4 w-4" />}
+          title="Redis"
+          status={props.overview?.redis.available ? "connected" : props.overview?.redis.configured ? "degraded" : "not configured"}
+          description={
+            props.overview?.redis.available
+              ? `Live keyspace under ${props.overview.redis.keyPrefix}. Inspect queues, locks, buffers, and raw values from the same surface.`
+              : "Redis is not configured or not reachable from the current server."
+          }
+          details={[
+            { label: "Configured", value: props.overview?.redis.configured ? "yes" : "no" },
+            { label: "Event Bus", value: props.overview?.redis.eventBusEnabled ? "yes" : "no" },
+            { label: "Run Queue", value: props.overview?.redis.runQueueEnabled ? "yes" : "no" }
+          ]}
+        />
       </div>
 
-      <div className="grid gap-3">
-        {props.browserTab === "postgres" ? (
-          <StoragePostgresPanel
-            overview={props.overview}
-            tablePage={props.tablePage}
-            selectedTable={props.selectedTable}
-            selectedRow={props.selectedRow}
-            onSelectRow={props.onSelectRow}
-            search={props.storageTableSearch}
-            onSearchChange={props.onStorageTableSearchChange}
-            workspaceId={props.storageTableWorkspaceId}
-            onWorkspaceIdChange={props.onStorageTableWorkspaceIdChange}
-            sessionId={props.storageTableSessionId}
-            onSessionIdChange={props.onStorageTableSessionIdChange}
-            runId={props.storageTableRunId}
-            onRunIdChange={props.onStorageTableRunIdChange}
-            onSelectTable={props.onSelectTable}
-            onRefresh={props.onRefreshTable}
-            onPreviousPage={props.onPreviousTablePage}
-            onNextPage={props.onNextTablePage}
-            onClearFilters={props.onClearTableFilters}
-            onDownloadCsv={props.onDownloadTableCsv}
-            busy={props.busy}
-          />
-        ) : null}
-        {props.browserTab === "redis" ? (
-          <StorageRedisPanel
-            overview={props.overview}
-            redisKeyPattern={props.redisKeyPattern}
-            onRedisKeyPatternChange={props.onRedisKeyPatternChange}
-            redisKeyPage={props.redisKeyPage}
-            selectedRedisKey={props.selectedRedisKey}
-            selectedRedisKeys={props.selectedRedisKeys}
-            onSelectedRedisKeysChange={props.onSelectedRedisKeysChange}
-            onSelectRedisKey={props.onSelectRedisKey}
-            redisKeyDetail={props.redisKeyDetail}
-            onRefreshKeys={props.onRefreshRedisKeys}
-            onLoadMoreKeys={props.onLoadMoreRedisKeys}
-            onRefreshKey={props.onRefreshRedisKey}
-            onDeleteKey={props.onDeleteRedisKey}
-            onDeleteSelectedKeys={props.onDeleteSelectedRedisKeys}
-            onClearSessionQueue={props.onClearRedisSessionQueue}
-            onReleaseSessionLock={props.onReleaseRedisSessionLock}
-            busy={props.busy}
-          />
-        ) : null}
-      </div>
+      {props.browserTab === "postgres" ? (
+        <StoragePostgresPanel
+          overview={props.overview}
+          tablePage={props.tablePage}
+          selectedTable={props.selectedTable}
+          selectedRow={props.selectedRow}
+          onSelectRow={props.onSelectRow}
+          search={props.storageTableSearch}
+          onSearchChange={props.onStorageTableSearchChange}
+          workspaceId={props.storageTableWorkspaceId}
+          onWorkspaceIdChange={props.onStorageTableWorkspaceIdChange}
+          sessionId={props.storageTableSessionId}
+          onSessionIdChange={props.onStorageTableSessionIdChange}
+          runId={props.storageTableRunId}
+          onRunIdChange={props.onStorageTableRunIdChange}
+          onSelectTable={props.onSelectTable}
+          onRefresh={props.onRefreshTable}
+          onPreviousPage={props.onPreviousTablePage}
+          onNextPage={props.onNextTablePage}
+          onClearFilters={props.onClearTableFilters}
+          onDownloadCsv={props.onDownloadTableCsv}
+          busy={props.busy}
+        />
+      ) : (
+        <StorageRedisPanel
+          overview={props.overview}
+          redisKeyPattern={props.redisKeyPattern}
+          onRedisKeyPatternChange={props.onRedisKeyPatternChange}
+          redisKeyPage={props.redisKeyPage}
+          selectedRedisKey={props.selectedRedisKey}
+          selectedRedisKeys={props.selectedRedisKeys}
+          onSelectedRedisKeysChange={props.onSelectedRedisKeysChange}
+          onSelectRedisKey={props.onSelectRedisKey}
+          redisKeyDetail={props.redisKeyDetail}
+          onRefreshKeys={props.onRefreshRedisKeys}
+          onLoadMoreKeys={props.onLoadMoreRedisKeys}
+          onRefreshKey={props.onRefreshRedisKey}
+          onDeleteKey={props.onDeleteRedisKey}
+          onDeleteSelectedKeys={props.onDeleteSelectedRedisKeys}
+          onClearSessionQueue={props.onClearRedisSessionQueue}
+          onReleaseSessionLock={props.onReleaseRedisSessionLock}
+          busy={props.busy}
+        />
+      )}
     </section>
-  );
-}
-
-function StorageBackendSummaryCard(props: {
-  title: string;
-  status: string;
-  description: string;
-  details: string[];
-}) {
-  return (
-    <div className="ob-subsection p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm font-semibold text-foreground">{props.title}</p>
-        <Badge className={statusTone(props.status === "connected" ? "completed" : props.status === "degraded" ? "failed" : "queued")}>
-          {props.status}
-        </Badge>
-      </div>
-      <p className="mt-2 text-sm leading-6 text-foreground">{props.description}</p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {props.details.map((detail) => (
-          <Badge key={detail}>{detail}</Badge>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -222,94 +406,92 @@ function StoragePostgresPanel(props: {
   onDownloadCsv: () => void;
   busy: boolean;
 }) {
+  const activeFilterCount = storageAppliedFilterCount([props.search, props.workspaceId, props.sessionId, props.runId]);
+  const selectedMeta = STORAGE_TABLE_META[props.selectedTable];
+
   return (
-    <section className="panel-card space-y-3 rounded-[24px] border p-4">
-        <InspectorPanelHeader
-        title="Postgres"
-        description="Select a table, filter rows, and inspect details."
-        action={
-          <Button variant="secondary" size="sm" onClick={props.onRefresh} disabled={props.busy || !props.overview?.postgres.available}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh Table
-          </Button>
-        }
-      />
+    <StoragePanelShell>
+      <aside className="border-b border-border/70 bg-muted/[0.18] px-4 py-4 xl:border-b-0 xl:border-r">
+        <div className="space-y-5">
+          {props.overview?.postgres.available ? (
+            <StorageRailSection
+              eyebrow="Filters"
+              title="Narrow the row set"
+              description="Apply text and id-based filters before refreshing the preview grid."
+            >
+              <div className="space-y-2.5">
+                <StorageFilterField label="Search" value={props.search} onChange={props.onSearchChange} placeholder="Search row JSON" />
+                <StorageFilterField label="Workspace" value={props.workspaceId} onChange={props.onWorkspaceIdChange} placeholder="workspaceId" />
+                <StorageFilterField label="Session" value={props.sessionId} onChange={props.onSessionIdChange} placeholder="sessionId" />
+                <StorageFilterField label="Run" value={props.runId} onChange={props.onRunIdChange} placeholder="runId" />
+              </div>
+              <div className="flex items-center justify-between gap-2 rounded-[18px] border border-border/70 bg-background/80 px-3 py-3">
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Applied</p>
+                  <p className="mt-1 text-sm font-medium text-foreground">{activeFilterCount} active filters</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" onClick={props.onRefresh} disabled={props.busy}>
+                    <Search className="h-4 w-4" />
+                    Apply
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={props.onClearFilters} disabled={props.busy}>
+                    Clear
+                  </Button>
+                </div>
+              </div>
+            </StorageRailSection>
+          ) : null}
+        </div>
+      </aside>
 
-      {!props.overview?.postgres.available ? (
-        <EmptyState title="Postgres unavailable" description="当前服务没有启用 Postgres，或者 Postgres 暂时不可达。" />
-      ) : (
-        <>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-            {props.overview.postgres.tables.map((table) => (
-              <button
-                key={table.name}
-                className={cn(
-                  "rounded-[16px] border p-3 text-left transition",
-                  props.selectedTable === table.name
-                    ? "border-border bg-muted/60"
-                    : "border-border/60 bg-card/60 hover:bg-muted/40"
-                )}
-                onClick={() => props.onSelectTable(table.name)}
-              >
+      <div className="min-w-0 px-4 py-4">
+        {!props.overview?.postgres.available ? (
+          <EmptyState title="Postgres unavailable" description="当前服务没有启用 Postgres，或者 Postgres 暂时不可达。" />
+        ) : props.tablePage ? (
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 border-b border-border/70 pb-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="secondary">{selectedMeta.label}</Badge>
+                  {props.tablePage.appliedFilters ? <Badge variant="outline">filtered</Badge> : null}
+                  <Badge variant="outline">{props.tablePage.rows.length} preview rows</Badge>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold tracking-tight text-foreground">{selectedMeta.label}</p>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{selectedMeta.description}</p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <StorageToolbarMeta label="rows" value={props.tablePage.rowCount} />
+                <StorageToolbarMeta label="order" value={props.tablePage.orderBy} />
+                <StorageToolbarMeta label="offset" value={props.tablePage.offset} />
+                <StorageToolbarMeta label="limit" value={props.tablePage.limit} />
+                <Button variant="ghost" size="sm" onClick={props.onDownloadCsv}>
+                  <Download className="h-4 w-4" />
+                  CSV
+                </Button>
+                <Button variant="ghost" size="sm" onClick={props.onPreviousPage} disabled={props.busy || props.tablePage.offset === 0}>
+                  Prev
+                </Button>
+                <Button variant="ghost" size="sm" onClick={props.onNextPage} disabled={props.busy || props.tablePage.nextOffset === undefined}>
+                  Next
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid items-start gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
+              <div className="space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-medium text-foreground">{table.name}</p>
-                  <Badge>{table.rowCount}</Badge>
-                </div>
-                <p className="mt-2 text-xs leading-6 text-muted-foreground">{table.description}</p>
-                <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">{table.orderBy}</p>
-              </button>
-            ))}
-          </div>
-
-          <div className="grid gap-2 xl:grid-cols-[minmax(220px,1.4fr)_minmax(160px,0.8fr)_minmax(160px,0.8fr)_minmax(160px,0.8fr)_auto_auto]">
-            <Input value={props.search} onChange={(event) => props.onSearchChange(event.target.value)} placeholder="Search row JSON" />
-            <Input value={props.workspaceId} onChange={(event) => props.onWorkspaceIdChange(event.target.value)} placeholder="workspaceId" />
-            <Input value={props.sessionId} onChange={(event) => props.onSessionIdChange(event.target.value)} placeholder="sessionId" />
-            <Input value={props.runId} onChange={(event) => props.onRunIdChange(event.target.value)} placeholder="runId" />
-            <Button variant="secondary" onClick={props.onRefresh} disabled={props.busy}>
-              Apply
-            </Button>
-            <Button variant="ghost" onClick={props.onClearFilters} disabled={props.busy}>
-              Clear
-            </Button>
-          </div>
-
-          {props.tablePage ? (
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
-              <div className="subtle-panel space-y-3 rounded-[20px] border border-border p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <p className="text-sm font-semibold text-foreground">{props.tablePage.table}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {props.tablePage.rowCount} rows · ordered by {props.tablePage.orderBy}
-                    </p>
+                    <p className="text-sm font-semibold text-foreground">Preview Rows</p>
+                    <p className="text-xs text-muted-foreground">Scan recent rows, then select one record to inspect the full payload.</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {props.tablePage.appliedFilters ? <Badge>filtered</Badge> : null}
-                    <Badge>{props.tablePage.rows.length} preview rows</Badge>
-                    <Button variant="ghost" size="sm" onClick={props.onDownloadCsv}>
-                      <Download className="h-4 w-4" />
-                      CSV
-                    </Button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs text-muted-foreground">
-                    offset {props.tablePage.offset} · limit {props.tablePage.limit}
-                  </p>
-                  <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" onClick={props.onPreviousPage} disabled={props.busy || props.tablePage.offset === 0}>
-                      Prev
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={props.onNextPage}
-                      disabled={props.busy || props.tablePage.nextOffset === undefined}
-                    >
-                      Next
-                    </Button>
-                  </div>
+                  <Button variant="secondary" size="sm" onClick={props.onRefresh} disabled={props.busy}>
+                    <RefreshCw className="h-4 w-4" />
+                    Refresh Table
+                  </Button>
                 </div>
                 <StorageDataGrid
                   tableName={props.tablePage.table}
@@ -319,8 +501,9 @@ function StoragePostgresPanel(props: {
                   onSelectRow={props.onSelectRow}
                 />
               </div>
-              <div className="subtle-panel space-y-3 rounded-[20px] border border-border p-3">
-                <div className="flex items-center justify-between gap-2">
+
+              <div className="space-y-3 rounded-[20px] border border-border/70 bg-muted/[0.16] p-4">
+                <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-foreground">
                       {props.tablePage.table === "messages"
@@ -331,22 +514,23 @@ function StoragePostgresPanel(props: {
                             ? "Tool Call Detail"
                             : props.tablePage.table === "session_events"
                               ? "Session Event Detail"
-                          : "Row Detail"}
+                              : "Row Detail"}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
                       {props.tablePage.table === "messages"
-                        ? "messages 表会按 AI SDK 风格拆开 content，直接查看 role、parts 和 tool trace。"
+                        ? "Read message role, content parts, and linked tool trace in one place."
                         : props.tablePage.table === "run_steps"
-                          ? "run_steps 表会优先给出结构化 step 视图，model_call 会直接还原成 LLM trace。"
+                          ? "Inspect structured runtime steps and model-call reconstruction."
                           : props.tablePage.table === "tool_calls"
-                            ? "tool_calls 表会拆出工具审计的 request / response，方便直接核对实际调度参数。"
+                            ? "Compare audited request payloads with stored tool responses."
                             : props.tablePage.table === "session_events"
-                              ? "session_events 表会优先解释常见事件 payload，message 内容会直接按 AI SDK 风格显示。"
-                          : "点选表格行后，在这里查看完整字段和值。"}
+                              ? "Review event frames and expand the underlying payload."
+                              : "Inspect the selected row as structured JSON."}
                     </p>
                   </div>
-                  {props.selectedRow ? <Badge>selected</Badge> : null}
+                  {props.selectedRow ? <Badge variant="outline">selected</Badge> : null}
                 </div>
+
                 {props.selectedRow ? (
                   props.tablePage.table === "messages" ? (
                     <StorageMessageRowDetail row={props.selectedRow} />
@@ -360,16 +544,16 @@ function StoragePostgresPanel(props: {
                     <JsonBlock title="Row" value={props.selectedRow} />
                   )
                 ) : (
-                  <EmptyState title="No row selected" description="Select a row from the table to inspect the full record." />
+                  <EmptyState title="No row selected" description="Select a row from the preview grid to inspect the stored record." />
                 )}
               </div>
             </div>
-          ) : (
-            <EmptyState title="No table selected" description="Select a Postgres table to inspect recent rows." />
-          )}
-        </>
-      )}
-    </section>
+          </div>
+        ) : (
+          <EmptyState title="No table selected" description="Select a Postgres table from the left rail to inspect recent rows." />
+        )}
+      </div>
+    </StoragePanelShell>
   );
 }
 
@@ -392,158 +576,132 @@ function StorageRedisPanel(props: {
   onReleaseSessionLock: (key: string) => void;
   busy: boolean;
 }) {
+  const selectedCount = props.selectedRedisKeys.length;
+
   return (
-    <section className="panel-card space-y-3 rounded-[24px] border p-4">
-        <InspectorPanelHeader
-        title="Redis"
-        description="Inspect queues, locks, buffers, and key values."
-        action={
-          <Button variant="secondary" size="sm" onClick={props.onRefreshKeys} disabled={props.busy || !props.overview?.redis.available}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh Keys
-          </Button>
-        }
-      />
-
-      {!props.overview?.redis.available ? (
-        <EmptyState title="Redis unavailable" description="当前服务没有启用 Redis，或者 Redis 暂时不可达。" />
-      ) : (
-        <>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            <CatalogLine label="dbsize" value={props.overview.redis.dbSize ?? 0} />
-            <CatalogLine label="ready queue" value={props.overview.redis.readyQueue?.length ?? 0} />
-            <CatalogLine label="session queues" value={props.overview.redis.sessionQueues.length} />
-            <CatalogLine label="session locks" value={props.overview.redis.sessionLocks.length} />
-          </div>
-
-          <div className="grid gap-3 xl:grid-cols-[minmax(300px,0.75fr)_minmax(0,1.25fr)]">
-            <div className="space-y-3">
-              <div className="subtle-panel rounded-[18px] border border-border p-3">
-                <p className="mb-3 text-xs font-medium text-muted-foreground">Queues And Locks</p>
-                <div className="space-y-4">
-                  <StorageKeySummaryList
-                    title="Session Queues"
-                    items={props.overview.redis.sessionQueues.map((item) => ({
-                      label: item.sessionId,
-                      value: `${item.length} items`,
-                      keyName: item.key
-                    }))}
-                    emptyLabel="No queued sessions."
-                    onSelect={props.onSelectRedisKey}
-                    actionLabel="Clear"
-                    onAction={props.onClearSessionQueue}
-                  />
-                  <StorageKeySummaryList
-                    title="Session Locks"
-                    items={props.overview.redis.sessionLocks.map((item) => ({
-                      label: item.sessionId,
-                      value: item.ttlMs !== undefined ? `${item.ttlMs}ms` : "ttl n/a",
-                      keyName: item.key
-                    }))}
-                    emptyLabel="No active session locks."
-                    onSelect={props.onSelectRedisKey}
-                    actionLabel="Release"
-                    onAction={props.onReleaseSessionLock}
-                  />
-                  <StorageKeySummaryList
-                    title="Event Buffers"
-                    items={props.overview.redis.eventBuffers.map((item) => ({
-                      label: item.sessionId,
-                      value: `${item.length} events`,
-                      keyName: item.key
-                    }))}
-                    emptyLabel="No session event buffers."
-                    onSelect={props.onSelectRedisKey}
-                  />
+    <section className="overflow-hidden rounded-[24px] border border-border/70 bg-background/75">
+      <div className="min-w-0 px-4 py-4">
+        {!props.overview?.redis.available ? (
+          <EmptyState title="Redis unavailable" description="当前服务没有启用 Redis，或者 Redis 暂时不可达。" />
+        ) : (
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 border-b border-border/70 pb-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="secondary">Redis Keys</Badge>
+                  <Badge variant="outline">{props.redisKeyPage?.items.length ?? 0} loaded</Badge>
+                  {selectedCount > 0 ? <Badge variant="outline">{selectedCount} selected</Badge> : null}
                 </div>
-              </div>
-              <div className="subtle-panel rounded-[18px] border border-border p-3">
-                <div className="flex gap-2">
-                  <Input value={props.redisKeyPattern} onChange={(event) => props.onRedisKeyPatternChange(event.target.value)} placeholder="oah:*" />
-                  <Button variant="secondary" onClick={props.onRefreshKeys} disabled={props.busy}>
-                    Load
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    onClick={props.onDeleteSelectedKeys}
-                    disabled={props.busy || props.selectedRedisKeys.length === 0}
-                  >
-                    Delete Selected
-                  </Button>
-                </div>
-                <div className="mt-3">
-                  <StorageRedisKeyGrid
-                    items={props.redisKeyPage?.items ?? []}
-                    selectedKey={props.selectedRedisKey}
-                    selectedKeys={props.selectedRedisKeys}
-                    onToggleSelected={(key) =>
-                      props.onSelectedRedisKeysChange(
-                        props.selectedRedisKeys.includes(key)
-                          ? props.selectedRedisKeys.filter((entry) => entry !== key)
-                          : [...props.selectedRedisKeys, key]
-                      )
-                    }
-                    onToggleSelectAll={(keys) =>
-                      props.onSelectedRedisKeysChange(
-                        keys.every((key) => props.selectedRedisKeys.includes(key))
-                          ? props.selectedRedisKeys.filter((entry) => !keys.includes(entry))
-                          : [...new Set([...props.selectedRedisKeys, ...keys])]
-                      )
-                    }
-                    onSelect={props.onSelectRedisKey}
-                  />
-                  {props.redisKeyPage?.nextCursor ? (
-                    <div className="mt-3">
-                      <Button variant="ghost" size="sm" onClick={props.onLoadMoreKeys} disabled={props.busy}>
-                        Load More
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-
-            <div className="subtle-panel rounded-[18px] border border-border p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="text-sm font-semibold text-foreground">Selected Redis Key</p>
-                  <p className="text-xs text-muted-foreground">{props.redisKeyDetail?.key ?? "Pick a key from the list or snapshot above."}</p>
-                </div>
-                <div className="flex gap-2">
-                  <Button variant="secondary" size="sm" onClick={props.onRefreshKey} disabled={props.busy || !props.selectedRedisKey}>
-                    Refresh
-                  </Button>
-                  {props.selectedRedisKey.endsWith(":queue") ? (
-                    <Button variant="secondary" size="sm" onClick={() => props.onClearSessionQueue(props.selectedRedisKey)} disabled={props.busy}>
-                      Clear Queue
-                    </Button>
-                  ) : null}
-                  {props.selectedRedisKey.endsWith(":lock") ? (
-                    <Button variant="secondary" size="sm" onClick={() => props.onReleaseSessionLock(props.selectedRedisKey)} disabled={props.busy}>
-                      Release Lock
-                    </Button>
-                  ) : null}
-                  <Button variant="destructive" size="sm" onClick={props.onDeleteKey} disabled={props.busy || !props.selectedRedisKey}>
-                    Delete Key
-                  </Button>
+                  <p className="text-lg font-semibold tracking-tight text-foreground">Browse keyspace and inspect live values</p>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    Search by pattern, bulk-delete noisy keys, and open one key at a time for full metadata and payload.
+                  </p>
                 </div>
               </div>
-              {props.redisKeyDetail ? (
-                <div className="mt-3 space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    <Badge>{props.redisKeyDetail.type}</Badge>
-                    {props.redisKeyDetail.size !== undefined ? <Badge>{`size ${props.redisKeyDetail.size}`}</Badge> : null}
-                    {props.redisKeyDetail.ttlMs !== undefined ? <Badge>{`ttl ${props.redisKeyDetail.ttlMs}ms`}</Badge> : null}
-                  </div>
-                  <JsonBlock title="Value" value={props.redisKeyDetail.value ?? {}} />
+
+              <div className="flex flex-wrap items-center gap-2">
+                <StorageToolbarMeta label="dbsize" value={props.overview.redis.dbSize ?? 0} />
+                <StorageToolbarMeta label="ready queue" value={props.overview.redis.readyQueue?.length ?? 0} />
+                <StorageToolbarMeta label="pattern" value={props.redisKeyPage?.pattern ?? props.redisKeyPattern ?? "n/a"} />
+                <Button variant="secondary" size="sm" onClick={props.onRefreshKeys} disabled={props.busy}>
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh Keys
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-[20px] border border-border/70 bg-muted/[0.16] p-4">
+              <div className="grid gap-2 md:grid-cols-[minmax(240px,1.2fr)_auto_auto]">
+                <StorageFilterField label="Pattern" value={props.redisKeyPattern} onChange={props.onRedisKeyPatternChange} placeholder="oah:*" />
+                <Button variant="secondary" onClick={props.onRefreshKeys} disabled={props.busy}>
+                  <Search className="h-4 w-4" />
+                  Load
+                </Button>
+                <Button variant="destructive" onClick={props.onDeleteSelectedKeys} disabled={props.busy || selectedCount === 0}>
+                  Delete Selected
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid items-start gap-4 2xl:grid-cols-[minmax(0,0.95fr)_minmax(360px,1.05fr)]">
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Key List</p>
+                  <p className="text-xs text-muted-foreground">Select keys from the current pattern result. Bulk selection stays available for cleanup actions.</p>
                 </div>
-              ) : (
-                <EmptyState title="No key selected" description="Choose a Redis key to inspect its current value and metadata." />
-              )}
+                <StorageRedisKeyGrid
+                  items={props.redisKeyPage?.items ?? []}
+                  selectedKey={props.selectedRedisKey}
+                  selectedKeys={props.selectedRedisKeys}
+                  onToggleSelected={(key) =>
+                    props.onSelectedRedisKeysChange(
+                      props.selectedRedisKeys.includes(key)
+                        ? props.selectedRedisKeys.filter((entry) => entry !== key)
+                        : [...props.selectedRedisKeys, key]
+                    )
+                  }
+                  onToggleSelectAll={(keys) =>
+                    props.onSelectedRedisKeysChange(
+                      keys.every((key) => props.selectedRedisKeys.includes(key))
+                        ? props.selectedRedisKeys.filter((entry) => !keys.includes(entry))
+                        : [...new Set([...props.selectedRedisKeys, ...keys])]
+                    )
+                  }
+                  onSelect={props.onSelectRedisKey}
+                />
+                {props.redisKeyPage?.nextCursor ? (
+                  <Button variant="ghost" size="sm" onClick={props.onLoadMoreKeys} disabled={props.busy}>
+                    Load More
+                  </Button>
+                ) : null}
+              </div>
+
+              <div className="space-y-3 rounded-[20px] border border-border/70 bg-muted/[0.16] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Selected Key</p>
+                    <p className="mt-1 break-all text-xs leading-5 text-muted-foreground">
+                      {props.redisKeyDetail?.key ?? "Pick a key from the list or from the queue / lock snapshots."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" size="sm" onClick={props.onRefreshKey} disabled={props.busy || !props.selectedRedisKey}>
+                      Refresh
+                    </Button>
+                    {props.selectedRedisKey.endsWith(":queue") ? (
+                      <Button variant="secondary" size="sm" onClick={() => props.onClearSessionQueue(props.selectedRedisKey)} disabled={props.busy}>
+                        Clear Queue
+                      </Button>
+                    ) : null}
+                    {props.selectedRedisKey.endsWith(":lock") ? (
+                      <Button variant="secondary" size="sm" onClick={() => props.onReleaseSessionLock(props.selectedRedisKey)} disabled={props.busy}>
+                        Release Lock
+                      </Button>
+                    ) : null}
+                    <Button variant="destructive" size="sm" onClick={props.onDeleteKey} disabled={props.busy || !props.selectedRedisKey}>
+                      Delete Key
+                    </Button>
+                  </div>
+                </div>
+
+                {props.redisKeyDetail ? (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2">
+                      <Badge>{props.redisKeyDetail.type}</Badge>
+                      {props.redisKeyDetail.size !== undefined ? <Badge>{`size ${props.redisKeyDetail.size}`}</Badge> : null}
+                      {props.redisKeyDetail.ttlMs !== undefined ? <Badge>{`ttl ${props.redisKeyDetail.ttlMs}ms`}</Badge> : <Badge>persistent</Badge>}
+                    </div>
+                    <JsonBlock title="Value" value={props.redisKeyDetail.value ?? {}} />
+                  </div>
+                ) : (
+                  <EmptyState title="No key selected" description="Choose a Redis key to inspect its current value and metadata." />
+                )}
+              </div>
             </div>
           </div>
-        </>
-      )}
+        )}
+      </div>
     </section>
   );
 }
@@ -557,20 +715,20 @@ function StorageKeySummaryList(props: {
   onAction?: (key: string) => void;
 }) {
   return (
-    <div>
-      <p className="mb-2 text-xs font-medium text-muted-foreground">{props.title}</p>
+    <div className="space-y-2">
+      <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">{props.title}</p>
       {props.items.length === 0 ? (
         <p className="text-sm text-muted-foreground">{props.emptyLabel}</p>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {props.items.map((item) => (
-            <div key={item.keyName} className="rounded-[14px] border border-border bg-muted/20 px-3 py-2">
+            <div key={item.keyName} className="rounded-[16px] border border-border/70 bg-background/80 px-3 py-2.5">
               <div className="flex items-center justify-between gap-2">
                 <button className="min-w-0 flex-1 text-left" onClick={() => props.onSelect(item.keyName)}>
                   <span className="truncate text-sm font-medium text-foreground">{item.label}</span>
                 </button>
                 <div className="flex items-center gap-2">
-                  <Badge>{item.value}</Badge>
+                  <Badge variant="outline">{item.value}</Badge>
                   {props.actionLabel && props.onAction ? (
                     <Button variant="ghost" size="sm" onClick={() => props.onAction?.(item.keyName)}>
                       {props.actionLabel}
@@ -691,10 +849,10 @@ function StorageDataGrid(props: {
   }
 
   return (
-    <div className="data-grid-shell overflow-hidden rounded-[18px] border border-border bg-background">
-      <div className="overflow-auto">
+    <div className="data-grid-shell overflow-hidden rounded-[18px] border border-border/70 bg-background/80">
+      <div className="max-h-[34rem] overflow-auto">
         <table className="min-w-full border-collapse text-left text-xs text-foreground/80">
-          <thead className="bg-muted/50">
+          <thead className="sticky top-0 z-10 bg-background/95 backdrop-blur">
             <tr>
               {props.columns.map((column) => (
                 <th key={column} className="border-b border-border px-3 py-2 font-medium uppercase tracking-[0.14em] text-muted-foreground">
@@ -955,10 +1113,10 @@ function StorageRedisKeyGrid(props: {
   }
 
   return (
-    <div className="data-grid-shell overflow-hidden rounded-[18px] border border-border bg-background">
-      <div className="overflow-auto">
+    <div className="data-grid-shell overflow-hidden rounded-[18px] border border-border/70 bg-background/80">
+      <div className="max-h-[34rem] overflow-auto">
         <table className="min-w-full border-collapse text-left text-xs text-foreground/80">
-          <thead className="bg-muted/50">
+          <thead className="sticky top-0 z-10 bg-background/95 backdrop-blur">
             <tr>
               <th className="w-10 border-b border-border px-3 py-2">
                 <input

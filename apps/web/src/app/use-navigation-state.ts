@@ -29,7 +29,6 @@ export function useNavigationState() {
   const [mirrorStatus, setMirrorStatus] = useState<WorkspaceHistoryMirrorStatus | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [showWorkspaceCreator, setShowWorkspaceCreator] = useState(false);
-  const [showConnectionPanel, setShowConnectionPanel] = useState(false);
   const [mirrorToggleBusy, setMirrorToggleBusy] = useState(false);
   const [mirrorRebuildBusy, setMirrorRebuildBusy] = useState(false);
   const [workspaceManagementEnabled, setWorkspaceManagementEnabled] = useState(true);
@@ -82,8 +81,6 @@ export function useNavigationState() {
     setSession,
     showWorkspaceCreator,
     setShowWorkspaceCreator,
-    showConnectionPanel,
-    setShowConnectionPanel,
     mirrorToggleBusy,
     setMirrorToggleBusy,
     mirrorRebuildBusy,

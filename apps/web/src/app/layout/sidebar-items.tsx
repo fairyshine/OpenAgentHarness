@@ -50,7 +50,7 @@ export function WorkspaceNavItem(props: {
         props.onSelect();
       }}
     >
-      {props.active ? <span className="absolute left-0 top-2 bottom-2 w-px rounded-full bg-foreground/18" aria-hidden="true" /> : null}
+      {props.active ? <span className="absolute left-0 top-2 bottom-2 w-1 rounded-full bg-foreground/40" aria-hidden="true" /> : null}
       <Button
         variant="ghost"
         size="icon"

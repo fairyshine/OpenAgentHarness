@@ -411,9 +411,34 @@ export class RuntimeService {
 
   async updateSession({ sessionId, input }: UpdateSessionParams): Promise<Session> {
     const session = await this.getSession(sessionId);
+    const workspace = await this.getWorkspaceRecord(session.workspaceId);
+    let nextActiveAgentName = session.activeAgentName;
+
+    if (input.activeAgentName !== undefined) {
+      const targetAgent = workspace.agents[input.activeAgentName];
+      if (!targetAgent) {
+        throw new AppError(
+          404,
+          "agent_not_found",
+          `Agent ${input.activeAgentName} was not found in workspace ${workspace.id}.`
+        );
+      }
+
+      if (targetAgent.mode !== "primary") {
+        throw new AppError(
+          409,
+          "invalid_session_agent_target",
+          `Agent ${input.activeAgentName} is not a primary agent and cannot be set as the active session agent.`
+        );
+      }
+
+      nextActiveAgentName = input.activeAgentName;
+    }
+
     return this.#sessionRepository.update({
       ...session,
-      title: input.title,
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      activeAgentName: nextActiveAgentName,
       updatedAt: nowIso()
     });
   }
@@ -1022,7 +1047,7 @@ export class RuntimeService {
           ? currentRun
           : await this.#setRunStatus(currentRun, "failed", {
               endedAt: nowIso(),
-              errorCode: "model_stream_failed",
+              errorCode: error instanceof AppError ? error.code : "model_stream_failed",
               errorMessage: error instanceof Error ? error.message : "Unknown streaming error."
             });
 
@@ -1035,7 +1060,7 @@ export class RuntimeService {
             runId: failedRun.id,
             sessionId: session.id,
             status: failedRun.status,
-            errorCode: failedRun.errorCode ?? "model_stream_failed",
+            errorCode: failedRun.errorCode ?? (error instanceof AppError ? error.code : "model_stream_failed"),
             errorMessage: failedRun.errorMessage ?? "Unknown streaming error."
           }
         });
@@ -1543,7 +1568,7 @@ export class RuntimeService {
       defaultModel: this.#defaultModel,
       executeAction: async (action, input, context) =>
         this.#executeAction(workspace, action, run, context.abortSignal, input),
-      delegateAgent: async ({ targetAgentName, task, handoffSummary }, currentAgentName) => {
+      delegateAgent: async ({ targetAgentName, task, handoffSummary, taskId }, currentAgentName) => {
         const accepted = await this.#delegateAgentRun(
           workspace,
           session,
@@ -1551,7 +1576,8 @@ export class RuntimeService {
           currentAgentName,
           targetAgentName,
           task,
-          handoffSummary
+          handoffSummary,
+          taskId
         );
         executionContext.delegatedRunIds.push(accepted.childRunId);
         return accepted;
@@ -1876,10 +1902,11 @@ export class RuntimeService {
     parentSession: Session,
     parentRun: Run,
     currentAgentName: string,
-    targetAgentName: string,
+    targetAgentName: string | undefined,
     task: string,
-    handoffSummary?: string | undefined
-  ): Promise<{ childSessionId: string; childRunId: string }> {
+    handoffSummary?: string | undefined,
+    taskId?: string | undefined
+  ): Promise<{ childSessionId: string; childRunId: string; targetAgentName: string }> {
     if (!canAgentDelegate(workspace, currentAgentName)) {
       throw new AppError(
         403,
@@ -1888,16 +1915,51 @@ export class RuntimeService {
       );
     }
 
-    const targetAgent = workspace.agents[targetAgentName];
+    const resumedSession = taskId ? await this.#sessionRepository.getById(taskId) : null;
+    if (taskId && !resumedSession) {
+      throw new AppError(404, "task_not_found", `Subagent task ${taskId} was not found.`);
+    }
+
+    if (resumedSession && resumedSession.workspaceId !== workspace.id) {
+      throw new AppError(
+        409,
+        "task_workspace_mismatch",
+        `Subagent task ${taskId} does not belong to workspace ${workspace.id}.`
+      );
+    }
+
+    const resolvedTargetAgentName = targetAgentName ?? resumedSession?.activeAgentName ?? resumedSession?.agentName;
+    if (!resolvedTargetAgentName) {
+      throw new AppError(400, "agent_type_required", "SubAgent requires subagent_type or a resumable task_id.");
+    }
+
+    const allowedTargets = workspace.agents[currentAgentName]?.subagents ?? [];
+    if (!allowedTargets.includes(resolvedTargetAgentName)) {
+      throw new AppError(
+        403,
+        "agent_delegate_not_allowed",
+        `Agent ${currentAgentName} is not allowed to delegate to ${resolvedTargetAgentName}.`
+      );
+    }
+
+    const targetAgent = workspace.agents[resolvedTargetAgentName];
     if (!targetAgent) {
-      throw new AppError(404, "agent_not_found", `Agent ${targetAgentName} was not found in workspace ${workspace.id}.`);
+      throw new AppError(404, "agent_not_found", `Agent ${resolvedTargetAgentName} was not found in workspace ${workspace.id}.`);
     }
 
     if (targetAgent.mode === "primary") {
       throw new AppError(
         409,
         "invalid_subagent_target",
-        `Agent ${targetAgentName} is a primary agent and cannot be used as a subagent target.`
+        `Agent ${resolvedTargetAgentName} is a primary agent and cannot be used as a subagent target.`
+      );
+    }
+
+    if (resumedSession && targetAgentName && resumedSession.activeAgentName !== targetAgentName && resumedSession.agentName !== targetAgentName) {
+      throw new AppError(
+        409,
+        "task_agent_mismatch",
+        `Subagent task ${taskId} is currently associated with ${resumedSession.activeAgentName}, not ${targetAgentName}.`
       );
     }
 
@@ -1906,26 +1968,27 @@ export class RuntimeService {
     const delegateStep = await this.#startRunStep({
       runId: parentRun.id,
       stepType: "agent_delegate",
-      name: targetAgentName,
+      name: resolvedTargetAgentName,
       agentName: currentAgentName,
       input: {
-        targetAgent: targetAgentName,
+        targetAgent: resolvedTargetAgentName,
         task,
-        ...(handoffSummary ? { handoffSummary } : {})
+        ...(handoffSummary ? { handoffSummary } : {}),
+        ...(taskId ? { taskId } : {})
       }
     });
 
     const now = nowIso();
-    const childSessionId = createId("ses");
+    const childSessionId = resumedSession?.id ?? createId("ses");
     const childRunId = createId("run");
     const parentModelRef = this.#resolveModelForRun(workspace, workspace.agents[currentAgentName]?.modelRef).canonicalModelRef;
-    const childSession: Session = {
+    const childSession: Session = resumedSession ?? {
       id: childSessionId,
       workspaceId: workspace.id,
       subjectRef: parentSession.subjectRef,
-      agentName: targetAgentName,
-      activeAgentName: targetAgentName,
-      title: `Agent ${targetAgentName}`,
+      agentName: resolvedTargetAgentName,
+      activeAgentName: resolvedTargetAgentName,
+      title: `Agent ${resolvedTargetAgentName}`,
       status: "active",
       createdAt: now,
       updatedAt: now
@@ -1934,11 +1997,12 @@ export class RuntimeService {
       id: createId("msg"),
       sessionId: childSessionId,
       role: "user",
-      content: textContent(this.#buildDelegatedTaskMessage(currentAgentName, targetAgentName, task, handoffSummary)),
+      content: textContent(this.#buildDelegatedTaskMessage(currentAgentName, resolvedTargetAgentName, task, handoffSummary)),
       metadata: {
         parentRunId: parentRun.id,
         parentSessionId: parentSession.id,
-        delegatedByAgent: currentAgentName
+        delegatedByAgent: currentAgentName,
+        ...(taskId ? { delegatedTaskId: taskId } : {})
       },
       createdAt: now
     };
@@ -1950,8 +2014,8 @@ export class RuntimeService {
       initiatorRef: parentRun.initiatorRef ?? parentSession.subjectRef,
       triggerType: "system",
       triggerRef: "agent.delegate",
-      agentName: targetAgentName,
-      effectiveAgentName: targetAgentName,
+      agentName: childSession.activeAgentName,
+      effectiveAgentName: childSession.activeAgentName,
       switchCount: 0,
       status: "queued",
       createdAt: now,
@@ -1961,11 +2025,20 @@ export class RuntimeService {
         parentAgentName: currentAgentName,
         delegatedTask: task,
         ...(handoffSummary ? { handoffSummary } : {}),
+        ...(taskId ? { taskId } : {}),
         ...(targetAgent.modelRef ? {} : { inheritedModelRef: parentModelRef })
       }
     };
 
-    await this.#sessionRepository.create(childSession);
+    if (resumedSession) {
+      await this.#sessionRepository.update({
+        ...childSession,
+        status: "active",
+        updatedAt: now
+      });
+    } else {
+      await this.#sessionRepository.create(childSession);
+    }
     await this.#messageRepository.create(childMessage);
     await this.#runRepository.create(childRun);
 
@@ -1974,7 +2047,7 @@ export class RuntimeService {
       {
         childRunId,
         childSessionId,
-        targetAgentName,
+        targetAgentName: resolvedTargetAgentName,
         parentAgentName: currentAgentName
       }
     ];
@@ -1994,23 +2067,26 @@ export class RuntimeService {
         runId: parentRun.id,
         sessionId: parentSession.id,
         agentName: currentAgentName,
-        targetAgent: targetAgentName,
+        targetAgent: resolvedTargetAgentName,
         childSessionId,
-        childRunId
+        childRunId,
+        ...(taskId ? { taskId, resumed: true } : {})
       }
     });
     await this.#completeRunStep(delegateStep, "completed", {
-      targetAgent: targetAgentName,
+      targetAgent: resolvedTargetAgentName,
       childSessionId,
-      childRunId
+      childRunId,
+      ...(taskId ? { taskId, resumed: true } : {})
     });
 
     await this.#enqueueRun(childSessionId, childRunId);
-    void this.#monitorDelegatedRun(parentSession.id, parentRun.id, currentAgentName, targetAgentName, childRunId);
+    void this.#monitorDelegatedRun(parentSession.id, parentRun.id, currentAgentName, resolvedTargetAgentName, childRunId);
 
     return {
       childSessionId,
-      childRunId
+      childRunId,
+      targetAgentName: resolvedTargetAgentName
     };
   }
 
@@ -2165,7 +2241,8 @@ export class RuntimeService {
   #renderAwaitedRunSummary(summary: AwaitedRunSummary): string {
     return formatToolOutput(
       [
-        ["agent_id", summary.run.id],
+        ["task_id", summary.run.sessionId],
+        ["run_id", summary.run.id],
         ["status", summary.run.status],
         ["subagent_type", summary.run.effectiveAgentName]
       ],

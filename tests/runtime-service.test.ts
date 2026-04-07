@@ -70,6 +70,15 @@ function messageToolCallId(message: Pick<Message, "content"> | undefined) {
     ?.toolCallId;
 }
 
+function extractFieldValue(text: string | undefined, key: string) {
+  if (!text) {
+    return undefined;
+  }
+
+  const match = text.match(new RegExp(`^${key}:\\s+(.+)$`, "m"));
+  return match?.[1]?.trim();
+}
+
 function hasToolCallPart(message: Pick<Message, "content"> | undefined, toolName: string, toolCallId: string) {
   return messageParts(message ?? { content: "" }).some(
     (part) => part.type === "tool-call" && part.toolName === toolName && part.toolCallId === toolCallId
@@ -171,7 +180,7 @@ describe("runtime service", () => {
             hooks: {},
             catalog: {
               workspaceId: "template",
-              agents: [{ name: "builder", source: "workspace" }],
+              agents: [{ name: "builder", mode: "primary", source: "workspace" }],
               models: [],
               actions: [],
               skills: [],
@@ -573,7 +582,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_demo",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -595,6 +604,137 @@ describe("runtime service", () => {
     });
 
     expect(session.activeAgentName).toBe("builder");
+  });
+
+  it("updates the session active agent for subsequent runs and rejects non-primary targets", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_session_agent_update",
+      name: "session-agent-update",
+      rootPath: "/tmp/session-agent-update",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "You are the builder agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["assistant"],
+          subagents: []
+        },
+        assistant: {
+          name: "assistant",
+          mode: "primary",
+          prompt: "You are the assistant agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["builder"],
+          subagents: []
+        },
+        reviewer: {
+          name: "reviewer",
+          mode: "subagent",
+          prompt: "You are the reviewer subagent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_session_agent_update",
+        agents: [
+          { name: "builder", mode: "primary", source: "workspace" },
+          { name: "assistant", mode: "primary", source: "workspace" },
+          { name: "reviewer", mode: "subagent", source: "workspace" }
+        ],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_session_agent_update",
+      caller,
+      input: {}
+    });
+
+    const updatedSession = await runtimeService.updateSession({
+      sessionId: session.id,
+      input: {
+        activeAgentName: "assistant"
+      }
+    });
+
+    expect(updatedSession.activeAgentName).toBe("assistant");
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "continue with the assistant" }
+    });
+    const run = await runtimeService.getRun(accepted.runId);
+
+    expect(run.agentName).toBe("assistant");
+    expect(run.effectiveAgentName).toBe("assistant");
+
+    await expect(
+      runtimeService.updateSession({
+        sessionId: session.id,
+        input: {
+          activeAgentName: "reviewer"
+        }
+      })
+    ).rejects.toMatchObject({
+      code: "invalid_session_agent_target"
+    });
   });
 
   it("injects AGENTS.md, active agent prompt, and system reminder when the session explicitly selects an agent", async () => {
@@ -646,7 +786,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_prompt",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -737,7 +877,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_prompt_default_agent",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -781,7 +921,7 @@ describe("runtime service", () => {
       text: "Build agent finished the implementation.",
       toolSteps: [
         {
-          toolName: "agent.switch",
+          toolName: "AgentSwitch",
           input: { to: "build" },
           toolCallId: "call_switch"
         }
@@ -849,8 +989,8 @@ describe("runtime service", () => {
       catalog: {
         workspaceId: "project_agent_switch",
         agents: [
-          { name: "plan", source: "workspace" },
-          { name: "build", source: "workspace" }
+          { name: "plan", mode: "primary", source: "workspace" },
+          { name: "build", mode: "primary", source: "workspace" }
         ],
         models: [],
         actions: [],
@@ -918,7 +1058,7 @@ describe("runtime service", () => {
 
     const runSteps = await runtimeService.listRunSteps(accepted.runId);
     expect(runSteps.items.some((step) => step.stepType === "agent_switch" && step.status === "completed")).toBe(true);
-    expect(runSteps.items.some((step) => step.stepType === "tool_call" && step.name === "agent.switch")).toBe(true);
+    expect(runSteps.items.some((step) => step.stepType === "tool_call" && step.name === "AgentSwitch")).toBe(true);
   });
 
   it("delegates to a subagent, awaits the child run, and inherits the parent model when the subagent has no model", async () => {
@@ -936,7 +1076,7 @@ describe("runtime service", () => {
         text: "Parent integrated the subagent result.",
         toolSteps: [
           {
-            toolName: "Agent",
+            toolName: "SubAgent",
             input: {
               description: "Gather repo facts",
               prompt: "Inspect the repository and summarize the key facts.",
@@ -1014,8 +1154,8 @@ describe("runtime service", () => {
       catalog: {
         workspaceId: "project_agent_delegate",
         agents: [
-          { name: "plan", source: "workspace" },
-          { name: "researcher", source: "workspace" }
+          { name: "plan", mode: "primary", source: "workspace" },
+          { name: "researcher", mode: "subagent", source: "workspace" }
         ],
         models: [{ ref: "platform/planner-model", name: "planner-model", source: "platform", provider: "openai" }],
         actions: [],
@@ -1067,7 +1207,7 @@ describe("runtime service", () => {
 
     const parentMessages = await runtimeService.listSessionMessages(session.id, 50);
     const agentToolMessage = parentMessages.items.find(
-      (message) => message.role === "tool" && messageToolName(message) === "Agent"
+      (message) => message.role === "tool" && messageToolName(message) === "SubAgent"
     );
     const events = await runtimeService.listSessionEvents(session.id);
     const childInvocation = gateway.invocations.find((invocation) =>
@@ -1086,19 +1226,22 @@ describe("runtime service", () => {
     expect(childInvocation?.model).toBe("planner-model");
     expect(messageText(agentToolMessage)).toContain("completed: true");
     expect(messageText(agentToolMessage)).toContain("subagent_type: researcher");
+    expect(messageText(agentToolMessage)).toContain("task_id:");
+    expect(messageText(agentToolMessage)).toContain(`task_id: ${childRun.sessionId}`);
+    expect(messageText(agentToolMessage)).toContain(`run_id: ${childRun.id}`);
     expect(messageText(agentToolMessage)).toContain("result:");
-    expect(messageText(agentToolMessage)).toContain("agent_id:");
     expect(messageText(agentToolMessage)).toContain("Subagent result: repository facts are ready.");
+    expect(messageText(agentToolMessage)).not.toContain("agent_id:");
     expect(events.map((event) => event.event)).toEqual(
       expect.arrayContaining(["agent.delegate.started", "agent.delegate.completed", "run.completed"])
     );
 
     const parentRunSteps = await runtimeService.listRunSteps(accepted.runId);
     expect(parentRunSteps.items.some((step) => step.stepType === "agent_delegate" && step.status === "completed")).toBe(true);
-    expect(parentRunSteps.items.some((step) => step.stepType === "tool_call" && step.name === "Agent")).toBe(true);
+    expect(parentRunSteps.items.some((step) => step.stepType === "tool_call" && step.name === "SubAgent")).toBe(true);
   });
 
-  it("launches background agents through Agent", async () => {
+  it("launches background agents through SubAgent", async () => {
     const gateway = new FakeModelGateway();
     gateway.streamScenarioFactory = (input) => {
       const systemMessages = input.messages?.filter((message) => message.role === "system").map((message) => message.content) ?? [];
@@ -1113,7 +1256,7 @@ describe("runtime service", () => {
         text: "Parent observed the background result.",
         toolSteps: [
           {
-            toolName: "Agent",
+            toolName: "SubAgent",
             input: {
               description: "Research in background",
               prompt: "Collect the repository facts and report back.",
@@ -1185,8 +1328,8 @@ describe("runtime service", () => {
       catalog: {
         workspaceId: "project_agent_background",
         agents: [
-          { name: "plan", source: "workspace" },
-          { name: "researcher", source: "workspace" }
+          { name: "plan", mode: "primary", source: "workspace" },
+          { name: "researcher", mode: "subagent", source: "workspace" }
         ],
         models: [],
         actions: [],
@@ -1224,12 +1367,545 @@ describe("runtime service", () => {
     });
 
     const messages = await runtimeService.listSessionMessages(session.id, 20);
-    const backgroundMessage = messages.items.find((message) => message.role === "tool" && messageToolName(message) === "Agent");
+    const backgroundMessage = messages.items.find((message) => message.role === "tool" && messageToolName(message) === "SubAgent");
 
     expect(messageText(backgroundMessage)).toContain("started: true");
     expect(messageText(backgroundMessage)).toContain("subagent_type: researcher");
     expect(messageText(backgroundMessage)).toContain("description: Research in background");
-    expect(messageText(backgroundMessage)).toContain("agent_id:");
+    expect(messageText(backgroundMessage)).toContain("task_id:");
+  });
+
+  it("reuses the same child session when SubAgent is called with task_id", async () => {
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = (input) => {
+      const systemMessages = input.messages?.filter((message) => message.role === "system").map((message) => message.content) ?? [];
+
+      if (systemMessages.some((message) => message.includes("You are the researcher subagent."))) {
+        const delegatedTurns = input.messages?.filter((message) => {
+          if (message.role !== "user") {
+            return false;
+          }
+
+          const text = typeof message.content === "string" ? message.content : "";
+          return text.includes("<delegated_task");
+        }).length ?? 0;
+
+        return {
+          text:
+            delegatedTurns >= 2
+              ? "Resumed subagent result: second pass complete."
+              : "Initial subagent result: first pass complete."
+        };
+      }
+
+      const latestUserMessage = input.messages?.filter((message) => message.role === "user").at(-1);
+      const latestText = typeof latestUserMessage?.content === "string" ? latestUserMessage.content : "";
+
+      if (latestText.includes("Resume the same subagent task")) {
+        return {
+          text: "Parent completed the resumed delegation.",
+          toolSteps: [
+            {
+              toolName: "SubAgent",
+              input: {
+                description: "Resume repo research",
+                prompt: "Continue the same repository investigation and report only new findings.",
+                subagent_type: "researcher",
+                task_id: "TASK_ID_PLACEHOLDER"
+              },
+              toolCallId: "call_resume_agent"
+            }
+          ]
+        };
+      }
+
+      return {
+        text: "Parent started the initial background delegation.",
+        toolSteps: [
+          {
+            toolName: "SubAgent",
+            input: {
+              description: "Start repo research",
+              prompt: "Inspect the repository and report the first pass findings.",
+              subagent_type: "researcher",
+              run_in_background: true
+            },
+            toolCallId: "call_start_agent"
+          }
+        ]
+      };
+    };
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_agent_resume",
+      name: "agent-resume",
+      rootPath: "/tmp/agent-resume",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "plan",
+      settings: {
+        defaultAgent: "plan",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        plan: {
+          name: "plan",
+          mode: "primary",
+          prompt: "You are the planner agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: ["researcher"]
+        },
+        researcher: {
+          name: "researcher",
+          mode: "subagent",
+          prompt: "You are the researcher subagent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_agent_resume",
+        agents: [
+          { name: "plan", mode: "primary", source: "workspace" },
+          { name: "researcher", mode: "subagent", source: "workspace" }
+        ],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_agent_resume",
+      caller,
+      input: {
+        agentName: "plan"
+      }
+    });
+
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Start a background subagent task." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(firstAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const firstMessages = await runtimeService.listSessionMessages(session.id, 20);
+    const initialToolMessage = firstMessages.items.find(
+      (message) => message.role === "tool" && messageToolName(message) === "SubAgent"
+    );
+    const taskId = extractFieldValue(messageText(initialToolMessage), "task_id");
+
+    expect(taskId).toBeTruthy();
+
+    gateway.streamScenarioFactory = (input) => {
+      const systemMessages = input.messages?.filter((message) => message.role === "system").map((message) => message.content) ?? [];
+
+      if (systemMessages.some((message) => message.includes("You are the researcher subagent."))) {
+        const delegatedTurns = input.messages?.filter((message) => {
+          if (message.role !== "user") {
+            return false;
+          }
+
+          const text = typeof message.content === "string" ? message.content : "";
+          return text.includes("<delegated_task");
+        }).length ?? 0;
+
+        return {
+          text:
+            delegatedTurns >= 2
+              ? "Resumed subagent result: second pass complete."
+              : "Initial subagent result: first pass complete."
+        };
+      }
+
+      return {
+        text: "Parent completed the resumed delegation.",
+        toolSteps: [
+          {
+            toolName: "SubAgent",
+            input: {
+              description: "Resume repo research",
+              prompt: "Continue the same repository investigation and report only new findings.",
+              subagent_type: "researcher",
+              task_id: taskId
+            },
+            toolCallId: "call_resume_agent"
+          }
+        ]
+      };
+    };
+
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Resume the same subagent task." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(secondAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const secondRun = await runtimeService.getRun(secondAccepted.runId);
+    const delegatedRecords =
+      (secondRun.metadata?.delegatedRuns as Array<{ childRunId: string; childSessionId: string }> | undefined) ?? [];
+
+    expect(delegatedRecords).toHaveLength(1);
+    expect(delegatedRecords[0]?.childSessionId).toBe(taskId);
+
+    const childMessages = await runtimeService.listSessionMessages(taskId!, 20);
+    const childUserMessages = childMessages.items.filter((message) => message.role === "user");
+    const childAssistantMessages = childMessages.items.filter((message) => message.role === "assistant");
+    const resumedToolMessage = (await runtimeService.listSessionMessages(session.id, 30)).items
+      .filter((message) => message.role === "tool" && messageToolName(message) === "SubAgent")
+      .at(-1);
+
+    expect(childUserMessages).toHaveLength(2);
+    expect(childAssistantMessages).toHaveLength(2);
+    expect(messageText(resumedToolMessage)).toContain(`task_id: ${taskId}`);
+    expect(messageText(resumedToolMessage)).toContain("Resumed subagent result: second pass complete.");
+  });
+
+  it("rejects resuming a missing subagent task_id", async () => {
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = () => ({
+      text: "Parent tried to resume a missing task.",
+      toolSteps: [
+        {
+          toolName: "SubAgent",
+          input: {
+            description: "Resume missing task",
+            prompt: "Continue the missing task.",
+            task_id: "ses_missing_task"
+          },
+          toolCallId: "call_missing_task"
+        }
+      ]
+    });
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_missing_task_resume",
+      name: "missing-task-resume",
+      rootPath: "/tmp/missing-task-resume",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "plan",
+      settings: {
+        defaultAgent: "plan",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        plan: {
+          name: "plan",
+          mode: "primary",
+          prompt: "You are the planner agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: ["researcher"]
+        },
+        researcher: {
+          name: "researcher",
+          mode: "subagent",
+          prompt: "You are the researcher subagent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_missing_task_resume",
+        agents: [
+          { name: "plan", mode: "primary", source: "workspace" },
+          { name: "researcher", mode: "subagent", source: "workspace" }
+        ],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_missing_task_resume",
+      caller,
+      input: {
+        agentName: "plan"
+      }
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Resume a task that does not exist." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "failed";
+    });
+
+    await expect(runtimeService.getRun(accepted.runId)).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "task_not_found"
+    });
+  });
+
+  it("rejects resuming a subagent task with a mismatched subagent_type", async () => {
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = (input) => {
+      const systemMessages = input.messages?.filter((message) => message.role === "system").map((message) => message.content) ?? [];
+
+      if (systemMessages.some((message) => message.includes("You are the researcher subagent."))) {
+        return {
+          text: "Initial research task complete."
+        };
+      }
+
+      return {
+        text: "Parent delegated work.",
+        toolSteps: [
+          {
+            toolName: "SubAgent",
+            input: {
+              description: "Start research",
+              prompt: "Inspect the repository.",
+              subagent_type: "researcher",
+              run_in_background: true
+            },
+            toolCallId: "call_start_research"
+          }
+        ]
+      };
+    };
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_task_mismatch",
+      name: "task-mismatch",
+      rootPath: "/tmp/task-mismatch",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "plan",
+      settings: {
+        defaultAgent: "plan",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        plan: {
+          name: "plan",
+          mode: "primary",
+          prompt: "You are the planner agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: ["researcher", "reviewer"]
+        },
+        researcher: {
+          name: "researcher",
+          mode: "subagent",
+          prompt: "You are the researcher subagent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        },
+        reviewer: {
+          name: "reviewer",
+          mode: "subagent",
+          prompt: "You are the reviewer subagent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_task_mismatch",
+        agents: [
+          { name: "plan", mode: "primary", source: "workspace" },
+          { name: "researcher", mode: "subagent", source: "workspace" },
+          { name: "reviewer", mode: "subagent", source: "workspace" }
+        ],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_task_mismatch",
+      caller,
+      input: {
+        agentName: "plan"
+      }
+    });
+
+    const initialAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Start the initial subagent task." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(initialAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const initialMessages = await runtimeService.listSessionMessages(session.id, 20);
+    const initialToolMessage = initialMessages.items.find(
+      (message) => message.role === "tool" && messageToolName(message) === "SubAgent"
+    );
+    const taskId = extractFieldValue(messageText(initialToolMessage), "task_id");
+
+    gateway.streamScenarioFactory = () => ({
+      text: "Parent attempted a mismatched resume.",
+      toolSteps: [
+        {
+          toolName: "SubAgent",
+          input: {
+            description: "Resume as reviewer",
+            prompt: "Continue the previous task, but as reviewer.",
+            subagent_type: "reviewer",
+            task_id: taskId
+          },
+          toolCallId: "call_mismatch_resume"
+        }
+      ]
+    });
+
+    const resumedAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Resume with the wrong subagent type." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(resumedAccepted.runId);
+      return run.status === "failed";
+    });
+
+    await expect(runtimeService.getRun(resumedAccepted.runId)).resolves.toMatchObject({
+      status: "failed",
+      errorCode: "task_agent_mismatch"
+    });
   });
 
   it("runs an action command and stores the result on the run", async () => {
@@ -1375,7 +2051,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_workspace_model",
-        agents: [{ name: "writer", source: "workspace" }],
+        agents: [{ name: "writer", mode: "primary", source: "workspace" }],
         models: [
           {
             ref: "workspace/repo-model",
@@ -1562,7 +2238,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_run_timeout_policy",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -1678,7 +2354,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_tool_timeout_policy",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -1776,7 +2452,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_run_heartbeat",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -1868,7 +2544,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_run_recovery",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -2019,7 +2695,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_parallel_tools",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -2138,7 +2814,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_serial_tools",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -2272,7 +2948,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_prompt_compose",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [{ ref: "platform/openai-default", name: "openai-default", source: "platform", provider: "openai" }],
         actions: [{ name: "debug.echo", description: "Echo", callableByApi: true, callableByUser: true, exposeToLlm: true }],
         skills: [{ name: "repo-explorer", description: "Explore the repository.", exposeToLlm: true }],
@@ -2400,7 +3076,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_skill_activation",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [{ name: "repo-explorer", description: "Explore repository structure and helper docs.", exposeToLlm: true }],
@@ -2644,7 +3320,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_action_tool",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [
           {
@@ -2775,7 +3451,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_native_catalog",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -2909,7 +3585,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_native_tools",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -3096,7 +3772,7 @@ describe("runtime service", () => {
       },
       catalog: {
         workspaceId: "project_audit_records",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [
           {
@@ -3252,7 +3928,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_waiting_tool",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [{ name: "repo-explorer", description: "Repository explorer", exposeToLlm: true }],
@@ -3345,7 +4021,7 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "chat_prompt_compose",
-        agents: [{ name: "assistant", source: "workspace" }],
+        agents: [{ name: "assistant", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -3487,7 +4163,7 @@ describe("runtime service", () => {
       },
       catalog: {
         workspaceId: "chat_locked_down",
-        agents: [{ name: "assistant", source: "workspace" }],
+        agents: [{ name: "assistant", mode: "primary", source: "workspace" }],
         models: [],
         actions: [{ name: "dangerous.run", callableByApi: true, callableByUser: true, exposeToLlm: true }],
         skills: [{ name: "repo-explorer", exposeToLlm: true }],
@@ -3603,7 +4279,7 @@ describe("runtime service", () => {
       },
       catalog: {
         workspaceId: "project_before_hook",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -3715,7 +4391,7 @@ describe("runtime service", () => {
       },
       catalog: {
         workspaceId: "project_before_hook_timeout",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -3824,7 +4500,7 @@ describe("runtime service", () => {
       },
       catalog: {
         workspaceId: "project_prompt_hook_timeout",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -3944,7 +4620,7 @@ describe("runtime service", () => {
       },
       catalog: {
         workspaceId: "project_context_hooks",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],
@@ -4101,7 +4777,7 @@ describe("runtime service", () => {
       },
       catalog: {
         workspaceId: "project_tool_hooks",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [
           {
@@ -4252,7 +4928,7 @@ describe("runtime service", () => {
       },
       catalog: {
         workspaceId: "project_after_hook",
-        agents: [{ name: "builder", source: "workspace" }],
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
         skills: [],

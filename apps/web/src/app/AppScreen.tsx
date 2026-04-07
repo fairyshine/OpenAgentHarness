@@ -1,6 +1,7 @@
 import { AppHeader } from "./layout/AppHeader";
 import { AppSidebar } from "./layout/AppSidebar";
 import { RuntimeWorkspace } from "./layout/RuntimeWorkspace";
+import { ProviderWorkspace } from "./provider/ProviderWorkspace";
 import { StorageWorkspace } from "./storage/StorageWorkspace";
 import { useAppController } from "./use-app-controller";
 
@@ -20,8 +21,12 @@ export function AppScreen() {
           ) : null}
 
           {controller.surfaceMode === "storage" ? (
-            <div className="min-h-0 flex-1 overflow-hidden px-4 py-4 md:px-5 md:py-5">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 md:px-5 md:py-5">
               <StorageWorkspace {...controller.storageSurfaceProps} />
+            </div>
+          ) : controller.surfaceMode === "provider" ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 md:px-5 md:py-5">
+              <ProviderWorkspace {...controller.providerSurfaceProps} />
             </div>
           ) : (
             <RuntimeWorkspace {...controller.runtimeDetailSurfaceProps} />

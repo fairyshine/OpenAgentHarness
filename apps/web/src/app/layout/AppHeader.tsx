@@ -49,7 +49,9 @@ export function AppHeader(props: HeaderProps) {
             </span>
           </div>
           <p className="truncate text-[11px] text-muted-foreground">
-            {props.hasActiveSession
+            {props.surfaceMode === "provider"
+              ? "Provider Workbench"
+              : props.hasActiveSession
               ? `${props.currentWorkspaceName} / ${props.currentSessionName}`
               : props.surfaceMode === "storage"
               ? "Storage Workbench"
@@ -65,6 +67,9 @@ export function AppHeader(props: HeaderProps) {
             </TabsTrigger>
             <TabsTrigger value="storage" className="text-xs">
               Storage
+            </TabsTrigger>
+            <TabsTrigger value="provider" className="text-xs">
+              Provider
             </TabsTrigger>
           </TabsList>
         </Tabs>

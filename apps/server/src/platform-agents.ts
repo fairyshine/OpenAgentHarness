@@ -19,7 +19,7 @@ export function createBuiltInPlatformAgents(): PlatformAgentRegistry {
         skills: [],
         external: []
       },
-      switch: [],
+      switch: ["builder"],
       subagents: []
     },
     builder: {
@@ -39,7 +39,7 @@ export function createBuiltInPlatformAgents(): PlatformAgentRegistry {
         skills: [],
         external: []
       },
-      switch: [],
+      switch: ["assistant"],
       subagents: []
     }
   };

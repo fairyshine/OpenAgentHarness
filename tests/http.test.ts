@@ -573,6 +573,113 @@ describe("http api", () => {
     expect(sessionPage.nextCursor).toBeUndefined();
   });
 
+  it("patches the session active agent over HTTP for subsequent runs", async () => {
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+
+    await persistence.workspaceRepository.upsert({
+      id: "workspace_http_agent_patch",
+      name: "http-agent-patch",
+      rootPath: "/tmp/http-agent-patch",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "assistant",
+      settings: {
+        defaultAgent: "assistant",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        assistant: {
+          name: "assistant",
+          mode: "primary",
+          prompt: "You are the assistant agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["builder"],
+          subagents: []
+        },
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "You are the builder agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["assistant"],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "workspace_http_agent_patch",
+        agents: [
+          { name: "assistant", mode: "primary", source: "workspace" },
+          { name: "builder", mode: "primary", source: "workspace" }
+        ],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    activeApp = await createStartedAppWithRuntimeService(runtimeService, gateway);
+
+    const authHeaders = {
+      authorization: "Bearer token-1",
+      "content-type": "application/json"
+    };
+
+    const sessionResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/workspace_http_agent_patch/sessions`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({})
+    });
+    expect(sessionResponse.status).toBe(201);
+    const session = (await sessionResponse.json()) as { id: string; activeAgentName: string };
+    expect(session.activeAgentName).toBe("assistant");
+
+    const patchResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}`, {
+      method: "PATCH",
+      headers: authHeaders,
+      body: JSON.stringify({
+        title: "builder session",
+        activeAgentName: "builder"
+      })
+    });
+
+    expect(patchResponse.status).toBe(200);
+    await expect(patchResponse.json()).resolves.toMatchObject({
+      id: session.id,
+      title: "builder session",
+      activeAgentName: "builder"
+    });
+  });
+
   it("imports existing workspaces over HTTP", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-http-import-"));
     await mkdir(path.join(tempDir, ".openharness"), { recursive: true });
@@ -1184,7 +1291,7 @@ describe("http api", () => {
       },
       catalog: {
         workspaceId: "chat_http_catalog",
-        agents: [{ name: "assistant", source: "workspace" }],
+        agents: [{ name: "assistant", mode: "primary", source: "workspace" }],
         models: [],
         actions: [{ name: "dangerous.run", callableByApi: true, callableByUser: true, exposeToLlm: true }],
         skills: [{ name: "repo-explorer", exposeToLlm: true }],
@@ -1210,7 +1317,7 @@ describe("http api", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       workspaceId: "chat_http_catalog",
-      agents: [{ name: "assistant", source: "workspace" }],
+      agents: [{ name: "assistant", mode: "primary", source: "workspace" }],
       models: [],
       actions: [],
       skills: [],
@@ -1652,7 +1759,7 @@ Use ripgrep first.
         subagents: []
       }
     };
-    workspace.catalog.agents = [{ name: "builder", source: "workspace" }];
+    workspace.catalog.agents = [{ name: "builder", mode: "primary", source: "workspace" }];
 
     const gateway = new FakeModelGateway(20);
     gateway.streamScenarioFactory = () => ({

@@ -1,7 +1,16 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { CircleSlash2, Download } from "lucide-react";
 
-import type { Message, Run, RunStep, Session, SessionEventContract, Workspace } from "@oah/api-contracts";
+import type {
+  Message,
+  Run,
+  RunStep,
+  Session,
+  SessionEventContract,
+  Workspace,
+  WorkspaceCatalog,
+  WorkspaceHistoryMirrorStatus
+} from "@oah/api-contracts";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -15,7 +24,6 @@ import {
   formatTimestamp,
   prettyJson,
   statusTone,
-  toModelCallTrace,
   type ModelCallTrace,
   type ModelCallTraceMessage,
   type ModelCallTraceRuntimeTool,
@@ -185,6 +193,50 @@ function ToolServerList(props: { servers: ModelCallTraceToolServer[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function TraceSummaryStat(props: { label: string; value: string }) {
+  return (
+    <div className="border-l border-border/70 pl-4">
+      <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">{props.label}</p>
+      <p className="mt-2 text-sm font-medium text-foreground">{props.value}</p>
+    </div>
+  );
+}
+
+function DetailSection(props: { title: string; description: string; children: ReactNode }) {
+  return (
+    <section className="ob-section space-y-3 rounded-[18px] p-5">
+      <InspectorPanelHeader title={props.title} description={props.description} />
+      {props.children}
+    </section>
+  );
+}
+
+function TimelineListButton(props: {
+  active: boolean;
+  eyebrow: string;
+  title: string;
+  subtitle?: string;
+  meta?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={cn(
+        "w-full border-l px-4 py-3 text-left transition",
+        props.active
+          ? "border-foreground/90 bg-muted/45"
+          : "border-border/70 hover:border-foreground/40 hover:bg-muted/25"
+      )}
+      onClick={props.onClick}
+    >
+      <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">{props.eyebrow}</p>
+      <p className="mt-1 text-sm font-medium text-foreground">{props.title}</p>
+      {props.subtitle ? <p className="mt-1 text-xs leading-6 text-foreground/75">{props.subtitle}</p> : null}
+      {props.meta ? <p className="mt-1 text-[11px] text-muted-foreground">{props.meta}</p> : null}
+    </button>
   );
 }
 
@@ -384,9 +436,26 @@ function CallsWorkbench(props: {
   );
 }
 
-function RuntimeWorkbench(props: {
-  mode: "steps" | "events";
-  onModeChange: (mode: "steps" | "events") => void;
+function TimelineWorkbench(props: {
+  mode: "all" | "messages" | "calls" | "steps" | "events";
+  onModeChange: (mode: "all" | "messages" | "calls" | "steps" | "events") => void;
+  systemMessages: ModelCallTraceMessage[];
+  firstTrace: ModelCallTrace | null;
+  messages: Message[];
+  selectedMessage: Message | null;
+  onSelectMessage: (messageId: string) => void;
+  traces: ModelCallTrace[];
+  selectedTrace: ModelCallTrace | null;
+  onSelectTrace: (traceId: string) => void;
+  latestTrace: ModelCallTrace | null;
+  latestModelMessageCounts: ReturnType<typeof countMessagesByRole>;
+  resolvedModelNames: string[];
+  resolvedModelRefs: string[];
+  runtimeTools: ModelCallTraceRuntimeTool[];
+  runtimeToolNames: string[];
+  activeToolNames: string[];
+  toolServers: ModelCallTraceToolServer[];
+  onDownload: () => void;
   steps: RunStep[];
   selectedStep: RunStep | null;
   onSelectStep: (stepId: string) => void;
@@ -394,123 +463,467 @@ function RuntimeWorkbench(props: {
   selectedEvent: SessionEventContract | null;
   onSelectEvent: (eventId: string) => void;
 }) {
+  const combinedSystemPrompt = props.systemMessages.map((message) => contentText(message.content)).join("\n\n");
+  const [activeItemKey, setActiveItemKey] = useState("");
+  const timelineItems = [
+    ...props.messages.map((message) => ({
+      key: `message:${message.id}`,
+      kind: "message" as const,
+      sortValue: Date.parse(message.createdAt),
+      eyebrow: message.role,
+      title: compactPreviewText(message.content, 84),
+      subtitle: message.runId ? `run ${message.runId}` : "stored message",
+      meta: formatTimestamp(message.createdAt),
+      message
+    })),
+    ...props.traces.map((trace) => ({
+      key: `call:${trace.id}`,
+      kind: "call" as const,
+      sortValue: Date.parse(trace.endedAt ?? trace.startedAt ?? "") || trace.seq,
+      eyebrow: `call ${trace.seq}`,
+      title: trace.input.model ?? trace.name ?? "model call",
+      subtitle: `${trace.output.toolCalls.length} tool calls · ${trace.output.toolResults.length} tool results`,
+      meta: trace.output.finishReason ?? formatTimestamp(trace.endedAt ?? trace.startedAt),
+      trace
+    })),
+    ...props.steps
+      .filter((step) => step.stepType !== "model_call")
+      .map((step) => ({
+        key: `step:${step.id}`,
+        kind: "step" as const,
+        sortValue: Date.parse(step.endedAt ?? step.startedAt ?? "") || step.seq,
+        eyebrow: `step ${step.seq}`,
+        title: step.name ?? step.stepType,
+        subtitle: `${step.stepType} · ${step.status}`,
+        meta: formatTimestamp(step.endedAt ?? step.startedAt),
+        step
+      })),
+    ...props.events.map((event) => ({
+      key: `event:${event.id}`,
+      kind: "event" as const,
+      sortValue: Date.parse(event.createdAt),
+      eyebrow: event.event,
+      title: event.runId ? `run ${event.runId}` : "session event",
+      subtitle: `cursor ${event.cursor}`,
+      meta: formatTimestamp(event.createdAt),
+      event
+    }))
+  ].sort((left, right) => left.sortValue - right.sortValue);
+  const filteredItems =
+    props.mode === "messages"
+      ? timelineItems.filter((item) => item.kind === "message")
+      : props.mode === "calls"
+        ? timelineItems.filter((item) => item.kind === "call")
+        : props.mode === "steps"
+          ? timelineItems.filter((item) => item.kind === "step")
+          : props.mode === "events"
+            ? timelineItems.filter((item) => item.kind === "event")
+            : timelineItems;
+  const selectedKey =
+    props.mode === "messages"
+      ? props.selectedMessage ? `message:${props.selectedMessage.id}` : ""
+      : props.mode === "calls"
+        ? props.selectedTrace ? `call:${props.selectedTrace.id}` : ""
+        : props.mode === "steps"
+          ? props.selectedStep ? `step:${props.selectedStep.id}` : ""
+          : props.mode === "events"
+            ? props.selectedEvent ? `event:${props.selectedEvent.id}` : ""
+            : "";
+  const activeItem =
+    filteredItems.find((item) => item.key === activeItemKey) ??
+    filteredItems.find((item) => item.key === selectedKey) ??
+    filteredItems[0] ??
+    null;
+
   return (
-    <section className="space-y-3">
-      <div className="ob-section rounded-[16px] p-4">
+    <section className="space-y-4">
+      <section className="ob-section rounded-[20px] p-5">
         <InspectorPanelHeader
-          title="Runtime Inspector"
-          description="把执行视角收在一个分栏里，切换查看 step timeline 或 SSE event feed。"
+          title="Timeline"
+          description="把消息、模型调用、运行步骤和事件流收进同一条时间线里，按一次运行真实发生的顺序来读。"
+          action={
+            <Button variant="secondary" size="sm" disabled={props.traces.length === 0} onClick={props.onDownload}>
+              <Download className="h-4 w-4" />
+              Download Trace
+            </Button>
+          }
         />
-        <div className="segmented-shell mt-4">
-          <InspectorTabButton label="Steps" active={props.mode === "steps"} onClick={() => props.onModeChange("steps")} />
-          <InspectorTabButton label="Events" active={props.mode === "events"} onClick={() => props.onModeChange("events")} />
+        <div className="mt-5 grid gap-4 lg:grid-cols-6">
+          <TraceSummaryStat label="System Source" value={props.firstTrace ? `step ${props.firstTrace.seq}` : "n/a"} />
+          <TraceSummaryStat label="Messages" value={String(props.messages.length)} />
+          <TraceSummaryStat label="Calls" value={String(props.traces.length)} />
+          <TraceSummaryStat label="Steps" value={String(props.steps.filter((step) => step.stepType !== "model_call").length)} />
+          <TraceSummaryStat label="Events" value={String(props.events.length)} />
+          <TraceSummaryStat label="Finish" value={props.latestTrace?.output.finishReason ?? "n/a"} />
         </div>
-      </div>
 
-      {props.mode === "steps" ? (
-        <div className="grid gap-3 2xl:grid-cols-[minmax(360px,0.76fr)_minmax(0,1.24fr)]">
-          <section className="ob-section space-y-3 rounded-[16px] p-4">
-            <InspectorPanelHeader title="Step List" description="左侧按顺序浏览 step，右侧看选中 step 的完整 input / output。" />
-            {props.steps.length === 0 ? (
-              <EmptyState title="No steps" description="Run steps appear here after the selected run starts executing." />
+        <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+          <InspectorDisclosure
+            title="System Prompt"
+            description="首个 model call 中真正发给模型的 system message。"
+            badge={props.systemMessages.length}
+          >
+            {combinedSystemPrompt.length === 0 ? (
+              <EmptyState title="No system prompt" description="Load a run with model calls to inspect the composed prompt." />
             ) : (
-              <div className="space-y-2">
-                {props.steps.map((step) => (
-                  <button
-                    key={step.id}
-                    className={cn(
-                      "w-full rounded-[16px] border p-3 text-left transition",
-                      props.selectedStep?.id === step.id
-                        ? "border-border bg-muted/60"
-                        : "border-border/60 bg-card/60 hover:bg-muted/40"
-                    )}
-                    onClick={() => props.onSelectStep(step.id)}
-                  >
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <Badge>{`step ${step.seq}`}</Badge>
-                      <Badge>{step.stepType}</Badge>
-                      <Badge className={statusTone(step.status)}>{step.status}</Badge>
-                    </div>
-                    <p className="text-sm text-foreground">{step.name ?? step.stepType}</p>
-                  </button>
-                ))}
+              <pre className="max-h-[20rem] overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80">{combinedSystemPrompt}</pre>
+            )}
+          </InspectorDisclosure>
+
+          <InspectorDisclosure
+            title="Model Context"
+            description="这块只保留 run 级别的模型环境信息，避免在每次调用详情里重复展示。"
+            badge={props.runtimeTools.length}
+          >
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <TraceSummaryStat label="Latest Model" value={props.latestTrace?.input.model ?? "n/a"} />
+                <TraceSummaryStat label="Provider" value={props.latestTrace?.input.provider ?? "n/a"} />
+                <TraceSummaryStat label="Canonical Ref" value={props.latestTrace?.input.canonicalModelRef ?? "n/a"} />
+                <TraceSummaryStat
+                  label="Latest Messages"
+                  value={`S${props.latestModelMessageCounts.system} U${props.latestModelMessageCounts.user} A${props.latestModelMessageCounts.assistant} T${props.latestModelMessageCounts.tool}`}
+                />
               </div>
-            )}
-          </section>
-
-          <section className="ob-section space-y-3 rounded-[16px] p-4">
-            <InspectorPanelHeader title="Step Detail" description="查看当前选中 step 的完整输入输出。" />
-            {props.selectedStep ? (
-              props.selectedStep.stepType === "model_call" && toModelCallTrace(props.selectedStep) ? (
-                <ModelCallTraceCard trace={toModelCallTrace(props.selectedStep)!} />
-              ) : (
-                <>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge>{`step ${props.selectedStep.seq}`}</Badge>
-                    <Badge>{props.selectedStep.stepType}</Badge>
-                    <Badge className={statusTone(props.selectedStep.status)}>{props.selectedStep.status}</Badge>
-                    {props.selectedStep.name ? <Badge>{props.selectedStep.name}</Badge> : null}
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <JsonBlock title="Input" value={props.selectedStep.input ?? {}} />
-                    <JsonBlock title="Output" value={props.selectedStep.output ?? {}} />
-                  </div>
-                </>
-              )
-            ) : (
-              <EmptyState title="No step selected" description="Choose a step from the left list to inspect its full payload." />
-            )}
-          </section>
-        </div>
-      ) : (
-        <div className="grid gap-3 2xl:grid-cols-[minmax(360px,0.76fr)_minmax(0,1.24fr)]">
-          <section className="ob-section space-y-3 rounded-[16px] p-4">
-            <InspectorPanelHeader title="Event List" description="左侧浏览 SSE 事件，右侧查看选中事件的完整 payload。" />
-            {props.events.length === 0 ? (
-              <EmptyState title="No events" description="SSE events appear here when the current session emits runtime updates." />
-            ) : (
-              <div className="space-y-2">
-                {props.events.map((event) => (
-                  <button
-                    key={event.id}
-                    className={cn(
-                      "w-full rounded-[16px] border p-3 text-left transition",
-                      props.selectedEvent?.id === event.id
-                        ? "border-border bg-muted/60"
-                        : "border-border/60 bg-card/60 hover:bg-muted/40"
-                    )}
-                    onClick={() => props.onSelectEvent(event.id)}
-                  >
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <Badge>{event.event}</Badge>
-                      {event.runId ? <Badge>{event.runId}</Badge> : null}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {formatTimestamp(event.createdAt)} · cursor {event.cursor}
-                    </p>
-                  </button>
-                ))}
+              <div>
+                <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Resolved Models</p>
+                <ToolNameChips names={props.resolvedModelNames} emptyLabel="No resolved model names recorded." />
               </div>
-            )}
-          </section>
-
-          <section className="ob-section space-y-3 rounded-[16px] p-4">
-            <InspectorPanelHeader title="Event Detail" description="查看当前选中 SSE event 的完整 data payload。" />
-            {props.selectedEvent ? (
-              <>
-                <div className="flex flex-wrap gap-2">
-                  <Badge>{props.selectedEvent.event}</Badge>
-                  {props.selectedEvent.runId ? <Badge>{props.selectedEvent.runId}</Badge> : null}
-                  <Badge>{`cursor ${props.selectedEvent.cursor}`}</Badge>
+              {props.resolvedModelRefs.length > 0 ? (
+                <div className="space-y-2">
+                  {props.resolvedModelRefs.map((ref) => (
+                    <div key={ref} className="border-l border-border/70 pl-4 text-xs leading-6 text-foreground/80">
+                      {ref}
+                    </div>
+                  ))}
                 </div>
-                <JsonBlock title={formatTimestamp(props.selectedEvent.createdAt)} value={props.selectedEvent.data} />
-              </>
-            ) : (
-              <EmptyState title="No event selected" description="Choose an event from the left list to inspect its full payload." />
-            )}
-          </section>
+              ) : null}
+              <InspectorDisclosure
+                title="Tool Snapshot"
+                description="工具定义、激活工具和外部 tool server 信息集中放在这里。"
+                badge={props.runtimeTools.length}
+              >
+                <div className="space-y-4">
+                  <div>
+                    <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Runtime Tool Names</p>
+                    <ToolNameChips names={props.runtimeToolNames} emptyLabel="No runtime tool names recorded." />
+                  </div>
+                  <div>
+                    <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Active Tool Names</p>
+                    <ToolNameChips names={props.activeToolNames} emptyLabel="No active tool names recorded." />
+                  </div>
+                  <RuntimeToolList tools={props.runtimeTools} />
+                  <ToolServerList servers={props.toolServers} />
+                </div>
+              </InspectorDisclosure>
+            </div>
+          </InspectorDisclosure>
         </div>
-      )}
+      </section>
+
+      <div className="grid gap-4 2xl:grid-cols-[minmax(340px,0.72fr)_minmax(0,1.28fr)]">
+        <DetailSection title="Timeline Feed" description="左侧统一浏览所有关键记录；右侧按类型展开当前项的完整详情。">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+            <div className="grid gap-2 sm:grid-cols-5">
+              <TraceSummaryStat label="Visible" value={String(filteredItems.length)} />
+              <TraceSummaryStat label="Messages" value={String(props.messages.length)} />
+              <TraceSummaryStat label="Calls" value={String(props.traces.length)} />
+              <TraceSummaryStat label="Steps" value={String(props.steps.filter((step) => step.stepType !== "model_call").length)} />
+              <TraceSummaryStat label="Events" value={String(props.events.length)} />
+            </div>
+            <div className="segmented-shell">
+              <InspectorTabButton label="All" active={props.mode === "all"} onClick={() => props.onModeChange("all")} />
+              <InspectorTabButton label="Messages" active={props.mode === "messages"} onClick={() => props.onModeChange("messages")} />
+              <InspectorTabButton label="Calls" active={props.mode === "calls"} onClick={() => props.onModeChange("calls")} />
+              <InspectorTabButton label="Steps" active={props.mode === "steps"} onClick={() => props.onModeChange("steps")} />
+              <InspectorTabButton label="Events" active={props.mode === "events"} onClick={() => props.onModeChange("events")} />
+            </div>
+          </div>
+
+          {filteredItems.length === 0 ? (
+            <EmptyState title="No timeline activity" description="Messages, model calls, steps, and events will appear here after execution starts." />
+          ) : (
+            <div className="max-h-[36rem] overflow-y-auto pr-1 space-y-1">
+              {filteredItems.map((item) => (
+                <TimelineListButton
+                  key={item.key}
+                  active={activeItem?.key === item.key}
+                  eyebrow={item.eyebrow}
+                  title={item.title}
+                  subtitle={item.subtitle}
+                  meta={item.meta}
+                  onClick={() => {
+                    setActiveItemKey(item.key);
+                    if (item.kind === "message") {
+                      props.onSelectMessage(item.message.id);
+                    } else if (item.kind === "call") {
+                      props.onSelectTrace(item.trace.id);
+                    } else if (item.kind === "step") {
+                      props.onSelectStep(item.step.id);
+                    } else {
+                      props.onSelectEvent(item.event.id);
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </DetailSection>
+
+        <DetailSection
+          title={
+            activeItem?.kind === "message"
+              ? "Message Detail"
+              : activeItem?.kind === "call"
+                ? "Model Call Detail"
+                : activeItem?.kind === "event"
+                  ? "Event Detail"
+                  : "Step Detail"
+          }
+          description={
+            activeItem?.kind === "message"
+              ? "消息详情保留对话视角：正文、metadata、tool refs 和落库信息。"
+              : activeItem?.kind === "call"
+                ? "模型调用详情保留模型视角：message list、tool 往返、usage 和原始 payload。"
+                : activeItem?.kind === "event"
+                  ? "事件详情保留实时流视角：event 名称、cursor、run 关联和完整 data。"
+                  : "步骤详情保留执行视角：step 元信息以及落库的 input / output 原始数据。"
+          }
+        >
+          {activeItem?.kind === "message" ? (
+            <>
+              <div className="flex flex-wrap gap-2">
+                <Badge>{activeItem.message.role}</Badge>
+                {activeItem.message.runId ? <Badge>{activeItem.message.runId}</Badge> : null}
+                <Badge>{formatTimestamp(activeItem.message.createdAt)}</Badge>
+                <MessageToolRefChips content={activeItem.message.content} />
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <InsightRow label="Message ID" value={activeItem.message.id} />
+                <InsightRow label="Session ID" value={activeItem.message.sessionId} />
+              </div>
+              <div className="border-l border-border/70 pl-4">
+                <MessageContentDetail content={activeItem.message.content} maxHeightClassName="max-h-[28rem]" />
+              </div>
+              {activeItem.message.metadata ? <JsonBlock title="Metadata" value={activeItem.message.metadata} /> : null}
+            </>
+          ) : activeItem?.kind === "call" ? (
+            <ModelCallTraceCard trace={activeItem.trace} />
+          ) : activeItem?.kind === "step" ? (
+            <>
+              <div className="flex flex-wrap gap-2">
+                <Badge>{`step ${activeItem.step.seq}`}</Badge>
+                <Badge>{activeItem.step.stepType}</Badge>
+                <Badge className={statusTone(activeItem.step.status)}>{activeItem.step.status}</Badge>
+                {activeItem.step.name ? <Badge>{activeItem.step.name}</Badge> : null}
+                {activeItem.step.agentName ? <Badge>{activeItem.step.agentName}</Badge> : null}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <InsightRow label="Started" value={formatTimestamp(activeItem.step.startedAt)} />
+                <InsightRow label="Ended" value={formatTimestamp(activeItem.step.endedAt)} />
+                <InsightRow label="Run" value={activeItem.step.runId} />
+                <InsightRow label="Type" value={activeItem.step.stepType} />
+              </div>
+              <div className="grid gap-3 xl:grid-cols-2">
+                <JsonBlock title="Input" value={activeItem.step.input ?? {}} />
+                <JsonBlock title="Output" value={activeItem.step.output ?? {}} />
+              </div>
+            </>
+          ) : activeItem?.kind === "event" ? (
+            <>
+              <div className="flex flex-wrap gap-2">
+                <Badge>{activeItem.event.event}</Badge>
+                {activeItem.event.runId ? <Badge>{activeItem.event.runId}</Badge> : null}
+                <Badge>{`cursor ${activeItem.event.cursor}`}</Badge>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <InsightRow label="Created" value={formatTimestamp(activeItem.event.createdAt)} />
+                <InsightRow label="Run" value={activeItem.event.runId ?? "session-wide"} />
+                <InsightRow label="Cursor" value={activeItem.event.cursor} />
+                <InsightRow label="Event" value={activeItem.event.event} />
+              </div>
+              <JsonBlock title="Event Data" value={activeItem.event.data} />
+            </>
+          ) : (
+            <EmptyState title="Nothing selected" description="Pick an item from the left timeline to inspect its raw detail." />
+          )}
+        </DetailSection>
+      </div>
+    </section>
+  );
+}
+
+function OverviewWorkbench(props: {
+  session: Session | null;
+  run: Run | null;
+  workspace: Workspace | null;
+  sessionName: string;
+  workspaceName: string;
+  selectedRunId: string;
+  onSelectedRunIdChange: (value: string) => void;
+  onRefreshRun: () => void;
+  onRefreshRunSteps: () => void;
+  onCancelRun: () => void;
+  modelCallCount: number;
+  stepCount: number;
+  eventCount: number;
+  messageCount: number;
+  latestEvent: SessionEventContract | undefined;
+  events: SessionEventContract[];
+  runSteps: RunStep[];
+  messages: Message[];
+  latestTrace: ModelCallTrace | null;
+  onOpenTimeline: () => void;
+  onOpenWorkspace: () => void;
+  onOpenProvider: () => void;
+}) {
+  const latestMessage = props.messages.at(-1);
+  const latestStep = props.runSteps.at(-1);
+  const latestEvent = props.latestEvent ?? props.events[0];
+  const lastUpdated = formatTimestamp(props.run?.heartbeatAt ?? props.run?.endedAt ?? props.session?.updatedAt);
+
+  return (
+    <section className="space-y-4">
+      <section className="ob-section rounded-[20px] p-5">
+        <InspectorPanelHeader
+          title="Overview"
+          description="先在这里确认当前 workspace、session 和 run 的状态，再决定下一步进入 Timeline、Workspace 还是 Provider。"
+          action={
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={props.onOpenTimeline}>
+                Open Timeline
+              </Button>
+              <Button variant="secondary" size="sm" onClick={props.onOpenWorkspace}>
+                Workspace
+              </Button>
+              <Button variant="ghost" size="sm" onClick={props.onOpenProvider}>
+                Provider
+              </Button>
+            </div>
+          }
+        />
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-6">
+          <TraceSummaryStat label="Workspace" value={props.workspace?.id ?? props.workspaceName} />
+          <TraceSummaryStat label="Session" value={props.session?.id ?? props.sessionName} />
+          <TraceSummaryStat label="Run" value={props.run?.id ?? "n/a"} />
+          <TraceSummaryStat label="Agent" value={props.run?.effectiveAgentName ?? props.session?.activeAgentName ?? "n/a"} />
+          <TraceSummaryStat label="Status" value={props.run?.status ?? "no-run"} />
+          <TraceSummaryStat label="Last Updated" value={lastUpdated} />
+        </div>
+
+        <div className="mt-5 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <CatalogLine label="messages" value={props.messageCount} />
+          <CatalogLine label="model calls" value={props.modelCallCount} />
+          <CatalogLine label="run steps" value={props.stepCount} />
+          <CatalogLine label="events" value={props.eventCount} />
+        </div>
+      </section>
+
+      <div className="grid gap-4 2xl:grid-cols-[minmax(340px,0.78fr)_minmax(0,1.22fr)]">
+        <DetailSection
+          title="Run Controls"
+          description="手动切换 run、刷新状态或取消当前执行。这里保留操作，避免散落到别的页面。"
+        >
+          <div className="flex flex-wrap gap-2">
+            <Badge>{props.workspaceName}</Badge>
+            <Badge>{props.sessionName}</Badge>
+            {props.run?.id ? <Badge>{props.run.id}</Badge> : null}
+            <Badge className={statusTone(props.run?.status ?? "idle")}>{props.run?.status ?? "no-run"}</Badge>
+            {latestEvent ? <Badge>{latestEvent.event}</Badge> : null}
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <InsightRow label="Workspace Mode" value={props.workspace?.kind ?? "n/a"} />
+            <InsightRow label="Mirror" value={props.workspace?.historyMirrorEnabled ? "enabled" : "disabled"} />
+            <InsightRow label="Latest Event" value={latestEvent?.event ?? "n/a"} />
+            <InsightRow label="Selected Run" value={props.selectedRunId || props.run?.id || "n/a"} />
+          </div>
+
+          <div className="rounded-[18px] border border-border bg-muted/20 p-4">
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
+              <Input
+                value={props.selectedRunId}
+                onChange={(event) => props.onSelectedRunIdChange(event.target.value)}
+                placeholder="Selected run"
+              />
+              <Button variant="secondary" onClick={props.onRefreshRun}>
+                Load Run
+              </Button>
+              <Button variant="secondary" onClick={props.onRefreshRunSteps}>
+                Load Steps
+              </Button>
+              <Button variant="destructive" onClick={props.onCancelRun}>
+                <CircleSlash2 className="h-4 w-4" />
+                Cancel
+              </Button>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">优先在这里确认当前 run 是否正确，再进入 Timeline 看具体链路。</p>
+          </div>
+        </DetailSection>
+
+        <DetailSection
+          title="Recent Signals"
+          description="这里只看最近发生了什么，帮助你判断接下来该去 Timeline 里看消息、模型调用、步骤还是事件。"
+        >
+          <div className="space-y-1">
+            <TimelineListButton
+              active={false}
+              eyebrow="message"
+              title={latestMessage ? compactPreviewText(latestMessage.content, 88) : "No message yet"}
+              subtitle={latestMessage?.runId ? `run ${latestMessage.runId}` : "stored conversation"}
+              meta={latestMessage ? formatTimestamp(latestMessage.createdAt) : undefined}
+              onClick={props.onOpenTimeline}
+            />
+            <TimelineListButton
+              active={false}
+              eyebrow="call"
+              title={props.latestTrace?.input.model ?? props.latestTrace?.name ?? "No model call yet"}
+              subtitle={
+                props.latestTrace
+                  ? `${props.latestTrace.output.toolCalls.length} tool calls · ${props.latestTrace.output.finishReason ?? "finish n/a"}`
+                  : "model-facing trace"
+              }
+              meta={props.latestTrace ? formatTimestamp(props.latestTrace.endedAt ?? props.latestTrace.startedAt) : undefined}
+              onClick={props.onOpenTimeline}
+            />
+            <TimelineListButton
+              active={false}
+              eyebrow="step"
+              title={latestStep?.name ?? latestStep?.stepType ?? "No step yet"}
+              subtitle={latestStep ? `${latestStep.stepType} · ${latestStep.status}` : "runtime step"}
+              meta={latestStep ? formatTimestamp(latestStep.endedAt ?? latestStep.startedAt) : undefined}
+              onClick={props.onOpenTimeline}
+            />
+            <TimelineListButton
+              active={false}
+              eyebrow="event"
+              title={latestEvent?.event ?? "No event yet"}
+              subtitle={latestEvent?.runId ? `run ${latestEvent.runId}` : "runtime event"}
+              meta={latestEvent ? formatTimestamp(latestEvent.createdAt) : undefined}
+              onClick={props.onOpenTimeline}
+            />
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-3">
+            <div className="rounded-[18px] border border-border/70 bg-muted/15 p-4">
+              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Next Best View</p>
+              <p className="mt-2 text-sm font-medium text-foreground">Timeline</p>
+              <p className="mt-1 text-xs leading-6 text-muted-foreground">看消息、模型调用、step、event 的完整因果链。</p>
+            </div>
+            <div className="rounded-[18px] border border-border/70 bg-muted/15 p-4">
+              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Environment</p>
+              <p className="mt-2 text-sm font-medium text-foreground">Workspace</p>
+              <p className="mt-1 text-xs leading-6 text-muted-foreground">核对 mirror、catalog 和原始记录边界。</p>
+            </div>
+            <div className="rounded-[18px] border border-border/70 bg-muted/15 p-4">
+              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Sandbox</p>
+              <p className="mt-2 text-sm font-medium text-foreground">Provider</p>
+              <p className="mt-1 text-xs leading-6 text-muted-foreground">管理连接、provider 列表和单次模型验证。</p>
+            </div>
+          </div>
+        </DetailSection>
+      </div>
     </section>
   );
 }
@@ -616,6 +1029,172 @@ function OverviewRecordsCard(props: {
       <InspectorDisclosure title="Workspace Record" description="当前 workspace 的配置与运行状态。" badge={props.workspace ? "ready" : "n/a"}>
         {props.workspace ? <EntityPreview title={props.workspace.id} data={props.workspace} /> : <EmptyState title="No workspace" description="Select a workspace to inspect its record." />}
       </InspectorDisclosure>
+    </section>
+  );
+}
+
+function WorkspaceCatalogCollection(props: {
+  title: string;
+  description: string;
+  items: unknown[];
+}) {
+  return (
+    <InspectorDisclosure title={props.title} description={props.description} badge={props.items.length}>
+      {props.items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No records available.</p>
+      ) : (
+        <EntityPreview title={props.title} data={props.items} />
+      )}
+    </InspectorDisclosure>
+  );
+}
+
+function WorkspaceWorkbench(props: {
+  workspace: Workspace | null;
+  session: Session | null;
+  run: Run | null;
+  catalog: WorkspaceCatalog | null;
+  mirrorStatus: WorkspaceHistoryMirrorStatus | null;
+  mirrorToggleBusy: boolean;
+  mirrorRebuildBusy: boolean;
+  updateWorkspaceHistoryMirrorEnabled: (enabled: boolean) => void;
+  refreshWorkspace: (targetId: string) => void;
+  rebuildWorkspaceHistoryMirror: () => void;
+}) {
+  const [panel, setPanel] = useState<"catalog" | "records">("catalog");
+
+  return (
+    <section className="space-y-4">
+      <section className="ob-section rounded-[20px] p-5">
+        <InspectorPanelHeader
+          title="Workspace"
+          description="Workspace 页只负责环境级信息: 同步控制、资源目录和原始记录，不再混入对话或运行细节。"
+        />
+        <div className="mt-5 grid gap-4 lg:grid-cols-6">
+          <TraceSummaryStat label="Workspace" value={props.workspace?.id ?? "n/a"} />
+          <TraceSummaryStat label="Kind" value={props.workspace?.kind ?? "n/a"} />
+          <TraceSummaryStat label="Status" value={props.workspace?.status ?? "n/a"} />
+          <TraceSummaryStat label="Mirror" value={props.workspace?.historyMirrorEnabled ? "enabled" : "disabled"} />
+          <TraceSummaryStat label="Catalog" value={props.catalog ? "loaded" : "missing"} />
+          <TraceSummaryStat label="Selected Run" value={props.run?.id ?? "n/a"} />
+        </div>
+      </section>
+
+      <div className="grid gap-4 2xl:grid-cols-[minmax(320px,0.68fr)_minmax(0,1.32fr)]">
+        <div className="space-y-4">
+          <DetailSection
+            title="Mirror Sync"
+            description="管理当前 workspace 的历史镜像同步，以及最近一次同步状态。"
+          >
+            {props.workspace ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className={props.workspace.historyMirrorEnabled ? "bg-foreground text-background" : ""}>
+                    {props.workspace.historyMirrorEnabled ? "Enabled" : "Disabled"}
+                  </Badge>
+                  <Badge variant="outline">{props.workspace.kind}</Badge>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant={props.workspace.historyMirrorEnabled ? "secondary" : "default"}
+                    size="sm"
+                    disabled={props.mirrorToggleBusy || props.workspace.kind !== "project" || props.workspace.historyMirrorEnabled}
+                    onClick={() => props.updateWorkspaceHistoryMirrorEnabled(true)}
+                  >
+                    Enable
+                  </Button>
+                  <Button
+                    variant={!props.workspace.historyMirrorEnabled ? "secondary" : "default"}
+                    size="sm"
+                    disabled={props.mirrorToggleBusy || props.workspace.kind !== "project" || !props.workspace.historyMirrorEnabled}
+                    onClick={() => props.updateWorkspaceHistoryMirrorEnabled(false)}
+                  >
+                    Disable
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={props.mirrorToggleBusy || props.mirrorRebuildBusy}
+                    onClick={() => props.refreshWorkspace(props.workspace!.id)}
+                  >
+                    Refresh
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={props.mirrorRebuildBusy || props.mirrorToggleBusy || props.workspace.kind !== "project" || !props.workspace.historyMirrorEnabled}
+                    onClick={props.rebuildWorkspaceHistoryMirror}
+                  >
+                    Rebuild
+                  </Button>
+                </div>
+                <div className="grid gap-2">
+                  <CatalogLine label="mirrorState" value={props.mirrorStatus?.state ?? "n/a"} />
+                  <CatalogLine label="lastSyncedAt" value={props.mirrorStatus?.lastSyncedAt ? formatTimestamp(props.mirrorStatus.lastSyncedAt) : "n/a"} />
+                  <CatalogLine label="lastEventId" value={props.mirrorStatus?.lastEventId ? String(props.mirrorStatus.lastEventId) : "n/a"} />
+                </div>
+                {props.mirrorStatus?.dbPath ? (
+                  <div className="border-l border-border/70 pl-4 text-xs leading-6 text-muted-foreground">
+                    {props.mirrorStatus.dbPath}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <EmptyState title="No workspace selected" description="Open a workspace to manage mirror sync and environment controls." />
+            )}
+          </DetailSection>
+
+          <DetailSection
+            title="Inventory Snapshot"
+            description="左侧只看 catalog 是否完整、资源数量是否符合预期。"
+          >
+            {props.catalog ? (
+              <div className="grid gap-2">
+                <CatalogLine label="agents" value={props.catalog.agents.length} />
+                <CatalogLine label="models" value={props.catalog.models.length} />
+                <CatalogLine label="actions" value={props.catalog.actions.length} />
+                <CatalogLine label="skills" value={props.catalog.skills.length} />
+                <CatalogLine label="tools" value={props.catalog.tools?.length ?? 0} />
+                <CatalogLine label="hooks" value={props.catalog.hooks.length} />
+                <CatalogLine label="nativeTools" value={props.catalog.nativeTools.length} />
+              </div>
+            ) : (
+              <EmptyState title="No catalog" description="Load a workspace first to inspect the current inventory." />
+            )}
+          </DetailSection>
+        </div>
+
+        <DetailSection
+          title="Workspace Data"
+          description="右侧分成两种阅读模式: Catalog 适合核对能力边界，Records 适合查看 workspace / session / run 原始对象。"
+        >
+          <div className="segmented-shell">
+            <InspectorTabButton label="Catalog" active={panel === "catalog"} onClick={() => setPanel("catalog")} />
+            <InspectorTabButton label="Records" active={panel === "records"} onClick={() => setPanel("records")} />
+          </div>
+
+          {panel === "catalog" ? (
+            props.catalog ? (
+              <div className="space-y-3">
+                <WorkspaceCatalogCollection title="Agents" description="Workspace-scoped agent definitions." items={props.catalog.agents} />
+                <WorkspaceCatalogCollection title="Models" description="Available models and provider bindings." items={props.catalog.models} />
+                <WorkspaceCatalogCollection title="Actions" description="Runnable actions exposed in this workspace." items={props.catalog.actions} />
+                <WorkspaceCatalogCollection title="Skills" description="Loaded workspace skills." items={props.catalog.skills} />
+                <WorkspaceCatalogCollection title="Tools" description="Declared tools and tool exposure." items={props.catalog.tools ?? []} />
+                <WorkspaceCatalogCollection title="Hooks" description="Registered hook definitions." items={props.catalog.hooks} />
+                <WorkspaceCatalogCollection title="Native Tools" description="Native tool exposure recorded by the runtime." items={props.catalog.nativeTools} />
+                <InspectorDisclosure title="Raw Catalog JSON" description="完整 catalog 记录，保留给审计或排查边界问题。" badge="raw">
+                  <EntityPreview title={props.catalog.workspaceId} data={props.catalog} />
+                </InspectorDisclosure>
+              </div>
+            ) : (
+              <EmptyState title="No catalog" description="Load a workspace first to inspect its catalog." />
+            )
+          ) : (
+            <OverviewRecordsCard run={props.run} session={props.session} workspace={props.workspace} />
+          )}
+        </DetailSection>
+      </div>
     </section>
   );
 }
@@ -1056,9 +1635,11 @@ export {
   MessageContentDetail,
   ContextWorkbench,
   CallsWorkbench,
-  RuntimeWorkbench,
+  TimelineWorkbench,
+  OverviewWorkbench,
   InspectorOverviewCard,
   OverviewRecordsCard,
+  WorkspaceWorkbench,
   RuntimeActivityCard,
   LlmSummaryCard,
   SessionContextCard,

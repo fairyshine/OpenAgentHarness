@@ -342,6 +342,7 @@ function toAgentCatalogItems(
 ): AgentCatalogItem[] {
   return Object.values(agents).map((agent) => ({
     name: agent.name,
+    mode: agent.mode,
     source: sources?.[agent.name] ?? "workspace",
     ...(agent.description ? { description: agent.description } : {})
   }));

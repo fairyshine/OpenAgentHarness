@@ -89,8 +89,8 @@ openai-default:
       expect(project.defaultAgent).toBe("builder");
       expect(project.catalog.agents).toEqual(
         expect.arrayContaining([
-          { name: "assistant", source: "platform", description: expect.any(String) },
-          { name: "builder", source: "platform", description: expect.any(String) }
+          { name: "assistant", mode: "primary", source: "platform", description: expect.any(String) },
+          { name: "builder", mode: "primary", source: "platform", description: expect.any(String) }
         ])
       );
       expect(project.agents.builder.tools.native).toEqual([
@@ -104,12 +104,14 @@ openai-default:
         "WebSearch",
         "TodoWrite"
       ]);
+      expect(project.agents.assistant.switch).toEqual(["builder"]);
+      expect(project.agents.builder.switch).toEqual(["assistant"]);
 
       expect(chat.defaultAgent).toBe("assistant");
       expect(chat.catalog.agents).toEqual(
         expect.arrayContaining([
-          { name: "assistant", source: "platform", description: expect.any(String) },
-          { name: "builder", source: "platform", description: expect.any(String) }
+          { name: "assistant", mode: "primary", source: "platform", description: expect.any(String) },
+          { name: "builder", mode: "primary", source: "platform", description: expect.any(String) }
         ])
       );
     } finally {

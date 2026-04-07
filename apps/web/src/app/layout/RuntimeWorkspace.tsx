@@ -1,6 +1,7 @@
 import { MessageSquareText, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import type { useAppController } from "../use-app-controller";
@@ -10,6 +11,20 @@ import { InspectorWorkspace } from "../inspector/InspectorWorkspace";
 type RuntimeProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"];
 
 export function RuntimeWorkspace(props: RuntimeProps) {
+  const selectedAgentName = props.session?.activeAgentName ?? props.run?.effectiveAgentName ?? "";
+  const workspacePrimaryAgents = (props.catalog?.agents ?? []).filter(
+    (agent) => agent.mode === "primary" && agent.source === "workspace"
+  );
+  const visiblePrimaryAgents =
+    selectedAgentName && !workspacePrimaryAgents.some((agent) => agent.name === selectedAgentName)
+      ? [
+          ...workspacePrimaryAgents,
+          ...(props.catalog?.agents ?? []).filter(
+            (agent) => agent.mode === "primary" && agent.name === selectedAgentName
+          )
+        ]
+      : workspacePrimaryAgents;
+
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-5">
@@ -27,7 +42,34 @@ export function RuntimeWorkspace(props: RuntimeProps) {
         </Tabs>
 
         <div className="flex flex-wrap items-center gap-2">
-          {props.hasActiveSession ? <Badge variant="secondary">{props.session?.activeAgentName ?? props.run?.effectiveAgentName ?? "no agent"}</Badge> : null}
+          {props.hasActiveSession ? (
+            visiblePrimaryAgents.length > 0 && props.session ? (
+              <div className="flex items-center gap-2">
+                <Select
+                  value={selectedAgentName}
+                  onValueChange={(value) => {
+                    if (value !== props.session?.activeAgentName) {
+                      props.switchSessionAgent(props.session.id, value);
+                    }
+                  }}
+                >
+                  <SelectTrigger className="min-w-36" size="sm" aria-label="Session agent">
+                    <SelectValue placeholder="Select agent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {visiblePrimaryAgents.map((agent) => (
+                      <SelectItem key={agent.name} value={agent.name}>
+                        {agent.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {props.isRunning ? <span className="text-xs text-muted-foreground">Applies to the next run</span> : null}
+              </div>
+            ) : (
+              <Badge variant="secondary">{selectedAgentName || "no agent"}</Badge>
+            )
+          ) : null}
           {props.selectedRunId ? <Badge variant="outline">run {props.selectedRunId}</Badge> : null}
           {props.mainViewMode === "inspector" ? (
             <>
@@ -47,7 +89,7 @@ export function RuntimeWorkspace(props: RuntimeProps) {
           <ConversationWorkspace {...props} />
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-hidden px-4 py-4 md:px-5 md:py-5">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 md:px-5 md:py-5">
           <InspectorWorkspace {...props} />
         </div>
       )}

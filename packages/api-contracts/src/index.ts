@@ -38,6 +38,7 @@ export const workspaceHistoryMirrorStatusSchema = z.object({
 
 export const agentCatalogItemSchema = z.object({
   name: z.string(),
+  mode: z.enum(["primary", "subagent", "all"]),
   source: z.enum(["platform", "workspace"]),
   description: z.string().optional()
 });
@@ -531,9 +532,14 @@ export const createSessionRequestSchema = z.object({
   agentName: z.string().optional()
 });
 
-export const updateSessionRequestSchema = z.object({
-  title: z.string().trim().min(1).max(120)
-});
+export const updateSessionRequestSchema = z
+  .object({
+    title: z.string().trim().min(1).max(120).optional(),
+    activeAgentName: z.string().trim().min(1).optional()
+  })
+  .refine((value) => value.title !== undefined || value.activeAgentName !== undefined, {
+    message: "At least one session field must be provided."
+  });
 
 export const createMessageRequestSchema = z.object({
   content: z.string().min(1),

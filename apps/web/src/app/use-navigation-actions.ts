@@ -321,6 +321,41 @@ export function useNavigationActions(params: {
     }
   }
 
+  async function switchSessionAgent(sessionToUpdateId: string, activeAgentName: string) {
+    const nextAgentName = activeAgentName.trim();
+    if (!nextAgentName) {
+      params.setErrorMessage("Agent 名称不能为空。");
+      return;
+    }
+
+    try {
+      const updated = await params.request<Session>(`/api/v1/sessions/${sessionToUpdateId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ activeAgentName: nextAgentName })
+      });
+
+      rememberSession(updated);
+      if (params.navigation.session?.id === updated.id) {
+        params.navigation.setSession(updated);
+      }
+      params.setActivity(`Session ${updated.id} 已切换到 agent ${updated.activeAgentName}`);
+      params.setErrorMessage("");
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        if (params.navigation.session?.id === sessionToUpdateId || params.navigation.sessionId === sessionToUpdateId) {
+          clearSessionSelection(sessionToUpdateId, { forgetSession: true });
+        } else {
+          params.navigation.setSavedSessions((current) => current.filter((entry) => entry.id !== sessionToUpdateId));
+          params.navigation.setRecentSessions((current) => current.filter((entry) => entry !== sessionToUpdateId));
+        }
+      }
+      params.setErrorMessage(toErrorMessage(error));
+    }
+  }
+
   async function refreshWorkspaceTemplates(quiet = false) {
     try {
       const response = await params.request<WorkspaceTemplateList>("/api/v1/workspace-templates");
@@ -771,6 +806,7 @@ export function useNavigationActions(params: {
     deleteWorkspace,
     removeSavedSession,
     renameSession,
+    switchSessionAgent,
     clearSessionSelection,
     clearWorkspaceSelection,
     openWorkspace,

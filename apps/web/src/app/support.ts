@@ -103,9 +103,9 @@ interface ModelProviderListResponse {
   items: ModelProviderRecord[];
 }
 
-type InspectorTab = "overview" | "context" | "calls" | "runtime" | "catalog" | "model";
+type InspectorTab = "overview" | "timeline" | "workspace";
 type MainViewMode = "conversation" | "inspector";
-type SurfaceMode = "runtime" | "storage";
+type SurfaceMode = "runtime" | "storage" | "provider";
 type StorageBrowserTab = "postgres" | "redis";
 type MessageParts = Extract<Message["content"], unknown[]>;
 type MessagePart = MessageParts[number];

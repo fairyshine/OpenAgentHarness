@@ -77,7 +77,7 @@ export function useAppController() {
   const [selectedMessageId, setSelectedMessageId] = useState("");
   const [selectedStepId, setSelectedStepId] = useState("");
   const [selectedEventId, setSelectedEventId] = useState("");
-  const [runtimeInspectorMode, setRuntimeInspectorMode] = useState<"steps" | "events">("steps");
+  const [timelineInspectorMode, setTimelineInspectorMode] = useState<"all" | "messages" | "calls" | "steps" | "events">("all");
   const navigation = useNavigationState();
   const {
     workspaceDraft,
@@ -108,8 +108,6 @@ export function useAppController() {
     setSession,
     showWorkspaceCreator,
     setShowWorkspaceCreator,
-    showConnectionPanel,
-    setShowConnectionPanel,
     mirrorToggleBusy,
     setMirrorToggleBusy,
     mirrorRebuildBusy,
@@ -810,16 +808,10 @@ export function useAppController() {
   const latestEvent = deferredEvents[0];
   const inspectorSubtitle =
     inspectorTab === "overview"
-      ? "Session / run summary and quick controls"
-      : inspectorTab === "context"
-        ? "System prompt and stored session messages"
-        : inspectorTab === "calls"
-          ? "Model calls, tool exchanges, and trace export"
-          : inspectorTab === "runtime"
-            ? "Run steps and SSE event feed"
-            : inspectorTab === "catalog"
-              ? "Workspace catalog and mirror controls"
-              : "Single-shot model generation";
+      ? "Session / run summary, quick controls, and raw records"
+      : inspectorTab === "timeline"
+        ? "Messages, model calls, steps, and events in one feed"
+        : "Workspace controls, catalog inventory, and raw records";
 
   return {
     errorMessage,
@@ -842,7 +834,25 @@ export function useAppController() {
       onSurfaceModeChange: setSurfaceMode
     },
     storageSurfaceProps: storageController.storageSurfaceProps,
+    providerSurfaceProps: {
+      connection,
+      setConnection,
+      pingHealth: () => void pingHealth(),
+      setStreamRevision,
+      healthStatus,
+      healthReport,
+      readinessReport,
+      streamState,
+      modelProviders,
+      refreshModelProviders: () => void refreshModelProviders(),
+      modelDraft,
+      setModelDraft,
+      generateOnce: () => void generateOnce(),
+      generateBusy,
+      generateOutput
+    },
     sidebarSurfaceProps: {
+      surfaceMode,
       orderedSavedWorkspaces,
       savedSessionsCount: savedSessions.length,
       workspaceManagementEnabled,
@@ -870,20 +880,34 @@ export function useAppController() {
       setAutoStream,
       filterSelectedRun,
       setFilterSelectedRun,
-      showConnectionPanel,
-      setShowConnectionPanel,
+      storageOverview: storageController.storageSurfaceProps.storageOverview,
+      storageBrowserTab: storageController.storageSurfaceProps.storageBrowserTab,
+      onStorageBrowserTabChange: storageController.storageSurfaceProps.onStorageBrowserTabChange,
+      onRefreshStorageOverview: storageController.storageSurfaceProps.onRefreshStorageOverview,
+      selectedStorageTable: storageController.storageSurfaceProps.selectedStorageTable,
+      onSelectStorageTable: storageController.storageSurfaceProps.onSelectStorageTable,
+      redisKeyPattern: storageController.storageSurfaceProps.redisKeyPattern,
+      onRedisKeyPatternChange: storageController.storageSurfaceProps.onRedisKeyPatternChange,
+      redisKeyPage: storageController.storageSurfaceProps.redisKeyPage,
+      selectedRedisKey: storageController.storageSurfaceProps.selectedRedisKey,
+      onSelectRedisKey: storageController.storageSurfaceProps.onSelectRedisKey,
+      onRefreshRedisKeys: storageController.storageSurfaceProps.onRefreshRedisKeys,
+      storageBusy: storageController.storageSurfaceProps.storageBusy,
       connection,
       setConnection,
       pingHealth: () => void pingHealth(),
+      refreshModelProviders: () => void refreshModelProviders(),
       setStreamRevision,
+      healthStatus,
       healthReport,
       readinessReport,
-      modelProviders,
-      refreshModelProviders: () => void refreshModelProviders()
+      streamState,
+      modelProviders
     },
     runtimeDetailSurfaceProps: {
       mainViewMode,
       setMainViewMode,
+      setSurfaceMode,
       hasActiveSession,
       currentSessionName,
       currentWorkspaceName,
@@ -930,24 +954,21 @@ export function useAppController() {
       allAdvertisedToolNames,
       allToolServers,
       downloadSessionTrace,
-      runtimeInspectorMode,
-      setRuntimeInspectorMode,
+      timelineInspectorMode,
+      setTimelineInspectorMode,
       selectedRunStep,
       setSelectedStepId,
       selectedSessionEvent,
       setSelectedEventId,
       catalog,
+      switchSessionAgent: (targetId: string, activeAgentName: string) =>
+        void navigationActions.switchSessionAgent(targetId, activeAgentName),
       mirrorStatus,
       mirrorToggleBusy,
       mirrorRebuildBusy,
       updateWorkspaceHistoryMirrorEnabled: (enabled: boolean) => void navigationActions.updateWorkspaceHistoryMirrorEnabled(enabled),
       refreshWorkspace: (targetId: string) => void navigationActions.refreshWorkspace(targetId, true),
       rebuildWorkspaceHistoryMirror: () => void navigationActions.rebuildWorkspaceHistoryMirror(),
-      modelDraft,
-      setModelDraft,
-      generateOnce: () => void generateOnce(),
-      generateBusy,
-      generateOutput,
       streamState,
       isRunning: !isTerminalRunStatus(run?.status) && run?.status != null
     }

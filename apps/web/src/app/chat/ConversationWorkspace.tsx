@@ -6,12 +6,68 @@ import { Bot, ChevronRight, Folder, Loader2, RefreshCw, Send, Square, Wrench, Co
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
-import { formatTimestamp, statusTone } from "../support";
+import { formatTimestamp, isRecord, statusTone } from "../support";
 import type { Message } from "@oah/api-contracts";
 import type { useAppController } from "../use-app-controller";
 import { Badge } from "@/components/ui/badge";
 
 type RuntimeProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"];
+
+function agentModeTone(mode: "primary" | "subagent" | "all") {
+  switch (mode) {
+    case "primary":
+      return "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300";
+    case "subagent":
+      return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300";
+    case "all":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300";
+  }
+}
+
+function readMessageAgentName(message: Message): string | undefined {
+  if (!message.metadata || !isRecord(message.metadata)) {
+    return undefined;
+  }
+
+  if (typeof message.metadata.agentName === "string" && message.metadata.agentName.trim()) {
+    return message.metadata.agentName;
+  }
+
+  if (typeof message.metadata.effectiveAgentName === "string" && message.metadata.effectiveAgentName.trim()) {
+    return message.metadata.effectiveAgentName;
+  }
+
+  return undefined;
+}
+
+function resolveMessageAgentInfo(message: Message, props: RuntimeProps) {
+  if (message.role !== "assistant" && message.role !== "tool") {
+    return null;
+  }
+
+  const agentModeByName = new Map((props.catalog?.agents ?? []).map((agent) => [agent.name, agent.mode]));
+  const latestStepForMessageRun =
+    message.runId && props.run?.id === message.runId
+      ? [...props.runSteps].reverse().find((step) => typeof step.agentName === "string" && step.agentName.trim())
+      : undefined;
+
+  const agentName =
+    readMessageAgentName(message) ??
+    latestStepForMessageRun?.agentName ??
+    (message.runId && props.run?.id === message.runId ? props.run?.effectiveAgentName ?? props.run?.agentName : undefined) ??
+    props.session?.activeAgentName ??
+    undefined;
+
+  if (!agentName) {
+    return null;
+  }
+
+  const mode = agentModeByName.get(agentName);
+  return {
+    name: agentName,
+    mode
+  };
+}
 
 function MarkdownText({ text, isUser }: { text: string; isUser?: boolean }) {
   return (
@@ -470,9 +526,10 @@ export function ConversationWorkspace(props: RuntimeProps) {
               const isUser = message.role === "user";
               const isStreaming = message.id.startsWith("live:");
               const isToolOnly = !isUser && isToolOnlyMessage(message.content);
+              const messageAgentInfo = resolveMessageAgentInfo(message, props);
 
               return (
-                <article key={message.id} className={`animate-fade-in flex gap-3 md:gap-4 py-2 md:py-3 ${isUser ? "flex-row-reverse" : ""}`}>
+                <article key={message.id} className={`group/message animate-fade-in flex gap-3 md:gap-4 py-2 md:py-3 ${isUser ? "flex-row-reverse" : ""}`}>
                   <div
                     className={`flex-shrink-0 w-8 h-8 md:w-9 md:h-9 rounded-full flex items-center justify-center text-sm shadow-elegant overflow-hidden ${
                       isUser ? "bg-foreground text-background text-xs font-medium" : "bg-muted"
@@ -496,7 +553,9 @@ export function ConversationWorkspace(props: RuntimeProps) {
                         <span className="mt-1 inline-block h-4 w-0.5 animate-pulse bg-current opacity-60" />
                       )}
                     </div>
-                    <div className={`text-[10px] text-muted-foreground/50 mt-1.5 font-medium flex flex-wrap items-center gap-2 ${isUser ? "justify-end" : ""}`}>
+                    <div
+                      className={`mt-1.5 flex min-h-5 flex-wrap items-center gap-2 text-[10px] font-medium text-muted-foreground/50 max-md:visible max-md:opacity-100 md:invisible md:opacity-0 md:pointer-events-none md:group-hover/message:visible md:group-hover/message:opacity-100 md:group-hover/message:pointer-events-auto md:group-focus-within/message:visible md:group-focus-within/message:opacity-100 md:group-focus-within/message:pointer-events-auto ${isUser ? "justify-end" : ""}`}
+                    >
                       {message.runId ? (
                         <Button
                           variant="outline"
@@ -505,7 +564,7 @@ export function ConversationWorkspace(props: RuntimeProps) {
                           onClick={() => {
                             props.setSelectedRunId(message.runId ?? "");
                             props.setMainViewMode("inspector");
-                            props.setInspectorTab("calls");
+                            props.setInspectorTab("timeline");
                             props.refreshRunById(message.runId ?? "");
                             props.refreshRunStepsById(message.runId ?? "");
                           }}
@@ -514,6 +573,20 @@ export function ConversationWorkspace(props: RuntimeProps) {
                         </Button>
                       ) : null}
                       {isStreaming ? <span className="uppercase tracking-[0.14em]">Streaming</span> : null}
+                      {!isUser && messageAgentInfo ? (
+                        <>
+                          <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[10px] font-medium">
+                            {messageAgentInfo.name}
+                          </Badge>
+                          {messageAgentInfo.mode ? (
+                            <span
+                              className={`inline-flex h-5 items-center rounded-md border px-1.5 text-[10px] font-medium uppercase tracking-[0.12em] ${agentModeTone(messageAgentInfo.mode)}`}
+                            >
+                              {messageAgentInfo.mode}
+                            </span>
+                          ) : null}
+                        </>
+                      ) : null}
                       <span>{formatTimestamp(message.createdAt)}</span>
                     </div>
                   </div>

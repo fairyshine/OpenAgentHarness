@@ -553,8 +553,8 @@ default_agent: assistant
       modelRef: "platform/openai-default"
     });
     expect(project?.catalog.agents).toEqual([
-      { name: "builder", source: "workspace", description: "Build things" },
-      { name: "assistant", source: "platform", description: "Platform assistant" }
+      { name: "builder", mode: "primary", source: "workspace", description: "Build things" },
+      { name: "assistant", mode: "primary", source: "platform", description: "Platform assistant" }
     ]);
     expect(project?.catalog.models.map((model) => model.ref)).toEqual(["platform/openai-default", "workspace/repo-model"]);
     expect(project?.workspaceModels["repo-model"]).toMatchObject({
@@ -628,7 +628,7 @@ default_agent: assistant
       name: "assistant",
       description: "Platform assistant"
     });
-    expect(chat?.catalog.agents).toEqual([{ name: "assistant", source: "platform", description: "Platform assistant" }]);
+    expect(chat?.catalog.agents).toEqual([{ name: "assistant", mode: "primary", source: "platform", description: "Platform assistant" }]);
     expect(chat?.catalog.models.map((model) => model.ref)).toEqual(["platform/openai-default"]);
     expect(chat?.catalog.actions).toEqual([]);
     expect(chat?.catalog.skills).toEqual([]);
@@ -782,8 +782,8 @@ Workspace implementation prompt.
 
     expect(workspace.defaultAgent).toBe("assistant");
     expect(workspace.catalog.agents).toEqual([
-      { name: "builder", source: "workspace", description: "Workspace builder" },
-      { name: "assistant", source: "platform", description: "Platform assistant" }
+      { name: "builder", mode: "primary", source: "workspace", description: "Workspace builder" },
+      { name: "assistant", mode: "primary", source: "platform", description: "Platform assistant" }
     ]);
     expect(workspace.agents.builder).toMatchObject({
       description: "Workspace builder",

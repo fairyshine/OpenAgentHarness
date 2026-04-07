@@ -1,5 +1,7 @@
+import type { Run, Session } from "@oah/api-contracts";
+
 import { createRunActionTool } from "./action-dispatch.js";
-import { createAgentSwitchTool, createAgentTool } from "./agent-control.js";
+import { createAgentSwitchTool, createSubAgentTool } from "./agent-control.js";
 import { AppError } from "./errors.js";
 import {
   createNativeToolSet,
@@ -12,10 +14,8 @@ import type {
   ActionDefinition,
   ActionRetryPolicy,
   ModelGateway,
-  Run,
   RuntimeToolExecutionContext,
   RuntimeToolSet,
-  Session,
   SkillDefinition,
   ToolServerDefinition,
   WorkspaceRecord
@@ -178,10 +178,10 @@ export function activeToolNamesForAgent(
     names.push("Skill");
   }
   if ((workspace.agents[activeAgentName]?.switch ?? []).length > 0) {
-    names.push("agent.switch");
+    names.push("AgentSwitch");
   }
   if (canDelegateFromAgent(workspace, activeAgentName)) {
-    names.push("Agent");
+    names.push("SubAgent");
   }
   return names.length > 0 ? names : undefined;
 }
@@ -217,7 +217,7 @@ export function toolSourceType(toolName: string): RuntimeToolSourceType {
     return "skill";
   }
 
-  if (toolName === "Agent" || toolName.startsWith("agent.")) {
+  if (toolName === "SubAgent" || toolName === "AgentSwitch" || toolName.startsWith("agent.")) {
     return "agent";
   }
 
@@ -267,9 +267,14 @@ export interface BuildRuntimeToolsInput {
     output: string;
   }>;
   delegateAgent: (
-    input: { targetAgentName: string; task: string; handoffSummary?: string | undefined },
+    input: {
+      targetAgentName?: string | undefined;
+      task: string;
+      handoffSummary?: string | undefined;
+      taskId?: string | undefined;
+    },
     currentAgentName: string
-  ) => Promise<{ childSessionId: string; childRunId: string }>;
+  ) => Promise<{ childSessionId: string; childRunId: string; targetAgentName: string }>;
   awaitDelegatedRuns: (input: { runIds: string[]; mode: "all" | "any" }) => Promise<string>;
   switchAgent: (targetAgentName: string, currentAgentName: string) => Promise<void>;
 }
@@ -295,7 +300,7 @@ export function buildRuntimeTools(input: BuildRuntimeToolsInput): RuntimeToolSet
       async (action, actionInput, context) => input.executeAction(action, actionInput, context)
     ),
     ...createDynamicActivateSkillTool(() => visibleLlmSkills(workspace, getCurrentAgentName())),
-    ...createAgentTool(
+    ...createSubAgentTool(
       getCurrentAgentName,
       () => workspace.agents[getCurrentAgentName()],
       () => workspace.agents,
