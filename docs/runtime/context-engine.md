@@ -8,8 +8,6 @@
 - 平台内建 agent 定义
 - 当前 agent 定义
 - 服务端 `paths.model_dir` 中的平台模型入口清单
-- 服务端 `paths.tool_dir` 中的公共 external tool 定义
-- 服务端 `paths.skill_dir` 中的公共 skill 定义
 - workspace 级模型入口清单
 - `AGENTS.md`
 - `.openharness` 目录中的声明式配置
@@ -17,7 +15,8 @@
 
 说明：
 
-- 运行时会同时读取服务端公共能力目录与当前 workspace 文件
+- 运行时会读取服务端公共模型目录与当前 workspace 文件
+- 服务端 `paths.tool_dir` / `paths.skill_dir` 主要作为模板初始化的导入源，不直接进入 workspace 运行时上下文
 - 平台模板仅用于初始化 workspace，不参与运行时加载或 merge
 - `paths.chat_dir` 下的只读对话空间不属于“先复制后使用”的模板；它们会被直接发现并按 workspace 加载
 - `kind=chat` workspace 仍沿用同一套加载入口，但只装配只读对话所需的静态配置

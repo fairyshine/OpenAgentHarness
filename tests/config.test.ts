@@ -606,11 +606,6 @@ default_agent: assistant
         name: "repo-explorer",
         description: "Explore repository structure.",
         exposeToLlm: true
-      },
-      {
-        name: "shared-skill",
-        description: "Platform-provided helper.",
-        exposeToLlm: true
       }
     ]);
     expect(project?.catalog.tools).toEqual([
@@ -618,11 +613,6 @@ default_agent: assistant
         name: "docs-server",
         transportType: "stdio",
         toolPrefix: "mcp.docs"
-      },
-      {
-        name: "shared-browser",
-        transportType: "http",
-        toolPrefix: "mcp.browser"
       }
     ]);
     expect(project?.catalog.hooks).toEqual([
@@ -641,9 +631,11 @@ default_agent: assistant
     expect(project?.skills["repo-explorer"]).toMatchObject({
       name: "repo-explorer"
     });
+    expect(project?.skills["shared-skill"]).toBeUndefined();
     expect(project?.toolServers["docs-server"]).toMatchObject({
       transportType: "stdio"
     });
+    expect(project?.toolServers["shared-browser"]).toBeUndefined();
     expect(project?.hooks["redact-secrets"]).toMatchObject({
       handlerType: "command"
     });
@@ -923,16 +915,30 @@ Workspace implementation prompt.
     tempDirs.push(tempDir);
 
     const templateDir = path.join(tempDir, "templates");
+    const platformToolDir = path.join(tempDir, "tools");
+    const platformSkillDir = path.join(tempDir, "skills");
     const workspaceRoot = path.join(tempDir, "workspaces", "demo");
     const templateRoot = path.join(templateDir, "workspace");
 
+    await mkdir(path.join(platformToolDir, "servers", "shared-browser"), { recursive: true });
+    await mkdir(path.join(platformSkillDir, "shared-skill", "references"), { recursive: true });
     await mkdir(path.join(templateRoot, ".openharness", "tools"), { recursive: true });
     await mkdir(path.join(templateRoot, ".openharness", "skills", "repo-explorer"), { recursive: true });
     await mkdir(path.join(templateRoot, ".openharness", "agents"), { recursive: true });
     await mkdir(path.join(templateRoot, ".openharness", "models"), { recursive: true });
 
     await writeFile(path.join(templateRoot, "AGENTS.md"), "# Template Guide\n\nFollow template rules.\n", "utf8");
-    await writeFile(path.join(templateRoot, ".openharness", "settings.yaml"), "default_agent: builder\n", "utf8");
+    await writeFile(
+      path.join(templateRoot, ".openharness", "settings.yaml"),
+      `default_agent: builder
+template_imports:
+  tools:
+    - shared-browser
+  skills:
+    - shared-skill
+`,
+      "utf8"
+    );
     await writeFile(
       path.join(templateRoot, ".openharness", "agents", "builder.md"),
       `---
@@ -973,11 +979,41 @@ Explore the repository.
 `,
       "utf8"
     );
+    await writeFile(
+      path.join(platformToolDir, "settings.yaml"),
+      `
+shared-browser:
+  command: node ./servers/shared-browser/index.js
+  enabled: true
+`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(platformToolDir, "servers", "shared-browser", "index.js"),
+      "console.log('shared-browser');\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(platformSkillDir, "shared-skill", "SKILL.md"),
+      `
+# Shared Skill
+
+Platform-provided helper.
+`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(platformSkillDir, "shared-skill", "references", "guide.md"),
+      "Use the shared guide.\n",
+      "utf8"
+    );
 
     await initializeWorkspaceFromTemplate({
       templateDir,
       templateName: "workspace",
       rootPath: workspaceRoot,
+      platformToolDir,
+      platformSkillDir,
       agentsMd: "## User Rules\n\nAlways mention assumptions.",
       toolServers: {
         "docs-server": {
@@ -1015,12 +1051,25 @@ Explore the repository.
       transportType: "http",
       url: "https://example.com/mcp"
     });
+    expect(workspace.toolServers["shared-browser"]).toMatchObject({
+      transportType: "stdio",
+      command: "node ./servers/shared-browser/index.js"
+    });
     expect(workspace.toolServers.browser).toMatchObject({
       transportType: "stdio",
       command: "node ./servers/browser.js"
     });
+    expect(workspace.skills["shared-skill"]).toMatchObject({
+      content: "# Shared Skill\n\nPlatform-provided helper."
+    });
     expect(workspace.skills["repo-explorer"]).toMatchObject({
       content: "# User Skill\n\nUse the user-provided exploration flow."
     });
+    expect(await readFile(path.join(workspaceRoot, ".openharness", "tools", "servers", "shared-browser", "index.js"), "utf8")).toContain(
+      "shared-browser"
+    );
+    expect(await readFile(path.join(workspaceRoot, ".openharness", "skills", "shared-skill", "references", "guide.md"), "utf8")).toContain(
+      "shared guide"
+    );
   });
 });

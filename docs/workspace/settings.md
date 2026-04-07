@@ -4,6 +4,7 @@
 
 - 默认 primary agent
 - 额外的 skill 搜索目录
+- 模板初始化时要导入的公共 tools / skills
 - workspace 级公共 system prompt
 - system prompt 的分层拼装顺序与开关
 
@@ -55,6 +56,7 @@ system_prompt:
 
 - `default_agent`
 - `skill_dirs`
+- `template_imports`
 - `system_prompt`
 
 ## `default_agent`
@@ -88,7 +90,6 @@ skill_dirs:
 - 若出现同名 skill，优先级为：
   1. `.openharness/skills/*`
   2. `skill_dirs` 中按声明顺序扫描到的第一个定义
-  3. 服务端 `paths.skill_dir`
 - 跨层同名冲突：
   - 记录 warning，并按优先级覆盖
 - 同层同名冲突：
@@ -214,3 +215,30 @@ compose:
 - `actions` 段在当前 agent 可见且暴露给 LLM 的 actions 非空时自动拼入，不存在时自动跳过
 - `project_agents_md` 段在根目录存在 `AGENTS.md` 时自动拼入，不存在时自动跳过
 - `skills` 段在当前 agent 可见 skills 非空时自动拼入，不存在时自动跳过
+
+## `template_imports`
+
+建议结构：
+
+```yaml
+template_imports:
+  tools:
+    - docs-server
+  skills:
+    - repo-explorer
+```
+
+字段说明：
+
+- `tools`
+  - 模板初始化时，要从服务端 `paths.tool_dir` 导入到 workspace 的公共 tool 名称
+- `skills`
+  - 模板初始化时，要从服务端 `paths.skill_dir` 导入到 workspace 的公共 skill 名称
+
+规则：
+
+- 该字段主要用于模板；普通 workspace 运行时不会动态重新导入
+- `tools` 会把对应定义写入 `.openharness/tools/settings.yaml`，并尽量复制 `tools/servers/<name>` 目录
+- `skills` 会复制整个 skill 目录到 `.openharness/skills/<name>`
+- 复制完成后，workspace 将以内置副本为准，不再依赖平台目录中的原始文件
+- 若模板声明了不存在的公共 tool 或 skill，workspace 初始化应失败

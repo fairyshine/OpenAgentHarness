@@ -333,9 +333,9 @@ llm:
 进入某个 workspace 时：
 
 - `paths.model_dir` 中的平台模型与 workspace 模型合并
-- `paths.skill_dir` 中的公共 skill 与 workspace skill 合并
-- `paths.tool_dir` 中的公共 external tools 与 workspace tools 合并，再与 native tool / action / skill 一起参与能力投影
-- workspace 同名定义优先级高于服务端公共定义
+- `paths.skill_dir` 不会直接并入 workspace 运行时；它主要作为模板初始化时的 skill 导入源
+- `paths.tool_dir` 不会直接并入 workspace 运行时；它主要作为模板初始化时的 tool 导入源
+- workspace 运行时默认只使用自身 `.openharness` 和 `settings.skill_dirs` 中声明的能力
 
 ## Schema
 

@@ -950,6 +950,8 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
                   templateDir: config.paths.template_dir,
                   templateName: input.template,
                   rootPath: workspaceRoot,
+                  platformToolDir: config.paths.tool_dir,
+                  platformSkillDir: config.paths.skill_dir,
                   agentsMd: input.agentsMd,
                   toolServers: (input as typeof input & { toolServers?: Record<string, Record<string, unknown>> | undefined }).toolServers,
                   skills: input.skills

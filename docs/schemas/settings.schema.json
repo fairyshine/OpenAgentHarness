@@ -20,11 +20,34 @@
     "history_mirror_enabled": {
       "type": "boolean"
     },
+    "template_imports": {
+      "$ref": "#/$defs/templateImports"
+    },
     "system_prompt": {
       "$ref": "#/$defs/systemPrompt"
     }
   },
   "$defs": {
+    "namedImports": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "templateImports": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tools": {
+          "$ref": "#/$defs/namedImports"
+        },
+        "skills": {
+          "$ref": "#/$defs/namedImports"
+        }
+      }
+    },
     "promptSource": {
       "type": "object",
       "additionalProperties": false,

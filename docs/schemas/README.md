@@ -23,6 +23,7 @@
 - `agent` 不走本地 JSON Schema，而是采用 Markdown + frontmatter + 正文 prompt 规范
 - `settings` 使用 `settings.yaml` 管理 workspace 默认 agent 和公共 system prompt
 - `settings` 也可声明额外 skill 目录
+- `settings` 也可为模板声明 `template_imports`
 - `skill` 不走本地 YAML schema，而是采用目录式 `SKILL.md` 规范
 - `tool` 采用 `tools/settings.yaml` + `tools/servers/*`
 - `server-config` 用于校验服务端部署级 `server.yaml`

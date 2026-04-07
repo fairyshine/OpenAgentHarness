@@ -744,6 +744,91 @@ describe("runtime service", () => {
     expect(session.activeAgentName).toBe("builder");
   });
 
+  it("falls back to the platform assistant when a workspace has no explicit default agent", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_platform_default",
+      name: "platform-default",
+      rootPath: "/tmp/platform-default",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      settings: {
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        assistant: {
+          name: "assistant",
+          mode: "primary",
+          prompt: "You are the platform assistant.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["builder"],
+          subagents: []
+        },
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "You are the builder.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["assistant"],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_platform_default",
+        agents: [
+          { name: "assistant", mode: "primary", source: "platform" },
+          { name: "builder", mode: "primary", source: "platform" }
+        ],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_platform_default",
+      caller: {
+        subjectRef: "dev:test",
+        authSource: "test",
+        scopes: [],
+        workspaceAccess: []
+      },
+      input: {}
+    });
+
+    expect(session.activeAgentName).toBe("assistant");
+  });
+
   it("updates the session active agent for subsequent runs and rejects non-primary targets", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();

@@ -404,7 +404,7 @@ export class RuntimeService {
   async createSession({ workspaceId, caller, input }: CreateSessionParams): Promise<Session> {
     const workspace = await this.getWorkspaceRecord(workspaceId);
     const now = nowIso();
-    const activeAgentName = input.agentName ?? workspace.defaultAgent;
+    const activeAgentName = input.agentName ?? this.#resolveWorkspaceDefaultAgentName(workspace);
     if (!activeAgentName) {
       throw new AppError(
         409,
@@ -448,6 +448,22 @@ export class RuntimeService {
     }
 
     return session;
+  }
+
+  #resolveWorkspaceDefaultAgentName(workspace: WorkspaceRecord): string | undefined {
+    if (workspace.defaultAgent) {
+      return workspace.defaultAgent;
+    }
+
+    const assistantAgent = workspace.agents.assistant;
+    if (assistantAgent && assistantAgent.mode !== "subagent") {
+      return assistantAgent.name;
+    }
+
+    return Object.values(workspace.agents)
+      .filter((agent) => agent.mode === "primary" || agent.mode === "all")
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .at(0)?.name;
   }
 
   async updateSession({ sessionId, input }: UpdateSessionParams): Promise<Session> {
@@ -641,7 +657,7 @@ export class RuntimeService {
       }
     }
 
-    const resolvedAgentName = agentName ?? session?.activeAgentName ?? workspace.defaultAgent;
+    const resolvedAgentName = agentName ?? session?.activeAgentName ?? this.#resolveWorkspaceDefaultAgentName(workspace);
     if (resolvedAgentName && Object.keys(workspace.agents).length > 0 && !workspace.agents[resolvedAgentName]) {
       throw new AppError(404, "agent_not_found", `Agent ${resolvedAgentName} was not found in workspace ${workspaceId}.`);
     }

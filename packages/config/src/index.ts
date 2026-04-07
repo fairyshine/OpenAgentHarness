@@ -98,6 +98,12 @@ export interface WorkspaceSettings {
   defaultAgent?: string | undefined;
   skillDirs?: string[] | undefined;
   historyMirrorEnabled?: boolean | undefined;
+  templateImports?:
+    | {
+        tools?: string[] | undefined;
+        skills?: string[] | undefined;
+      }
+    | undefined;
   systemPrompt?: WorkspaceSystemPromptSettings | undefined;
 }
 
@@ -234,6 +240,8 @@ export interface InitializeWorkspaceFromTemplateInput {
   templateDir: string;
   templateName: string;
   rootPath: string;
+  platformToolDir?: string | undefined;
+  platformSkillDir?: string | undefined;
   agentsMd?: string | undefined;
   toolServers?: Record<string, Record<string, unknown>> | undefined;
   skills?: WorkspaceTemplateSkill[] | undefined;
@@ -658,6 +666,121 @@ async function writeWorkspaceSkills(rootPath: string, skills: WorkspaceTemplateS
   }
 }
 
+function uniqueNames(values: string[] | undefined): string[] {
+  if (!values) {
+    return [];
+  }
+
+  return [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
+}
+
+function serializeToolServerDefinition(server: DiscoveredToolServer): Record<string, unknown> {
+  return {
+    ...(server.command ? { command: server.command } : {}),
+    ...(server.url ? { url: server.url } : {}),
+    ...(server.enabled !== true ? { enabled: server.enabled } : {}),
+    ...(server.environment ? { environment: server.environment } : {}),
+    ...(server.headers ? { headers: server.headers } : {}),
+    ...(typeof server.timeout === "number" ? { timeout: server.timeout } : {}),
+    ...(server.oauth !== undefined ? { oauth: server.oauth } : {}),
+    ...(server.toolPrefix || server.include || server.exclude
+      ? {
+          expose: {
+            ...(server.toolPrefix ? { tool_prefix: server.toolPrefix } : {}),
+            ...(server.include ? { include: server.include } : {}),
+            ...(server.exclude ? { exclude: server.exclude } : {})
+          }
+        }
+      : {})
+  };
+}
+
+async function importTemplateSkills(
+  rootPath: string,
+  platformSkillDir: string | undefined,
+  importedSkillNames: string[]
+): Promise<void> {
+  if (importedSkillNames.length === 0) {
+    return;
+  }
+
+  if (!platformSkillDir) {
+    throw new Error("Template requested skill imports, but platformSkillDir was not provided.");
+  }
+
+  const skillsRoot = path.join(rootPath, ".openharness", "skills");
+  await mkdir(skillsRoot, { recursive: true });
+
+  for (const skillName of importedSkillNames) {
+    const sourceDirectory = resolvePathInsideRoot(platformSkillDir, skillName, "template skill import");
+    const sourceStats = await stat(sourceDirectory).catch(() => null);
+    if (!sourceStats?.isDirectory()) {
+      throw new Error(`Template skill import was not found: ${skillName}`);
+    }
+
+    const targetDirectory = resolvePathInsideRoot(skillsRoot, skillName, "skill name");
+    await rm(targetDirectory, { recursive: true, force: true });
+    await cp(sourceDirectory, targetDirectory, {
+      recursive: true,
+      force: false,
+      errorOnExist: false
+    });
+  }
+}
+
+async function importTemplateTools(
+  rootPath: string,
+  platformToolDir: string | undefined,
+  importedToolNames: string[]
+): Promise<void> {
+  if (importedToolNames.length === 0) {
+    return;
+  }
+
+  if (!platformToolDir) {
+    throw new Error("Template requested tool imports, but platformToolDir was not provided.");
+  }
+
+  const platformToolServers = await loadPlatformToolServers(platformToolDir);
+  const importedToolDefinitions: Record<string, Record<string, unknown>> = {};
+  const targetServersRoot = path.join(rootPath, ".openharness", "tools", "servers");
+  await mkdir(targetServersRoot, { recursive: true });
+
+  for (const toolName of importedToolNames) {
+    const toolServer = platformToolServers[toolName];
+    if (!toolServer) {
+      throw new Error(`Template tool import was not found: ${toolName}`);
+    }
+
+    importedToolDefinitions[toolName] = serializeToolServerDefinition(toolServer);
+
+    const sourceDirectoryCandidates = [path.join(platformToolDir, "servers", toolName), path.join(platformToolDir, toolName)];
+    let sourceDirectory: string | undefined;
+
+    for (const candidate of sourceDirectoryCandidates) {
+      const candidateStats = await stat(candidate).catch(() => null);
+      if (candidateStats?.isDirectory()) {
+        sourceDirectory = candidate;
+        break;
+      }
+    }
+
+    if (!sourceDirectory) {
+      continue;
+    }
+
+    const targetDirectory = resolvePathInsideRoot(targetServersRoot, toolName, "tool server name");
+    await rm(targetDirectory, { recursive: true, force: true });
+    await cp(sourceDirectory, targetDirectory, {
+      recursive: true,
+      force: false,
+      errorOnExist: false
+    });
+  }
+
+  await mergeWorkspaceToolSettings(rootPath, importedToolDefinitions);
+}
+
 export async function initializeWorkspaceFromTemplate(input: InitializeWorkspaceFromTemplateInput): Promise<void> {
   const templatePath = resolvePathInsideRoot(input.templateDir, input.templateName, "template name");
   const templateStats = await stat(templatePath).catch(() => null);
@@ -675,6 +798,13 @@ export async function initializeWorkspaceFromTemplate(input: InitializeWorkspace
     force: false,
     errorOnExist: true
   });
+
+  const templateSettings = await loadWorkspaceSettings(input.rootPath);
+  const importedToolNames = uniqueNames(templateSettings.templateImports?.tools);
+  const importedSkillNames = uniqueNames(templateSettings.templateImports?.skills);
+
+  await importTemplateTools(input.rootPath, input.platformToolDir, importedToolNames);
+  await importTemplateSkills(input.rootPath, input.platformSkillDir, importedSkillNames);
 
   if (input.agentsMd) {
     await appendAgentsMd(input.rootPath, input.agentsMd);
@@ -720,6 +850,10 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
     default_agent?: string;
     skill_dirs?: string[];
     history_mirror_enabled?: boolean;
+    template_imports?: {
+      tools?: string[];
+      skills?: string[];
+    };
     system_prompt?: {
       base?: PromptSource;
       llm_optimized?: {
@@ -748,6 +882,14 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
     ...(typedParsed.skill_dirs ? { skillDirs: typedParsed.skill_dirs } : {}),
     ...(typeof typedParsed.history_mirror_enabled === "boolean"
       ? { historyMirrorEnabled: typedParsed.history_mirror_enabled }
+      : {}),
+    ...(typedParsed.template_imports
+      ? {
+          templateImports: {
+            ...(typedParsed.template_imports.tools ? { tools: typedParsed.template_imports.tools } : {}),
+            ...(typedParsed.template_imports.skills ? { skills: typedParsed.template_imports.skills } : {})
+          }
+        }
       : {}),
     ...(typedParsed.system_prompt
       ? {
@@ -1162,10 +1304,10 @@ export async function loadWorkspaceHooks(workspaceRoot: string): Promise<Record<
   return hooks;
 }
 
-function resolveSkillRoots(workspaceRoot: string, settings: WorkspaceSettings, platformSkillDir: string): string[] {
+function resolveSkillRoots(workspaceRoot: string, settings: WorkspaceSettings): string[] {
   const workspaceSkillRoot = path.join(workspaceRoot, ".openharness", "skills");
   const configuredSkillRoots = (settings.skillDirs ?? []).map((skillDir) => path.resolve(workspaceRoot, skillDir));
-  return [workspaceSkillRoot, ...configuredSkillRoots, platformSkillDir];
+  return [workspaceSkillRoot, ...configuredSkillRoots];
 }
 
 export async function discoverWorkspace(
@@ -1193,33 +1335,10 @@ export async function discoverWorkspace(
     ...(settings.skillDirs ?? []).map((skillDir) => path.resolve(rootPath, skillDir))
   ];
   const discoveredWorkspaceSkills = kind === "chat" ? {} : await loadSkillsFromRoots(workspaceSkillRoots);
-  const skills =
-    kind === "chat"
-      ? {}
-      : input.platformSkills
-        ? mergeWithPrecedence(discoveredWorkspaceSkills, input.platformSkills)
-        : await loadSkillsFromRoots(
-            input.platformSkillDir
-              ? resolveSkillRoots(rootPath, settings, input.platformSkillDir)
-              : [path.join(rootPath, ".openharness", "skills")]
-          );
+  const skills = kind === "chat" ? {} : discoveredWorkspaceSkills;
   const discoveredWorkspaceToolServers =
     kind === "chat" ? {} : await loadWorkspaceToolServers(path.join(rootPath, ".openharness", "tools"));
-  const toolServers =
-    kind === "chat"
-      ? {}
-      : input.platformToolServers
-        ? mergeWithPrecedence(discoveredWorkspaceToolServers, input.platformToolServers)
-        : input.platformToolDir
-        ? {
-            ...discoveredWorkspaceToolServers,
-            ...Object.fromEntries(
-              Object.entries(await loadPlatformToolServers(input.platformToolDir)).filter(
-                ([name]) => !(name in discoveredWorkspaceToolServers)
-              )
-            )
-          }
-        : discoveredWorkspaceToolServers;
+  const toolServers = kind === "chat" ? {} : discoveredWorkspaceToolServers;
   const hooks = kind === "chat" ? {} : await loadWorkspaceHooks(rootPath);
   const projectAgentsMd = await loadProjectAgentsMd(rootPath);
   const name = path.basename(rootPath);
@@ -1262,10 +1381,6 @@ export async function discoverWorkspaces(input: {
   platformModels: PlatformModelRegistry;
   platformAgents?: PlatformAgentRegistry;
 }): Promise<DiscoveredWorkspace[]> {
-  const [platformSkills, platformToolServers] = await Promise.all([
-    loadPlatformSkills(input.paths.skill_dir),
-    loadPlatformToolServers(input.paths.tool_dir)
-  ]);
   const projectEntries = await readDirectoryEntriesIfExists(input.paths.workspace_dir);
   const chatEntries = await readDirectoryEntriesIfExists(input.paths.chat_dir);
 
@@ -1275,9 +1390,7 @@ export async function discoverWorkspaces(input: {
       .map((entry) =>
         discoverWorkspace(path.join(input.paths.workspace_dir, entry.name), "project", {
           platformModels: input.platformModels,
-          ...(input.platformAgents ? { platformAgents: input.platformAgents } : {}),
-          platformSkills,
-          platformToolServers
+          ...(input.platformAgents ? { platformAgents: input.platformAgents } : {})
         })
       )
   );
@@ -1288,9 +1401,7 @@ export async function discoverWorkspaces(input: {
       .map((entry) =>
         discoverWorkspace(path.join(input.paths.chat_dir, entry.name), "chat", {
           platformModels: input.platformModels,
-          ...(input.platformAgents ? { platformAgents: input.platformAgents } : {}),
-          platformSkills,
-          platformToolServers
+          ...(input.platformAgents ? { platformAgents: input.platformAgents } : {})
         })
       )
   );

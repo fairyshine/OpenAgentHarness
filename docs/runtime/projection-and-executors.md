@@ -103,9 +103,8 @@ Skill 采用按需加载：
 - 读取 skill 资源文件时，继续通过 `Skill` 并附带 `resource_path`
 - `scripts/`、`references/`、`assets/` 中的内容仅在需要时加载
 - 默认扫描 `.openharness/skills/*`
-- 服务端公共 skill 先从 `paths.skill_dir` 加载
 - 可从 `settings.skill_dirs` 追加额外 skill 根目录
-- 跨层同名冲突记录 warning 并按优先级覆盖，同层冲突直接报错
+- 同名 skill 按 workspace 优先；同层同名冲突直接报错
 
 `Skill` 建议语义：
 
@@ -134,7 +133,7 @@ Action 采用目录式注册：
 - `command` 为字符串
 - shell 命令和本地脚本都通过 `command` 表达
 
-公共 tool servers 建议由服务端 `paths.tool_dir` 统一加载。
+公共 tool servers 可由服务端 `paths.tool_dir` 提供给模板初始化阶段导入。
 
 它们的语义是：
 

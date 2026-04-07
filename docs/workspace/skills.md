@@ -73,7 +73,6 @@ description: Explore repository structure and summarize key modules. Use when th
 
 ## 加载规则
 
-- 服务端公共 skill 可先从 `paths.skill_dir` 加载
 - 发现阶段优先读取 `SKILL.md` frontmatter
 - 若无 frontmatter，则从目录名和正文推断基础元数据
 - 默认只将 skill catalog 注入到 system prompt
@@ -87,7 +86,6 @@ description: Explore repository structure and summarize key modules. Use when th
 
 1. workspace `.openharness/skills/*`
 2. `settings.skill_dirs`
-3. 服务端 `paths.skill_dir`
 
 ## `Skill` 工具语义
 
