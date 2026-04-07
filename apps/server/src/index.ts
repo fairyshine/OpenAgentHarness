@@ -18,6 +18,7 @@ async function main() {
     getWorkspaceHistoryMirrorStatus: runtime.getWorkspaceHistoryMirrorStatus,
     rebuildWorkspaceHistoryMirror: runtime.rebuildWorkspaceHistoryMirror,
     storageAdmin: runtime.storageAdmin,
+    ...(runtime.listPlatformModels ? { listPlatformModels: runtime.listPlatformModels } : {}),
     ...(runtime.listWorkspaceTemplates ? { listWorkspaceTemplates: runtime.listWorkspaceTemplates } : {}),
     ...(runtime.importWorkspace ? { importWorkspace: runtime.importWorkspace } : {})
   });

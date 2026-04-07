@@ -9,6 +9,7 @@ import {
   messageAcceptedSchema,
   modelGenerateRequestSchema,
   modelGenerateResponseSchema,
+  platformModelListSchema,
   modelProviderListSchema,
   pageQuerySchema,
   storageOverviewSchema,
@@ -99,6 +100,17 @@ export interface AppDependencies {
   workspaceMode?: "multi" | "single";
   resolveCallerContext?: ((request: FastifyRequest) => Promise<CallerContext | undefined> | CallerContext | undefined) | undefined;
   listWorkspaceTemplates?: (() => Promise<import("@oah/config").WorkspaceTemplateDescriptor[]>) | undefined;
+  listPlatformModels?: (() => Promise<
+    Array<{
+      id: string;
+      provider: string;
+      modelName: string;
+      url?: string;
+      hasKey: boolean;
+      metadata?: Record<string, unknown>;
+      isDefault: boolean;
+    }>
+  >) | undefined;
   importWorkspace?: (input: {
     rootPath: string;
     kind?: "project" | "chat";
@@ -205,6 +217,19 @@ export function createApp(dependencies: AppDependencies) {
       })
     )
   );
+
+  app.get("/api/v1/platform-models", async (_request, reply) => {
+    if (!dependencies.listPlatformModels) {
+      throw new AppError(404, "platform_models_unavailable", "Platform models are not available.");
+    }
+
+    const items = await dependencies.listPlatformModels();
+    return reply.send(
+      platformModelListSchema.parse({
+        items
+      })
+    );
+  });
 
   app.get("/api/v1/storage/overview", async (_request, reply) => {
     if (!dependencies.storageAdmin) {

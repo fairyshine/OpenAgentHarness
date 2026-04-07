@@ -14,7 +14,7 @@ import {
   updateWorkspaceHistoryMirrorSetting
 } from "@oah/config";
 import type { ServerConfig } from "@oah/config";
-import { AppError, RuntimeService, parseCursor } from "@oah/runtime-core";
+import { AppError, RuntimeService, createId, parseCursor } from "@oah/runtime-core";
 import type {
   Run,
   RunRepository,
@@ -67,6 +67,17 @@ export interface BootstrappedRuntime {
         rootPath: string;
       };
   listWorkspaceTemplates?: () => Promise<Array<{ name: string }>>;
+  listPlatformModels?: () => Promise<
+    Array<{
+      id: string;
+      provider: string;
+      modelName: string;
+      url?: string;
+      hasKey: boolean;
+      metadata?: Record<string, unknown>;
+      isDefault: boolean;
+    }>
+  >;
   importWorkspace?: (input: {
     rootPath: string;
     kind?: "project" | "chat";
@@ -864,9 +875,11 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       ? {
           workspaceInitializer: {
             async initialize(input) {
+              const workspaceId = createId("ws");
               const workspaceRoot = resolveWorkspaceCreationRoot({
                 workspaceDir: config.paths.workspace_dir,
                 name: input.name,
+                workspaceId,
                 rootPath: input.rootPath
               });
 
@@ -881,12 +894,17 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
                 } as Parameters<typeof initializeWorkspaceFromTemplate>[0]
               );
 
-              return discoverWorkspace(workspaceRoot, "project", {
+              const discovered = await discoverWorkspace(workspaceRoot, "project", {
                 platformModels: models,
                 platformAgents,
                 platformSkillDir: config.paths.skill_dir,
                 platformToolDir: toolDir
               } as Parameters<typeof discoverWorkspace>[2]);
+
+              return {
+                ...discovered,
+                id: workspaceId
+              };
             }
           }
         }
@@ -1031,6 +1049,16 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     modelGateway,
     process: runtimeProcess,
     workspaceMode,
+    listPlatformModels: async () =>
+      Object.entries(models).map(([id, definition]) => ({
+        id,
+        provider: definition.provider,
+        modelName: definition.name,
+        ...(definition.url ? { url: definition.url } : {}),
+        hasKey: Boolean(definition.key),
+        ...(definition.metadata ? { metadata: definition.metadata } : {}),
+        isDefault: config.llm.default_model === id
+      })),
     ...(singleWorkspace === undefined
       ? {
           listWorkspaceTemplates: () => listWorkspaceTemplates(config.paths.template_dir),

@@ -54,6 +54,16 @@ interface ModelProviderRecord {
   useCases: string[];
 }
 
+interface PlatformModelRecord {
+  id: string;
+  provider: string;
+  modelName: string;
+  url?: string;
+  hasKey: boolean;
+  metadata?: Record<string, unknown>;
+  isDefault: boolean;
+}
+
 interface SseFrame {
   cursor?: string;
   event: string;
@@ -101,6 +111,10 @@ interface ReadinessReportResponse {
 
 interface ModelProviderListResponse {
   items: ModelProviderRecord[];
+}
+
+interface PlatformModelListResponse {
+  items: PlatformModelRecord[];
 }
 
 type InspectorTab = "overview" | "timeline" | "workspace";
@@ -303,6 +317,16 @@ function prettyJson(value: unknown) {
 
 function sanitizeFileSegment(value: string) {
   return value.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
+}
+
+function pathLeaf(value: string) {
+  const normalized = value.trim().replace(/[\\/]+$/g, "");
+  if (!normalized) {
+    return "";
+  }
+
+  const segments = normalized.split(/[\\/]/).filter(Boolean);
+  return segments.at(-1) ?? normalized;
 }
 
 function downloadJsonFile(filename: string, value: unknown) {
@@ -1028,6 +1052,7 @@ export {
   isNotFoundError,
   prettyJson,
   sanitizeFileSegment,
+  pathLeaf,
   downloadJsonFile,
   downloadCsvFile,
   isRecord,
@@ -1065,10 +1090,12 @@ export type {
   SavedSessionRecord,
   ModelDraft,
   ModelProviderRecord,
+  PlatformModelRecord,
   SseFrame,
   HealthReportResponse,
   ReadinessReportResponse,
   ModelProviderListResponse,
+  PlatformModelListResponse,
   InspectorTab,
   MainViewMode,
   SurfaceMode,

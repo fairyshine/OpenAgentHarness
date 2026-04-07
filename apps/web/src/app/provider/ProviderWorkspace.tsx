@@ -1,14 +1,14 @@
 import type { ReactNode } from "react";
 
-import { Database, Network, Orbit, RefreshCw, Sparkles } from "lucide-react";
+import { Network, RefreshCw, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-import { StatusTile, EmptyState, EntityPreview } from "../primitives";
-import { probeTone } from "../support";
+import { EmptyState, EntityPreview } from "../primitives";
 import type { useAppController } from "../use-app-controller";
 import { InspectorPanelHeader } from "../inspector-panels";
 
@@ -24,54 +24,25 @@ function Section(props: { title: string; description: string; action?: ReactNode
 }
 
 export function ProviderWorkspace(props: ProviderProps) {
-  const providerCount = props.modelProviders.length;
-  const baseUrlLabel = props.connection.baseUrl.trim() || "not configured";
-  const storageLabel = props.healthReport ? `${props.healthReport.storage.primary} / ${props.healthReport.storage.runQueue}` : "unknown";
   const readinessLabel = props.readinessReport?.status ?? "unknown";
+  const defaultModel = props.platformModels.find((model) => model.isDefault);
+  const selectedModel =
+    props.platformModels.find((model) => model.id === props.modelDraft.model) ?? defaultModel ?? props.platformModels[0];
+  const providerIndex = new Map(props.modelProviders.map((provider) => [provider.id, provider]));
+  const providerSummaries = props.modelProviders.map((provider) => ({
+    ...provider,
+    modelCount: props.platformModels.filter((model) => model.provider === provider.id).length
+  }));
 
   return (
     <section className="workspace-pane flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-auto px-5 py-5">
         <div className="space-y-4">
-          <section className="ob-section rounded-[20px] p-5">
-            <InspectorPanelHeader
-              title="Provider"
-              description="管理全局连接、服务健康、模型 provider 列表，以及单次模型验证。这里替代原来的侧边栏 Server 面板和 Inspector Model。"
-            />
-
-            <div className="mt-5 grid gap-4 lg:grid-cols-6">
-              <div className="border-l border-border/70 pl-4">
-                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Base URL</p>
-                <p className="mt-2 text-sm font-medium text-foreground">{baseUrlLabel}</p>
-              </div>
-              <div className="border-l border-border/70 pl-4">
-                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Health</p>
-                <p className="mt-2 text-sm font-medium text-foreground">{props.healthStatus}</p>
-              </div>
-              <div className="border-l border-border/70 pl-4">
-                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Readiness</p>
-                <p className="mt-2 text-sm font-medium text-foreground">{readinessLabel}</p>
-              </div>
-              <div className="border-l border-border/70 pl-4">
-                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Stream</p>
-                <p className="mt-2 text-sm font-medium text-foreground">{props.streamState}</p>
-              </div>
-              <div className="border-l border-border/70 pl-4">
-                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Storage</p>
-                <p className="mt-2 text-sm font-medium text-foreground">{storageLabel}</p>
-              </div>
-              <div className="border-l border-border/70 pl-4">
-                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Providers</p>
-                <p className="mt-2 text-sm font-medium text-foreground">{providerCount}</p>
-              </div>
-            </div>
-          </section>
-
           <div className="grid gap-4 2xl:grid-cols-[minmax(360px,0.82fr)_minmax(0,1.18fr)]">
             <div className="space-y-4">
               <Section
                 title="Connection"
-                description="配置 API 地址、token，并触发健康检查或 SSE 重连。"
+                description="配置 API 地址、token，并触发健康检查或 SSE 重连。状态摘要压缩在这里，不再重复成独立卡片。"
                 action={
                   <div className="flex gap-2">
                     <Button variant="secondary" size="sm" onClick={props.pingHealth}>
@@ -96,21 +67,11 @@ export function ProviderWorkspace(props: ProviderProps) {
                   placeholder="Bearer token (optional)"
                 />
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <StatusTile icon={Network} label="Health" value={props.healthStatus} tone={probeTone(props.healthStatus)} />
-                  <StatusTile
-                    icon={Orbit}
-                    label="Stream"
-                    value={props.streamState}
-                    tone={props.streamState === "open" || props.streamState === "listening" ? "emerald" : props.streamState === "error" ? "rose" : "sky"}
-                  />
-                  <StatusTile icon={Database} label="Readiness" value={readinessLabel} tone={probeTone(readinessLabel)} />
-                  <StatusTile
-                    icon={Database}
-                    label="Mirror"
-                    value={props.healthReport?.checks.historyMirror ?? "unknown"}
-                    tone={probeTone(props.healthReport?.checks.historyMirror ?? "idle")}
-                  />
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline">health {props.healthStatus}</Badge>
+                  <Badge variant="outline">stream {props.streamState}</Badge>
+                  <Badge variant="outline">ready {readinessLabel}</Badge>
+                  <Badge variant="outline">mirror {props.healthReport?.checks.historyMirror ?? "unknown"}</Badge>
                 </div>
               </Section>
 
@@ -128,40 +89,71 @@ export function ProviderWorkspace(props: ProviderProps) {
 
             <div className="space-y-4">
               <Section
-                title="Model Providers"
-                description="查看当前服务暴露出的 provider 能力、包来源与推荐用法。"
-                action={
-                  <Button variant="secondary" size="sm" onClick={props.refreshModelProviders}>
-                    <RefreshCw className="h-4 w-4" />
-                    Refresh
-                  </Button>
-                }
+                title="Selected Model"
+                description="集中展示 provider 摘要和当前选中模型详情。模型切换放在侧边栏完成。"
               >
-                {props.modelProviders.length === 0 ? (
-                  <EmptyState title="No providers" description="Refresh the provider index after the connection is available." />
-                ) : (
-                  <div className="space-y-2">
-                    {props.modelProviders.map((provider) => (
-                      <div key={provider.id} className="rounded-[18px] border border-border/70 bg-background/75 p-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge>{provider.id}</Badge>
-                          <span className="text-xs text-muted-foreground">{provider.packageName}</span>
-                          {provider.requiresUrl ? <Badge variant="outline">requires URL</Badge> : null}
-                        </div>
-                        <p className="mt-2 text-sm text-foreground">{provider.description}</p>
-                        <p className="mt-2 text-xs leading-6 text-muted-foreground">{provider.useCases.join(" · ")}</p>
+                {providerSummaries.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {providerSummaries.map((provider) => (
+                      <div
+                        key={provider.id}
+                        className="flex items-center gap-2 rounded-full border border-border/70 bg-muted/25 px-3 py-1.5 text-xs text-muted-foreground"
+                      >
+                        <span className="font-medium text-foreground">{provider.id}</span>
+                        <span>{provider.modelCount} models</span>
+                        {provider.requiresUrl ? <span>URL required</span> : null}
                       </div>
                     ))}
                   </div>
+                ) : null}
+
+                {selectedModel ? (
+                  <div className="space-y-4">
+                    <div className="rounded-[18px] border border-border/70 bg-background/75 p-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge>{selectedModel.id}</Badge>
+                        <Badge variant="outline">{selectedModel.provider}</Badge>
+                        <Badge variant="outline">{selectedModel.modelName}</Badge>
+                        {selectedModel.isDefault ? <Badge className="bg-foreground text-background">default</Badge> : null}
+                        {selectedModel.url ? <Badge variant="outline">custom url</Badge> : null}
+                        {selectedModel.hasKey ? <Badge variant="outline">key ready</Badge> : <Badge variant="outline">no key</Badge>}
+                      </div>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        <div className="border-l border-border/70 pl-4">
+                          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Provider Package</p>
+                          <p className="mt-2 text-sm text-foreground">
+                            {providerIndex.get(selectedModel.provider)?.packageName ?? "unknown provider"}
+                          </p>
+                        </div>
+                        <div className="border-l border-border/70 pl-4">
+                          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Base URL</p>
+                          <p className="mt-2 break-all text-sm text-foreground">{selectedModel.url ?? "provider default"}</p>
+                        </div>
+                      </div>
+                    </div>
+                    {selectedModel.metadata ? <EntityPreview title={`${selectedModel.id}.metadata`} data={selectedModel.metadata} /> : null}
+                  </div>
+                ) : (
+                  <EmptyState title="No models" description="Use the sidebar to refresh and load platform models from paths.model_dir." />
                 )}
               </Section>
 
               <Section title="Model Playground" description="做单次模型验证，不依赖当前 Inspector 状态，也不打断正在看的 session 诊断。">
-                <Input
-                  value={props.modelDraft.model}
-                  onChange={(event) => props.setModelDraft((current) => ({ ...current, model: event.target.value }))}
-                  placeholder="Model"
-                />
+                <Select
+                  value={selectedModel?.id ?? props.modelDraft.model}
+                  onValueChange={(value) => props.setModelDraft((current) => ({ ...current, model: value }))}
+                >
+                  <SelectTrigger aria-label="Platform model">
+                    <SelectValue placeholder="Choose a loaded model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {props.platformModels.map((model) => (
+                      <SelectItem key={model.id} value={model.id}>
+                        {model.id} · {model.modelName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Textarea
                   value={props.modelDraft.prompt}
                   onChange={(event) => props.setModelDraft((current) => ({ ...current, prompt: event.target.value }))}

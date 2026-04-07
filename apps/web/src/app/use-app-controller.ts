@@ -30,6 +30,8 @@ import {
   type InspectorTab,
   type MainViewMode,
   type ModelDraft,
+  type PlatformModelListResponse,
+  type PlatformModelRecord,
   type ModelProviderListResponse,
   type ModelProviderRecord,
   type ReadinessReportResponse,
@@ -62,6 +64,7 @@ export function useAppController() {
   const [healthReport, setHealthReport] = useState<HealthReportResponse | null>(null);
   const [readinessReport, setReadinessReport] = useState<ReadinessReportResponse | null>(null);
   const [modelProviders, setModelProviders] = useState<ModelProviderRecord[]>([]);
+  const [platformModels, setPlatformModels] = useState<PlatformModelRecord[]>([]);
   const [streamState, setStreamState] = useState<"idle" | "connecting" | "listening" | "open" | "error">("idle");
   const [activity, setActivity] = useState("等待连接");
   const [errorMessage, setErrorMessage] = useState("");
@@ -375,6 +378,23 @@ export function useAppController() {
     }
   }
 
+  async function refreshPlatformModels(quiet = false) {
+    try {
+      const response = await request<PlatformModelListResponse>("/api/v1/platform-models");
+      startTransition(() => {
+        setPlatformModels(response.items);
+      });
+      if (!quiet) {
+        setActivity(`已加载 ${response.items.length} 个平台模型`);
+        setErrorMessage("");
+      }
+    } catch (error) {
+      if (!quiet) {
+        setErrorMessage(toErrorMessage(error));
+      }
+    }
+  }
+
   async function refreshMessages(quiet = false) {
     if (!sessionId.trim()) {
       return;
@@ -625,6 +645,7 @@ export function useAppController() {
     void navigationActions.refreshWorkspaceIndex(true);
     void navigationActions.refreshWorkspaceTemplates(true);
     void refreshModelProviders(true);
+    void refreshPlatformModels(true);
   }, [connection.baseUrl, connection.token]);
 
   useEffect(() => {
@@ -845,6 +866,8 @@ export function useAppController() {
       streamState,
       modelProviders,
       refreshModelProviders: () => void refreshModelProviders(),
+      platformModels,
+      refreshPlatformModels: () => void refreshPlatformModels(),
       modelDraft,
       setModelDraft,
       generateOnce: () => void generateOnce(),
@@ -886,6 +909,16 @@ export function useAppController() {
       onRefreshStorageOverview: storageController.storageSurfaceProps.onRefreshStorageOverview,
       selectedStorageTable: storageController.storageSurfaceProps.selectedStorageTable,
       onSelectStorageTable: storageController.storageSurfaceProps.onSelectStorageTable,
+      storageTableSearch: storageController.storageSurfaceProps.storageTableSearch,
+      onStorageTableSearchChange: storageController.storageSurfaceProps.onStorageTableSearchChange,
+      storageTableWorkspaceId: storageController.storageSurfaceProps.storageTableWorkspaceId,
+      onStorageTableWorkspaceIdChange: storageController.storageSurfaceProps.onStorageTableWorkspaceIdChange,
+      storageTableSessionId: storageController.storageSurfaceProps.storageTableSessionId,
+      onStorageTableSessionIdChange: storageController.storageSurfaceProps.onStorageTableSessionIdChange,
+      storageTableRunId: storageController.storageSurfaceProps.storageTableRunId,
+      onStorageTableRunIdChange: storageController.storageSurfaceProps.onStorageTableRunIdChange,
+      onRefreshStorageTable: storageController.storageSurfaceProps.onRefreshStorageTable,
+      onClearStorageTableFilters: storageController.storageSurfaceProps.onClearStorageTableFilters,
       redisKeyPattern: storageController.storageSurfaceProps.redisKeyPattern,
       onRedisKeyPatternChange: storageController.storageSurfaceProps.onRedisKeyPatternChange,
       redisKeyPage: storageController.storageSurfaceProps.redisKeyPage,
@@ -897,6 +930,10 @@ export function useAppController() {
       setConnection,
       pingHealth: () => void pingHealth(),
       refreshModelProviders: () => void refreshModelProviders(),
+      platformModels,
+      refreshPlatformModels: () => void refreshPlatformModels(),
+      modelDraft,
+      setModelDraft,
       setStreamRevision,
       healthStatus,
       healthReport,

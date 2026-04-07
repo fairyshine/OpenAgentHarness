@@ -13,7 +13,7 @@ import {
 export function useNavigationState() {
   const [workspaceDraft, setWorkspaceDraft] = usePersistentState<WorkspaceDraft>(storageKeys.workspaceDraft, {
     name: "debug-playground",
-    template: "workspace",
+    template: "",
     rootPath: ""
   });
   const [workspaceId, setWorkspaceId] = usePersistentState(storageKeys.workspaceId, "");

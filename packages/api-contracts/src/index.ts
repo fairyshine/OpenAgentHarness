@@ -90,7 +90,8 @@ export const workspaceCatalogSchema = z.object({
   skills: z.array(skillCatalogItemSchema),
   tools: z.array(toolCatalogItemSchema).optional(),
   hooks: z.array(hookCatalogItemSchema),
-  nativeTools: z.array(z.string())
+  nativeTools: z.array(z.string()),
+  runtimeTools: z.array(z.string()).optional()
 });
 
 export const sessionSchema = z.object({
@@ -383,6 +384,20 @@ export const modelProviderSchema = z.object({
 
 export const modelProviderListSchema = z.object({
   items: z.array(modelProviderSchema)
+});
+
+export const platformModelSchema = z.object({
+  id: z.string(),
+  provider: z.string(),
+  modelName: z.string(),
+  url: z.string().optional(),
+  hasKey: z.boolean(),
+  metadata: jsonObjectSchema.optional(),
+  isDefault: z.boolean()
+});
+
+export const platformModelListSchema = z.object({
+  items: z.array(platformModelSchema)
 });
 
 export const storagePostgresTableNameSchema = z.enum([
@@ -697,6 +712,8 @@ export type RunStep = z.infer<typeof runStepSchema>;
 export type RunStepPage = z.infer<typeof runStepPageSchema>;
 export type WorkspaceTemplate = z.infer<typeof workspaceTemplateSchema>;
 export type WorkspaceTemplateList = z.infer<typeof workspaceTemplateListSchema>;
+export type PlatformModel = z.infer<typeof platformModelSchema>;
+export type PlatformModelList = z.infer<typeof platformModelListSchema>;
 export type StoragePostgresTableName = z.infer<typeof storagePostgresTableNameSchema>;
 export type StoragePostgresTableSummary = z.infer<typeof storagePostgresTableSummarySchema>;
 export type StorageRedisKeySummary = z.infer<typeof storageRedisKeySummarySchema>;

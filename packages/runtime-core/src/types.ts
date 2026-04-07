@@ -222,7 +222,17 @@ export interface WorkspaceSystemPromptSettings {
     models?: Record<string, { content: string }> | undefined;
   } | undefined;
   compose: {
-    order: Array<"base" | "llm_optimized" | "agent" | "actions" | "project_agents_md" | "skills">;
+    order: Array<
+      | "base"
+      | "llm_optimized"
+      | "agent"
+      | "actions"
+      | "project_agents_md"
+      | "skills"
+      | "agent_switches"
+      | "subagents"
+      | "environment"
+    >;
     includeEnvironment: boolean;
   };
 }
@@ -501,7 +511,8 @@ export function createEmptyCatalog(workspaceId: string, models: ModelCatalogItem
     skills: [],
     tools: [],
     hooks: [],
-    nativeTools: []
+    nativeTools: [],
+    runtimeTools: []
   };
 }
 

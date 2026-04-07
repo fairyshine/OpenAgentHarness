@@ -65,6 +65,10 @@ function tableLabel(name: string) {
   return name.replace(/_/g, " ");
 }
 
+function compactFilterCount(values: string[]) {
+  return values.filter((value) => value.trim().length > 0).length;
+}
+
 function SidebarSection(props: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
   return (
     <section className="space-y-3 border-t border-border/60 pt-4 first:border-t-0 first:pt-0">
@@ -117,6 +121,20 @@ function SidebarMetric(props: { label: string; value: string; tone?: "sky" | "em
       <p className="text-[10px] uppercase tracking-[0.14em]">{props.label}</p>
       <p className="mt-1 truncate text-sm font-semibold tracking-tight">{props.value}</p>
     </div>
+  );
+}
+
+function SidebarFilterField(props: { label: string; value: string; onChange: (value: string) => void; placeholder: string }) {
+  return (
+    <label className="space-y-1">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{props.label}</span>
+      <Input
+        value={props.value}
+        onChange={(event) => props.onChange(event.target.value)}
+        placeholder={props.placeholder}
+        className="h-8 rounded-xl border-border/70 bg-background/85 text-xs shadow-none"
+      />
+    </label>
   );
 }
 
@@ -186,18 +204,6 @@ function SidebarActionItem(props: {
   );
 }
 
-function ProviderCard(props: { title: string; subtitle: string; badge?: string }) {
-  return (
-    <div className="rounded-2xl border border-border/70 bg-background/75 px-3 py-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium text-foreground">{props.title}</span>
-        {props.badge ? <Badge variant="outline">{props.badge}</Badge> : null}
-      </div>
-      <p className="mt-1 text-xs leading-5 text-muted-foreground">{props.subtitle}</p>
-    </div>
-  );
-}
-
 function ToggleRow(props: { label: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
   return (
     <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-muted/20 px-3 py-2">
@@ -224,7 +230,16 @@ function RuntimeSidebar(props: SidebarProps) {
                 <RotateCcw className="h-4 w-4" />
               </Button>
               {props.workspaceManagementEnabled ? (
-                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => props.setShowWorkspaceCreator(true)} title="New Workspace">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8"
+                  onClick={() => {
+                    props.setWorkspaceDraft((current) => ({ ...current, template: "" }));
+                    props.setShowWorkspaceCreator(true);
+                  }}
+                  title="New Workspace"
+                >
                   <FolderPlus className="h-4 w-4" />
                 </Button>
               ) : null}
@@ -255,6 +270,17 @@ function RuntimeSidebar(props: SidebarProps) {
             props.orderedSavedWorkspaces.map((entry) => {
               const workspaceSessions = props.sessionsByWorkspaceId.get(entry.id) ?? [];
               const isExpanded = props.expandedWorkspaceIds.includes(entry.id) || entry.id === props.activeWorkspaceId;
+              const lastEditedAt = workspaceSessions.reduce<string | undefined>((latest, sessionEntry) => {
+                if (!sessionEntry.lastRunAt) {
+                  return latest;
+                }
+
+                if (!latest) {
+                  return sessionEntry.lastRunAt;
+                }
+
+                return Date.parse(sessionEntry.lastRunAt) > Date.parse(latest) ? sessionEntry.lastRunAt : latest;
+              }, undefined);
 
               return (
                 <div key={entry.id} className="space-y-1">
@@ -263,6 +289,7 @@ function RuntimeSidebar(props: SidebarProps) {
                     active={entry.id === props.activeWorkspaceId}
                     expanded={isExpanded}
                     sessionCount={workspaceSessions.length}
+                    lastEditedAt={lastEditedAt}
                     canRemove={props.workspaceManagementEnabled}
                     onSelect={() => props.openWorkspace(entry.id)}
                     onToggleExpanded={() => props.toggleWorkspaceExpansion(entry.id)}
@@ -311,6 +338,12 @@ function StorageSidebar(props: SidebarProps) {
   const redisAvailable = props.storageOverview?.redis.available ?? false;
   const postgresTableCount = props.storageOverview?.postgres.tables.length ?? 0;
   const redisLoadedCount = props.redisKeyPage?.items.length ?? 0;
+  const postgresFilterCount = compactFilterCount([
+    props.storageTableSearch ?? "",
+    props.storageTableWorkspaceId ?? "",
+    props.storageTableSessionId ?? "",
+    props.storageTableRunId ?? ""
+  ]);
   const redisHotCount =
     (props.storageOverview?.redis.sessionQueues.length ?? 0) +
     (props.storageOverview?.redis.sessionLocks.length ?? 0) +
@@ -341,52 +374,102 @@ function StorageSidebar(props: SidebarProps) {
       </SidebarHero>
 
       {props.storageBrowserTab === "postgres" ? (
-        <SidebarSection title="Entities" description={`${postgresTableCount} tables available in the current storage model.`}>
+        <>
+          <SidebarSection title="Entities" description={postgresTableCount > 0 ? `${postgresTableCount} tables` : undefined}>
+            {!postgresAvailable ? (
+              <p className="text-sm text-muted-foreground">Postgres 当前不可用。</p>
+            ) : (
+              <div className="space-y-1.5">
+                {props.storageOverview?.postgres.tables.map((table) => (
+                  <SidebarActionItem
+                    key={table.name}
+                    title={tableLabel(table.name)}
+                    subtitle={`${table.description} · order by ${table.orderBy}`}
+                    badge={String(table.rowCount)}
+                    icon={<Database className="h-4 w-4" />}
+                    active={props.selectedStorageTable === table.name}
+                    onClick={() => {
+                      props.onStorageBrowserTabChange("postgres");
+                      props.onSelectStorageTable(table.name);
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </SidebarSection>
+
+          <SidebarSection
+            title="Filters"
+            description={postgresFilterCount > 0 ? `${postgresFilterCount} active` : undefined}
+            action={postgresFilterCount > 0 ? <Badge variant="outline">{postgresFilterCount} active</Badge> : undefined}
+          >
           {!postgresAvailable ? (
             <p className="text-sm text-muted-foreground">Postgres 当前不可用。</p>
           ) : (
-            <div className="space-y-1.5">
-              {props.storageOverview?.postgres.tables.map((table) => (
-                <SidebarActionItem
-                  key={table.name}
-                  title={tableLabel(table.name)}
-                  subtitle={`${table.description} · order by ${table.orderBy}`}
-                  badge={String(table.rowCount)}
-                  icon={<Database className="h-4 w-4" />}
-                  active={props.selectedStorageTable === table.name}
-                  onClick={() => {
-                    props.onStorageBrowserTabChange("postgres");
-                    props.onSelectStorageTable(table.name);
-                  }}
+            <div className="space-y-3">
+              <div className="grid gap-2">
+                <SidebarFilterField
+                  label="Search"
+                  value={props.storageTableSearch ?? ""}
+                  onChange={props.onStorageTableSearchChange}
+                  placeholder="Search row JSON"
                 />
-              ))}
-            </div>
-          )}
-        </SidebarSection>
-      ) : (
-        <>
-          <SidebarSection title="Pattern" description="先定义当前 key pattern，再把右侧主区切到对应结果。">
-            <div className="rounded-[18px] border border-border/70 bg-muted/25 p-2">
-              <div className="flex gap-2">
-                <Input
-                  value={props.redisKeyPattern}
-                  onChange={(event) => props.onRedisKeyPatternChange(event.target.value)}
-                  placeholder="oah:*"
-                  className="border-0 bg-background/80 shadow-none"
+                <div className="grid grid-cols-2 gap-2">
+                  <SidebarFilterField
+                    label="Workspace"
+                    value={props.storageTableWorkspaceId ?? ""}
+                    onChange={props.onStorageTableWorkspaceIdChange}
+                    placeholder="workspaceId"
+                  />
+                  <SidebarFilterField
+                    label="Session"
+                    value={props.storageTableSessionId ?? ""}
+                    onChange={props.onStorageTableSessionIdChange}
+                    placeholder="sessionId"
+                  />
+                </div>
+                <SidebarFilterField
+                  label="Run"
+                  value={props.storageTableRunId ?? ""}
+                  onChange={props.onStorageTableRunIdChange}
+                  placeholder="runId"
                 />
-                <Button
-                  variant="secondary"
-                  size="icon"
-                  className="rounded-xl"
-                  onClick={() => {
-                    props.onStorageBrowserTabChange("redis");
-                    props.onRefreshRedisKeys();
-                  }}
-                  disabled={props.storageBusy}
-                >
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="secondary" className="h-9 rounded-xl" onClick={props.onRefreshStorageTable} disabled={props.storageBusy}>
                   <Search className="h-4 w-4" />
+                  Apply
+                </Button>
+                <Button variant="outline" className="h-9 rounded-xl" onClick={props.onClearStorageTableFilters} disabled={props.storageBusy}>
+                  Clear
                 </Button>
               </div>
+            </div>
+          )}
+          </SidebarSection>
+        </>
+      ) : (
+        <>
+          <SidebarSection title="Pattern">
+            <div className="flex gap-2">
+              <Input
+                value={props.redisKeyPattern}
+                onChange={(event) => props.onRedisKeyPatternChange(event.target.value)}
+                placeholder="oah:*"
+                className="h-9 rounded-xl border-border/70 bg-background/85 text-xs shadow-none"
+              />
+              <Button
+                variant="secondary"
+                size="icon"
+                className="h-9 w-9 rounded-xl"
+                onClick={() => {
+                  props.onStorageBrowserTabChange("redis");
+                  props.onRefreshRedisKeys();
+                }}
+                disabled={props.storageBusy}
+              >
+                <Search className="h-4 w-4" />
+              </Button>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <SidebarMetric label="Pattern" value={props.redisKeyPage?.pattern ?? (props.redisKeyPattern || "oah:*")} tone="sky" />
@@ -394,7 +477,7 @@ function StorageSidebar(props: SidebarProps) {
             </div>
           </SidebarSection>
 
-          <SidebarSection title="Hot Paths" description={`${redisHotCount} 个热点入口，适合先做运维排查。`}>
+          <SidebarSection title="Hot Paths" description={redisHotCount > 0 ? `${redisHotCount} entries` : undefined}>
             <div className="grid grid-cols-3 gap-2">
               <SidebarMetric label="Queues" value={String(props.storageOverview?.redis.sessionQueues.length ?? 0)} tone="amber" />
               <SidebarMetric label="Locks" value={String(props.storageOverview?.redis.sessionLocks.length ?? 0)} tone="rose" />
@@ -477,59 +560,81 @@ function StorageSidebar(props: SidebarProps) {
 }
 
 function ProviderSidebar(props: SidebarProps) {
+  const defaultModel = props.platformModels.find((model) => model.isDefault);
+
   return (
-    <div className="space-y-5 px-3 py-4">
-      <SidebarHero
-        icon={<Network className="h-4 w-4 text-foreground" />}
-      >
-        <div className="grid grid-cols-2 gap-2">
-          <SidebarMetric label="Health" value={props.healthStatus} tone={probeTone(props.healthStatus)} />
-          <SidebarMetric label="Stream" value={props.streamState} tone={streamTone(props.streamState)} />
-          <SidebarMetric label="Readiness" value={props.readinessReport?.status ?? "unknown"} tone={probeTone(props.readinessReport?.status ?? "idle")} />
-          <SidebarMetric label="Providers" value={String(props.modelProviders.length)} tone="sky" />
-        </div>
-        <div className="rounded-[18px] border border-border/70 bg-background/80 px-3 py-3">
-          <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            <Globe className="h-3.5 w-3.5" />
-            Base URL
-          </div>
-          <p className="mt-1 truncate text-xs text-foreground">{props.connection.baseUrl || "not configured"}</p>
-        </div>
-      </SidebarHero>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4">
+        <div className="space-y-5">
+          <SidebarHero
+            icon={<Network className="h-4 w-4 text-foreground" />}
+            title="Provider"
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <SidebarMetric label="Health" value={props.healthStatus} tone={probeTone(props.healthStatus)} />
+              <SidebarMetric label="Stream" value={props.streamState} tone={streamTone(props.streamState)} />
+              <SidebarMetric label="Models" value={String(props.platformModels.length)} tone="emerald" />
+              <SidebarMetric label="Providers" value={String(props.modelProviders.length)} tone="sky" />
+            </div>
+            <div className="space-y-2 rounded-[18px] border border-border/70 bg-background/80 px-3 py-3">
+              <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                <Globe className="h-3.5 w-3.5" />
+                Base URL
+              </div>
+              <p className="truncate text-xs text-foreground">{props.connection.baseUrl || "not configured"}</p>
+              <div className="flex flex-wrap gap-1.5">
+                <Badge variant="outline">ready {props.readinessReport?.status ?? "unknown"}</Badge>
+                {defaultModel ? <Badge variant="outline">default {defaultModel.id}</Badge> : null}
+              </div>
+            </div>
+          </SidebarHero>
 
-      <SidebarSection title="Quick Actions" description="把最常用的健康检查和刷新动作固定在这里。">
-        <div className="grid gap-2">
-          <Button variant="secondary" className="h-10 justify-start rounded-2xl" onClick={props.pingHealth}>
-            <Network className="h-4 w-4" />
-            Health Check
-          </Button>
-          <Button variant="outline" className="h-10 justify-start rounded-2xl" onClick={() => props.setStreamRevision((current) => current + 1)}>
-            <Orbit className="h-4 w-4" />
-            Restart SSE
-          </Button>
-          <Button variant="outline" className="h-10 justify-start rounded-2xl" onClick={props.refreshModelProviders}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh Providers
-          </Button>
-        </div>
-      </SidebarSection>
+          <SidebarSection title="Quick Actions">
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" className="h-10 justify-start rounded-2xl" onClick={props.pingHealth}>
+                <Network className="h-4 w-4" />
+                Health
+              </Button>
+              <Button variant="outline" className="h-10 justify-start rounded-2xl" onClick={() => props.setStreamRevision((current) => current + 1)}>
+                <Orbit className="h-4 w-4" />
+                SSE
+              </Button>
+              <Button variant="outline" className="h-10 justify-start rounded-2xl" onClick={props.refreshModelProviders}>
+                <RefreshCw className="h-4 w-4" />
+                Providers
+              </Button>
+              <Button variant="outline" className="h-10 justify-start rounded-2xl" onClick={props.refreshPlatformModels}>
+                <Workflow className="h-4 w-4" />
+                Models
+              </Button>
+            </div>
+          </SidebarSection>
 
-      <SidebarSection title="Available Providers" description="当前服务暴露的 provider 列表和来源。">
-        <div className="space-y-1.5">
-          {props.modelProviders.length === 0 ? (
-            <p className="text-sm text-muted-foreground">当前还没有加载到 provider 列表。</p>
-          ) : (
-            props.modelProviders.map((provider) => (
-              <ProviderCard
-                key={provider.id}
-                title={provider.id}
-                subtitle={`${provider.packageName}${provider.description ? ` · ${provider.description}` : ""}`}
-                badge={provider.requiresUrl ? "requires url" : undefined}
-              />
-            ))
-          )}
+          <SidebarSection title="Models" description="点击切换当前 Playground 模型。">
+            <div className="space-y-1.5">
+              {props.platformModels.length === 0 ? (
+                <p className="text-sm text-muted-foreground">当前还没有加载到平台模型。</p>
+              ) : (
+                props.platformModels.map((model) => (
+                  <SidebarActionItem
+                    key={model.id}
+                    icon={<Workflow className="h-4 w-4" />}
+                    title={model.id}
+                    subtitle={[
+                      model.modelName,
+                      model.provider,
+                      model.hasKey ? "key ready" : "no key"
+                    ].join(" · ")}
+                    badge={model.isDefault ? "default" : model.provider}
+                    active={props.modelDraft.model === model.id}
+                    onClick={() => props.setModelDraft((current) => ({ ...current, model: model.id }))}
+                  />
+                ))
+              )}
+            </div>
+          </SidebarSection>
         </div>
-      </SidebarSection>
+      </div>
     </div>
   );
 }
@@ -579,7 +684,9 @@ export function AppSidebar(props: SidebarProps) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>New Workspace</DialogTitle>
-            <DialogDescription>Create a workspace rooted at a project directory.</DialogDescription>
+            <DialogDescription>
+              Leave Root path empty to create a managed workspace folder named with a generated workspace id.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <Input value={props.workspaceDraft.name} onChange={(event) => props.setWorkspaceDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Workspace name" />
@@ -590,6 +697,9 @@ export function AppSidebar(props: SidebarProps) {
               ))}
             </datalist>
             <Input value={props.workspaceDraft.rootPath} onChange={(event) => props.setWorkspaceDraft((current) => ({ ...current, rootPath: event.target.value }))} placeholder="Root path" />
+            <p className="px-1 text-xs leading-5 text-muted-foreground">
+              Managed mode: auto-create under workspace_dir/workspace_id. Custom mode: use the path you enter here.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => props.refreshWorkspaceTemplates()}>

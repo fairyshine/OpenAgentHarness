@@ -188,8 +188,21 @@ openai-default:
     });
   });
 
-  it("defaults new workspace roots into workspace_dir when rootPath is omitted", async () => {
+  it("defaults new workspace roots into workspace_dir using workspace id when provided", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-workspace-root-"));
+    tempDirs.push(tempDir);
+
+    const resolved = resolveWorkspaceCreationRoot({
+      workspaceDir: path.join(tempDir, "workspaces"),
+      name: "Demo App",
+      workspaceId: "ws_demo123"
+    });
+
+    expect(resolved).toBe(path.join(tempDir, "workspaces", "ws_demo123"));
+  });
+
+  it("falls back to normalized workspace name when workspace id is absent", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-workspace-root-name-"));
     tempDirs.push(tempDir);
 
     const resolved = resolveWorkspaceCreationRoot({
@@ -311,6 +324,32 @@ system_prompt:
 
     const settings = await loadWorkspaceSettings(tempDir);
     expect(settings.systemPrompt?.compose.order).toEqual(["base", "actions", "skills"]);
+  });
+
+  it("accepts agent switch, subagent, and environment segments in compose order", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-settings-agent-segments-"));
+    tempDirs.push(tempDir);
+
+    await mkdir(path.join(tempDir, ".openharness"), { recursive: true });
+    await writeFile(
+      path.join(tempDir, ".openharness", "settings.yaml"),
+      `
+system_prompt:
+  compose:
+    order:
+      - base
+      - agent_switches
+      - subagents
+      - environment
+      - skills
+    include_environment: true
+`,
+      "utf8"
+    );
+
+    const settings = await loadWorkspaceSettings(tempDir);
+    expect(settings.systemPrompt?.compose.order).toEqual(["base", "agent_switches", "subagents", "environment", "skills"]);
+    expect(settings.systemPrompt?.compose.includeEnvironment).toBe(true);
   });
 
   it("discovers project and chat workspaces with merged model catalogs", async () => {

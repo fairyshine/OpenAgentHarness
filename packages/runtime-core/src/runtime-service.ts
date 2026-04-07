@@ -34,6 +34,7 @@ import {
   buildRuntimeTools as createWorkspaceRuntimeTools,
   canDelegateFromAgent as canAgentDelegate,
   enabledToolServers as listEnabledToolServers,
+  runtimeToolNamesForCatalog as listRuntimeToolNamesForCatalog,
   toolRetryPolicy as resolveToolRetryPolicy,
   toolSourceType as resolveToolSourceType,
   visibleLlmActions as listVisibleLlmActions,
@@ -1449,11 +1450,27 @@ export class RuntimeService {
     const activeAgent = workspace.agents[activeAgentName];
     const systemPromptSettings = workspace.settings.systemPrompt;
     const compose = systemPromptSettings?.compose ?? {
-      order: ["base", "llm_optimized", "agent", "actions", "project_agents_md", "skills"] as const,
+      order: [
+        "base",
+        "llm_optimized",
+        "agent",
+        "actions",
+        "project_agents_md",
+        "skills",
+        "agent_switches",
+        "subagents",
+        "environment"
+      ] as const,
       includeEnvironment: false
     };
     const visibleActions = activeAgent ? listVisibleLlmActions(workspace, activeAgentName) : [];
     const visibleSkills = activeAgent ? listVisibleLlmSkills(workspace, activeAgentName) : [];
+    const agentSwitchMessage = this.#buildAgentSwitchMessage(workspace, activeAgentName);
+    const availableSubagentsMessage = this.#buildAvailableSubagentsMessage(workspace, activeAgentName);
+    const environmentMessage =
+      compose.includeEnvironment && workspace.kind === "project"
+        ? this.#buildEnvironmentMessage(workspace, activeAgentName)
+        : undefined;
     const orderedMessages: Array<{ role: "system"; content: string }> = [];
 
     for (const segment of compose.order) {
@@ -1508,30 +1525,31 @@ export class RuntimeService {
             });
           }
           break;
+        case "agent_switches":
+          if (agentSwitchMessage) {
+            orderedMessages.push({
+              role: "system",
+              content: agentSwitchMessage
+            });
+          }
+          break;
+        case "subagents":
+          if (availableSubagentsMessage) {
+            orderedMessages.push({
+              role: "system",
+              content: availableSubagentsMessage
+            });
+          }
+          break;
+        case "environment":
+          if (environmentMessage) {
+            orderedMessages.push({
+              role: "system",
+              content: environmentMessage
+            });
+          }
+          break;
       }
-    }
-
-    const agentSwitchMessage = this.#buildAgentSwitchMessage(workspace, activeAgentName);
-    if (agentSwitchMessage) {
-      orderedMessages.push({
-        role: "system",
-        content: agentSwitchMessage
-      });
-    }
-
-    const availableSubagentsMessage = this.#buildAvailableSubagentsMessage(workspace, activeAgentName);
-    if (availableSubagentsMessage) {
-      orderedMessages.push({
-        role: "system",
-        content: availableSubagentsMessage
-      });
-    }
-
-    if (compose.includeEnvironment && workspace.kind === "project") {
-      orderedMessages.push({
-        role: "system",
-        content: this.#buildEnvironmentMessage(workspace, activeAgentName)
-      });
     }
 
     return orderedMessages;
@@ -3574,7 +3592,8 @@ export class RuntimeService {
       return {
         ...workspace.catalog,
         tools,
-        nativeTools: [...NATIVE_TOOL_NAMES]
+        nativeTools: [...NATIVE_TOOL_NAMES],
+        runtimeTools: listRuntimeToolNamesForCatalog(workspace)
       };
     }
 
@@ -3584,7 +3603,8 @@ export class RuntimeService {
       skills: [],
       tools: [],
       hooks: [],
-      nativeTools: []
+      nativeTools: [],
+      runtimeTools: []
     };
   }
 }

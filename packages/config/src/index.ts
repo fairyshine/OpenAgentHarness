@@ -111,7 +111,17 @@ export interface ResolvedPromptSource {
 }
 
 export interface WorkspaceSystemPromptComposeSettings {
-  order: Array<"base" | "llm_optimized" | "agent" | "actions" | "project_agents_md" | "skills">;
+  order: Array<
+    | "base"
+    | "llm_optimized"
+    | "agent"
+    | "actions"
+    | "project_agents_md"
+    | "skills"
+    | "agent_switches"
+    | "subagents"
+    | "environment"
+  >;
   includeEnvironment: boolean;
 }
 
@@ -332,7 +342,8 @@ function createWorkspaceCatalog(workspaceId: string, models: ModelCatalogItem[])
     skills: [],
     tools: [],
     hooks: [],
-    nativeTools: []
+    nativeTools: [],
+    runtimeTools: []
   };
 }
 
@@ -449,7 +460,17 @@ async function resolveWorkspaceSystemPrompt(
       models?: Record<string, PromptSource>;
     };
     compose?: {
-      order?: Array<"base" | "llm_optimized" | "agent" | "actions" | "project_agents_md" | "skills">;
+      order?: Array<
+        | "base"
+        | "llm_optimized"
+        | "agent"
+        | "actions"
+        | "project_agents_md"
+        | "skills"
+        | "agent_switches"
+        | "subagents"
+        | "environment"
+      >;
       include_environment?: boolean;
     };
   },
@@ -488,7 +509,9 @@ async function resolveWorkspaceSystemPrompt(
         }
       : {}),
     compose: {
-      order: systemPrompt.compose?.order ?? ["base", "llm_optimized", "agent", "actions", "project_agents_md", "skills"],
+      order:
+        systemPrompt.compose?.order ??
+        ["base", "llm_optimized", "agent", "actions", "project_agents_md", "skills", "agent_switches", "subagents", "environment"],
       includeEnvironment: systemPrompt.compose?.include_environment ?? false
     }
   };
@@ -518,6 +541,7 @@ export function normalizeWorkspaceName(name: string): string {
 export function resolveWorkspaceCreationRoot(input: {
   workspaceDir: string;
   name: string;
+  workspaceId?: string | undefined;
   rootPath?: string | undefined;
 }): string {
   if (input.rootPath) {
@@ -526,7 +550,7 @@ export function resolveWorkspaceCreationRoot(input: {
       : path.resolve(input.workspaceDir, input.rootPath);
   }
 
-  const directoryName = normalizeWorkspaceName(input.name) || "workspace";
+  const directoryName = input.workspaceId?.trim() || normalizeWorkspaceName(input.name) || "workspace";
   return path.resolve(input.workspaceDir, directoryName);
 }
 
@@ -684,7 +708,17 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
         models?: Record<string, PromptSource>;
       };
       compose?: {
-        order?: Array<"base" | "llm_optimized" | "agent" | "actions" | "project_agents_md" | "skills">;
+        order?: Array<
+          | "base"
+          | "llm_optimized"
+          | "agent"
+          | "actions"
+          | "project_agents_md"
+          | "skills"
+          | "agent_switches"
+          | "subagents"
+          | "environment"
+        >;
         include_environment?: boolean;
       };
     };

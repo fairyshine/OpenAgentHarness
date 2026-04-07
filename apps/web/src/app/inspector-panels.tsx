@@ -1156,6 +1156,7 @@ function WorkspaceWorkbench(props: {
                 <CatalogLine label="skills" value={props.catalog.skills.length} />
                 <CatalogLine label="tools" value={props.catalog.tools?.length ?? 0} />
                 <CatalogLine label="hooks" value={props.catalog.hooks.length} />
+                <CatalogLine label="runtimeTools" value={props.catalog.runtimeTools?.length ?? 0} />
                 <CatalogLine label="nativeTools" value={props.catalog.nativeTools.length} />
               </div>
             ) : (
@@ -1182,7 +1183,12 @@ function WorkspaceWorkbench(props: {
                 <WorkspaceCatalogCollection title="Skills" description="Loaded workspace skills." items={props.catalog.skills} />
                 <WorkspaceCatalogCollection title="Tools" description="Declared tools and tool exposure." items={props.catalog.tools ?? []} />
                 <WorkspaceCatalogCollection title="Hooks" description="Registered hook definitions." items={props.catalog.hooks} />
-                <WorkspaceCatalogCollection title="Native Tools" description="Native tool exposure recorded by the runtime." items={props.catalog.nativeTools} />
+                <WorkspaceCatalogCollection
+                  title="Runtime Tools"
+                  description="Tools the runtime can actually expose across this workspace, including AgentSwitch, Skill, run_action, SubAgent, and native tools."
+                  items={props.catalog.runtimeTools ?? props.catalog.nativeTools}
+                />
+                <WorkspaceCatalogCollection title="Native Tools" description="Base native tool inventory recorded by the runtime." items={props.catalog.nativeTools} />
                 <InspectorDisclosure title="Raw Catalog JSON" description="完整 catalog 记录，保留给审计或排查边界问题。" badge="raw">
                   <EntityPreview title={props.catalog.workspaceId} data={props.catalog} />
                 </InspectorDisclosure>

@@ -64,7 +64,10 @@
               "agent",
               "actions",
               "project_agents_md",
-              "skills"
+              "skills",
+              "agent_switches",
+              "subagents",
+              "environment"
             ]
           },
           "uniqueItems": true

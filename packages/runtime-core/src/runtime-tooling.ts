@@ -186,6 +186,38 @@ export function activeToolNamesForAgent(
   return names.length > 0 ? names : undefined;
 }
 
+export function runtimeToolNamesForCatalog(workspace: WorkspaceRecord): string[] {
+  if (workspace.kind === "chat") {
+    return [];
+  }
+
+  const agentNames = Object.keys(workspace.agents);
+  if (agentNames.length === 0) {
+    return [...NATIVE_TOOL_NAMES];
+  }
+
+  const names = new Set<string>();
+  for (const agentName of agentNames) {
+    for (const toolName of visibleNativeToolNames(workspace, agentName)) {
+      names.add(toolName);
+    }
+    if (visibleLlmActions(workspace, agentName).length > 0) {
+      names.add("run_action");
+    }
+    if (visibleLlmSkills(workspace, agentName).length > 0) {
+      names.add("Skill");
+    }
+    if ((workspace.agents[agentName]?.switch ?? []).length > 0) {
+      names.add("AgentSwitch");
+    }
+    if (canDelegateFromAgent(workspace, agentName)) {
+      names.add("SubAgent");
+    }
+  }
+
+  return [...names];
+}
+
 export function buildEnvironmentMessage(workspace: WorkspaceRecord, activeAgentName: string): string {
   const activeAgent = workspace.agents[activeAgentName];
   const nativeTools = activeAgent ? visibleNativeToolNames(workspace, activeAgentName) : [];

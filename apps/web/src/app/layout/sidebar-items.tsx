@@ -8,7 +8,7 @@ import {
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 
-import { formatTimestamp, type SavedSessionRecord, type SavedWorkspaceRecord } from "../support";
+import { formatTimestamp, pathLeaf, type SavedSessionRecord, type SavedWorkspaceRecord } from "../support";
 
 function workspaceItemClass(active: boolean) {
   return active
@@ -32,13 +32,15 @@ export function WorkspaceNavItem(props: {
   active: boolean;
   expanded: boolean;
   sessionCount: number;
+  lastEditedAt?: string;
   canRemove: boolean;
   onSelect: () => void;
   onToggleExpanded: () => void;
   onRemove: () => void;
 }) {
   const ExpandIcon = props.expanded ? ChevronDown : ChevronRight;
-  const subtitle = [props.entry.template, props.entry.lastOpenedAt ? formatTimestamp(props.entry.lastOpenedAt) : undefined]
+  const folderName = pathLeaf(props.entry.rootPath);
+  const subtitle = [props.entry.template, props.lastEditedAt ? formatTimestamp(props.lastEditedAt) : undefined]
     .filter(Boolean)
     .join(" · ");
 
@@ -70,6 +72,17 @@ export function WorkspaceNavItem(props: {
             <span className="shrink-0 opacity-45">sessions</span>
             {subtitle ? <span className="shrink-0 opacity-35">·</span> : null}
             {subtitle ? <span className="truncate">{subtitle}</span> : null}
+          </div>
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground/78">
+            <span className="truncate font-mono" title={props.entry.id}>
+              {props.entry.id}
+            </span>
+            {folderName ? <span className="shrink-0 opacity-35">·</span> : null}
+            {folderName ? (
+              <span className="truncate" title={props.entry.rootPath}>
+                dir {folderName}
+              </span>
+            ) : null}
           </div>
         </div>
       </div>

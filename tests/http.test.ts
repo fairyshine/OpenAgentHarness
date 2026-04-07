@@ -136,6 +136,17 @@ async function createStartedAppWithRuntimeService(
   gateway: FakeModelGateway,
   options?: {
     rebuildWorkspaceHistoryMirror?: (workspace: any) => Promise<any>;
+    listPlatformModels?: () => Promise<
+      Array<{
+        id: string;
+        provider: string;
+        modelName: string;
+        url?: string;
+        hasKey: boolean;
+        metadata?: Record<string, unknown>;
+        isDefault: boolean;
+      }>
+    >;
     importWorkspace?: (input: {
       rootPath: string;
       kind?: "project" | "chat";
@@ -153,6 +164,7 @@ async function createStartedAppWithRuntimeService(
     defaultModel: "openai-default",
     logger: false,
     listWorkspaceTemplates: async () => [{ name: "workspace" }],
+    ...(options?.listPlatformModels ? { listPlatformModels: options.listPlatformModels } : {}),
     ...(options?.workspaceMode ? { workspaceMode: options.workspaceMode } : {}),
     ...(options?.resolveCallerContext ? { resolveCallerContext: options.resolveCallerContext } : {}),
     ...(options?.storageAdmin ? { storageAdmin: options.storageAdmin } : {}),
@@ -229,6 +241,61 @@ describe("http api", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       items: [{ name: "workspace" }]
+    });
+  });
+
+  it("lists platform models loaded from model_dir", async () => {
+    activeApp = await createStartedAppWithRuntimeService(new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(20),
+      ...createMemoryRuntimePersistence()
+    }), new FakeModelGateway(20), {
+      listPlatformModels: async () => [
+        {
+          id: "openai-default",
+          provider: "openai",
+          modelName: "gpt-5",
+          hasKey: true,
+          isDefault: true,
+          metadata: {
+            tier: "default"
+          }
+        },
+        {
+          id: "compat-fast",
+          provider: "openai-compatible",
+          modelName: "qwen-max",
+          url: "https://example.test/v1",
+          hasKey: false,
+          isDefault: false
+        }
+      ]
+    });
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/platform-models`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      items: [
+        {
+          id: "openai-default",
+          provider: "openai",
+          modelName: "gpt-5",
+          hasKey: true,
+          isDefault: true,
+          metadata: {
+            tier: "default"
+          }
+        },
+        {
+          id: "compat-fast",
+          provider: "openai-compatible",
+          modelName: "qwen-max",
+          url: "https://example.test/v1",
+          hasKey: false,
+          isDefault: false
+        }
+      ]
     });
   });
 
@@ -1323,7 +1390,8 @@ describe("http api", () => {
       skills: [],
       tools: [],
       hooks: [],
-      nativeTools: []
+      nativeTools: [],
+      runtimeTools: []
     });
   });
 

@@ -2893,7 +2893,17 @@ describe("runtime service", () => {
             }
           },
           compose: {
-            order: ["base", "llm_optimized", "agent", "actions", "skills", "project_agents_md"],
+            order: [
+              "base",
+              "llm_optimized",
+              "agent",
+              "environment",
+              "agent_switches",
+              "subagents",
+              "actions",
+              "skills",
+              "project_agents_md"
+            ],
             includeEnvironment: true
           }
         }
@@ -2909,6 +2919,32 @@ describe("runtime service", () => {
             native: [],
             actions: [],
             skills: ["repo-explorer"],
+            external: []
+          },
+          switch: ["reviewer"],
+          subagents: ["researcher"]
+        },
+        reviewer: {
+          name: "reviewer",
+          mode: "primary",
+          prompt: "You are the reviewer.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["builder"],
+          subagents: []
+        },
+        researcher: {
+          name: "researcher",
+          mode: "subagent",
+          prompt: "You are the researcher subagent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
             external: []
           },
           switch: [],
@@ -2948,7 +2984,11 @@ describe("runtime service", () => {
       hooks: {},
       catalog: {
         workspaceId: "project_prompt_compose",
-        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        agents: [
+          { name: "builder", mode: "primary", source: "workspace" },
+          { name: "reviewer", mode: "primary", source: "workspace" },
+          { name: "researcher", mode: "subagent", source: "workspace" }
+        ],
         models: [{ ref: "platform/openai-default", name: "openai-default", source: "platform", provider: "openai" }],
         actions: [{ name: "debug.echo", description: "Echo", callableByApi: true, callableByUser: true, exposeToLlm: true }],
         skills: [{ name: "repo-explorer", description: "Explore the repository.", exposeToLlm: true }],
@@ -2990,9 +3030,23 @@ describe("runtime service", () => {
     expect(composedSystemPrompt).toContain("call `run_action`");
     expect(composedSystemPrompt).toContain("<available_skills>");
     expect(composedSystemPrompt).toContain("call `Skill`");
+    expect(composedSystemPrompt).toContain("<available_agent_switches");
+    expect(composedSystemPrompt).toContain("<available_agents");
     expect(composedSystemPrompt).toContain("available_actions: debug.echo");
     expect(composedSystemPrompt).toContain("available_skills: repo-explorer");
     expect(composedSystemPrompt).toContain("available_tool_servers: docs-server");
+    expect(composedSystemPrompt.indexOf("available_actions: debug.echo")).toBeLessThan(
+      composedSystemPrompt.indexOf("<available_agent_switches")
+    );
+    expect(composedSystemPrompt.indexOf("active_agent: builder")).toBeLessThan(
+      composedSystemPrompt.indexOf("<available_agent_switches")
+    );
+    expect(composedSystemPrompt.indexOf("<available_agent_switches")).toBeLessThan(
+      composedSystemPrompt.indexOf("<available_agents")
+    );
+    expect(composedSystemPrompt.indexOf("<available_agents")).toBeLessThan(
+      composedSystemPrompt.indexOf("<available_actions>")
+    );
     expect(composedSystemPrompt.indexOf("<available_actions>")).toBeLessThan(composedSystemPrompt.indexOf("<available_skills>"));
     expect(composedSystemPrompt.indexOf("<available_skills>")).toBeLessThan(
       composedSystemPrompt.indexOf("Repository conventions live here.")
@@ -3424,7 +3478,7 @@ describe("runtime service", () => {
         skillDirs: [],
         systemPrompt: {
           compose: {
-            order: ["agent"],
+            order: ["agent", "environment"],
             includeEnvironment: true
           }
         }
@@ -3437,6 +3491,19 @@ describe("runtime service", () => {
           prompt: "Use native tools when helpful.",
           tools: {
             native: ["Bash", "Read"],
+            actions: ["debug.echo"],
+            skills: ["repo-explorer"],
+            external: []
+          },
+          switch: ["reviewer"],
+          subagents: ["reviewer"]
+        },
+        reviewer: {
+          name: "reviewer",
+          mode: "subagent",
+          prompt: "Review implementation details.",
+          tools: {
+            native: ["Read"],
             actions: [],
             skills: [],
             external: []
@@ -3445,16 +3512,40 @@ describe("runtime service", () => {
           subagents: []
         }
       },
-      actions: {},
-      skills: {},
+      actions: {
+        "debug.echo": {
+          name: "debug.echo",
+          description: "Echo input for debugging.",
+          callableByApi: true,
+          callableByUser: true,
+          exposeToLlm: true,
+          directory: "/tmp/native-catalog/actions/debug.echo",
+          entry: {
+            command: "printf ok"
+          }
+        }
+      },
+      skills: {
+        "repo-explorer": {
+          name: "repo-explorer",
+          description: "Explore repository files safely.",
+          exposeToLlm: true,
+          directory: "/tmp/native-catalog/skills/repo-explorer",
+          sourceRoot: "/tmp/native-catalog/skills/repo-explorer",
+          content: "# Repo Explorer"
+        }
+      },
       toolServers: {},
       hooks: {},
       catalog: {
         workspaceId: "project_native_catalog",
-        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        agents: [
+          { name: "builder", mode: "primary", source: "workspace" },
+          { name: "reviewer", mode: "subagent", source: "workspace" }
+        ],
         models: [],
-        actions: [],
-        skills: [],
+        actions: [{ name: "debug.echo", description: "Echo input for debugging.", callableByApi: true, callableByUser: true, exposeToLlm: true }],
+        skills: [{ name: "repo-explorer", description: "Explore repository files safely.", exposeToLlm: true }],
         tools: [],
         hooks: [],
         nativeTools: []
@@ -3473,6 +3564,7 @@ describe("runtime service", () => {
       "WebSearch",
       "TodoWrite"
     ]);
+    expect(catalog.runtimeTools).toEqual(expect.arrayContaining(["Bash", "Read", "run_action", "Skill", "AgentSwitch", "SubAgent"]));
 
     const caller = {
       subjectRef: "dev:test",
@@ -4179,6 +4271,7 @@ describe("runtime service", () => {
     expect(catalog.tools).toEqual([]);
     expect(catalog.hooks).toEqual([]);
     expect(catalog.nativeTools).toEqual([]);
+    expect(catalog.runtimeTools).toEqual([]);
 
     const caller = {
       subjectRef: "dev:test",

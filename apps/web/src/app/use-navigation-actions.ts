@@ -15,6 +15,7 @@ import type {
 import {
   addRecentId,
   isNotFoundError,
+  pathLeaf,
   toErrorMessage,
   type SavedSessionRecord,
   type SavedWorkspaceRecord,
@@ -607,11 +608,20 @@ export function useNavigationActions(params: {
         template: params.navigation.workspaceDraft.template.trim()
       });
       params.runtime.lastCursorRef.current = undefined;
+      params.navigation.setWorkspaceDraft((current) => ({
+        ...current,
+        template: ""
+      }));
       params.navigation.setShowWorkspaceCreator(false);
       expandWorkspaceInSidebar(created.id);
       await refreshWorkspace(created.id, true);
       await refreshWorkspaceIndex(true);
-      params.setActivity(`Workspace ${created.id} 已创建`);
+      const folderName = pathLeaf(created.rootPath);
+      params.setActivity(
+        folderName
+          ? `Workspace ${created.name} 已创建 · ${created.id} · dir ${folderName}`
+          : `Workspace ${created.name} 已创建 · ${created.id}`
+      );
       params.setErrorMessage("");
     } catch (error) {
       params.setErrorMessage(toErrorMessage(error));
