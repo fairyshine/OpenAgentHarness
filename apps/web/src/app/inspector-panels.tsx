@@ -196,11 +196,204 @@ function ToolServerList(props: { servers: ModelCallTraceToolServer[] }) {
   );
 }
 
+function ToolSnapshotBrowser(props: {
+  runtimeTools: ModelCallTraceRuntimeTool[];
+  runtimeToolNames: string[];
+  activeToolNames: string[];
+  toolServers: ModelCallTraceToolServer[];
+}) {
+  const [selectedKey, setSelectedKey] = useState("");
+  const runtimeEntries = props.runtimeTools.map((tool) => ({
+      key: `runtime:${tool.name}`,
+      kind: "runtime" as const,
+      name: tool.name,
+      searchName: tool.name.toLowerCase(),
+      active: props.activeToolNames.includes(tool.name),
+      detail: tool
+    }));
+  const serverEntries = props.toolServers.map((server) => ({
+      key: `server:${server.name}`,
+      kind: "server" as const,
+      name: server.name,
+      searchName: server.name.toLowerCase(),
+      active: false,
+      detail: server
+    }));
+  const entries = [...runtimeEntries, ...serverEntries].sort((left, right) => left.searchName.localeCompare(right.searchName));
+  const activeEntry = entries.find((entry) => entry.key === selectedKey) ?? entries[0] ?? null;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2 sm:grid-cols-3">
+        <CatalogLine label="runtimeDefs" value={props.runtimeTools.length} />
+        <CatalogLine label="activeTools" value={props.activeToolNames.length} />
+        <CatalogLine label="toolServers" value={props.toolServers.length} />
+      </div>
+
+      {entries.length === 0 ? (
+        <EmptyState title="No tool snapshot" description="Run a session with tool exposure to inspect runtime tools and tool servers here." />
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-[minmax(260px,0.82fr)_minmax(0,1.18fr)]">
+          <div className="space-y-3">
+            <div className="rounded-[18px] border border-border/70 bg-background/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Directory</p>
+                  <p className="mt-1 text-sm font-medium text-foreground">Tools and servers</p>
+                </div>
+                <Badge variant="outline">{entries.length}</Badge>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Runtime Tools</p>
+                    <Badge variant="secondary">{runtimeEntries.length}</Badge>
+                  </div>
+                  {runtimeEntries.length === 0 ? (
+                    <p className="mt-2 text-sm text-muted-foreground">No runtime tool definitions recorded.</p>
+                  ) : (
+                    <div className="mt-2 space-y-1.5">
+                      {runtimeEntries.map((entry) => (
+                        <button
+                          key={entry.key}
+                          className={cn(
+                            "w-full rounded-[14px] border-l-2 px-3 py-2.5 text-left transition",
+                            activeEntry?.key === entry.key
+                              ? "border-foreground bg-muted/45"
+                              : "border-border bg-muted/10 hover:border-foreground/50 hover:bg-muted/25"
+                          )}
+                          onClick={() => setSelectedKey(entry.key)}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="truncate text-sm font-medium text-foreground">{entry.name}</p>
+                            {entry.active ? <Badge variant="secondary">active</Badge> : null}
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {entry.detail.retryPolicy ? `Retry ${entry.detail.retryPolicy}` : "Runtime definition"}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-border/70 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Tool Servers</p>
+                    <Badge variant="secondary">{serverEntries.length}</Badge>
+                  </div>
+                  {serverEntries.length === 0 ? (
+                    <p className="mt-2 text-sm text-muted-foreground">No external tool server metadata recorded.</p>
+                  ) : (
+                    <div className="mt-2 space-y-1.5">
+                      {serverEntries.map((entry) => (
+                        <button
+                          key={entry.key}
+                          className={cn(
+                            "w-full rounded-[14px] border-l-2 px-3 py-2.5 text-left transition",
+                            activeEntry?.key === entry.key
+                              ? "border-foreground bg-muted/45"
+                              : "border-border bg-muted/10 hover:border-foreground/50 hover:bg-muted/25"
+                          )}
+                          onClick={() => setSelectedKey(entry.key)}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="truncate text-sm font-medium text-foreground">{entry.name}</p>
+                            {entry.detail.transportType ? <Badge variant="outline">{entry.detail.transportType}</Badge> : null}
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {entry.detail.toolPrefix ? `Prefix ${entry.detail.toolPrefix}` : "Server metadata"}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-1">
+              <div className="rounded-[18px] border border-border/70 bg-muted/10 p-4">
+                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Active Tool Names</p>
+                <div className="mt-3">
+                  <ToolNameChips names={props.activeToolNames} emptyLabel="No active tool names recorded." />
+                </div>
+              </div>
+              <div className="rounded-[18px] border border-border/70 bg-muted/10 p-4">
+                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Runtime Tool Names</p>
+                <div className="mt-3">
+                  <ToolNameChips names={props.runtimeToolNames} emptyLabel="No runtime tool names recorded." />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-[18px] border border-border/70 bg-background/70 p-4">
+            {activeEntry?.kind === "runtime" ? (
+              <div className="space-y-4">
+                <div className="border-b border-border/70 pb-4">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Runtime Tool</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <p className="text-lg font-semibold text-foreground">{activeEntry.detail.name}</p>
+                    {activeEntry.active ? <Badge variant="secondary">active</Badge> : null}
+                    {activeEntry.detail.retryPolicy ? <Badge variant="outline">{activeEntry.detail.retryPolicy}</Badge> : null}
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {activeEntry.detail.description ?? "This runtime tool did not record a description."}
+                  </p>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <InsightRow label="Exposure" value={activeEntry.active ? "active" : "listed only"} />
+                  <InsightRow label="Retry Policy" value={activeEntry.detail.retryPolicy ?? "n/a"} />
+                </div>
+
+                {activeEntry.detail.inputSchema !== undefined ? (
+                  <JsonBlock title="Input Schema" value={activeEntry.detail.inputSchema} />
+                ) : null}
+              </div>
+            ) : activeEntry?.kind === "server" ? (
+              <div className="space-y-4">
+                <div className="border-b border-border/70 pb-4">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Tool Server</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <p className="text-lg font-semibold text-foreground">{activeEntry.detail.name}</p>
+                    {activeEntry.detail.transportType ? <Badge variant="outline">{activeEntry.detail.transportType}</Badge> : null}
+                    {activeEntry.detail.toolPrefix ? <Badge variant="secondary">{activeEntry.detail.toolPrefix}</Badge> : null}
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">Server routing, prefix, timeout, and include/exclude rules.</p>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <InsightRow label="Transport" value={activeEntry.detail.transportType ?? "n/a"} />
+                  <InsightRow label="Prefix" value={activeEntry.detail.toolPrefix ?? "n/a"} />
+                  <InsightRow label="Timeout" value={activeEntry.detail.timeout !== undefined ? `${activeEntry.detail.timeout}ms` : "n/a"} />
+                  <InsightRow label="Include Rules" value={activeEntry.detail.include?.length ? String(activeEntry.detail.include.length) : "0"} />
+                </div>
+
+                {activeEntry.detail.include && activeEntry.detail.include.length > 0 ? (
+                  <JsonBlock title="Include" value={activeEntry.detail.include} />
+                ) : null}
+                {activeEntry.detail.exclude && activeEntry.detail.exclude.length > 0 ? (
+                  <JsonBlock title="Exclude" value={activeEntry.detail.exclude} />
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TraceSummaryStat(props: { label: string; value: string }) {
   return (
-    <div className="border-l border-border/70 pl-4">
+    <div className="min-w-0 border-l border-border/70 pl-4">
       <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">{props.label}</p>
-      <p className="mt-2 text-sm font-medium text-foreground">{props.value}</p>
+      <p className="mt-2 whitespace-pre-wrap break-words text-sm font-medium leading-6 text-foreground [overflow-wrap:anywhere]">
+        {props.value}
+      </p>
     </div>
   );
 }
@@ -437,9 +630,10 @@ function CallsWorkbench(props: {
 }
 
 function TimelineWorkbench(props: {
-  mode: "all" | "messages" | "calls" | "steps" | "events";
-  onModeChange: (mode: "all" | "messages" | "calls" | "steps" | "events") => void;
+  mode: "all" | "execution" | "messages" | "calls" | "steps" | "events";
+  onModeChange: (mode: "all" | "execution" | "messages" | "calls" | "steps" | "events") => void;
   systemMessages: ModelCallTraceMessage[];
+  selectedMessageSystemMessages: ModelCallTraceMessage[];
   firstTrace: ModelCallTrace | null;
   messages: Message[];
   selectedMessage: Message | null;
@@ -463,8 +657,47 @@ function TimelineWorkbench(props: {
   selectedEvent: SessionEventContract | null;
   onSelectEvent: (eventId: string) => void;
 }) {
-  const combinedSystemPrompt = props.systemMessages.map((message) => contentText(message.content)).join("\n\n");
   const [activeItemKey, setActiveItemKey] = useState("");
+  const normalizeTimelineSortValue = (value: number) => (Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER);
+  const timelineSecondBucket = (value: number) =>
+    Number.isFinite(value) ? Math.floor(value / 1000) : Number.MAX_SAFE_INTEGER;
+  const compareTimelineItems = <
+    T extends
+      | { key: string; kind: "message"; sortValue: number }
+      | { key: string; kind: "call"; sortValue: number; trace: ModelCallTrace }
+      | { key: string; kind: "step"; sortValue: number; step: RunStep }
+      | { key: string; kind: "event"; sortValue: number }
+  >(
+    left: T,
+    right: T
+  ) => {
+    const leftTime = normalizeTimelineSortValue(left.sortValue);
+    const rightTime = normalizeTimelineSortValue(right.sortValue);
+    const leftSeq = left.kind === "call" ? left.trace.seq : left.kind === "step" ? left.step.seq : undefined;
+    const rightSeq = right.kind === "call" ? right.trace.seq : right.kind === "step" ? right.step.seq : undefined;
+    const leftSecond = timelineSecondBucket(leftTime);
+    const rightSecond = timelineSecondBucket(rightTime);
+
+    if (leftSecond !== rightSecond) {
+      return leftSecond - rightSecond;
+    }
+
+    if (leftSeq !== undefined && rightSeq !== undefined && leftSeq !== rightSeq) {
+      return leftSeq - rightSeq;
+    }
+
+    if (leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    const kindOrder = { message: 0, call: 1, step: 2, event: 3 } as const;
+    const kindDelta = kindOrder[left.kind] - kindOrder[right.kind];
+    if (kindDelta !== 0) {
+      return kindDelta;
+    }
+
+    return left.key.localeCompare(right.key);
+  };
   const timelineItems = [
     ...props.messages.map((message) => ({
       key: `message:${message.id}`,
@@ -479,7 +712,7 @@ function TimelineWorkbench(props: {
     ...props.traces.map((trace) => ({
       key: `call:${trace.id}`,
       kind: "call" as const,
-      sortValue: Date.parse(trace.endedAt ?? trace.startedAt ?? "") || trace.seq,
+      sortValue: Date.parse(trace.endedAt ?? trace.startedAt ?? ""),
       eyebrow: `call ${trace.seq}`,
       title: trace.input.model ?? trace.name ?? "model call",
       subtitle: `${trace.output.toolCalls.length} tool calls · ${trace.output.toolResults.length} tool results`,
@@ -491,7 +724,7 @@ function TimelineWorkbench(props: {
       .map((step) => ({
         key: `step:${step.id}`,
         kind: "step" as const,
-        sortValue: Date.parse(step.endedAt ?? step.startedAt ?? "") || step.seq,
+        sortValue: Date.parse(step.endedAt ?? step.startedAt ?? ""),
         eyebrow: `step ${step.seq}`,
         title: step.name ?? step.stepType,
         subtitle: `${step.stepType} · ${step.status}`,
@@ -508,20 +741,28 @@ function TimelineWorkbench(props: {
       meta: formatTimestamp(event.createdAt),
       event
     }))
-  ].sort((left, right) => left.sortValue - right.sortValue);
+  ].sort(compareTimelineItems);
   const filteredItems =
     props.mode === "messages"
       ? timelineItems.filter((item) => item.kind === "message")
+      : props.mode === "execution"
+        ? [...timelineItems.filter((item) => item.kind === "call" || item.kind === "step")].sort(compareTimelineItems)
       : props.mode === "calls"
-        ? timelineItems.filter((item) => item.kind === "call")
+        ? [...timelineItems.filter((item) => item.kind === "call")].sort(compareTimelineItems)
         : props.mode === "steps"
-          ? timelineItems.filter((item) => item.kind === "step")
+          ? [...timelineItems.filter((item) => item.kind === "step")].sort(compareTimelineItems)
           : props.mode === "events"
             ? timelineItems.filter((item) => item.kind === "event")
             : timelineItems;
   const selectedKey =
     props.mode === "messages"
       ? props.selectedMessage ? `message:${props.selectedMessage.id}` : ""
+      : props.mode === "execution"
+        ? props.selectedTrace
+          ? `call:${props.selectedTrace.id}`
+          : props.selectedStep
+            ? `step:${props.selectedStep.id}`
+            : ""
       : props.mode === "calls"
         ? props.selectedTrace ? `call:${props.selectedTrace.id}` : ""
         : props.mode === "steps"
@@ -534,6 +775,33 @@ function TimelineWorkbench(props: {
     filteredItems.find((item) => item.key === selectedKey) ??
     filteredItems[0] ??
     null;
+  const selectedMessagePrompt =
+    activeItem?.kind === "message" && props.selectedMessage?.id === activeItem.message.id
+      ? props.selectedMessageSystemMessages
+      : [];
+  const activeSystemMessages =
+    activeItem?.kind === "message"
+      ? selectedMessagePrompt
+      : activeItem?.kind === "call"
+        ? activeItem.trace.input.messages.filter((message) => message.role === "system")
+        : props.systemMessages;
+  const combinedSystemPrompt = activeSystemMessages.map((message) => contentText(message.content)).join("\n\n");
+  const systemPromptSource =
+    activeItem?.kind === "message"
+      ? selectedMessagePrompt.length > 0
+        ? `message ${activeItem.message.id}`
+        : "n/a"
+      : activeItem?.kind === "call"
+        ? `step ${activeItem.trace.seq}`
+        : props.firstTrace
+          ? `step ${props.firstTrace.seq}`
+          : "n/a";
+  const systemPromptDescription =
+    activeItem?.kind === "message"
+      ? "当前选中 message 落库时记录下来的 system prompt 快照。"
+      : activeItem?.kind === "call"
+        ? "当前选中 model call 真正发给模型的 system message。"
+        : "首个 model call 中真正发给模型的 system message。";
 
   return (
     <section className="space-y-4">
@@ -549,7 +817,7 @@ function TimelineWorkbench(props: {
           }
         />
         <div className="mt-5 grid gap-4 lg:grid-cols-6">
-          <TraceSummaryStat label="System Source" value={props.firstTrace ? `step ${props.firstTrace.seq}` : "n/a"} />
+          <TraceSummaryStat label="System Source" value={systemPromptSource} />
           <TraceSummaryStat label="Messages" value={String(props.messages.length)} />
           <TraceSummaryStat label="Calls" value={String(props.traces.length)} />
           <TraceSummaryStat label="Steps" value={String(props.steps.filter((step) => step.stepType !== "model_call").length)} />
@@ -560,8 +828,8 @@ function TimelineWorkbench(props: {
         <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
           <InspectorDisclosure
             title="System Prompt"
-            description="首个 model call 中真正发给模型的 system message。"
-            badge={props.systemMessages.length}
+            description={systemPromptDescription}
+            badge={activeSystemMessages.length}
           >
             {combinedSystemPrompt.length === 0 ? (
               <EmptyState title="No system prompt" description="Load a run with model calls to inspect the composed prompt." />
@@ -598,24 +866,9 @@ function TimelineWorkbench(props: {
                   ))}
                 </div>
               ) : null}
-              <InspectorDisclosure
-                title="Tool Snapshot"
-                description="工具定义、激活工具和外部 tool server 信息集中放在这里。"
-                badge={props.runtimeTools.length}
-              >
-                <div className="space-y-4">
-                  <div>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Runtime Tool Names</p>
-                    <ToolNameChips names={props.runtimeToolNames} emptyLabel="No runtime tool names recorded." />
-                  </div>
-                  <div>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Active Tool Names</p>
-                    <ToolNameChips names={props.activeToolNames} emptyLabel="No active tool names recorded." />
-                  </div>
-                  <RuntimeToolList tools={props.runtimeTools} />
-                  <ToolServerList servers={props.toolServers} />
-                </div>
-              </InspectorDisclosure>
+              <div className="rounded-[16px] border border-dashed border-border/70 px-4 py-3 text-xs leading-6 text-muted-foreground">
+                Tool Snapshot 已移到 Workspace 页，避免 Timeline 顶部因为工具定义过长而拉伸页面。
+              </div>
             </div>
           </InspectorDisclosure>
         </div>
@@ -633,6 +886,7 @@ function TimelineWorkbench(props: {
             </div>
             <div className="segmented-shell">
               <InspectorTabButton label="All" active={props.mode === "all"} onClick={() => props.onModeChange("all")} />
+              <InspectorTabButton label="Execution" active={props.mode === "execution"} onClick={() => props.onModeChange("execution")} />
               <InspectorTabButton label="Messages" active={props.mode === "messages"} onClick={() => props.onModeChange("messages")} />
               <InspectorTabButton label="Calls" active={props.mode === "calls"} onClick={() => props.onModeChange("calls")} />
               <InspectorTabButton label="Steps" active={props.mode === "steps"} onClick={() => props.onModeChange("steps")} />
@@ -760,9 +1014,13 @@ function OverviewWorkbench(props: {
   sessionName: string;
   workspaceName: string;
   selectedRunId: string;
+  sessionRuns: Run[];
   onSelectedRunIdChange: (value: string) => void;
+  onRefreshSessionRuns: () => void;
   onRefreshRun: () => void;
   onRefreshRunSteps: () => void;
+  onLoadRunById: (runId: string) => void;
+  onLoadRunStepsById: (runId: string) => void;
   onCancelRun: () => void;
   modelCallCount: number;
   stepCount: number;
@@ -774,8 +1032,6 @@ function OverviewWorkbench(props: {
   messages: Message[];
   latestTrace: ModelCallTrace | null;
   onOpenTimeline: () => void;
-  onOpenWorkspace: () => void;
-  onOpenProvider: () => void;
 }) {
   const latestMessage = props.messages.at(-1);
   const latestStep = props.runSteps.at(-1);
@@ -788,19 +1044,6 @@ function OverviewWorkbench(props: {
         <InspectorPanelHeader
           title="Overview"
           description="先在这里确认当前 workspace、session 和 run 的状态，再决定下一步进入 Timeline、Workspace 还是 Provider。"
-          action={
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={props.onOpenTimeline}>
-                Open Timeline
-              </Button>
-              <Button variant="secondary" size="sm" onClick={props.onOpenWorkspace}>
-                Workspace
-              </Button>
-              <Button variant="ghost" size="sm" onClick={props.onOpenProvider}>
-                Provider
-              </Button>
-            </div>
-          }
         />
 
         <div className="mt-5 grid gap-4 lg:grid-cols-6">
@@ -813,6 +1056,7 @@ function OverviewWorkbench(props: {
         </div>
 
         <div className="mt-5 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <CatalogLine label="session runs" value={props.sessionRuns.length} />
           <CatalogLine label="messages" value={props.messageCount} />
           <CatalogLine label="model calls" value={props.modelCallCount} />
           <CatalogLine label="run steps" value={props.stepCount} />
@@ -822,8 +1066,8 @@ function OverviewWorkbench(props: {
 
       <div className="grid gap-4 2xl:grid-cols-[minmax(340px,0.78fr)_minmax(0,1.22fr)]">
         <DetailSection
-          title="Run Controls"
-          description="手动切换 run、刷新状态或取消当前执行。这里保留操作，避免散落到别的页面。"
+          title="Session Runs"
+          description="直接展开当前 session 下的全部 runs，不需要再点击切换才能知道这里发生过几次执行。"
         >
           <div className="flex flex-wrap gap-2">
             <Badge>{props.workspaceName}</Badge>
@@ -837,28 +1081,58 @@ function OverviewWorkbench(props: {
             <InsightRow label="Workspace Mode" value={props.workspace?.kind ?? "n/a"} />
             <InsightRow label="Mirror" value={props.workspace?.historyMirrorEnabled ? "enabled" : "disabled"} />
             <InsightRow label="Latest Event" value={latestEvent?.event ?? "n/a"} />
-            <InsightRow label="Selected Run" value={props.selectedRunId || props.run?.id || "n/a"} />
+            <InsightRow label="Current Detail Run" value={props.selectedRunId || props.run?.id || "n/a"} />
           </div>
 
           <div className="rounded-[18px] border border-border bg-muted/20 p-4">
-            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
-              <Input
-                value={props.selectedRunId}
-                onChange={(event) => props.onSelectedRunIdChange(event.target.value)}
-                placeholder="Selected run"
-              />
+            <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={props.onRefreshSessionRuns}>
+                Refresh Runs
+              </Button>
               <Button variant="secondary" onClick={props.onRefreshRun}>
-                Load Run
+                Refresh Current Run
               </Button>
               <Button variant="secondary" onClick={props.onRefreshRunSteps}>
-                Load Steps
+                Refresh Current Steps
               </Button>
               <Button variant="destructive" onClick={props.onCancelRun}>
                 <CircleSlash2 className="h-4 w-4" />
                 Cancel
               </Button>
             </div>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">优先在这里确认当前 run 是否正确，再进入 Timeline 看具体链路。</p>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              这里直接显示 session 下所有 run。Timeline 和 step 详情仍然默认跟随当前 detail run。
+            </p>
+            <div className="mt-3 grid gap-3">
+              {props.sessionRuns.length === 0 ? (
+                <span className="text-xs text-muted-foreground">No runs loaded for this session yet.</span>
+              ) : (
+                props.sessionRuns.map((sessionRun) => (
+                  <article
+                    key={sessionRun.id}
+                    className={`rounded-[16px] border p-4 ${
+                      sessionRun.id === (props.selectedRunId || props.run?.id)
+                        ? "border-primary/40 bg-primary/5"
+                        : "border-border/70 bg-background/60"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge>{sessionRun.id}</Badge>
+                      <Badge className={statusTone(sessionRun.status)}>{sessionRun.status}</Badge>
+                      <Badge variant="outline">{sessionRun.effectiveAgentName}</Badge>
+                      {sessionRun.parentRunId ? <Badge variant="outline">parent {sessionRun.parentRunId}</Badge> : null}
+                      {sessionRun.id === (props.selectedRunId || props.run?.id) ? <Badge variant="secondary">detail</Badge> : null}
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                      <InsightRow label="Trigger" value={sessionRun.triggerType} />
+                      <InsightRow label="Started" value={formatTimestamp(sessionRun.startedAt ?? sessionRun.createdAt)} />
+                      <InsightRow label="Ended" value={formatTimestamp(sessionRun.endedAt)} />
+                      <InsightRow label="Switch Count" value={String(sessionRun.switchCount ?? 0)} />
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
           </div>
         </DetailSection>
 
@@ -872,7 +1146,7 @@ function OverviewWorkbench(props: {
               eyebrow="message"
               title={latestMessage ? compactPreviewText(latestMessage.content, 88) : "No message yet"}
               subtitle={latestMessage?.runId ? `run ${latestMessage.runId}` : "stored conversation"}
-              meta={latestMessage ? formatTimestamp(latestMessage.createdAt) : undefined}
+              {...(latestMessage ? { meta: formatTimestamp(latestMessage.createdAt) } : {})}
               onClick={props.onOpenTimeline}
             />
             <TimelineListButton
@@ -884,7 +1158,7 @@ function OverviewWorkbench(props: {
                   ? `${props.latestTrace.output.toolCalls.length} tool calls · ${props.latestTrace.output.finishReason ?? "finish n/a"}`
                   : "model-facing trace"
               }
-              meta={props.latestTrace ? formatTimestamp(props.latestTrace.endedAt ?? props.latestTrace.startedAt) : undefined}
+              {...(props.latestTrace ? { meta: formatTimestamp(props.latestTrace.endedAt ?? props.latestTrace.startedAt) } : {})}
               onClick={props.onOpenTimeline}
             />
             <TimelineListButton
@@ -892,7 +1166,7 @@ function OverviewWorkbench(props: {
               eyebrow="step"
               title={latestStep?.name ?? latestStep?.stepType ?? "No step yet"}
               subtitle={latestStep ? `${latestStep.stepType} · ${latestStep.status}` : "runtime step"}
-              meta={latestStep ? formatTimestamp(latestStep.endedAt ?? latestStep.startedAt) : undefined}
+              {...(latestStep ? { meta: formatTimestamp(latestStep.endedAt ?? latestStep.startedAt) } : {})}
               onClick={props.onOpenTimeline}
             />
             <TimelineListButton
@@ -900,7 +1174,7 @@ function OverviewWorkbench(props: {
               eyebrow="event"
               title={latestEvent?.event ?? "No event yet"}
               subtitle={latestEvent?.runId ? `run ${latestEvent.runId}` : "runtime event"}
-              meta={latestEvent ? formatTimestamp(latestEvent.createdAt) : undefined}
+              {...(latestEvent ? { meta: formatTimestamp(latestEvent.createdAt) } : {})}
               onClick={props.onOpenTimeline}
             />
           </div>
@@ -1054,6 +1328,10 @@ function WorkspaceWorkbench(props: {
   session: Session | null;
   run: Run | null;
   catalog: WorkspaceCatalog | null;
+  runtimeTools: ModelCallTraceRuntimeTool[];
+  runtimeToolNames: string[];
+  activeToolNames: string[];
+  toolServers: ModelCallTraceToolServer[];
   mirrorStatus: WorkspaceHistoryMirrorStatus | null;
   mirrorToggleBusy: boolean;
   mirrorRebuildBusy: boolean;
@@ -1061,55 +1339,71 @@ function WorkspaceWorkbench(props: {
   refreshWorkspace: (targetId: string) => void;
   rebuildWorkspaceHistoryMirror: () => void;
 }) {
-  const [panel, setPanel] = useState<"catalog" | "records">("catalog");
+  const [panel, setPanel] = useState<"snapshot" | "catalog" | "records">("snapshot");
+  const mirrorEnabled = props.workspace?.historyMirrorEnabled ?? false;
+  const workspaceKind = props.workspace?.kind ?? "n/a";
+  const workspaceId = props.workspace?.id ?? "n/a";
+  const selectedRunId = props.run?.id ?? "n/a";
+  const inventoryRows = props.catalog
+    ? [
+        { label: "agents", value: props.catalog.agents.length },
+        { label: "models", value: props.catalog.models.length },
+        { label: "actions", value: props.catalog.actions.length },
+        { label: "skills", value: props.catalog.skills.length },
+        { label: "tools", value: props.catalog.tools?.length ?? 0 },
+        { label: "hooks", value: props.catalog.hooks.length },
+        { label: "runtimeTools", value: props.catalog.runtimeTools?.length ?? 0 },
+        { label: "nativeTools", value: props.catalog.nativeTools.length }
+      ]
+    : [];
 
   return (
     <section className="space-y-4">
       <section className="ob-section rounded-[20px] p-5">
         <InspectorPanelHeader
           title="Workspace"
-          description="Workspace 页只负责环境级信息: 同步控制、资源目录和原始记录，不再混入对话或运行细节。"
+          description="Workspace 页现在收成一套更紧凑的环境工作台: 顶部先看状态和控制，下方再切换 Snapshot、Catalog、Records。"
         />
-        <div className="mt-5 grid gap-4 lg:grid-cols-6">
-          <TraceSummaryStat label="Workspace" value={props.workspace?.id ?? "n/a"} />
-          <TraceSummaryStat label="Kind" value={props.workspace?.kind ?? "n/a"} />
-          <TraceSummaryStat label="Status" value={props.workspace?.status ?? "n/a"} />
-          <TraceSummaryStat label="Mirror" value={props.workspace?.historyMirrorEnabled ? "enabled" : "disabled"} />
-          <TraceSummaryStat label="Catalog" value={props.catalog ? "loaded" : "missing"} />
-          <TraceSummaryStat label="Selected Run" value={props.run?.id ?? "n/a"} />
-        </div>
-      </section>
+        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.18fr)_minmax(320px,0.82fr)]">
+          <div className="rounded-[18px] border border-border/70 bg-muted/15 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className={mirrorEnabled ? "bg-foreground text-background" : ""}>{mirrorEnabled ? "Mirror Enabled" : "Mirror Disabled"}</Badge>
+              <Badge variant="outline">{workspaceKind}</Badge>
+              <Badge variant="outline">{props.catalog ? "catalog loaded" : "catalog missing"}</Badge>
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              <TraceSummaryStat label="Workspace" value={workspaceId} />
+              <TraceSummaryStat label="Status" value={props.workspace?.status ?? "n/a"} />
+              <TraceSummaryStat label="Selected Run" value={selectedRunId} />
+              <TraceSummaryStat label="Mirror State" value={props.mirrorStatus?.state ?? "n/a"} />
+              <TraceSummaryStat
+                label="Last Synced"
+                value={props.mirrorStatus?.lastSyncedAt ? formatTimestamp(props.mirrorStatus.lastSyncedAt) : "n/a"}
+              />
+              <TraceSummaryStat label="Last Event ID" value={props.mirrorStatus?.lastEventId ? String(props.mirrorStatus.lastEventId) : "n/a"} />
+            </div>
+          </div>
 
-      <div className="grid gap-4 2xl:grid-cols-[minmax(320px,0.68fr)_minmax(0,1.32fr)]">
-        <div className="space-y-4">
-          <DetailSection
-            title="Mirror Sync"
-            description="管理当前 workspace 的历史镜像同步，以及最近一次同步状态。"
-          >
+          <div className="rounded-[18px] border border-border/70 bg-background/80 p-4">
+            <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Controls</p>
             {props.workspace ? (
               <>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge className={props.workspace.historyMirrorEnabled ? "bg-foreground text-background" : ""}>
-                    {props.workspace.historyMirrorEnabled ? "Enabled" : "Disabled"}
-                  </Badge>
-                  <Badge variant="outline">{props.workspace.kind}</Badge>
-                </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <Button
-                    variant={props.workspace.historyMirrorEnabled ? "secondary" : "default"}
+                    variant={mirrorEnabled ? "secondary" : "default"}
                     size="sm"
-                    disabled={props.mirrorToggleBusy || props.workspace.kind !== "project" || props.workspace.historyMirrorEnabled}
+                    disabled={props.mirrorToggleBusy || props.workspace.kind !== "project" || mirrorEnabled}
                     onClick={() => props.updateWorkspaceHistoryMirrorEnabled(true)}
                   >
-                    Enable
+                    Enable Mirror
                   </Button>
                   <Button
-                    variant={!props.workspace.historyMirrorEnabled ? "secondary" : "default"}
+                    variant={!mirrorEnabled ? "secondary" : "default"}
                     size="sm"
-                    disabled={props.mirrorToggleBusy || props.workspace.kind !== "project" || !props.workspace.historyMirrorEnabled}
+                    disabled={props.mirrorToggleBusy || props.workspace.kind !== "project" || !mirrorEnabled}
                     onClick={() => props.updateWorkspaceHistoryMirrorEnabled(false)}
                   >
-                    Disable
+                    Disable Mirror
                   </Button>
                   <Button
                     variant="ghost"
@@ -1122,85 +1416,138 @@ function WorkspaceWorkbench(props: {
                   <Button
                     variant="secondary"
                     size="sm"
-                    disabled={props.mirrorRebuildBusy || props.mirrorToggleBusy || props.workspace.kind !== "project" || !props.workspace.historyMirrorEnabled}
+                    disabled={props.mirrorRebuildBusy || props.mirrorToggleBusy || props.workspace.kind !== "project" || !mirrorEnabled}
                     onClick={props.rebuildWorkspaceHistoryMirror}
                   >
                     Rebuild
                   </Button>
                 </div>
-                <div className="grid gap-2">
-                  <CatalogLine label="mirrorState" value={props.mirrorStatus?.state ?? "n/a"} />
-                  <CatalogLine label="lastSyncedAt" value={props.mirrorStatus?.lastSyncedAt ? formatTimestamp(props.mirrorStatus.lastSyncedAt) : "n/a"} />
-                  <CatalogLine label="lastEventId" value={props.mirrorStatus?.lastEventId ? String(props.mirrorStatus.lastEventId) : "n/a"} />
-                </div>
-                {props.mirrorStatus?.dbPath ? (
-                  <div className="border-l border-border/70 pl-4 text-xs leading-6 text-muted-foreground">
-                    {props.mirrorStatus.dbPath}
-                  </div>
-                ) : null}
+                <p className="mt-3 text-xs leading-6 text-muted-foreground">
+                  Use Snapshot for quick environment checks. Switch to Catalog or Records only when you need the full detail.
+                </p>
               </>
             ) : (
-              <EmptyState title="No workspace selected" description="Open a workspace to manage mirror sync and environment controls." />
+              <EmptyState title="No workspace selected" description="Open a workspace to manage mirror sync and inspect environment state." />
             )}
-          </DetailSection>
-
-          <DetailSection
-            title="Inventory Snapshot"
-            description="左侧只看 catalog 是否完整、资源数量是否符合预期。"
-          >
-            {props.catalog ? (
-              <div className="grid gap-2">
-                <CatalogLine label="agents" value={props.catalog.agents.length} />
-                <CatalogLine label="models" value={props.catalog.models.length} />
-                <CatalogLine label="actions" value={props.catalog.actions.length} />
-                <CatalogLine label="skills" value={props.catalog.skills.length} />
-                <CatalogLine label="tools" value={props.catalog.tools?.length ?? 0} />
-                <CatalogLine label="hooks" value={props.catalog.hooks.length} />
-                <CatalogLine label="runtimeTools" value={props.catalog.runtimeTools?.length ?? 0} />
-                <CatalogLine label="nativeTools" value={props.catalog.nativeTools.length} />
-              </div>
-            ) : (
-              <EmptyState title="No catalog" description="Load a workspace first to inspect the current inventory." />
-            )}
-          </DetailSection>
+          </div>
         </div>
+      </section>
 
-        <DetailSection
-          title="Workspace Data"
-          description="右侧分成两种阅读模式: Catalog 适合核对能力边界，Records 适合查看 workspace / session / run 原始对象。"
-        >
+      <section className="ob-section rounded-[20px] p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-foreground">Workspace Views</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">Keep the default page short, then open deeper detail only when needed.</p>
+          </div>
           <div className="segmented-shell">
+            <InspectorTabButton label="Snapshot" active={panel === "snapshot"} onClick={() => setPanel("snapshot")} />
             <InspectorTabButton label="Catalog" active={panel === "catalog"} onClick={() => setPanel("catalog")} />
             <InspectorTabButton label="Records" active={panel === "records"} onClick={() => setPanel("records")} />
           </div>
+        </div>
 
-          {panel === "catalog" ? (
-            props.catalog ? (
-              <div className="space-y-3">
-                <WorkspaceCatalogCollection title="Agents" description="Workspace-scoped agent definitions." items={props.catalog.agents} />
-                <WorkspaceCatalogCollection title="Models" description="Available models and provider bindings." items={props.catalog.models} />
-                <WorkspaceCatalogCollection title="Actions" description="Runnable actions exposed in this workspace." items={props.catalog.actions} />
-                <WorkspaceCatalogCollection title="Skills" description="Loaded workspace skills." items={props.catalog.skills} />
-                <WorkspaceCatalogCollection title="Tools" description="Declared tools and tool exposure." items={props.catalog.tools ?? []} />
-                <WorkspaceCatalogCollection title="Hooks" description="Registered hook definitions." items={props.catalog.hooks} />
-                <WorkspaceCatalogCollection
-                  title="Runtime Tools"
-                  description="Tools the runtime can actually expose across this workspace, including AgentSwitch, Skill, run_action, SubAgent, and native tools."
-                  items={props.catalog.runtimeTools ?? props.catalog.nativeTools}
-                />
-                <WorkspaceCatalogCollection title="Native Tools" description="Base native tool inventory recorded by the runtime." items={props.catalog.nativeTools} />
-                <InspectorDisclosure title="Raw Catalog JSON" description="完整 catalog 记录，保留给审计或排查边界问题。" badge="raw">
-                  <EntityPreview title={props.catalog.workspaceId} data={props.catalog} />
-                </InspectorDisclosure>
+        <div className="mt-5">
+          {panel === "snapshot" ? (
+            <div className="grid gap-4 2xl:grid-cols-[minmax(320px,0.72fr)_minmax(0,1.28fr)]">
+              <div className="space-y-4">
+                <DetailSection
+                  title="Mirror Sync"
+                  description="把 mirror 状态和同步控制收成一块，避免把页面拆成太多层。"
+                >
+                  {props.workspace ? (
+                    <>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <InsightRow label="Workspace Kind" value={props.workspace.kind} />
+                        <InsightRow label="Mirror" value={mirrorEnabled ? "enabled" : "disabled"} />
+                        <InsightRow label="Mirror State" value={props.mirrorStatus?.state ?? "n/a"} />
+                        <InsightRow
+                          label="Last Synced"
+                          value={props.mirrorStatus?.lastSyncedAt ? formatTimestamp(props.mirrorStatus.lastSyncedAt) : "n/a"}
+                        />
+                      </div>
+                      {props.mirrorStatus?.dbPath ? (
+                        <div className="rounded-[16px] border border-border/70 bg-muted/10 px-4 py-3 text-xs leading-6 text-muted-foreground">
+                          {props.mirrorStatus.dbPath}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <EmptyState title="No workspace selected" description="Open a workspace to inspect mirror state and sync controls." />
+                  )}
+                </DetailSection>
+
+                <DetailSection
+                  title="Inventory Snapshot"
+                  description="先看数量和边界，确认 catalog 是否符合预期。"
+                >
+                  {props.catalog ? (
+                    <div className="grid gap-2">
+                      {inventoryRows.map((item) => (
+                        <CatalogLine key={item.label} label={item.label} value={item.value} />
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState title="No catalog" description="Load a workspace first to inspect the current inventory." />
+                  )}
+                </DetailSection>
               </div>
-            ) : (
-              <EmptyState title="No catalog" description="Load a workspace first to inspect its catalog." />
-            )
-          ) : (
-            <OverviewRecordsCard run={props.run} session={props.session} workspace={props.workspace} />
-          )}
-        </DetailSection>
-      </div>
+
+              <DetailSection
+                title="Tool Snapshot"
+                description="默认首屏把工具环境放在右侧主区域，目录和详情集中阅读，减少来回跳转。"
+              >
+                <ToolSnapshotBrowser
+                  runtimeTools={props.runtimeTools}
+                  runtimeToolNames={props.runtimeToolNames}
+                  activeToolNames={props.activeToolNames}
+                  toolServers={props.toolServers}
+                />
+              </DetailSection>
+            </div>
+          ) : null}
+
+          {panel !== "snapshot" ? (
+            <DetailSection
+              title={panel === "catalog" ? "Catalog Detail" : "Record Detail"}
+              description={
+                panel === "catalog"
+                  ? "Catalog 模式只在你需要核对能力边界时展开，默认不再占据首屏。"
+                  : "Records 模式保留 workspace、session、run 的原始对象，适合审计和排查。"
+              }
+            >
+              {panel === "catalog" ? (
+                props.catalog ? (
+                  <div className="space-y-3">
+                    <WorkspaceCatalogCollection
+                      title="Agents"
+                      description="Workspace agent definitions, or platform fallback agents when the workspace does not declare any."
+                      items={props.catalog.agents}
+                    />
+                    <WorkspaceCatalogCollection title="Models" description="Available models and provider bindings." items={props.catalog.models} />
+                    <WorkspaceCatalogCollection title="Actions" description="Runnable actions exposed in this workspace." items={props.catalog.actions} />
+                    <WorkspaceCatalogCollection title="Skills" description="Loaded workspace skills." items={props.catalog.skills} />
+                    <WorkspaceCatalogCollection title="Tools" description="Declared tools and tool exposure." items={props.catalog.tools ?? []} />
+                    <WorkspaceCatalogCollection title="Hooks" description="Registered hook definitions." items={props.catalog.hooks} />
+                    <WorkspaceCatalogCollection
+                      title="Runtime Tools"
+                      description="Tools the runtime can actually expose across this workspace, including AgentSwitch, Skill, run_action, SubAgent, and native tools."
+                      items={props.catalog.runtimeTools ?? props.catalog.nativeTools}
+                    />
+                    <WorkspaceCatalogCollection title="Native Tools" description="Base native tool inventory recorded by the runtime." items={props.catalog.nativeTools} />
+                    <InspectorDisclosure title="Raw Catalog JSON" description="完整 catalog 记录，保留给审计或排查边界问题。" badge="raw">
+                      <EntityPreview title={props.catalog.workspaceId} data={props.catalog} />
+                    </InspectorDisclosure>
+                  </div>
+                ) : (
+                  <EmptyState title="No catalog" description="Load a workspace first to inspect its catalog." />
+                )
+              ) : (
+                <OverviewRecordsCard run={props.run} session={props.session} workspace={props.workspace} />
+              )}
+            </DetailSection>
+          ) : null}
+        </div>
+      </section>
     </section>
   );
 }
@@ -1324,10 +1671,15 @@ function LlmSummaryCard(props: {
 
       <InspectorDisclosure
         title="Tool Snapshot"
-        description="工具定义和外部 tool server 信息在这里统一展示，不再在每个 model call 卡片里重复展开。"
+        description="详细工具快照已移到 Workspace 页；这里保留摘要，避免 timeline 视图过长。"
         badge={props.runtimeTools.length}
       >
-        <div className="space-y-4">
+        <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-3">
+            <CatalogLine label="runtimeDefs" value={props.runtimeTools.length} />
+            <CatalogLine label="activeTools" value={props.activeToolNames.length} />
+            <CatalogLine label="toolServers" value={props.toolServers.length} />
+          </div>
           <div>
             <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Runtime Tool Names</p>
             <ToolNameChips names={props.runtimeToolNames} emptyLabel="No runtime tool names recorded." />
@@ -1336,14 +1688,7 @@ function LlmSummaryCard(props: {
             <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Active Tool Names</p>
             <ToolNameChips names={props.activeToolNames} emptyLabel="No active tool names recorded." />
           </div>
-          <div>
-            <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Runtime Tool Definitions</p>
-            <RuntimeToolList tools={props.runtimeTools} />
-          </div>
-          <div>
-            <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">External Tool Servers</p>
-            <ToolServerList servers={props.toolServers} />
-          </div>
+          <p className="text-xs leading-6 text-muted-foreground">Open Workspace to inspect each tool or tool server in detail.</p>
         </div>
       </InspectorDisclosure>
     </section>

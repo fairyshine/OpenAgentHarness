@@ -302,7 +302,7 @@ sequenceDiagram
 - `AGENTS.md` 当前只读根目录单文件
 - `AGENTS.md` 在启用时按原文全文注入，不做摘要或裁剪
 - Agent 采用 `agents/*.md` 定义，frontmatter 承载结构化字段，正文承载主 prompt
-- Agent 支持独立的 `system_reminder`，用于激活或切换 agent 时注入 `<system_reminder>` 段
+- Agent 支持独立的 `system_reminder`，用于切换 agent 后在最新 user message 上附加 `<system_reminder>` 段
 - Agent frontmatter 还可声明 `switch` 和 `subagents` allowlist，用于控制 agent 间切换与后台调用
 - API / session / run 的显式参数只允许选择或收窄当前 workspace 已声明能力，不允许扩权
 - Model、Hook 采用 YAML 声明式定义

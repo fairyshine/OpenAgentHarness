@@ -97,6 +97,7 @@ export const workspaceCatalogSchema = z.object({
 export const sessionSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
+  parentSessionId: z.string().optional(),
   subjectRef: z.string(),
   agentName: z.string().optional(),
   activeAgentName: z.string(),
@@ -340,6 +341,11 @@ export const runSchema = z.object({
   errorCode: z.string().optional(),
   errorMessage: z.string().optional(),
   metadata: jsonObjectSchema.optional()
+});
+
+export const runPageSchema = z.object({
+  items: z.array(runSchema),
+  nextCursor: z.string().optional()
 });
 
 export const runStepSchema = z.object({
@@ -604,6 +610,7 @@ export const modelGenerateRequestSchema = z
     prompt: z.string().optional(),
     messages: z.array(chatMessageSchema).optional(),
     temperature: z.number().optional(),
+    topP: z.number().optional(),
     maxTokens: z.number().int().min(1).optional()
   })
   .superRefine((value, ctx) => {
@@ -620,6 +627,8 @@ export const modelStreamRequestSchema = modelGenerateRequestSchema;
 export const modelGenerateResponseSchema = z.object({
   model: z.string(),
   text: z.string(),
+  content: z.array(jsonValueSchema).optional(),
+  reasoning: z.array(jsonValueSchema).optional(),
   finishReason: z.string().optional(),
   usage: usageSchema.optional()
 });
@@ -708,6 +717,7 @@ export type MessagePage = z.infer<typeof messagePageSchema>;
 export type MessagePart = z.infer<typeof messagePartSchema>;
 export type MessageContent = z.infer<typeof messageContentSchema>;
 export type Run = z.infer<typeof runSchema>;
+export type RunPage = z.infer<typeof runPageSchema>;
 export type RunStep = z.infer<typeof runStepSchema>;
 export type RunStepPage = z.infer<typeof runStepPageSchema>;
 export type WorkspaceTemplate = z.infer<typeof workspaceTemplateSchema>;

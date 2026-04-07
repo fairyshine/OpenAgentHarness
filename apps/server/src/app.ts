@@ -12,6 +12,7 @@ import {
   platformModelListSchema,
   modelProviderListSchema,
   pageQuerySchema,
+  runPageSchema,
   storageOverviewSchema,
   storagePostgresTableNameSchema,
   storagePostgresTablePageSchema,
@@ -489,6 +490,13 @@ export function createApp(dependencies: AppDependencies) {
     const query = pageQuerySchema.parse(request.query);
     const page = await dependencies.runtimeService.listSessionMessages(params.sessionId, query.pageSize, query.cursor);
     return reply.send(page);
+  });
+
+  app.get("/api/v1/sessions/:sessionId/runs", async (request, reply) => {
+    const params = createParamsSchema("sessionId").parse(request.params);
+    const query = pageQuerySchema.parse(request.query);
+    const page = await dependencies.runtimeService.listSessionRuns(params.sessionId, query.pageSize, query.cursor);
+    return reply.send(runPageSchema.parse(page));
   });
 
   app.post("/api/v1/sessions/:sessionId/messages", async (request, reply) => {

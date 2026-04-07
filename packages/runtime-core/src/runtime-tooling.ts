@@ -23,6 +23,32 @@ import type {
 
 export type RuntimeToolSourceType = "action" | "skill" | "agent" | "tool" | "native";
 
+function configuredAgentActions(workspace: WorkspaceRecord, activeAgentName: string): string[] {
+  const activeAgent = workspace.agents[activeAgentName];
+  return activeAgent?.actions ?? activeAgent?.tools?.actions ?? [];
+}
+
+function configuredAgentSkills(workspace: WorkspaceRecord, activeAgentName: string): string[] {
+  const activeAgent = workspace.agents[activeAgentName];
+  return activeAgent?.skills ?? activeAgent?.tools?.skills ?? [];
+}
+
+function excludedActionNames(workspace: WorkspaceRecord, activeAgentName: string): Set<string> {
+  return new Set(workspace.agents[activeAgentName]?.disallowed?.actions ?? []);
+}
+
+function excludedSkillNames(workspace: WorkspaceRecord, activeAgentName: string): Set<string> {
+  return new Set(workspace.agents[activeAgentName]?.disallowed?.skills ?? []);
+}
+
+function excludedExternalToolServerNames(workspace: WorkspaceRecord, activeAgentName: string): Set<string> {
+  return new Set(workspace.agents[activeAgentName]?.disallowed?.tools?.external ?? []);
+}
+
+function excludedNativeToolNames(workspace: WorkspaceRecord, activeAgentName: string): Set<string> {
+  return new Set(workspace.agents[activeAgentName]?.disallowed?.tools?.native ?? []);
+}
+
 export function visibleSkills(
   workspace: WorkspaceRecord,
   activeAgentName: string
@@ -31,16 +57,19 @@ export function visibleSkills(
     return [];
   }
 
-  const activeAgent = workspace.agents[activeAgentName];
-  const configuredSkills = activeAgent?.tools?.skills ?? [];
-  if (!activeAgent || configuredSkills.length === 0) {
-    return Object.values(workspace.skills);
+  const configuredSkills = configuredAgentSkills(workspace, activeAgentName);
+  const excludedSkills = excludedSkillNames(workspace, activeAgentName);
+  if (configuredSkills.length === 0) {
+    return Object.values(workspace.skills).filter((skill) => !excludedSkills.has(skill.name));
   }
 
   return configuredSkills.map((skillName) => {
     const skill = workspace.skills[skillName];
     if (!skill) {
       throw new AppError(404, "skill_not_found", `Skill ${skillName} was not found in workspace ${workspace.id}.`);
+    }
+    if (excludedSkills.has(skillName)) {
+      throw new AppError(409, "skill_disallowed", `Skill ${skillName} is disallowed for agent ${activeAgentName}.`);
     }
 
     return skill;
@@ -62,16 +91,19 @@ export function visibleActions(
     return [];
   }
 
-  const activeAgent = workspace.agents[activeAgentName];
-  const configuredActions = activeAgent?.tools?.actions ?? [];
-  if (!activeAgent || configuredActions.length === 0) {
-    return Object.values(workspace.actions);
+  const configuredActions = configuredAgentActions(workspace, activeAgentName);
+  const excludedActions = excludedActionNames(workspace, activeAgentName);
+  if (configuredActions.length === 0) {
+    return Object.values(workspace.actions).filter((action) => !excludedActions.has(action.name));
   }
 
   return configuredActions.map((actionName) => {
     const action = workspace.actions[actionName];
     if (!action) {
       throw new AppError(404, "action_not_found", `Action ${actionName} was not found in workspace ${workspace.id}.`);
+    }
+    if (excludedActions.has(actionName)) {
+      throw new AppError(409, "action_disallowed", `Action ${actionName} is disallowed for agent ${activeAgentName}.`);
     }
 
     return action;
@@ -93,16 +125,23 @@ export function visibleToolServers(
     return [];
   }
 
-  const activeAgent = workspace.agents[activeAgentName];
-  const configuredToolServers = activeAgent?.tools?.external ?? [];
-  if (!activeAgent || configuredToolServers.length === 0) {
-    return Object.values(workspace.toolServers);
+  const configuredToolServers = workspace.agents[activeAgentName]?.tools?.external ?? [];
+  const excludedToolServers = excludedExternalToolServerNames(workspace, activeAgentName);
+  if (configuredToolServers.length === 0) {
+    return Object.values(workspace.toolServers).filter((server) => !excludedToolServers.has(server.name));
   }
 
   return configuredToolServers.map((serverName) => {
     const server = workspace.toolServers[serverName];
     if (!server) {
       throw new AppError(404, "tool_server_not_found", `Tool server ${serverName} was not found in workspace ${workspace.id}.`);
+    }
+    if (excludedToolServers.has(serverName)) {
+      throw new AppError(
+        409,
+        "tool_server_disallowed",
+        `Tool server ${serverName} is disallowed for agent ${activeAgentName}.`
+      );
     }
 
     return server;
@@ -134,9 +173,10 @@ export function visibleNativeToolNames(workspace: WorkspaceRecord, activeAgentNa
   const activeAgent = workspace.agents[activeAgentName];
   const configuredNativeTools = activeAgent?.tools?.native ?? [];
   const availableNativeTools = [...NATIVE_TOOL_NAMES];
+  const excludedNativeTools = excludedNativeToolNames(workspace, activeAgentName);
 
-  if (!activeAgent || configuredNativeTools.length === 0) {
-    return availableNativeTools;
+  if (configuredNativeTools.length === 0) {
+    return availableNativeTools.filter((toolName) => !excludedNativeTools.has(toolName));
   }
 
   return configuredNativeTools.map((toolName) => {
@@ -146,6 +186,9 @@ export function visibleNativeToolNames(workspace: WorkspaceRecord, activeAgentNa
         "native_tool_not_found",
         `Native tool ${toolName} was not found in workspace ${workspace.id}.`
       );
+    }
+    if (excludedNativeTools.has(toolName)) {
+      throw new AppError(409, "native_tool_disallowed", `Native tool ${toolName} is disallowed for agent ${activeAgentName}.`);
     }
 
     return toolName;
@@ -165,7 +208,7 @@ export function activeToolNamesForAgent(
     return undefined;
   }
 
-  if (enabledToolServers(workspace).length > 0) {
+  if (visibleEnabledToolServers(workspace, activeAgentName).length > 0) {
     return undefined;
   }
 

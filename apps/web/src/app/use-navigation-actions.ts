@@ -30,6 +30,7 @@ export function useNavigationActions(params: {
   setErrorMessage: (value: string) => void;
   navigation: {
     workspaceDraft: WorkspaceDraft;
+    setWorkspaceDraft: Dispatch<SetStateAction<WorkspaceDraft>>;
     workspaceId: string;
     setWorkspaceId: Dispatch<SetStateAction<string>>;
     sessionId: string;
@@ -43,6 +44,7 @@ export function useNavigationActions(params: {
     setRecentSessions: Dispatch<SetStateAction<string[]>>;
     expandedWorkspaceIds: string[];
     setExpandedWorkspaceIds: Dispatch<SetStateAction<string[]>>;
+    setExpandedSessionIds: Dispatch<SetStateAction<string[]>>;
     workspace: Workspace | null;
     setWorkspace: Dispatch<SetStateAction<Workspace | null>>;
     setWorkspaceTemplates: Dispatch<SetStateAction<string[]>>;
@@ -122,6 +124,7 @@ export function useNavigationActions(params: {
     const nextRecord: SavedSessionRecord = {
       id: sessionRecord.id,
       workspaceId: sessionRecord.workspaceId,
+      ...(sessionRecord.parentSessionId ? { parentSessionId: sessionRecord.parentSessionId } : {}),
       createdAt: sessionRecord.createdAt,
       lastOpenedAt: now
     };
@@ -146,6 +149,30 @@ export function useNavigationActions(params: {
 
       return [...current, nextRecord].slice(-48);
     });
+  }
+
+  function collectSessionTreeIds(rootSessionId: string, sessions: SavedSessionRecord[]): string[] {
+    const childIdsByParentId = new Map<string, string[]>();
+    for (const entry of sessions) {
+      if (!entry.parentSessionId) {
+        continue;
+      }
+
+      const childIds = childIdsByParentId.get(entry.parentSessionId) ?? [];
+      childIds.push(entry.id);
+      childIdsByParentId.set(entry.parentSessionId, childIds);
+    }
+
+    const collectedIds: string[] = [];
+    const visit = (sessionId: string) => {
+      collectedIds.push(sessionId);
+      for (const childSessionId of childIdsByParentId.get(sessionId) ?? []) {
+        visit(childSessionId);
+      }
+    };
+
+    visit(rootSessionId);
+    return collectedIds;
   }
 
   function expandWorkspaceInSidebar(targetWorkspaceId: string) {
@@ -260,6 +287,9 @@ export function useNavigationActions(params: {
   }
 
   async function removeSavedSession(sessionToRemoveId: string) {
+    const sessionIdsToRemove = collectSessionTreeIds(sessionToRemoveId, params.navigation.savedSessions);
+    const sessionIdsToRemoveSet = new Set(sessionIdsToRemove);
+
     try {
       await params.request<void>(`/api/v1/sessions/${sessionToRemoveId}`, { method: "DELETE" });
     } catch (error) {
@@ -269,21 +299,20 @@ export function useNavigationActions(params: {
       }
     }
 
-    params.navigation.setSavedSessions((current) => current.filter((entry) => entry.id !== sessionToRemoveId));
-    params.navigation.setRecentSessions((current) => current.filter((entry) => entry !== sessionToRemoveId));
+    params.navigation.setSavedSessions((current) => current.filter((entry) => !sessionIdsToRemoveSet.has(entry.id)));
+    params.navigation.setRecentSessions((current) => current.filter((entry) => !sessionIdsToRemoveSet.has(entry)));
+    params.navigation.setExpandedSessionIds((current) => current.filter((entry) => !sessionIdsToRemoveSet.has(entry)));
 
-    if (params.navigation.sessionId === sessionToRemoveId) {
-      params.navigation.setSessionId("");
-      params.navigation.setSession(null);
-      params.runtime.setMessages([]);
-      params.runtime.setEvents([]);
-      params.runtime.setSelectedRunId("");
-      params.runtime.setRun(null);
-      params.runtime.setRunSteps([]);
-      params.runtime.setLiveOutput({});
+    if (params.navigation.sessionId && sessionIdsToRemoveSet.has(params.navigation.sessionId)) {
+      clearSessionSelection();
     }
 
-    params.setActivity(`Session ${sessionToRemoveId} 已删除`);
+    const removedChildCount = Math.max(0, sessionIdsToRemove.length - 1);
+    params.setActivity(
+      removedChildCount > 0
+        ? `Session ${sessionToRemoveId} 及其 ${removedChildCount} 个子 Session 已删除`
+        : `Session ${sessionToRemoveId} 已删除`
+    );
     params.setErrorMessage("");
   }
 
@@ -322,11 +351,11 @@ export function useNavigationActions(params: {
     }
   }
 
-  async function switchSessionAgent(sessionToUpdateId: string, activeAgentName: string) {
+  async function switchSessionAgent(sessionToUpdateId: string, activeAgentName: string): Promise<Session | null> {
     const nextAgentName = activeAgentName.trim();
     if (!nextAgentName) {
       params.setErrorMessage("Agent 名称不能为空。");
-      return;
+      return null;
     }
 
     try {
@@ -344,6 +373,7 @@ export function useNavigationActions(params: {
       }
       params.setActivity(`Session ${updated.id} 已切换到 agent ${updated.activeAgentName}`);
       params.setErrorMessage("");
+      return updated;
     } catch (error) {
       if (isNotFoundError(error)) {
         if (params.navigation.session?.id === sessionToUpdateId || params.navigation.sessionId === sessionToUpdateId) {
@@ -354,6 +384,7 @@ export function useNavigationActions(params: {
         }
       }
       params.setErrorMessage(toErrorMessage(error));
+      return null;
     }
   }
 
@@ -437,6 +468,7 @@ export function useNavigationActions(params: {
             syncedSessions.set(session.id, {
               id: session.id,
               workspaceId: session.workspaceId,
+              ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
               ...(session.title ? { title: session.title } : {}),
               ...(session.activeAgentName ? { agentName: session.activeAgentName } : {}),
               ...(session.lastRunAt ? { lastRunAt: session.lastRunAt } : {}),
@@ -739,9 +771,7 @@ export function useNavigationActions(params: {
       expandWorkspaceInSidebar(nextWorkspaceId);
       touchSavedWorkspace(nextWorkspaceId);
       rememberSession(sessionResponse);
-      if (workspaceChanged) {
-        void refreshWorkspace(nextWorkspaceId, true);
-      }
+      void refreshWorkspace(nextWorkspaceId, true);
       params.setActivity(`Session ${nextSessionId} 已加载`);
       if (!quiet) {
         params.setErrorMessage("");

@@ -52,6 +52,12 @@ interface WorkspaceMessageRow {
   payload: string;
 }
 
+interface WorkspaceScopedPayloadRow {
+  id: string;
+  workspace_id: string;
+  payload: string;
+}
+
 interface WorkspaceRunStepRow {
   id: string;
   payload: string;
@@ -494,6 +500,100 @@ function normalizePersistedWorkspaceData(db: DatabaseSync): void {
   });
 }
 
+function reconcilePersistedWorkspaceScope(db: DatabaseSync, workspace: Pick<WorkspaceRecord, "id" | "rootPath">): void {
+  runInTransaction(db, () => {
+    const workspaceMetaRows = coerceRows<Record<string, unknown>>(
+      db.prepare("select id, root_path as rootPath from workspace_meta").all()
+    );
+    const deleteWorkspaceMeta = db.prepare("delete from workspace_meta where id = ?");
+    const updateWorkspaceMeta = db.prepare("update workspace_meta set root_path = ? where id = ?");
+    for (const row of workspaceMetaRows) {
+      const rowId = stringValue(row.id);
+      const rootPath = stringValue(row.rootPath);
+      if (rowId && rowId !== workspace.id) {
+        deleteWorkspaceMeta.run(rowId);
+        continue;
+      }
+
+      if (rowId === workspace.id && rootPath !== workspace.rootPath) {
+        updateWorkspaceMeta.run(workspace.rootPath, workspace.id);
+      }
+    }
+
+    const sessionRows = coerceRows<WorkspaceScopedPayloadRow>(
+      db.prepare("select id, workspace_id, payload from sessions").all()
+    );
+    const updateSession = db.prepare("update sessions set workspace_id = ?, payload = ? where id = ?");
+    for (const row of sessionRows) {
+      const payload = parseJson<Session>(row.payload);
+      if (row.workspace_id === workspace.id && payload.workspaceId === workspace.id) {
+        continue;
+      }
+
+      updateSession.run(
+        workspace.id,
+        serializeJson({
+          ...payload,
+          workspaceId: workspace.id
+        }),
+        row.id
+      );
+    }
+
+    const runRows = coerceRows<WorkspaceScopedPayloadRow>(
+      db.prepare("select id, workspace_id, payload from runs").all()
+    );
+    const updateRun = db.prepare("update runs set workspace_id = ?, payload = ? where id = ?");
+    for (const row of runRows) {
+      const payload = parseJson<Run>(row.payload);
+      if (row.workspace_id === workspace.id && payload.workspaceId === workspace.id) {
+        continue;
+      }
+
+      updateRun.run(
+        workspace.id,
+        serializeJson({
+          ...payload,
+          workspaceId: workspace.id
+        }),
+        row.id
+      );
+    }
+
+    const historyRows = coerceRows<HistoryEventRow>(
+      db.prepare("select id, workspace_id, entity_type, entity_id, op, payload, occurred_at from history_events").all()
+    );
+    const updateHistoryEvent = db.prepare("update history_events set workspace_id = ?, payload = ? where id = ?");
+    for (const row of historyRows) {
+      let nextPayload = row.payload;
+
+      if (row.entity_type === "session") {
+        const payload = parseJson<Session>(row.payload);
+        if (payload.workspaceId !== workspace.id) {
+          nextPayload = serializeJson({
+            ...payload,
+            workspaceId: workspace.id
+          });
+        }
+      } else if (row.entity_type === "run") {
+        const payload = parseJson<Run>(row.payload);
+        if (payload.workspaceId !== workspace.id) {
+          nextPayload = serializeJson({
+            ...payload,
+            workspaceId: workspace.id
+          });
+        }
+      }
+
+      if (row.workspace_id === workspace.id && nextPayload === row.payload) {
+        continue;
+      }
+
+      updateHistoryEvent.run(workspace.id, nextPayload, row.id);
+    }
+  });
+}
+
 function runInTransaction(db: DatabaseSync, operation: () => void): void {
   db.exec("begin immediate");
   try {
@@ -729,6 +829,7 @@ class SQLitePersistenceCoordinator {
     db.exec("pragma journal_mode = wal");
     db.exec("pragma busy_timeout = 5000");
     migrateLegacyMirrorSchemaIfNeeded(db);
+    reconcilePersistedWorkspaceScope(db, workspace);
     normalizePersistedWorkspaceData(db);
     const handle = { dbPath, db };
     this.#handles.set(workspace.id, handle);
@@ -1025,6 +1126,14 @@ class SQLiteRunRepository implements RunRepository {
     });
     this.#coordinator.indexRun(input.id, input.workspaceId);
     return input;
+  }
+
+  async listBySessionId(sessionId: string): Promise<Run[]> {
+    const handle = await this.#coordinator.getSessionHandle(sessionId);
+    const rows = coerceRows<JsonRow>(
+      handle.db.prepare("select payload from runs where session_id = ? order by created_at desc, id desc").all(sessionId)
+    );
+    return rows.map((row) => parseJson<Run>(row.payload));
   }
 
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {

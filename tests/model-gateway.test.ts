@@ -133,6 +133,52 @@ describe("model gateway mcp tools", () => {
       ]
     });
   }, 15_000);
+
+  it("skips unreachable remote MCP servers instead of exposing them to the model", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "oah-mcp-"));
+    const serverPath = path.join(tempDir, "fake-mcp.cjs");
+    await writeFile(serverPath, `${MCP_SERVER_SOURCE}\n`, "utf8");
+    const warnings: Array<{ message: string; details?: Record<string, unknown> }> = [];
+
+    const prepared = await prepareToolServers(
+      [
+        {
+          name: "docs-server",
+          enabled: true,
+          transportType: "stdio",
+          command: `node ${JSON.stringify(serverPath)}`,
+          toolPrefix: "mcp.docs",
+          include: ["search"]
+        },
+        {
+          name: "web-search-mcp",
+          enabled: true,
+          transportType: "http",
+          url: "http://127.0.0.1:9/mcp",
+          timeout: 300
+        }
+      ],
+      {
+        logger: {
+          warn(message, details) {
+            warnings.push({ message, details });
+          }
+        }
+      }
+    );
+    preparedClosers.push(() => prepared.close());
+
+    expect(Object.keys(prepared.tools)).toEqual(["mcp.docs.search"]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      message: "Skipping unreachable remote MCP server.",
+      details: {
+        serverName: "web-search-mcp",
+        transportType: "http",
+        url: "http://127.0.0.1:9/mcp"
+      }
+    });
+  }, 15_000);
 });
 
 describe("AiSdkModelGateway openai-compatible provider", () => {

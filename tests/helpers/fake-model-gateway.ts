@@ -72,11 +72,14 @@ export class FakeModelGateway implements ModelGateway {
       ) =>
         | {
             text?: string | undefined;
+            content?: unknown[] | undefined;
+            reasoning?: unknown[] | undefined;
             toolSteps?: Array<{
               toolName: string;
               input: unknown;
               toolCallId?: string | undefined;
               delayMs?: number | undefined;
+              continueOnError?: boolean | undefined;
             }> | undefined;
             toolBatches?:
               | Array<
@@ -85,6 +88,7 @@ export class FakeModelGateway implements ModelGateway {
                     input: unknown;
                     toolCallId?: string | undefined;
                     delayMs?: number | undefined;
+                    continueOnError?: boolean | undefined;
                   }>
                 >
               | undefined;
@@ -141,6 +145,13 @@ export class FakeModelGateway implements ModelGateway {
         };
       }
 
+      if (preparation.messages) {
+        currentInput = {
+          ...currentInput,
+          messages: preparation.messages
+        };
+      }
+
       if (preparation.systemMessages) {
         const tailMessages = (currentInput.messages ?? []).filter((message) => message.role !== "system");
         currentInput = {
@@ -182,6 +193,7 @@ export class FakeModelGateway implements ModelGateway {
               input: unknown;
               toolCallId?: string | undefined;
               delayMs?: number | undefined;
+              continueOnError?: boolean | undefined;
             },
             toolIndex: number
           ) => {
@@ -204,31 +216,53 @@ export class FakeModelGateway implements ModelGateway {
               }
 
               const toolDefinition = options?.tools?.[toolStep.toolName];
-              const toolResult = toolDefinition
-                ? await toolDefinition.execute(toolStep.input, {
-                    abortSignal: options?.signal,
-                    toolCallId
-                  })
-                : `Error: Tool "${toolStep.toolName}" was not registered.`;
 
-              await options?.onToolCallFinish?.({
-                toolCallId,
-                toolName: toolStep.toolName,
-                output: toolResult
-              });
+              try {
+                const toolResult = toolDefinition
+                  ? await toolDefinition.execute(toolStep.input, {
+                      abortSignal: options?.signal,
+                      toolCallId
+                    })
+                  : `Error: Tool "${toolStep.toolName}" was not registered.`;
 
-              return {
-                toolCall: {
-                  toolCallId,
-                  toolName: toolStep.toolName,
-                  input: toolStep.input
-                },
-                toolResult: {
+                await options?.onToolCallFinish?.({
                   toolCallId,
                   toolName: toolStep.toolName,
                   output: toolResult
+                });
+
+                return {
+                  toolCall: {
+                    toolCallId,
+                    toolName: toolStep.toolName,
+                    input: toolStep.input
+                  },
+                  toolResult: {
+                    toolCallId,
+                    toolName: toolStep.toolName,
+                    output: toolResult
+                  }
+                };
+              } catch (error) {
+                if (!toolStep.continueOnError) {
+                  throw error;
                 }
-              };
+
+                return {
+                  toolCall: {
+                    toolCallId,
+                    toolName: toolStep.toolName,
+                    input: toolStep.input
+                  },
+                  toolError: {
+                    type: "tool-error" as const,
+                    toolCallId,
+                    toolName: toolStep.toolName,
+                    input: toolStep.input,
+                    error
+                  }
+                };
+              }
             } finally {
               gateway.#activeToolExecutions -= 1;
             }
@@ -248,7 +282,14 @@ export class FakeModelGateway implements ModelGateway {
           await options?.onStepFinish?.({
             finishReason: "tool-calls",
             toolCalls: executedBatch.map((entry) => entry.toolCall),
-            toolResults: executedBatch.map((entry) => entry.toolResult)
+            toolResults: executedBatch.flatMap((entry) => (entry.toolResult ? [entry.toolResult] : [])),
+            ...(executedBatch.some((entry) => entry.toolError)
+              ? {
+                  response: {
+                    content: executedBatch.flatMap((entry) => (entry.toolError ? [entry.toolError] : []))
+                  }
+                }
+              : {})
           });
 
           await applyPreparation(index + 1);
@@ -272,6 +313,8 @@ export class FakeModelGateway implements ModelGateway {
 
         await options?.onStepFinish?.({
           text: emitted,
+          ...(Array.isArray(scenario?.content) ? { content: scenario.content } : {}),
+          ...(Array.isArray(scenario?.reasoning) ? { reasoning: scenario.reasoning } : {}),
           finishReason: "stop",
           toolCalls: [],
           toolResults: []
@@ -280,6 +323,8 @@ export class FakeModelGateway implements ModelGateway {
         resolveCompleted({
           model: modelName,
           text: emitted,
+          ...(Array.isArray(scenario?.content) ? { content: scenario.content } : {}),
+          ...(Array.isArray(scenario?.reasoning) ? { reasoning: scenario.reasoning } : {}),
           finishReason: "stop",
           usage: {
             inputTokens: 10,
@@ -291,6 +336,8 @@ export class FakeModelGateway implements ModelGateway {
         resolveCompleted({
           model: modelName,
           text: emitted,
+          ...(Array.isArray(scenario?.content) ? { content: scenario.content } : {}),
+          ...(Array.isArray(scenario?.reasoning) ? { reasoning: scenario.reasoning } : {}),
           finishReason: "stop",
           usage: {
             inputTokens: 10,

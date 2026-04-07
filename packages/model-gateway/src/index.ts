@@ -7,6 +7,7 @@ import type { ModelGenerateResponse, Usage } from "@oah/api-contracts";
 import type {
   GenerateModelInput,
   ModelGateway,
+  RuntimeLogger,
   ModelStepPreparation,
   ModelStepResult,
   ModelStreamOptions,
@@ -222,6 +223,38 @@ function toToolResult(toolResult: { toolCallId: string; toolName: string; output
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractToolErrors(step: ModelStepResult): Array<{ toolCallId: string; toolName: string; error: unknown }> {
+  const responseContent = isRecord(step.response) && Array.isArray(step.response.content) ? step.response.content : [];
+  const stepContent = Array.isArray(step.content) ? step.content : [];
+  const successfulToolCallIds = new Set(step.toolResults.map((toolResult) => toolResult.toolCallId));
+  const toolErrors = new Map<string, { toolCallId: string; toolName: string; error: unknown }>();
+
+  for (const part of [...stepContent, ...responseContent]) {
+    if (
+      !isRecord(part) ||
+      part.type !== "tool-error" ||
+      typeof part.toolCallId !== "string" ||
+      typeof part.toolName !== "string" ||
+      !("error" in part) ||
+      successfulToolCallIds.has(part.toolCallId)
+    ) {
+      continue;
+    }
+
+    toolErrors.set(part.toolCallId, {
+      toolCallId: part.toolCallId,
+      toolName: part.toolName,
+      error: part.error
+    });
+  }
+
+  return [...toolErrors.values()];
+}
+
 function toError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
@@ -237,16 +270,19 @@ function toError(error: unknown): Error {
 export interface AiSdkModelGatewayOptions {
   defaultModelName: string;
   models: PlatformModelRegistry;
+  logger?: RuntimeLogger | undefined;
 }
 
 export class AiSdkModelGateway implements ModelGateway {
   readonly #defaultModelName: string;
   readonly #models: PlatformModelRegistry;
+  readonly #logger: RuntimeLogger | undefined;
   readonly #clients = new Map<string, LanguageModel>();
 
   constructor(options: AiSdkModelGatewayOptions) {
     this.#defaultModelName = options.defaultModelName;
     this.#models = options.models;
+    this.#logger = options.logger;
   }
 
   async generate(input: GenerateModelInput, options?: { signal?: AbortSignal }): Promise<ModelGenerateResponse> {
@@ -257,6 +293,7 @@ export class AiSdkModelGateway implements ModelGateway {
       model,
       ...toPrompt(input),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+      ...(input.topP !== undefined ? { topP: input.topP } : {}),
       ...(input.maxTokens !== undefined ? { maxOutputTokens: input.maxTokens } : {}),
       ...(options?.signal ? { abortSignal: options.signal } : {})
     });
@@ -264,6 +301,8 @@ export class AiSdkModelGateway implements ModelGateway {
     return {
       model: modelName,
       text: result.text,
+      ...(Array.isArray(result.content) ? { content: result.content } : {}),
+      ...(Array.isArray(result.reasoning) ? { reasoning: result.reasoning } : {}),
       finishReason: result.finishReason,
       usage: toUsage(result.usage)
     };
@@ -274,7 +313,8 @@ export class AiSdkModelGateway implements ModelGateway {
     const model = this.#resolveModel(modelName, input.modelDefinition);
     const runtimeTools = toAiTools(options?.tools, options?.signal, options?.parallelToolCalls);
     const preparedToolServers = await prepareToolServers(
-      (options as ModelStreamOptions & { toolServers?: ToolServerDefinition[] | undefined })?.toolServers
+      (options as ModelStreamOptions & { toolServers?: ToolServerDefinition[] | undefined })?.toolServers,
+      { logger: this.#logger }
     );
     const aiTools = mergeToolSets(runtimeTools, preparedToolServers.tools);
     let cleanedUp = false;
@@ -287,15 +327,31 @@ export class AiSdkModelGateway implements ModelGateway {
       await preparedToolServers.close();
     };
     let observedStreamError: Error | undefined;
+    this.#logger?.debug?.("Model gateway starting AI SDK stream.", {
+      model: modelName,
+      provider: input.modelDefinition?.provider,
+      messageCount: input.messages?.length ?? 0,
+      hasPrompt: typeof input.prompt === "string",
+      toolNames: options?.tools ? Object.keys(options.tools) : [],
+      toolServerNames: options?.toolServers?.map((server) => server.name) ?? [],
+      maxSteps: options?.maxSteps,
+      parallelToolCalls: options?.parallelToolCalls
+    });
 
     const result = streamText({
       model,
       ...toPrompt(input),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+      ...(input.topP !== undefined ? { topP: input.topP } : {}),
       ...(input.maxTokens !== undefined ? { maxOutputTokens: input.maxTokens } : {}),
       ...(options?.signal ? { abortSignal: options.signal } : {}),
       onError: ({ error }) => {
         observedStreamError ??= toError(error);
+        this.#logger?.error?.("Model gateway stream error observed.", {
+          model: modelName,
+          provider: input.modelDefinition?.provider,
+          errorMessage: observedStreamError.message
+        });
       },
       ...(aiTools
         ? {
@@ -317,6 +373,11 @@ export class AiSdkModelGateway implements ModelGateway {
                       model: this.#resolveModel(preparation.model, preparation.modelDefinition)
                     }
                   : { model: currentModel }),
+                ...(preparation.messages
+                  ? {
+                      messages: preparation.messages
+                    }
+                  : {}),
                 ...(preparation.systemMessages
                   ? {
                       messages: replaceLeadingSystemMessages(messages, preparation.systemMessages)
@@ -330,13 +391,30 @@ export class AiSdkModelGateway implements ModelGateway {
       ...(options?.onStepFinish
         ? {
             onStepFinish: async (step) => {
-              await options.onStepFinish?.(toStepResult(step));
+              const stepResult = toStepResult(step);
+              const toolErrors = extractToolErrors(stepResult);
+              this.#logger?.debug?.("Model gateway step finished.", {
+                model: modelName,
+                provider: input.modelDefinition?.provider,
+                finishReason: stepResult.finishReason ?? "unknown",
+                toolCallsCount: stepResult.toolCalls.length,
+                toolResultsCount: stepResult.toolResults.length,
+                toolErrorsCount: toolErrors.length,
+                toolErrorIds: toolErrors.map((toolError) => toolError.toolCallId)
+              });
+              await options.onStepFinish?.(stepResult);
             }
           }
         : {}),
       ...(options?.onToolCallStart
         ? {
             experimental_onToolCallStart: async (event) => {
+              this.#logger?.debug?.("Model gateway tool call started.", {
+                model: modelName,
+                provider: input.modelDefinition?.provider,
+                toolCallId: event.toolCall.toolCallId,
+                toolName: event.toolCall.toolName
+              });
               await options.onToolCallStart?.(toToolCall(event.toolCall));
             }
           }
@@ -345,9 +423,21 @@ export class AiSdkModelGateway implements ModelGateway {
         ? {
             experimental_onToolCallFinish: async (event) => {
               if (!event.success) {
+                this.#logger?.debug?.("Model gateway tool call finished with non-success status.", {
+                  model: modelName,
+                  provider: input.modelDefinition?.provider,
+                  toolCallId: event.toolCall.toolCallId,
+                  toolName: event.toolCall.toolName
+                });
                 return;
               }
 
+              this.#logger?.debug?.("Model gateway tool call finished.", {
+                model: modelName,
+                provider: input.modelDefinition?.provider,
+                toolCallId: event.toolCall.toolCallId,
+                toolName: event.toolCall.toolName
+              });
               await options.onToolCallFinish?.(
                 toToolResult({
                   toolCallId: event.toolCall.toolCallId,
@@ -370,10 +460,12 @@ export class AiSdkModelGateway implements ModelGateway {
           await cleanup();
         }
       })(),
-      completed: Promise.all([result.text, result.finishReason, result.usage])
-        .then(([text, finishReason, usage]) => ({
+      completed: Promise.all([result.text, result.finishReason, result.usage, result.content, result.reasoning])
+        .then(([text, finishReason, usage, content, reasoning]) => ({
           model: modelName,
           text,
+          ...(Array.isArray(content) ? { content } : {}),
+          ...(Array.isArray(reasoning) ? { reasoning } : {}),
           finishReason,
           usage: toUsage(usage)
         }))

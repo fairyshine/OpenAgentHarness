@@ -13,19 +13,23 @@ import type {
 } from "@oah/api-contracts";
 
 import { AppError } from "./errors.js";
+import { normalizePersistedMessages } from "./persisted-history-normalization.js";
 import { buildAvailableAgentSwitchesMessage, buildAvailableSubagentsMessage } from "./agent-control.js";
 import { NATIVE_TOOL_NAMES } from "./native-tools.js";
 import { buildAvailableActionsMessage } from "./action-dispatch.js";
 import { buildAvailableSkillsMessage } from "./skill-activation.js";
 import { formatToolOutput } from "./tool-output.js";
 import {
+  assistantContentFromModelOutput,
   contentToPromptMessage,
   extractTextFromContent,
   isMessageContentForRole,
   isMessagePartList,
   isMessageRole,
+  normalizeToolErrorOutput,
   textContent,
   toolCallContent,
+  toolErrorResultContent,
   toolResultContent
 } from "./runtime-message-content.js";
 import {
@@ -33,10 +37,10 @@ import {
   buildEnvironmentMessage as composeEnvironmentMessage,
   buildRuntimeTools as createWorkspaceRuntimeTools,
   canDelegateFromAgent as canAgentDelegate,
-  enabledToolServers as listEnabledToolServers,
   runtimeToolNamesForCatalog as listRuntimeToolNamesForCatalog,
   toolRetryPolicy as resolveToolRetryPolicy,
   toolSourceType as resolveToolSourceType,
+  visibleEnabledToolServers as listVisibleEnabledToolServers,
   visibleLlmActions as listVisibleLlmActions,
   visibleLlmSkills as listVisibleLlmSkills
 } from "./runtime-tooling.js";
@@ -63,6 +67,7 @@ import {
   type RuntimeToolExecutionContext,
   type RuntimeWorkspaceCatalog,
   type WorkspaceListResult,
+  type RunListResult,
   toPublicWorkspace,
   type WorkspaceRecord
 } from "./types.js";
@@ -133,6 +138,7 @@ interface ModelExecutionInput {
   provider?: string | undefined;
   modelDefinition?: ModelDefinition | undefined;
   temperature?: number | undefined;
+  topP?: number | undefined;
   maxTokens?: number | undefined;
   messages: ChatMessage[];
 }
@@ -152,7 +158,16 @@ interface DelegatedRunRecord {
 
 interface AwaitedRunSummary {
   run: Run;
-  assistantContent?: string | undefined;
+  outputContent?: string | undefined;
+}
+
+interface ToolErrorContentPart {
+  type: "tool-error";
+  toolCallId: string;
+  toolName: string;
+  error: unknown;
+  input?: unknown;
+  providerExecuted?: boolean | undefined;
 }
 
 function escapeXml(value: string): string {
@@ -181,6 +196,20 @@ function isAbortError(error: unknown): boolean {
     (error.name === "AbortError" ||
       error.message === "aborted" ||
       error.message === "This operation was aborted")
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isToolErrorContentPart(value: unknown): value is ToolErrorContentPart {
+  return (
+    isRecord(value) &&
+    value.type === "tool-error" &&
+    typeof value.toolCallId === "string" &&
+    typeof value.toolName === "string" &&
+    "error" in value
   );
 }
 
@@ -225,6 +254,7 @@ function createAbortError(): Error {
 export class RuntimeService {
   readonly #defaultModel: string;
   readonly #modelGateway: RuntimeServiceOptions["modelGateway"];
+  readonly #logger: RuntimeServiceOptions["logger"];
   readonly #runHeartbeatIntervalMs: number;
   readonly #platformModels: Record<string, ModelDefinition>;
   readonly #workspaceRepository: RuntimeServiceOptions["workspaceRepository"];
@@ -245,6 +275,7 @@ export class RuntimeService {
   constructor(options: RuntimeServiceOptions) {
     this.#defaultModel = options.defaultModel;
     this.#modelGateway = options.modelGateway;
+    this.#logger = options.logger;
     this.#runHeartbeatIntervalMs = Math.max(50, options.runHeartbeatIntervalMs ?? 5_000);
     this.#platformModels = options.platformModels ?? {};
     this.#workspaceRepository = options.workspaceRepository;
@@ -386,6 +417,15 @@ export class RuntimeService {
       throw new AppError(404, "agent_not_found", `Agent ${activeAgentName} was not found in workspace ${workspaceId}.`);
     }
 
+    const initialAgent = workspace.agents[activeAgentName];
+    if (initialAgent?.mode === "subagent") {
+      throw new AppError(
+        409,
+        "invalid_session_agent_target",
+        `Agent ${activeAgentName} is a subagent and cannot be set as the active session agent.`
+      );
+    }
+
     const session: Session = {
       id: createId("ses"),
       workspaceId: workspace.id,
@@ -425,11 +465,11 @@ export class RuntimeService {
         );
       }
 
-      if (targetAgent.mode !== "primary") {
+      if (targetAgent.mode === "subagent") {
         throw new AppError(
           409,
           "invalid_session_agent_target",
-          `Agent ${input.activeAgentName} is not a primary agent and cannot be set as the active session agent.`
+          `Agent ${input.activeAgentName} is a subagent and cannot be set as the active session agent.`
         );
       }
 
@@ -445,8 +485,33 @@ export class RuntimeService {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    await this.getSession(sessionId);
-    await this.#sessionRepository.delete(sessionId);
+    const session = await this.getSession(sessionId);
+    const workspaceSessions = await this.#listAllWorkspaceSessions(session.workspaceId);
+    const childSessionIdsByParentId = new Map<string, string[]>();
+
+    for (const candidate of workspaceSessions) {
+      if (!candidate.parentSessionId) {
+        continue;
+      }
+
+      const childIds = childSessionIdsByParentId.get(candidate.parentSessionId) ?? [];
+      childIds.push(candidate.id);
+      childSessionIdsByParentId.set(candidate.parentSessionId, childIds);
+    }
+
+    const deletionOrder: string[] = [];
+    const visit = (targetSessionId: string) => {
+      for (const childSessionId of childSessionIdsByParentId.get(targetSessionId) ?? []) {
+        visit(childSessionId);
+      }
+      deletionOrder.push(targetSessionId);
+    };
+
+    visit(sessionId);
+
+    for (const targetSessionId of deletionOrder) {
+      await this.#sessionRepository.delete(targetSessionId);
+    }
   }
 
   async listWorkspaceSessions(workspaceId: string, pageSize: number, cursor?: string): Promise<SessionListResult> {
@@ -464,6 +529,16 @@ export class RuntimeService {
     const startIndex = parseCursor(cursor);
     const items = messages.slice(startIndex, startIndex + pageSize);
     const nextCursor = startIndex + pageSize < messages.length ? String(startIndex + pageSize) : undefined;
+
+    return nextCursor === undefined ? { items } : { items, nextCursor };
+  }
+
+  async listSessionRuns(sessionId: string, pageSize = 100, cursor?: string): Promise<RunListResult> {
+    await this.getSession(sessionId);
+    const runs = await this.#runRepository.listBySessionId(sessionId);
+    const startIndex = parseCursor(cursor);
+    const items = runs.slice(startIndex, startIndex + pageSize);
+    const nextCursor = startIndex + pageSize < runs.length ? String(startIndex + pageSize) : undefined;
 
     return nextCursor === undefined ? { items } : { items, nextCursor };
   }
@@ -795,7 +870,10 @@ export class RuntimeService {
         throw new AppError(500, "session_required", `Run ${run.id} requires a session for message execution.`);
       }
 
-      const allMessages = [...(await this.#messageRepository.listBySessionId(session.id))];
+      const allMessages = await this.#repairSessionHistoryIfNeeded(
+        session.id,
+        await this.#messageRepository.listBySessionId(session.id)
+      );
       const executionContext: RunExecutionContext = {
         currentAgentName: run.effectiveAgentName,
         injectSystemReminder: false,
@@ -814,6 +892,8 @@ export class RuntimeService {
       const toolCallStartedAt = new Map<string, number>();
       const toolCallSteps = new Map<string, RunStep>();
       const activeToolCallIds = new Set<string>();
+      const modelCallMessageMetadata = new Map<number, Record<string, unknown>>();
+      let latestMessageGenerationMetadata: Record<string, unknown> | undefined;
       let completedModelStepCount = 0;
       const syncRunStatusFromActiveTools = async () => {
         await this.#setRunStatusIfPossible(run.id, activeToolCallIds.size > 0 ? "waiting_tool" : "running");
@@ -827,16 +907,32 @@ export class RuntimeService {
         toolCallStartedAt,
         toolCallSteps
       );
-      const activeToolServers = listEnabledToolServers(workspace);
+      const activeToolServers = listVisibleEnabledToolServers(workspace, executionContext.currentAgentName);
       const runtimeToolNames = Object.keys(observableRuntimeTools);
       const persistedToolCalls = new Set<string>();
       let assistantMessage: Message | undefined;
+      let finalAssistantStep: ModelStepResult | undefined;
+      this.#logger?.debug?.("Runtime run starting model stream.", {
+        workspaceId: workspace.id,
+        sessionId: session.id,
+        runId: run.id,
+        triggerType: run.triggerType,
+        agentName: executionContext.currentAgentName,
+        model: hookedModelInput.model,
+        provider: hookedModelInput.provider,
+        canonicalModelRef: hookedModelInput.canonicalModelRef,
+        messageCount: hookedModelInput.messages.length,
+        messageRoles: this.#summarizeMessageRoles(hookedModelInput.messages),
+        runtimeToolNames,
+        toolServerNames: activeToolServers.map((server) => server.name)
+      });
       const response = await this.#modelGateway.stream(
         {
           model: hookedModelInput.model,
           ...(hookedModelInput.modelDefinition ? { modelDefinition: hookedModelInput.modelDefinition } : {}),
           messages: hookedModelInput.messages,
           ...(hookedModelInput.temperature !== undefined ? { temperature: hookedModelInput.temperature } : {}),
+          ...(hookedModelInput.topP !== undefined ? { topP: hookedModelInput.topP } : {}),
           ...(hookedModelInput.maxTokens !== undefined ? { maxTokens: hookedModelInput.maxTokens } : {})
         },
         {
@@ -856,22 +952,39 @@ export class RuntimeService {
           prepareStep: async (stepNumber) => {
             const activeToolNames = resolveActiveToolNamesForAgent(workspace, executionContext.currentAgentName);
             if (stepNumber === 0) {
-              modelCallSteps.set(
-                stepNumber,
-                await this.#startRunStep({
-                  runId: run.id,
-                  stepType: "model_call",
-                  name: hookedModelInput.model,
-                  agentName: executionContext.currentAgentName,
-                  input: this.#serializeModelCallStepInput(
-                    hookedModelInput,
-                    activeToolNames,
-                    activeToolServers,
-                    runtimeToolNames,
-                    runtimeTools
-                  )
-                })
+              const initialModelCallStep = await this.#startRunStep({
+                runId: run.id,
+                stepType: "model_call",
+                name: hookedModelInput.model,
+                agentName: executionContext.currentAgentName,
+                input: this.#serializeModelCallStepInput(
+                  hookedModelInput,
+                  activeToolNames,
+                  activeToolServers,
+                  runtimeToolNames,
+                  runtimeTools
+                )
+              });
+              modelCallSteps.set(stepNumber, initialModelCallStep);
+              latestMessageGenerationMetadata = this.#buildGeneratedMessageMetadata(
+                workspace,
+                executionContext.currentAgentName,
+                hookedModelInput,
+                initialModelCallStep
               );
+              modelCallMessageMetadata.set(stepNumber, latestMessageGenerationMetadata);
+              this.#logger?.debug?.("Runtime prepared initial model step.", {
+                workspaceId: workspace.id,
+                sessionId: session.id,
+                runId: run.id,
+                stepNumber,
+                agentName: executionContext.currentAgentName,
+                model: hookedModelInput.model,
+                provider: hookedModelInput.provider,
+                canonicalModelRef: hookedModelInput.canonicalModelRef,
+                messageCount: hookedModelInput.messages.length,
+                activeToolNames
+              });
               return activeToolNames ? { activeToolNames } : undefined;
             }
 
@@ -887,36 +1000,59 @@ export class RuntimeService {
             const hookedNextInput = await this.#applyBeforeModelHooks(workspace, session, latestRun, nextInput);
             latestHookedModelInput = hookedNextInput;
             executionContext.injectSystemReminder = false;
-            modelCallSteps.set(
-              stepNumber,
-              await this.#startRunStep({
-                runId: run.id,
-                stepType: "model_call",
-                name: hookedNextInput.model,
-                agentName: executionContext.currentAgentName,
-                input: this.#serializeModelCallStepInput(
-                  hookedNextInput,
-                  activeToolNames,
-                  activeToolServers,
-                  runtimeToolNames,
-                  runtimeTools
-                )
-              })
+            const followupModelCallStep = await this.#startRunStep({
+              runId: run.id,
+              stepType: "model_call",
+              name: hookedNextInput.model,
+              agentName: executionContext.currentAgentName,
+              input: this.#serializeModelCallStepInput(
+                hookedNextInput,
+                activeToolNames,
+                activeToolServers,
+                runtimeToolNames,
+                runtimeTools
+              )
+            });
+            modelCallSteps.set(stepNumber, followupModelCallStep);
+            latestMessageGenerationMetadata = this.#buildGeneratedMessageMetadata(
+              workspace,
+              executionContext.currentAgentName,
+              hookedNextInput,
+              followupModelCallStep
             );
+            modelCallMessageMetadata.set(stepNumber, latestMessageGenerationMetadata);
+            this.#logger?.debug?.("Runtime prepared follow-up model step.", {
+              workspaceId: workspace.id,
+              sessionId: session.id,
+              runId: run.id,
+              stepNumber,
+              agentName: executionContext.currentAgentName,
+              model: hookedNextInput.model,
+              provider: hookedNextInput.provider,
+              canonicalModelRef: hookedNextInput.canonicalModelRef,
+              messageCount: hookedNextInput.messages.length,
+              activeToolNames
+            });
 
             return {
               model: hookedNextInput.model,
               ...(hookedNextInput.modelDefinition ? { modelDefinition: hookedNextInput.modelDefinition } : {}),
-              systemMessages: hookedNextInput.messages.filter(
-                (message): message is { role: "system"; content: string } =>
-                  message.role === "system" && typeof message.content === "string"
-              ),
+              messages: hookedNextInput.messages,
               ...(activeToolNames ? { activeToolNames } : {})
             };
           },
           onToolCallStart: async (toolCall) => {
             toolCallStartedAt.set(toolCall.toolCallId, Date.now());
             activeToolCallIds.add(toolCall.toolCallId);
+            this.#logger?.debug?.("Runtime tool call started.", {
+              workspaceId: workspace.id,
+              sessionId: session.id,
+              runId: run.id,
+              agentName: executionContext.currentAgentName,
+              toolCallId: toolCall.toolCallId,
+              toolName: toolCall.toolName,
+              inputPreview: this.#previewValue(toolCall.input)
+            });
             await syncRunStatusFromActiveTools();
           },
           onToolCallFinish: async (toolResult) => {
@@ -950,24 +1086,80 @@ export class RuntimeService {
                 ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
               }
             });
+            this.#logger?.debug?.("Runtime tool call finished.", {
+              workspaceId: workspace.id,
+              sessionId: session.id,
+              runId: run.id,
+              agentName: executionContext.currentAgentName,
+              toolCallId: toolResult.toolCallId,
+              toolName: toolResult.toolName,
+              outputPreview: this.#previewValue(toolResult.output),
+              ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
+            });
             await syncRunStatusFromActiveTools();
           },
           onStepFinish: async (step) => {
+            const messageMetadata = modelCallMessageMetadata.get(completedModelStepCount) ?? latestMessageGenerationMetadata;
+            const failedToolResults = this.#extractFailedToolResults(step);
+            for (const toolError of failedToolResults) {
+              toolCallStartedAt.delete(toolError.toolCallId);
+              toolCallSteps.delete(toolError.toolCallId);
+              activeToolCallIds.delete(toolError.toolCallId);
+            }
+            await syncRunStatusFromActiveTools();
             const modelCallStep = modelCallSteps.get(completedModelStepCount);
             if (modelCallStep) {
-              await this.#completeRunStep(modelCallStep, "completed", this.#serializeModelCallStepOutput(step));
+              await this.#completeRunStep(
+                modelCallStep,
+                "completed",
+                this.#serializeModelCallStepOutput(step, failedToolResults)
+              );
               modelCallSteps.delete(completedModelStepCount);
             }
+            modelCallMessageMetadata.delete(completedModelStepCount);
             completedModelStepCount += 1;
-            await this.#persistAssistantToolCalls(session, run, step, allMessages);
-            await this.#persistToolResults(session, run, step, persistedToolCalls, allMessages);
+            this.#logger?.debug?.("Runtime model step finished.", {
+              workspaceId: workspace.id,
+              sessionId: session.id,
+              runId: run.id,
+              stepNumber: completedModelStepCount - 1,
+              finishReason: step.finishReason ?? "unknown",
+              toolCallsCount: step.toolCalls.length,
+              toolResultsCount: step.toolResults.length,
+              toolErrorsCount: failedToolResults.length,
+              toolErrorIds: failedToolResults.map((toolError) => toolError.toolCallId)
+            });
+            if (
+              step.toolCalls.length === 0 &&
+              step.toolResults.length === 0 &&
+              (typeof step.text === "string" || Array.isArray(step.content) || Array.isArray(step.reasoning))
+            ) {
+              finalAssistantStep = step;
+            }
+            await this.#persistAssistantToolCalls(session, run, step, allMessages, messageMetadata);
+            await this.#persistToolResults(
+              session,
+              run,
+              step,
+              failedToolResults,
+              persistedToolCalls,
+              allMessages,
+              messageMetadata
+            );
           }
         }
       );
 
       let accumulatedText = "";
       for await (const chunk of response.chunks) {
-        assistantMessage = await this.#ensureAssistantMessage(session, run, assistantMessage, allMessages);
+        assistantMessage = await this.#ensureAssistantMessage(
+          session,
+          run,
+          assistantMessage,
+          allMessages,
+          "",
+          modelCallMessageMetadata.get(completedModelStepCount) ?? latestMessageGenerationMetadata
+        );
         accumulatedText += chunk;
         await this.#messageRepository.update({
           ...assistantMessage,
@@ -994,7 +1186,15 @@ export class RuntimeService {
         latestHookedModelInput,
         completed
       );
-      await this.#finalizeSuccessfulRun(session, latestRun, assistantMessage, hookedCompleted);
+      await this.#finalizeSuccessfulRun(
+        workspace,
+        session,
+        latestRun,
+        assistantMessage,
+        hookedCompleted,
+        finalAssistantStep,
+        latestMessageGenerationMetadata
+      );
     } catch (error) {
       const pendingModelStepStatus = runTimedOut ? "failed" : abortController.signal.aborted ? "cancelled" : "failed";
       for (const step of modelCallSteps.values()) {
@@ -1043,6 +1243,15 @@ export class RuntimeService {
       }
 
       const currentRun = await this.getRun(run.id);
+      this.#logger?.error?.("Runtime run failed.", {
+        workspaceId: workspace.id,
+        sessionId: session?.id,
+        runId: run.id,
+        triggerType: run.triggerType,
+        status: currentRun.status,
+        errorCode: error instanceof AppError ? error.code : "model_stream_failed",
+        errorMessage: error instanceof Error ? error.message : "Unknown streaming error."
+      });
       const failedRun =
         currentRun.status === "failed" || currentRun.status === "timed_out"
           ? currentRun
@@ -1084,35 +1293,44 @@ export class RuntimeService {
   }
 
   async #finalizeSuccessfulRun(
+    workspace: WorkspaceRecord,
     session: Session,
     run: Run,
     assistantMessage: Message | undefined,
-    completed: ModelGenerateResponse
+    completed: ModelGenerateResponse,
+    finalAssistantStep: ModelStepResult | undefined,
+    messageMetadata?: Record<string, unknown> | undefined
   ): Promise<void> {
+    const finalizedAssistantContent = assistantContentFromModelOutput({
+      text: completed.text,
+      content: Array.isArray(completed.content) ? completed.content : finalAssistantStep?.content,
+      reasoning: Array.isArray(completed.reasoning) ? completed.reasoning : finalAssistantStep?.reasoning
+    });
     const latestRun = await this.getRun(run.id);
     const persistedAssistantMessage = await this.#ensureAssistantMessage(
       session,
       latestRun,
       assistantMessage,
       undefined,
-      completed.text
+      typeof finalizedAssistantContent === "string" ? finalizedAssistantContent : completed.text,
+      messageMetadata ?? this.#buildGeneratedMessageMetadata(workspace, latestRun.effectiveAgentName, { messages: [] })
     );
     const updatedMessage =
-      extractTextFromContent(persistedAssistantMessage.content) === completed.text
+      JSON.stringify(persistedAssistantMessage.content) === JSON.stringify(finalizedAssistantContent)
         ? persistedAssistantMessage
         : await this.#messageRepository.update({
             ...persistedAssistantMessage,
-            content: textContent(completed.text)
+            content: finalizedAssistantContent
           });
 
     await this.#appendEvent({
       sessionId: session.id,
       runId: run.id,
       event: "message.completed",
-        data: {
-          runId: run.id,
-          messageId: updatedMessage.id,
-          content: updatedMessage.content,
+      data: {
+        runId: run.id,
+        messageId: updatedMessage.id,
+        content: updatedMessage.content,
         finishReason: completed.finishReason ?? "stop"
       }
     });
@@ -1309,6 +1527,139 @@ export class RuntimeService {
     });
   }
 
+  async #repairSessionHistoryIfNeeded(sessionId: string, messages: Message[]): Promise<Message[]> {
+    const normalized = normalizePersistedMessages(messages);
+    if (!normalized.changed) {
+      return messages;
+    }
+
+    const existingMessagesById = new Map(messages.map((message) => [message.id, message]));
+    let createdCount = 0;
+    let updatedCount = 0;
+    const repairedToolCallIds: string[] = [];
+
+    for (const normalizedMessage of normalized.messages) {
+      const existingMessage = existingMessagesById.get(normalizedMessage.id);
+      if (!existingMessage) {
+        await this.#messageRepository.create(normalizedMessage);
+        createdCount += 1;
+        repairedToolCallIds.push(...this.#messageToolCallIds(normalizedMessage));
+        continue;
+      }
+
+      if (!this.#messagesEqual(existingMessage, normalizedMessage)) {
+        await this.#messageRepository.update(normalizedMessage);
+        updatedCount += 1;
+      }
+    }
+
+    this.#logger?.warn?.("Runtime auto-repaired persisted session history before model execution.", {
+      sessionId,
+      createdCount,
+      updatedCount,
+      repairedToolCallIds
+    });
+
+    return normalized.messages;
+  }
+
+  #messagesEqual(left: Message, right: Message): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  #messageToolCallIds(message: Message): string[] {
+    if (!Array.isArray(message.content)) {
+      return [];
+    }
+
+    return message.content.flatMap((part) => {
+      if (part.type === "tool-call" || part.type === "tool-result") {
+        return [part.toolCallId];
+      }
+
+      return [];
+    });
+  }
+
+  #extractMessageDisplayText(message: Message): string {
+    if (typeof message.content === "string") {
+      return message.content;
+    }
+
+    return message.content
+      .flatMap((part) => {
+        if (part.type === "text") {
+          return [part.text];
+        }
+
+        if (part.type !== "tool-result") {
+          return [];
+        }
+
+        switch (part.output.type) {
+          case "text":
+          case "error-text":
+            return [part.output.value];
+          case "json":
+          case "error-json":
+          case "content":
+            return [this.#stringifyMessageDisplayValue(part.output.value)];
+          case "execution-denied":
+            return [part.output.reason?.trim() ? part.output.reason : "Execution denied."];
+        }
+      })
+      .join("\n\n");
+  }
+
+  #stringifyMessageDisplayValue(value: unknown): string {
+    try {
+      return JSON.stringify(value, null, 2) ?? String(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  #hasMeaningfulText(value: string | undefined): value is string {
+    return typeof value === "string" && value.trim().length > 0;
+  }
+
+  #formatSystemReminder(reminder: string): string {
+    return `<system_reminder>\n${reminder}\n</system_reminder>`;
+  }
+
+  #withInjectedSystemReminder(messages: ChatMessage[], reminder: string): ChatMessage[] {
+    let lastUserMessageIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === "user") {
+        lastUserMessageIndex = index;
+        break;
+      }
+    }
+
+    if (lastUserMessageIndex === -1) {
+      return messages;
+    }
+
+    const userMessage = messages[lastUserMessageIndex];
+    if (!userMessage || userMessage.role !== "user") {
+      return messages;
+    }
+
+    const reminderBlock = this.#formatSystemReminder(reminder);
+    const updatedMessages = [...messages];
+    updatedMessages[lastUserMessageIndex] = {
+      ...userMessage,
+      content:
+        typeof userMessage.content === "string"
+          ? this.#hasMeaningfulText(userMessage.content)
+            ? `${reminderBlock}\n\n${userMessage.content}`
+            : reminderBlock
+          : [{ type: "text", text: reminderBlock }, ...userMessage.content]
+    };
+
+    return updatedMessages;
+  }
+
   async #buildModelInput(
     workspace: WorkspaceRecord,
     session: Session,
@@ -1334,11 +1685,8 @@ export class RuntimeService {
       resolvedModel
     );
 
-    if (activeAgent?.systemReminder && this.#shouldInjectSystemReminder(session, run, messages, activeAgentName, forceSystemReminder)) {
-      promptMessages.push({
-        role: "system",
-        content: `<system_reminder>\n${activeAgent.systemReminder}\n</system_reminder>`
-      });
+    if (activeAgent?.systemReminder && this.#shouldInjectSystemReminder(messages, activeAgentName, forceSystemReminder)) {
+      contextMessages = this.#withInjectedSystemReminder(contextMessages, activeAgent.systemReminder);
     }
 
     contextMessages = await this.#applyContextHooks(workspace, session, run, "after_context_build", [
@@ -1352,28 +1700,44 @@ export class RuntimeService {
       ...(resolvedModel.provider ? { provider: resolvedModel.provider } : {}),
       ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
       ...(activeAgent?.temperature !== undefined ? { temperature: activeAgent.temperature } : {}),
+      ...(activeAgent?.topP !== undefined ? { topP: activeAgent.topP } : {}),
       ...(activeAgent?.maxTokens !== undefined ? { maxTokens: activeAgent.maxTokens } : {}),
       messages: this.#collapseLeadingSystemMessages(contextMessages)
     };
   }
 
-  #shouldInjectSystemReminder(
-    session: Session,
-    run: Run,
-    messages: Message[],
-    activeAgentName: string,
-    forceSystemReminder = false
-  ): boolean {
+  #latestMessageAgentName(messages: Message[]): string | undefined {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (!message || message.role === "system") {
+        continue;
+      }
+
+      // Ignore the newest user turn; we only care about the previously active agent.
+      if (index === messages.length - 1 && message.role === "user") {
+        continue;
+      }
+
+      const metadata = isRecord(message.metadata) ? message.metadata : undefined;
+      if (typeof metadata?.effectiveAgentName === "string" && metadata.effectiveAgentName.length > 0) {
+        return metadata.effectiveAgentName;
+      }
+
+      if (typeof metadata?.agentName === "string" && metadata.agentName.length > 0) {
+        return metadata.agentName;
+      }
+    }
+
+    return undefined;
+  }
+
+  #shouldInjectSystemReminder(messages: Message[], activeAgentName: string, forceSystemReminder = false): boolean {
     if (forceSystemReminder) {
       return true;
     }
 
-    const interactionCount = messages.filter((message) => message.role !== "system").length;
-    if (interactionCount === 1 && session.agentName && session.agentName === activeAgentName && run.effectiveAgentName === activeAgentName) {
-      return true;
-    }
-
-    return false;
+    const latestAgentName = this.#latestMessageAgentName(messages);
+    return latestAgentName !== undefined && latestAgentName !== activeAgentName;
   }
 
   #resolveModelForRun(
@@ -1774,6 +2138,19 @@ export class RuntimeService {
                   ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
                 }
               });
+              this.#logger?.error?.("Runtime tool call failed.", {
+                workspaceId: workspace.id,
+                sessionId: session.id,
+                runId: run.id,
+                agentName: currentAgentName,
+                toolCallId: context.toolCallId,
+                toolName,
+                sourceType: resolveToolSourceType(toolName),
+                retryPolicy,
+                errorCode: error instanceof AppError ? error.code : "tool_execution_failed",
+                errorMessage: error instanceof Error ? error.message : "Unknown tool execution error.",
+                ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
+              });
               throw error;
             }
           }
@@ -2003,6 +2380,7 @@ export class RuntimeService {
     const childSession: Session = resumedSession ?? {
       id: childSessionId,
       workspaceId: workspace.id,
+      parentSessionId: parentSession.id,
       subjectRef: parentSession.subjectRef,
       agentName: resolvedTargetAgentName,
       activeAgentName: resolvedTargetAgentName,
@@ -2172,7 +2550,7 @@ export class RuntimeService {
           targetAgent: targetAgentName,
           childRunId,
           childStatus: childRun.status,
-          output: childSummary.assistantContent ?? ""
+          output: childSummary.outputContent ?? ""
         }
       });
       return;
@@ -2246,13 +2624,25 @@ export class RuntimeService {
     }
 
     const messages = await this.#messageRepository.listBySessionId(run.sessionId);
-    const assistantMessage = [...messages]
+    const runMessages = messages.filter((message) => message.runId === run.id);
+    const assistantMessage = [...runMessages]
       .reverse()
-      .find((message) => message.runId === run.id && message.role === "assistant");
+      .find((message) => message.role === "assistant");
+    const assistantContent = assistantMessage ? this.#extractMessageDisplayText(assistantMessage) : undefined;
+
+    if (this.#hasMeaningfulText(assistantContent)) {
+      return {
+        run,
+        outputContent: assistantContent
+      };
+    }
+
+    const toolMessage = [...runMessages].reverse().find((message) => message.role === "tool");
+    const toolContent = toolMessage ? this.#extractMessageDisplayText(toolMessage) : undefined;
 
     return {
       run,
-      ...(assistantMessage ? { assistantContent: extractTextFromContent(assistantMessage.content) } : {})
+      ...(this.#hasMeaningfulText(toolContent) ? { outputContent: toolContent } : {})
     };
   }
 
@@ -2265,11 +2655,11 @@ export class RuntimeService {
         ["subagent_type", summary.run.effectiveAgentName]
       ],
       [
-        ...(summary.assistantContent
+        ...(summary.outputContent
           ? [
               {
                 title: "output",
-                lines: summary.assistantContent.split(/\r?\n/),
+                lines: summary.outputContent.split(/\r?\n/),
                 emptyText: "(empty output)"
               }
             ]
@@ -2667,6 +3057,7 @@ export class RuntimeService {
       model: modelInput.model,
       canonicalModelRef: modelInput.canonicalModelRef,
       ...(modelInput.temperature !== undefined ? { temperature: modelInput.temperature } : {}),
+      ...(modelInput.topP !== undefined ? { topP: modelInput.topP } : {}),
       ...(modelInput.maxTokens !== undefined ? { maxTokens: modelInput.maxTokens } : {}),
       messages: modelInput.messages
     };
@@ -2734,7 +3125,10 @@ export class RuntimeService {
     }));
   }
 
-  #serializeModelCallStepOutput(step: ModelStepResult): Record<string, unknown> {
+  #serializeModelCallStepOutput(
+    step: ModelStepResult,
+    failedToolResults = this.#extractFailedToolResults(step)
+  ): Record<string, unknown> {
     return {
       response: {
         ...(typeof step.stepType === "string" ? { stepType: step.stepType } : {}),
@@ -2756,13 +3150,70 @@ export class RuntimeService {
           toolCallId: toolResult.toolCallId,
           toolName: toolResult.toolName,
           output: toolResult.output
-        }))
+        })),
+        ...(failedToolResults.length > 0
+          ? {
+              toolErrors: failedToolResults.map((toolError) => ({
+                toolCallId: toolError.toolCallId,
+                toolName: toolError.toolName,
+                output: normalizeToolErrorOutput(toolError.error)
+              }))
+            }
+          : {})
       },
       runtime: {
         toolCallsCount: step.toolCalls.length,
-        toolResultsCount: step.toolResults.length
+        toolResultsCount: step.toolResults.length,
+        toolErrorsCount: failedToolResults.length
       }
     };
+  }
+
+  #extractFailedToolResults(step: ModelStepResult): ToolErrorContentPart[] {
+    const responseContent = isRecord(step.response) && Array.isArray(step.response.content) ? step.response.content : [];
+    const stepContent = Array.isArray(step.content) ? step.content : [];
+    const successfulToolCallIds = new Set(step.toolResults.map((toolResult) => toolResult.toolCallId));
+    const failedToolResults = new Map<string, ToolErrorContentPart>();
+
+    for (const part of [...stepContent, ...responseContent]) {
+      if (!isToolErrorContentPart(part) || successfulToolCallIds.has(part.toolCallId)) {
+        continue;
+      }
+
+      failedToolResults.set(part.toolCallId, part);
+    }
+
+    return [...failedToolResults.values()];
+  }
+
+  #summarizeMessageRoles(messages: ChatMessage[]): Record<string, number> {
+    return messages.reduce<Record<string, number>>((summary, message) => {
+      summary[message.role] = (summary[message.role] ?? 0) + 1;
+      return summary;
+    }, {});
+  }
+
+  #previewValue(value: unknown, maxLength = 240): string {
+    if (value instanceof Error) {
+      return value.message;
+    }
+
+    const serialized =
+      typeof value === "string"
+        ? value
+        : (() => {
+            try {
+              return JSON.stringify(value);
+            } catch {
+              return String(value);
+            }
+          })();
+
+    if (serialized.length <= maxLength) {
+      return serialized;
+    }
+
+    return `${serialized.slice(0, maxLength)}...`;
   }
 
   #applyModelRequestPatch(
@@ -2787,6 +3238,9 @@ export class RuntimeService {
 
     if (typeof patch.temperature === "number") {
       next.temperature = patch.temperature;
+    }
+    if (typeof patch.topP === "number" || typeof patch.top_p === "number") {
+      next.topP = typeof patch.topP === "number" ? patch.topP : (patch.top_p as number);
     }
     if (typeof patch.maxTokens === "number") {
       next.maxTokens = patch.maxTokens;
@@ -2820,12 +3274,36 @@ export class RuntimeService {
     };
   }
 
+  #buildGeneratedMessageMetadata(
+    workspace: WorkspaceRecord,
+    agentName: string,
+    modelInput: Pick<ModelExecutionInput, "messages">,
+    modelCallStep?: Pick<RunStep, "id" | "seq"> | undefined
+  ): Record<string, unknown> {
+    const systemMessages = modelInput.messages
+      .filter((message): message is { role: "system"; content: string } => message.role === "system" && typeof message.content === "string")
+      .map((message) => ({
+        role: "system" as const,
+        content: message.content
+      }));
+    const agentMode = workspace.agents[agentName]?.mode;
+
+    return {
+      agentName,
+      effectiveAgentName: agentName,
+      ...(agentMode ? { agentMode } : {}),
+      ...(modelCallStep ? { modelCallStepId: modelCallStep.id, modelCallStepSeq: modelCallStep.seq } : {}),
+      ...(systemMessages.length > 0 ? { systemMessages } : {})
+    };
+  }
+
   async #ensureAssistantMessage(
     session: Session,
     run: Run,
     currentMessage: Message | undefined,
     allMessages?: Message[],
-    content = ""
+    content = "",
+    metadata?: Record<string, unknown> | undefined
   ): Promise<Message> {
     if (currentMessage) {
       return currentMessage;
@@ -2837,6 +3315,7 @@ export class RuntimeService {
       runId: run.id,
       role: "assistant",
       content: textContent(content),
+      ...(metadata ? { metadata } : {}),
       createdAt: nowIso()
     });
 
@@ -2848,11 +3327,19 @@ export class RuntimeService {
     session: Session,
     run: Run,
     step: ModelStepResult,
-    allMessages: Message[]
+    allMessages: Message[],
+    metadata?: Record<string, unknown> | undefined
   ): Promise<void> {
     if (step.toolCalls.length === 0) {
       return;
     }
+
+    this.#logger?.debug?.("Persisting assistant tool-call message.", {
+      sessionId: session.id,
+      runId: run.id,
+      toolCallIds: step.toolCalls.map((toolCall) => toolCall.toolCallId),
+      toolNames: step.toolCalls.map((toolCall) => toolCall.toolName)
+    });
 
     const assistantToolCallMessage = await this.#messageRepository.create({
       id: createId("msg"),
@@ -2860,6 +3347,7 @@ export class RuntimeService {
       runId: run.id,
       role: "assistant",
       content: toolCallContent(step.toolCalls),
+      ...(metadata ? { metadata } : {}),
       createdAt: nowIso()
     });
 
@@ -2880,8 +3368,10 @@ export class RuntimeService {
     session: Session,
     run: Run,
     step: ModelStepResult,
+    failedToolResults: ToolErrorContentPart[],
     persistedToolCalls: Set<string>,
-    allMessages: Message[]
+    allMessages: Message[],
+    metadata?: Record<string, unknown> | undefined
   ): Promise<void> {
     for (const toolResult of step.toolResults) {
       if (persistedToolCalls.has(toolResult.toolCallId)) {
@@ -2889,12 +3379,21 @@ export class RuntimeService {
       }
 
       persistedToolCalls.add(toolResult.toolCallId);
+      this.#logger?.debug?.("Persisting tool result message.", {
+        sessionId: session.id,
+        runId: run.id,
+        toolCallId: toolResult.toolCallId,
+        toolName: toolResult.toolName,
+        resultType: "success",
+        outputPreview: this.#previewValue(toolResult.output)
+      });
       const toolMessage = await this.#messageRepository.create({
         id: createId("msg"),
         sessionId: session.id,
         runId: run.id,
         role: "tool",
         content: toolResultContent(toolResult),
+        ...(metadata ? { metadata } : {}),
         createdAt: nowIso()
       });
       allMessages.push(toolMessage);
@@ -2909,6 +3408,46 @@ export class RuntimeService {
           content: toolMessage.content,
           toolName: toolResult.toolName,
           toolCallId: toolResult.toolCallId
+        }
+      });
+    }
+
+    for (const toolError of failedToolResults) {
+      if (persistedToolCalls.has(toolError.toolCallId)) {
+        continue;
+      }
+
+      persistedToolCalls.add(toolError.toolCallId);
+      this.#logger?.debug?.("Persisting failed tool result message.", {
+        sessionId: session.id,
+        runId: run.id,
+        toolCallId: toolError.toolCallId,
+        toolName: toolError.toolName,
+        resultType: "error",
+        errorPreview: this.#previewValue(toolError.error)
+      });
+      const toolMessage = await this.#messageRepository.create({
+        id: createId("msg"),
+        sessionId: session.id,
+        runId: run.id,
+        role: "tool",
+        content: toolErrorResultContent(toolError),
+        ...(metadata ? { metadata } : {}),
+        createdAt: nowIso()
+      });
+      allMessages.push(toolMessage);
+
+      await this.#appendEvent({
+        sessionId: session.id,
+        runId: run.id,
+        event: "message.completed",
+        data: {
+          runId: run.id,
+          messageId: toolMessage.id,
+          content: toolMessage.content,
+          toolName: toolError.toolName,
+          toolCallId: toolError.toolCallId,
+          resultType: "error"
         }
       });
     }
@@ -3193,6 +3732,7 @@ export class RuntimeService {
           ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
           ...(agent.maxTokens !== undefined ? { maxTokens: agent.maxTokens } : {}),
           ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
+          ...(agent.topP !== undefined ? { topP: agent.topP } : {}),
           messages: [
             { role: "system", content: agent.prompt },
             { role: "user", content: task },
@@ -3606,5 +4146,18 @@ export class RuntimeService {
       nativeTools: [],
       runtimeTools: []
     };
+  }
+
+  async #listAllWorkspaceSessions(workspaceId: string): Promise<Session[]> {
+    const pageSize = 200;
+    const items: Session[] = [];
+
+    for (let offset = 0; ; offset += pageSize) {
+      const page = await this.#sessionRepository.listByWorkspaceId(workspaceId, pageSize, String(offset));
+      items.push(...page);
+      if (page.length < pageSize) {
+        return items;
+      }
+    }
   }
 }

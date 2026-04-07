@@ -162,7 +162,7 @@ pnpm dev:server -- \
   - 使用 `--api-only` 或 `--no-worker`
   - 适合将 API 与 worker 分离部署
   - 如果配置了 Redis，需要单独启动 `standalone worker`
-  - 如果没有配置 Redis，当前仍会保留本地 in-process 执行语义
+  - 如果没有配置 Redis，当前仍会保留本地 in-process 执行语义，并由 API 进程执行 history mirror sync
 - `standalone worker`
   - 使用独立 worker 进程启动
   - 适合生产环境横向扩展和资源隔离

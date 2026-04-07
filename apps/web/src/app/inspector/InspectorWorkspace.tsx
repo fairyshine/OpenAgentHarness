@@ -47,9 +47,13 @@ export function InspectorWorkspace(props: RuntimeProps) {
                 sessionName={props.currentSessionName}
                 workspaceName={props.currentWorkspaceName}
                 selectedRunId={props.selectedRunId}
+                sessionRuns={props.sessionRuns}
                 onSelectedRunIdChange={props.setSelectedRunId}
+                onRefreshSessionRuns={props.refreshSessionRuns}
                 onRefreshRun={props.refreshRun}
                 onRefreshRunSteps={props.refreshRunSteps}
+                onLoadRunById={props.refreshRunById}
+                onLoadRunStepsById={props.refreshRunStepsById}
                 onCancelRun={props.cancelCurrentRun}
                 modelCallCount={props.modelCallTraces.length}
                 stepCount={props.runSteps.length}
@@ -61,8 +65,6 @@ export function InspectorWorkspace(props: RuntimeProps) {
                 messages={props.messages}
                 latestTrace={props.latestModelCallTrace}
                 onOpenTimeline={() => props.setInspectorTab("timeline")}
-                onOpenWorkspace={() => props.setInspectorTab("workspace")}
-                onOpenProvider={() => props.setSurfaceMode("provider")}
               />
             </TabsContent>
 
@@ -71,6 +73,7 @@ export function InspectorWorkspace(props: RuntimeProps) {
                 mode={props.timelineInspectorMode}
                 onModeChange={props.setTimelineInspectorMode}
                 systemMessages={props.composedSystemMessages}
+                selectedMessageSystemMessages={props.selectedMessageSystemMessages}
                 firstTrace={props.firstModelCallTrace}
                 messages={props.messages}
                 selectedMessage={props.selectedSessionMessage}
@@ -102,6 +105,10 @@ export function InspectorWorkspace(props: RuntimeProps) {
                 session={props.session}
                 run={props.run}
                 catalog={props.catalog}
+                runtimeTools={props.allRuntimeTools}
+                runtimeToolNames={props.allRuntimeToolNames}
+                activeToolNames={props.allAdvertisedToolNames}
+                toolServers={props.allToolServers}
                 mirrorStatus={props.mirrorStatus}
                 mirrorToggleBusy={props.mirrorToggleBusy}
                 mirrorRebuildBusy={props.mirrorRebuildBusy}

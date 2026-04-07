@@ -1,12 +1,7 @@
-import { Bot, ChevronDown, ChevronRight, Folder, MoreHorizontal, PencilLine, Trash2 } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, Folder, PencilLine, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { formatTimestamp, pathLeaf, type SavedSessionRecord, type SavedWorkspaceRecord } from "../support";
 
@@ -27,6 +22,15 @@ function hasTextSelection() {
   return Boolean(selection && selection.type === "Range" && selection.toString().trim());
 }
 
+function DetailLine(props: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="shrink-0 text-[10px] uppercase tracking-[0.14em] text-background/60">{props.label}</span>
+      <span className={`min-w-0 break-all text-[11px] text-background/88 ${props.mono ? "font-mono" : ""}`}>{props.value}</span>
+    </div>
+  );
+}
+
 export function WorkspaceNavItem(props: {
   entry: SavedWorkspaceRecord;
   active: boolean;
@@ -40,7 +44,10 @@ export function WorkspaceNavItem(props: {
 }) {
   const ExpandIcon = props.expanded ? ChevronDown : ChevronRight;
   const folderName = pathLeaf(props.entry.rootPath);
-  const subtitle = [props.entry.template, props.lastEditedAt ? formatTimestamp(props.lastEditedAt) : undefined]
+  const metaLine = [
+    `${props.sessionCount} sessions`,
+    props.lastEditedAt ? formatTimestamp(props.lastEditedAt) : undefined
+  ]
     .filter(Boolean)
     .join(" · ");
 
@@ -61,50 +68,46 @@ export function WorkspaceNavItem(props: {
       >
         <ExpandIcon className="h-3.5 w-3.5" />
       </Button>
-      <div className="flex min-w-0 flex-1 items-center gap-2.5">
-        <div className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center ${props.active ? "text-foreground/82" : "text-muted-foreground/78"}`}>
-          <Folder className="h-[13px] w-[13px]" />
-        </div>
-        <div className="min-w-0 select-text">
-          <p className="truncate text-sm font-medium text-foreground">{props.entry.name}</p>
-          <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span className="shrink-0 tabular-nums">{props.sessionCount}</span>
-            <span className="shrink-0 opacity-45">sessions</span>
-            {subtitle ? <span className="shrink-0 opacity-35">·</span> : null}
-            {subtitle ? <span className="truncate">{subtitle}</span> : null}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <div className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center ${props.active ? "text-foreground/82" : "text-muted-foreground/78"}`}>
+              <Folder className="h-[13px] w-[13px]" />
+            </div>
+            <div className="min-w-0 select-text">
+              <p className="truncate text-sm font-medium text-foreground">{props.entry.name}</p>
+              <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                {metaLine ? <span className="truncate">{metaLine}</span> : <span className="truncate text-muted-foreground/70">No recent runs</span>}
+              </div>
+            </div>
           </div>
-          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground/78">
-            <span className="truncate font-mono" title={props.entry.id}>
-              {props.entry.id}
-            </span>
-            {folderName ? <span className="shrink-0 opacity-35">·</span> : null}
-            {folderName ? (
-              <span className="truncate" title={props.entry.rootPath}>
-                dir {folderName}
-              </span>
-            ) : null}
+        </TooltipTrigger>
+        <TooltipContent side="right" sideOffset={10} className="max-w-sm items-start rounded-xl px-3 py-3">
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-background">{props.entry.name}</p>
+              <p className="text-[11px] text-background/70">{props.sessionCount} sessions</p>
+            </div>
+            {props.lastEditedAt ? <DetailLine label="edited" value={formatTimestamp(props.lastEditedAt)} /> : null}
+            {props.entry.template ? <DetailLine label="template" value={props.entry.template} /> : null}
+            <DetailLine label="id" value={props.entry.id} mono />
+            {folderName ? <DetailLine label="dir" value={folderName} /> : null}
           </div>
-        </div>
-      </div>
+        </TooltipContent>
+      </Tooltip>
       {props.canRemove ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 shrink-0 rounded-md text-muted-foreground/56 opacity-0 group-hover:opacity-100 transition hover:bg-background/55 hover:text-foreground"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreHorizontal className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem variant="destructive" onClick={props.onRemove}>
-              <Trash2 className="h-4 w-4" />
-              Delete Workspace
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 shrink-0 rounded-md text-muted-foreground/56 opacity-0 transition group-hover:opacity-100 hover:bg-background/55 hover:text-rose-600 dark:hover:text-rose-400"
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onRemove();
+          }}
+          title="Delete workspace"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
       ) : null}
     </div>
   );
@@ -113,34 +116,112 @@ export function WorkspaceNavItem(props: {
 export function SessionNavItem(props: {
   entry: SavedSessionRecord;
   active: boolean;
+  depth?: number;
+  expanded?: boolean;
+  hasChildren?: boolean;
   onSelect: () => void;
+  onToggleExpanded?: () => void;
   onRename: (title: string) => void | Promise<void>;
   onRemove: () => void;
 }) {
-  const subtitle = [props.entry.agentName, formatTimestamp(props.entry.lastRunAt || props.entry.createdAt)].filter(Boolean).join(" · ");
+  const primaryTime = formatTimestamp(props.entry.lastRunAt || props.entry.createdAt);
+  const subtitle = [props.entry.agentName, primaryTime].filter(Boolean).join(" · ");
+  const isChild = (props.depth ?? 0) > 0;
+  const ExpandIcon = props.expanded ? ChevronDown : ChevronRight;
+  const childLineClass = props.active ? "bg-foreground/30" : "bg-border/75 group-hover:bg-border";
+  const rowSurfaceClass = isChild
+    ? props.active
+      ? "border border-transparent bg-foreground/[0.025]"
+      : "border border-transparent bg-transparent hover:bg-transparent"
+    : sessionItemClass(props.active);
+  const rowPaddingClass = isChild ? "py-1.5 pr-2.5 pl-2" : "px-2 py-2.5 pr-3";
+  const rowGapClass = isChild ? "gap-1.5" : "gap-2";
+  const controlSizeClass = isChild ? "h-5 w-5" : "h-6 w-6";
+  const iconToneClass = props.active
+    ? "text-foreground"
+    : isChild
+      ? "text-muted-foreground/66 group-hover:text-muted-foreground/82"
+      : "text-muted-foreground";
+  const titleToneClass = isChild
+    ? props.active
+      ? "text-[13px] font-medium text-foreground"
+      : "text-[13px] font-medium text-foreground/82 group-hover:text-foreground/92"
+    : "text-sm font-medium text-foreground";
+  const metaToneClass = isChild
+    ? props.active
+      ? "text-[11px] text-muted-foreground/82"
+      : "text-[11px] text-muted-foreground/72 group-hover:text-muted-foreground/82"
+    : "text-xs text-muted-foreground";
 
   return (
     <div
-      className={`group relative flex items-center gap-2 rounded-md px-2 py-2.5 pr-[4.25rem] transition-colors cursor-pointer ${sessionItemClass(props.active)}`}
+      className={`group relative flex items-center rounded-md transition-colors cursor-pointer ${rowGapClass} ${rowPaddingClass} ${rowSurfaceClass} ${
+        isChild ? "shadow-none" : ""
+      }`}
       onClick={() => {
         if (hasTextSelection()) return;
         props.onSelect();
       }}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
-        <div className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center ${props.active ? "text-foreground" : "text-muted-foreground"}`}>
-          <Bot className="h-3.5 w-3.5" />
-        </div>
-        <div className="min-w-0 select-text">
-          <p className="truncate text-sm font-medium text-foreground">{props.entry.title || "Untitled session"}</p>
-          <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
-        </div>
-      </div>
-      <div className={`absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-md bg-background/72 px-1 py-0.5 backdrop-blur-sm transition-opacity ${props.active ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+      {isChild ? (
+        <span className={`absolute left-0.5 top-1.5 bottom-1.5 w-px rounded-full ${childLineClass}`} aria-hidden="true" />
+      ) : null}
+      {props.hasChildren ? (
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6 shrink-0 rounded-md text-muted-foreground/72 hover:bg-background/70 hover:text-foreground"
+          className={`${controlSizeClass} shrink-0 rounded-md text-muted-foreground/72 hover:bg-background/55 hover:text-foreground`}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onToggleExpanded?.();
+          }}
+          title={props.expanded ? "Collapse child sessions" : "Expand child sessions"}
+        >
+          <ExpandIcon className={isChild ? "h-3 w-3" : "h-3.5 w-3.5"} />
+        </Button>
+      ) : (
+        <div className={`${controlSizeClass} shrink-0`} aria-hidden="true" />
+      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className={`flex min-w-0 flex-1 items-center text-left ${isChild ? "gap-1.5" : "gap-2"}`}>
+            <div className={`mt-0.5 flex shrink-0 items-center justify-center ${isChild ? "h-3.5 w-3.5" : "h-4 w-4"} ${iconToneClass}`}>
+              <Bot className={isChild ? "h-3 w-3" : "h-3.5 w-3.5"} />
+            </div>
+            <div className="min-w-0 select-text">
+              <p className={`truncate ${titleToneClass}`}>
+                {props.entry.title || "Untitled session"}
+              </p>
+              <p className={`truncate ${metaToneClass}`}>{primaryTime}</p>
+            </div>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="right" sideOffset={10} className="max-w-sm items-start rounded-xl px-3 py-3">
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-background">{props.entry.title || "Untitled session"}</p>
+              <p className="text-[11px] text-background/70">{subtitle}</p>
+            </div>
+            <DetailLine label="id" value={props.entry.id} mono />
+            {props.entry.parentSessionId ? <DetailLine label="parent" value={props.entry.parentSessionId} mono /> : null}
+            {props.hasChildren ? <DetailLine label="children" value={props.expanded ? "expanded" : "collapsed"} /> : null}
+            <DetailLine label="created" value={formatTimestamp(props.entry.createdAt)} />
+            {props.entry.lastRunAt ? <DetailLine label="last run" value={formatTimestamp(props.entry.lastRunAt)} /> : null}
+            {props.entry.agentName ? <DetailLine label="agent" value={props.entry.agentName} /> : null}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+      <div
+        className={`absolute right-1.5 top-1/2 flex -translate-y-1/2 translate-x-1 items-center gap-0.5 transition-all ${
+          props.active
+            ? "opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100"
+            : "opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100"
+        }`}
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 shrink-0 rounded-md text-muted-foreground/66 hover:bg-background/78 hover:text-foreground"
           title="Rename session"
           onClick={(event) => {
             event.stopPropagation();
@@ -156,7 +237,7 @@ export function SessionNavItem(props: {
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6 shrink-0 rounded-md text-muted-foreground/72 hover:bg-background/70 hover:text-rose-600 dark:hover:text-rose-400"
+          className="h-6 w-6 shrink-0 rounded-md text-muted-foreground/66 hover:bg-background/78 hover:text-rose-600 dark:hover:text-rose-400"
           title="Delete session"
           onClick={(event) => {
             event.stopPropagation();

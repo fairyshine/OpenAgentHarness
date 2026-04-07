@@ -34,6 +34,7 @@ interface SavedWorkspaceRecord {
 interface SavedSessionRecord {
   id: string;
   workspaceId: string;
+  parentSessionId?: string;
   title?: string;
   agentName?: string;
   lastRunAt?: string;
@@ -127,10 +128,16 @@ type SystemMessageContent = Extract<Message, { role: "system" }>["content"];
 type UserMessageContent = Extract<Message, { role: "user" }>["content"];
 type AssistantMessageContent = Extract<Message, { role: "assistant" }>["content"];
 type ToolMessageContent = Extract<Message, { role: "tool" }>["content"];
+type AgentMode = "primary" | "subagent" | "all";
 
 interface ModelCallTraceMessage {
   role: Message["role"];
   content: Message["content"];
+}
+
+interface MessageAgentSnapshot {
+  name?: string;
+  mode?: AgentMode;
 }
 
 interface ModelCallTraceToolCall {
@@ -243,7 +250,8 @@ const storageKeys = {
   sessionId: "oah.web.sessionId",
   recentWorkspaces: "oah.web.recentWorkspaces",
   recentSessions: "oah.web.recentSessions",
-  expandedWorkspaces: "oah.web.expandedWorkspaces"
+  expandedWorkspaces: "oah.web.expandedWorkspaces",
+  expandedSessions: "oah.web.expandedSessions"
 } as const;
 
 function usePersistentState<T>(key: string, initialValue: T) {
@@ -370,6 +378,81 @@ function readStringArray(value: unknown) {
   }
 
   return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function isAgentMode(value: unknown): value is AgentMode {
+  return value === "primary" || value === "subagent" || value === "all";
+}
+
+function readMessageAgentSnapshot(message: Pick<Message, "metadata">): MessageAgentSnapshot | null {
+  if (!message.metadata || !isRecord(message.metadata)) {
+    return null;
+  }
+
+  const metadata = message.metadata;
+  const name =
+    typeof metadata.agentName === "string" && metadata.agentName.trim()
+      ? metadata.agentName
+      : typeof metadata.effectiveAgentName === "string" && metadata.effectiveAgentName.trim()
+        ? metadata.effectiveAgentName
+        : undefined;
+  const mode = isAgentMode(metadata.agentMode) ? metadata.agentMode : undefined;
+
+  if (!name && !mode) {
+    return null;
+  }
+
+  return {
+    ...(name ? { name } : {}),
+    ...(mode ? { mode } : {})
+  };
+}
+
+function readMessageSystemPromptSnapshot(message: Pick<Message, "metadata">): ModelCallTraceMessage[] {
+  if (!message.metadata || !isRecord(message.metadata) || !Array.isArray(message.metadata.systemMessages)) {
+    return [];
+  }
+
+  return message.metadata.systemMessages.flatMap((entry) => {
+    if (
+      isRecord(entry) &&
+      entry.role === "system" &&
+      typeof entry.content === "string"
+    ) {
+      return [
+        {
+          role: "system" as const,
+          content: entry.content
+        }
+      ];
+    }
+
+    return [];
+  });
+}
+
+function readMessageModelCallStepRef(message: Pick<Message, "metadata">): { stepId?: string; stepSeq?: number } | null {
+  if (!message.metadata || !isRecord(message.metadata)) {
+    return null;
+  }
+
+  const stepId =
+    typeof message.metadata.modelCallStepId === "string" && message.metadata.modelCallStepId.trim()
+      ? message.metadata.modelCallStepId
+      : undefined;
+  const stepSeq =
+    typeof message.metadata.modelCallStepSeq === "number" && Number.isInteger(message.metadata.modelCallStepSeq)
+      ? message.metadata.modelCallStepSeq
+      : undefined;
+
+  if (!stepId && stepSeq === undefined) {
+    return null;
+  }
+
+  return {
+    ...(stepId ? { stepId } : {}),
+    ...(stepSeq !== undefined ? { stepSeq } : {})
+  };
 }
 
 function isMessagePart(value: unknown): value is MessagePart {
@@ -1057,6 +1140,9 @@ export {
   downloadCsvFile,
   isRecord,
   readStringArray,
+  readMessageAgentSnapshot,
+  readMessageSystemPromptSnapshot,
+  readMessageModelCallStepRef,
   normalizeMessageContent,
   buildMessageRecord,
   contentText,
@@ -1108,5 +1194,7 @@ export type {
   ModelCallTraceInput,
   ModelCallTraceOutput,
   ModelCallTrace,
+  AgentMode,
+  MessageAgentSnapshot,
   StorageToolCallRecord
 };

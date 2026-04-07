@@ -132,6 +132,7 @@ export function createSubAgentTool(
         const agents = getAgents();
         const allowedTargets = currentAgent?.subagents ?? [];
         const targetAgentName = subagentType ?? (!taskId && allowedTargets.length === 1 ? allowedTargets[0] : undefined);
+        const targetAgent = targetAgentName ? agents[targetAgentName] : undefined;
 
         if (!targetAgentName && !taskId) {
           throw new AppError(
@@ -152,7 +153,6 @@ export function createSubAgentTool(
             );
           }
 
-          const targetAgent = agents[targetAgentName];
           if (!targetAgent) {
             throw new AppError(404, "agent_not_found", `Agent ${targetAgentName} was not found.`);
           }
@@ -166,6 +166,8 @@ export function createSubAgentTool(
           }
         }
 
+        const shouldRunInBackground = runInBackground ?? targetAgent?.background ?? false;
+
         const accepted = await launchAgent(
           {
             ...(targetAgentName ? { targetAgentName } : {}),
@@ -176,7 +178,7 @@ export function createSubAgentTool(
           currentAgentName
         );
 
-        if (runInBackground) {
+        if (shouldRunInBackground) {
           return formatToolOutput([
             ["started", true],
             ["subagent_type", accepted.targetAgentName],

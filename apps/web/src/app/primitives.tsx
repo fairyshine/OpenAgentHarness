@@ -157,9 +157,11 @@ function InspectorTabButton(props: { label: string; active: boolean; onClick: ()
 
 function InsightRow(props: { label: string; value: string }) {
   return (
-    <div className="ob-subsection px-4 py-3">
+    <div className="ob-subsection min-w-0 px-4 py-3">
       <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">{props.label}</p>
-      <p className="mt-2 truncate text-[15px] font-semibold text-foreground">{props.value}</p>
+      <p className="mt-2 whitespace-pre-wrap break-words text-[15px] font-semibold leading-6 text-foreground [overflow-wrap:anywhere]">
+        {props.value}
+      </p>
     </div>
   );
 }
@@ -323,9 +325,11 @@ function EmptyState(props: { title: string; description: string }) {
 
 function CatalogLine(props: { label: string; value: number | string }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3 text-sm">
-      <span className="text-muted-foreground">{props.label}</span>
-      <span className="font-semibold text-foreground">{props.value}</span>
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-3 rounded-xl border border-border bg-background px-4 py-3 text-sm">
+      <span className="min-w-0 text-muted-foreground">{props.label}</span>
+      <span className="min-w-0 whitespace-pre-wrap break-words text-right font-semibold text-foreground [overflow-wrap:anywhere]">
+        {props.value}
+      </span>
     </div>
   );
 }

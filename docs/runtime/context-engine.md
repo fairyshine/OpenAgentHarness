@@ -44,7 +44,7 @@
 
 1. 按 `system_prompt.compose.order` 组装静态 system prompt 段
 2. session 历史消息
-3. agent 激活或切换时的 `<system_reminder>`
+3. 如发生 agent 切换，则在最新 user message 上附加 `<system_reminder>`
 4. 当前消息输入
 
 静态 system prompt 的默认顺序为：
@@ -86,10 +86,10 @@ agent 可见性与覆盖规则：
 
 其中 `<system_reminder>` 的触发规则建议为：
 
-- session 创建时显式指定 agent
-- 当前 run 的 `agent_name` 与上一轮 active agent 不同
-- 同一 agent 连续执行时默认不重复注入
+- 创建 session 时显式指定 agent 时默认不注入
 - run 内发生 `agent.switch`，且 `effective_agent_name` 改变
+- 用户手动更新 session 的 `activeAgentName` 后，下一条 user message 首次进入新 agent
+- 同一 agent 连续执行时默认不重复注入
 
 补充说明：
 

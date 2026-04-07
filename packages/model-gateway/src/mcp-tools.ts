@@ -2,12 +2,16 @@ import { createMCPClient, type MCPClient } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
 import type { ToolSet } from "ai";
 
-import type { ToolServerDefinition } from "@oah/runtime-core";
+import type { RuntimeLogger, ToolServerDefinition } from "@oah/runtime-core";
 import { AppError } from "@oah/runtime-core";
 
 export interface PreparedToolServers {
   tools: ToolSet;
   close(): Promise<void>;
+}
+
+export interface PrepareToolServersOptions {
+  logger?: RuntimeLogger | undefined;
 }
 
 function createShellWrappedCommand(command: string): { command: string; args: string[] } {
@@ -86,7 +90,41 @@ async function createClient(server: ToolServerDefinition): Promise<MCPClient> {
   });
 }
 
-export async function prepareToolServers(toolServers: ToolServerDefinition[] | undefined): Promise<PreparedToolServers> {
+async function withServerTimeout<T>(
+  server: ToolServerDefinition,
+  operation: Promise<T>,
+  phase: string
+): Promise<T> {
+  if (server.timeout === undefined || !Number.isFinite(server.timeout) || server.timeout <= 0) {
+    return operation;
+  }
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`MCP server ${server.name} timed out during ${phase} after ${server.timeout}ms.`));
+        }, server.timeout);
+      })
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+function shouldSkipRemoteServer(server: ToolServerDefinition, error: unknown): boolean {
+  return server.transportType === "http" && !(error instanceof AppError);
+}
+
+export async function prepareToolServers(
+  toolServers: ToolServerDefinition[] | undefined,
+  options?: PrepareToolServersOptions
+): Promise<PreparedToolServers> {
   const enabledServers = (toolServers ?? []).filter((server) => server.enabled);
   if (enabledServers.length === 0) {
     return {
@@ -100,28 +138,51 @@ export async function prepareToolServers(toolServers: ToolServerDefinition[] | u
 
   try {
     for (const server of enabledServers) {
-      const client = await createClient(server);
-      clients.push(client);
+      let client: MCPClient | undefined;
 
-      const definitions = await client.listTools();
-      const filteredDefinitions = {
-        ...definitions,
-        tools: definitions.tools.filter((tool) => shouldIncludeTool(tool.name, server.include, server.exclude))
-      };
-      const serverTools = client.toolsFromDefinitions(filteredDefinitions);
-      const prefix = normalizePrefix(server.toolPrefix);
+      try {
+        client = await withServerTimeout(server, createClient(server), "client creation");
+        clients.push(client);
 
-      for (const [toolName, toolDefinition] of Object.entries(serverTools)) {
-        const exposedToolName = prefix ? `${prefix}.${toolName}` : toolName;
-        if (toolEntries.some(([existingName]) => existingName === exposedToolName)) {
-          throw new AppError(
-            409,
-            "duplicate_mcp_tool_name",
-            `Duplicate external tool name detected: ${exposedToolName}. Adjust tool_prefix/include/exclude settings.`
-          );
+        const definitions = await withServerTimeout(server, client.listTools(), "tool listing");
+        const filteredDefinitions = {
+          ...definitions,
+          tools: definitions.tools.filter((tool) => shouldIncludeTool(tool.name, server.include, server.exclude))
+        };
+        const serverTools = client.toolsFromDefinitions(filteredDefinitions);
+        const prefix = normalizePrefix(server.toolPrefix);
+
+        for (const [toolName, toolDefinition] of Object.entries(serverTools)) {
+          const exposedToolName = prefix ? `${prefix}.${toolName}` : toolName;
+          if (toolEntries.some(([existingName]) => existingName === exposedToolName)) {
+            throw new AppError(
+              409,
+              "duplicate_mcp_tool_name",
+              `Duplicate external tool name detected: ${exposedToolName}. Adjust tool_prefix/include/exclude settings.`
+            );
+          }
+
+          toolEntries.push([exposedToolName, toolDefinition]);
+        }
+      } catch (error) {
+        if (client) {
+          await Promise.allSettled([client.close()]);
+          const clientIndex = clients.indexOf(client);
+          if (clientIndex >= 0) {
+            clients.splice(clientIndex, 1);
+          }
         }
 
-        toolEntries.push([exposedToolName, toolDefinition]);
+        if (!shouldSkipRemoteServer(server, error)) {
+          throw error;
+        }
+
+        options?.logger?.warn?.("Skipping unreachable remote MCP server.", {
+          serverName: server.name,
+          transportType: server.transportType,
+          url: server.url,
+          error: error instanceof Error ? error.message : String(error)
+        });
       }
     }
 

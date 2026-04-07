@@ -47,7 +47,8 @@ function messageText(message: Pick<Message, "content"> | undefined) {
         part.type === "tool-result" &&
         typeof part.output === "object" &&
         part.output !== null &&
-        (part.output as { type?: unknown }).type === "text" &&
+        ((part.output as { type?: unknown }).type === "text" ||
+          (part.output as { type?: unknown }).type === "error-text") &&
         typeof (part.output as { value?: unknown }).value === "string"
       ) {
         return [(part.output as { value: string }).value];
@@ -337,6 +338,106 @@ describe("runtime service", () => {
     });
   });
 
+  it("deletes child sessions when removing a parent session", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      workspaceInitializer: {
+        async initialize(input) {
+          return {
+            rootPath: input.rootPath,
+            settings: {
+              defaultAgent: "default",
+              skillDirs: []
+            },
+            defaultAgent: "default",
+            workspaceModels: {},
+            agents: {},
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "template",
+              agents: [],
+              models: [],
+              actions: [],
+              skills: [],
+              tools: [],
+              hooks: [],
+              nativeTools: []
+            }
+          };
+        }
+      }
+    });
+
+    const workspace = await runtimeService.createWorkspace({
+      input: {
+        name: "demo",
+        template: "workspace",
+        rootPath: "/tmp/demo-delete-session-tree",
+        executionPolicy: "local"
+      }
+    });
+
+    const createdAt = "2026-04-07T00:00:00.000Z";
+    const updatedAt = "2026-04-07T00:00:00.000Z";
+
+    await persistence.sessionRepository.create({
+      id: "ses-parent",
+      workspaceId: workspace.id,
+      subjectRef: "dev:test",
+      activeAgentName: "default",
+      title: "Parent",
+      status: "active",
+      createdAt,
+      updatedAt
+    });
+    await persistence.sessionRepository.create({
+      id: "ses-child",
+      workspaceId: workspace.id,
+      parentSessionId: "ses-parent",
+      subjectRef: "dev:test",
+      activeAgentName: "default",
+      title: "Child",
+      status: "active",
+      createdAt,
+      updatedAt
+    });
+    await persistence.sessionRepository.create({
+      id: "ses-grandchild",
+      workspaceId: workspace.id,
+      parentSessionId: "ses-child",
+      subjectRef: "dev:test",
+      activeAgentName: "default",
+      title: "Grandchild",
+      status: "active",
+      createdAt,
+      updatedAt
+    });
+    await persistence.sessionRepository.create({
+      id: "ses-sibling",
+      workspaceId: workspace.id,
+      subjectRef: "dev:test",
+      activeAgentName: "default",
+      title: "Sibling",
+      status: "active",
+      createdAt,
+      updatedAt
+    });
+
+    await runtimeService.deleteSession("ses-parent");
+
+    await expect(runtimeService.getSession("ses-parent")).rejects.toMatchObject({ code: "session_not_found" });
+    await expect(runtimeService.getSession("ses-child")).rejects.toMatchObject({ code: "session_not_found" });
+    await expect(runtimeService.getSession("ses-grandchild")).rejects.toMatchObject({ code: "session_not_found" });
+    await expect(runtimeService.getSession("ses-sibling")).resolves.toMatchObject({ id: "ses-sibling" });
+  });
+
   it("serializes runs inside a session", async () => {
     const { runtimeService, workspace } = await createRuntime(30);
     const caller = {
@@ -428,6 +529,43 @@ describe("runtime service", () => {
 
     expect(runStarted).toEqual([first.runId, second.runId, third.runId]);
     expect(runCompleted).toEqual([first.runId, second.runId, third.runId]);
+  });
+
+  it("lists all runs for a session in reverse chronological order", async () => {
+    const { runtimeService, workspace } = await createRuntime();
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const first = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "first" }
+    });
+    const second = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "second" }
+    });
+
+    await waitFor(async () => {
+      const events = await runtimeService.listSessionEvents(session.id);
+      return events.filter((event) => event.event === "run.completed").length === 2;
+    });
+
+    const runs = await runtimeService.listSessionRuns(session.id, 20);
+    expect(runs.items).toHaveLength(2);
+    expect(runs.items.map((run) => run.id)).toEqual(expect.arrayContaining([first.runId, second.runId]));
+    expect(runs.items.every((run) => run.sessionId === session.id)).toBe(true);
   });
 
   it("includes the first session event when listing without a cursor", async () => {
@@ -659,6 +797,19 @@ describe("runtime service", () => {
           switch: ["builder"],
           subagents: []
         },
+        planner: {
+          name: "planner",
+          mode: "all",
+          prompt: "You are the planner agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["assistant"],
+          subagents: []
+        },
         reviewer: {
           name: "reviewer",
           mode: "subagent",
@@ -682,6 +833,7 @@ describe("runtime service", () => {
         agents: [
           { name: "builder", mode: "primary", source: "workspace" },
           { name: "assistant", mode: "primary", source: "workspace" },
+          { name: "planner", mode: "all", source: "workspace" },
           { name: "reviewer", mode: "subagent", source: "workspace" }
         ],
         models: [],
@@ -715,15 +867,24 @@ describe("runtime service", () => {
 
     expect(updatedSession.activeAgentName).toBe("assistant");
 
+    const updatedAllModeSession = await runtimeService.updateSession({
+      sessionId: session.id,
+      input: {
+        activeAgentName: "planner"
+      }
+    });
+
+    expect(updatedAllModeSession.activeAgentName).toBe("planner");
+
     const accepted = await runtimeService.createSessionMessage({
       sessionId: session.id,
       caller,
-      input: { content: "continue with the assistant" }
+      input: { content: "continue with the planner" }
     });
     const run = await runtimeService.getRun(accepted.runId);
 
-    expect(run.agentName).toBe("assistant");
-    expect(run.effectiveAgentName).toBe("assistant");
+    expect(run.agentName).toBe("planner");
+    expect(run.effectiveAgentName).toBe("planner");
 
     await expect(
       runtimeService.updateSession({
@@ -737,7 +898,7 @@ describe("runtime service", () => {
     });
   });
 
-  it("injects AGENTS.md, active agent prompt, and system reminder when the session explicitly selects an agent", async () => {
+  it("injects AGENTS.md and the active agent prompt without a system reminder when the session explicitly selects an agent", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();
     const runtimeService = new RuntimeService({
@@ -823,13 +984,15 @@ describe("runtime service", () => {
       .at(0)
       ?.input.messages?.filter((message) => message.role === "system")
       .map((message) => message.content);
+    const userMessage = gateway.invocations.at(0)?.input.messages?.find((message) => message.role === "user");
     expect(systemMessages).toHaveLength(1);
     expect(systemMessages?.[0]).toContain("Repository rule: always add tests.");
     expect(systemMessages?.[0]).toContain("You are the builder agent.");
-    expect(systemMessages?.[0]).toContain("Stay focused on implementation.");
+    expect(systemMessages?.[0]).not.toContain("Stay focused on implementation.");
+    expect(messageText(userMessage)).toBe("implement feature");
   });
 
-  it("does not inject system reminder for default-agent sessions unless the agent was explicitly selected", async () => {
+  it("does not inject system reminder for default-agent sessions before any agent switch", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();
     const runtimeService = new RuntimeService({
@@ -912,7 +1075,156 @@ describe("runtime service", () => {
       .at(0)
       ?.input.messages?.filter((message) => message.role === "system")
       .map((message) => message.content);
+    const userMessage = gateway.invocations.at(0)?.input.messages?.find((message) => message.role === "user");
     expect(systemMessages?.some((message) => message.includes("<system_reminder>"))).toBe(false);
+    expect(messageText(userMessage)).not.toContain("<system_reminder>");
+  });
+
+  it("injects a system reminder on the next user turn after the session agent is manually switched", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_manual_agent_switch",
+      name: "manual-agent-switch",
+      rootPath: "/tmp/manual-agent-switch",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "plan",
+      settings: {
+        defaultAgent: "plan",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        plan: {
+          name: "plan",
+          mode: "primary",
+          prompt: "You are the planning agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["build"],
+          subagents: []
+        },
+        build: {
+          name: "build",
+          mode: "primary",
+          prompt: "You are the build agent.",
+          systemReminder: "Take over implementation and continue from the planner's handoff.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_manual_agent_switch",
+        agents: [
+          { name: "plan", mode: "primary", source: "workspace" },
+          { name: "build", mode: "primary", source: "workspace" }
+        ],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_manual_agent_switch",
+      caller,
+      input: {}
+    });
+
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Plan this task first." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(firstAccepted.runId);
+      return run.status === "completed";
+    });
+
+    await runtimeService.updateSession({
+      sessionId: session.id,
+      input: {
+        activeAgentName: "build"
+      }
+    });
+
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Now implement it." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(secondAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const thirdAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Continue with the implementation." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(thirdAccepted.runId);
+      return run.status === "completed";
+    });
+
+    expect(gateway.invocations).toHaveLength(3);
+
+    const firstUserMessage = [...(gateway.invocations.at(0)?.input.messages ?? [])].reverse().find((message) => message.role === "user");
+    const secondSystemMessages = gateway.invocations
+      .at(1)
+      ?.input.messages?.filter((message) => message.role === "system")
+      .map((message) => message.content);
+    const secondUserMessage = [...(gateway.invocations.at(1)?.input.messages ?? [])].reverse().find((message) => message.role === "user");
+    const thirdUserMessage = [...(gateway.invocations.at(2)?.input.messages ?? [])].reverse().find((message) => message.role === "user");
+
+    expect(messageText(firstUserMessage)).toBe("Plan this task first.");
+    expect(secondSystemMessages).toHaveLength(1);
+    expect(secondSystemMessages?.[0]).toContain("You are the build agent.");
+    expect(secondSystemMessages?.[0]).not.toContain("Take over implementation");
+    expect(messageText(secondUserMessage)).toContain("<system_reminder>");
+    expect(messageText(secondUserMessage)).toContain("Take over implementation and continue from the planner's handoff.");
+    expect(messageText(secondUserMessage)).toContain("Now implement it.");
+    expect(messageText(thirdUserMessage)).toBe("Continue with the implementation.");
   });
 
   it("switches agents mid-run and uses the switched prompt, model, and reminder on the next step", async () => {
@@ -1040,6 +1352,7 @@ describe("runtime service", () => {
     const switchedSystemMessages = switchedInvocation?.input.messages
       ?.filter((message) => message.role === "system")
       .map((message) => message.content);
+    const switchedUserMessage = [...(switchedInvocation?.input.messages ?? [])].reverse().find((message) => message.role === "user");
 
     expect(run.effectiveAgentName).toBe("build");
     expect(run.switchCount).toBe(1);
@@ -1053,12 +1366,66 @@ describe("runtime service", () => {
     expect(switchedSystemMessages).toHaveLength(1);
     expect(switchedSystemMessages?.[0]).toContain("You are the build agent.");
     expect(switchedSystemMessages?.[0]).not.toContain("You are the planning agent.");
-    expect(switchedSystemMessages?.[0]).toContain("<system_reminder>");
-    expect(switchedSystemMessages?.[0]).toContain("Take over implementation");
+    expect(switchedSystemMessages?.[0]).not.toContain("<system_reminder>");
+    expect(switchedSystemMessages?.[0]).not.toContain("Take over implementation");
+    expect(messageText(switchedUserMessage)).toContain("<system_reminder>");
+    expect(messageText(switchedUserMessage)).toContain("Take over implementation");
+    expect(messageText(switchedUserMessage)).toContain("Plan first, then hand off to build.");
 
     const runSteps = await runtimeService.listRunSteps(accepted.runId);
     expect(runSteps.items.some((step) => step.stepType === "agent_switch" && step.status === "completed")).toBe(true);
     expect(runSteps.items.some((step) => step.stepType === "tool_call" && step.name === "AgentSwitch")).toBe(true);
+
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    const assistantToolCallMessage = messages.items.find((message) => hasToolCallPart(message, "AgentSwitch", "call_switch"));
+    const toolResultMessage = messages.items.find((message) => hasToolResultPart(message, "AgentSwitch", "call_switch"));
+    const finalAssistantMessage = [...messages.items].reverse().find((message) => message.role === "assistant");
+
+    expect(assistantToolCallMessage?.metadata).toMatchObject({
+      agentName: "plan",
+      effectiveAgentName: "plan",
+      agentMode: "primary",
+      modelCallStepSeq: expect.any(Number),
+      systemMessages: [
+        {
+          role: "system",
+          content: expect.stringContaining("You are the planning agent.")
+        }
+      ]
+    });
+    expect(toolResultMessage?.metadata).toMatchObject({
+      agentName: "plan",
+      effectiveAgentName: "plan",
+      agentMode: "primary",
+      modelCallStepSeq: expect.any(Number),
+      systemMessages: [
+        {
+          role: "system",
+          content: expect.stringContaining("You are the planning agent.")
+        }
+      ]
+    });
+    expect(finalAssistantMessage?.metadata).toMatchObject({
+      agentName: "build",
+      effectiveAgentName: "build",
+      agentMode: "primary",
+      modelCallStepSeq: expect.any(Number),
+      systemMessages: [
+        {
+          role: "system",
+          content: expect.stringContaining("You are the build agent.")
+        }
+      ]
+    });
+    expect(
+      (finalAssistantMessage?.metadata as { systemMessages?: Array<{ content?: string }> } | undefined)?.systemMessages?.[0]?.content
+    ).not.toContain("Take over implementation");
+    expect((assistantToolCallMessage?.metadata as { modelCallStepSeq?: number } | undefined)?.modelCallStepSeq).toBe(
+      (toolResultMessage?.metadata as { modelCallStepSeq?: number } | undefined)?.modelCallStepSeq
+    );
+    expect((finalAssistantMessage?.metadata as { modelCallStepSeq?: number } | undefined)?.modelCallStepSeq).not.toBe(
+      (assistantToolCallMessage?.metadata as { modelCallStepSeq?: number } | undefined)?.modelCallStepSeq
+    );
   });
 
   it("delegates to a subagent, awaits the child run, and inherits the parent model when the subagent has no model", async () => {
@@ -1200,6 +1567,7 @@ describe("runtime service", () => {
     expect(delegatedRuns).toHaveLength(1);
 
     const childRun = await runtimeService.getRun(delegatedRuns[0]!);
+    const childSession = await runtimeService.getSession(childRun.sessionId!);
     await waitFor(async () => {
       const run = await runtimeService.getRun(childRun.id);
       return run.status === "completed";
@@ -1218,6 +1586,7 @@ describe("runtime service", () => {
 
     expect(childRun.triggerType).toBe("system");
     expect(childRun.parentRunId).toBe(accepted.runId);
+    expect(childSession.parentSessionId).toBe(session.id);
     expect(childRun.metadata).toMatchObject({
       parentRunId: accepted.runId,
       parentSessionId: session.id,
@@ -1241,7 +1610,215 @@ describe("runtime service", () => {
     expect(parentRunSteps.items.some((step) => step.stepType === "tool_call" && step.name === "SubAgent")).toBe(true);
   });
 
-  it("launches background agents through SubAgent", async () => {
+  it("falls back to the last tool result when the awaited subagent assistant message is blank", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-agent-delegate-fallback-"));
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = (input) => {
+      const systemMessages = input.messages?.filter((message) => message.role === "system").map((message) => message.content) ?? [];
+
+      if (systemMessages.some((message) => message.includes("You are the researcher subagent."))) {
+        return {
+          text: "   \n",
+          toolSteps: [
+            {
+              toolName: "Bash",
+              input: {
+                command: "printf subagent-tool-fallback"
+              },
+              toolCallId: "call_subagent_bash"
+            }
+          ]
+        };
+      }
+
+      return {
+        text: "Parent integrated the fallback result.",
+        toolSteps: [
+          {
+            toolName: "SubAgent",
+            input: {
+              description: "Gather repo facts",
+              prompt: "Inspect the repository and summarize the key facts.",
+              subagent_type: "researcher"
+            },
+            toolCallId: "call_agent"
+          }
+        ]
+      };
+    };
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_agent_delegate_tool_fallback",
+      name: "agent-delegate-tool-fallback",
+      rootPath: workspaceRoot,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "plan",
+      settings: {
+        defaultAgent: "plan",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        plan: {
+          name: "plan",
+          mode: "primary",
+          prompt: "You are the planner agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: ["researcher"]
+        },
+        researcher: {
+          name: "researcher",
+          mode: "subagent",
+          prompt: "You are the researcher subagent.",
+          tools: {
+            native: ["Bash"],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_agent_delegate_tool_fallback",
+        agents: [
+          { name: "plan", mode: "primary", source: "workspace" },
+          { name: "researcher", mode: "subagent", source: "workspace" }
+        ],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_agent_delegate_tool_fallback",
+      caller,
+      input: {
+        agentName: "plan"
+      }
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Use a subagent to gather the repo facts, then continue." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    const parentMessages = await runtimeService.listSessionMessages(session.id, 50);
+    const agentToolMessage = parentMessages.items.find(
+      (message) => message.role === "tool" && messageToolName(message) === "SubAgent"
+    );
+    const events = await runtimeService.listSessionEvents(session.id);
+
+    expect(messageText(agentToolMessage)).toContain("result:");
+    expect(messageText(agentToolMessage)).toContain("exit_code: 0");
+    expect(messageText(agentToolMessage)).toContain("stdout:");
+    expect(messageText(agentToolMessage)).toContain("subagent-tool-fallback");
+    expect(events.find((event) => event.event === "agent.delegate.completed")?.data).toMatchObject({
+      output: expect.stringContaining("subagent-tool-fallback")
+    });
+  });
+
+  it("persists reasoning-only assistant completions as message parts", async () => {
+    const { gateway, runtimeService, workspace } = await createRuntime();
+    gateway.streamScenarioFactory = () => ({
+      text: "",
+      reasoning: [
+        {
+          type: "reasoning",
+          text: " 用户要求切换到plan模式，我已经成功切换。_plan_"
+        }
+      ]
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "switch to plan mode" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    const messages = await runtimeService.listSessionMessages(session.id, 50);
+    const assistantMessage = messages.items.find(
+      (message) => message.runId === accepted.runId && message.role === "assistant"
+    );
+    const events = await runtimeService.listSessionEvents(session.id);
+    const completedEvent = events.find(
+      (event) => event.runId === accepted.runId && event.event === "message.completed" && event.data.messageId === assistantMessage?.id
+    );
+
+    expect(assistantMessage?.content).toEqual([
+      {
+        type: "reasoning",
+        text: " 用户要求切换到plan模式，我已经成功切换。_plan_"
+      }
+    ]);
+    expect(completedEvent?.data.content).toEqual([
+      {
+        type: "reasoning",
+        text: " 用户要求切换到plan模式，我已经成功切换。_plan_"
+      }
+    ]);
+  });
+
+  it("defaults SubAgent launches to background when the target agent enables it", async () => {
     const gateway = new FakeModelGateway();
     gateway.streamScenarioFactory = (input) => {
       const systemMessages = input.messages?.filter((message) => message.role === "system").map((message) => message.content) ?? [];
@@ -1260,8 +1837,7 @@ describe("runtime service", () => {
             input: {
               description: "Research in background",
               prompt: "Collect the repository facts and report back.",
-              subagent_type: "researcher",
-              run_in_background: true
+              subagent_type: "researcher"
             },
             toolCallId: "call_agent_background"
           }
@@ -1300,10 +1876,10 @@ describe("runtime service", () => {
           prompt: "You are the planner agent.",
           tools: {
             native: [],
-            actions: [],
-            skills: [],
             external: []
           },
+          actions: [],
+          skills: [],
           switch: [],
           subagents: ["researcher"]
         },
@@ -1311,12 +1887,13 @@ describe("runtime service", () => {
           name: "researcher",
           mode: "subagent",
           prompt: "You are the researcher subagent.",
+          background: true,
           tools: {
             native: [],
-            actions: [],
-            skills: [],
             external: []
           },
+          actions: [],
+          skills: [],
           switch: [],
           subagents: []
         }
@@ -1373,6 +1950,95 @@ describe("runtime service", () => {
     expect(messageText(backgroundMessage)).toContain("subagent_type: researcher");
     expect(messageText(backgroundMessage)).toContain("description: Research in background");
     expect(messageText(backgroundMessage)).toContain("task_id:");
+  });
+
+  it("forwards agent sampling settings including topP to the model gateway", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_agent_sampling",
+      name: "agent-sampling",
+      rootPath: "/tmp/agent-sampling",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "You are the builder agent.",
+          temperature: 0.3,
+          topP: 0.8,
+          maxTokens: 256,
+          tools: {
+            native: [],
+            external: []
+          },
+          actions: [],
+          skills: [],
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_agent_sampling",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_agent_sampling",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "hello" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    expect(gateway.invocations.at(0)?.input.temperature).toBe(0.3);
+    expect(gateway.invocations.at(0)?.input.topP).toBe(0.8);
+    expect(gateway.invocations.at(0)?.input.maxTokens).toBe(256);
   });
 
   it("reuses the same child session when SubAgent is called with task_id", async () => {
@@ -3759,6 +4425,292 @@ describe("runtime service", () => {
     });
   });
 
+  it("persists failed tool executions as tool results so later runs can reuse the session history", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-tool-error-history-"));
+    await mkdir(path.join(workspaceRoot, "notes"), { recursive: true });
+    await writeFile(path.join(workspaceRoot, "notes", "broken.html"), "<html>old</html>");
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = (input) => {
+      const latestMessage = input.messages?.at(-1);
+      const latestContent =
+        typeof latestMessage?.content === "string"
+          ? latestMessage.content
+          : latestMessage?.content
+              ?.filter((part): part is Extract<(typeof latestMessage.content)[number], { type: "text" }> => part.type === "text")
+              .map((part) => part.text)
+              .join("\n\n") ?? "";
+
+      if (latestContent.includes("First run")) {
+        return {
+          text: "Recovered after the failed write.",
+          toolSteps: [
+            {
+              toolName: "Write",
+              input: {
+                file_path: "notes/broken.html",
+                content: "<html></html>"
+              },
+              toolCallId: "call_write_fail",
+              continueOnError: true
+            }
+          ]
+        };
+      }
+
+      return {
+        text: "Second run completed without missing tool results."
+      };
+    };
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_failed_tool_history",
+      name: "failed-tool-history",
+      rootPath: workspaceRoot,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Use native tools when useful.",
+          tools: {
+            native: ["Write"],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_failed_tool_history",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: ["Write"]
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_failed_tool_history",
+      caller,
+      input: {}
+    });
+
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "First run should recover from a failed write." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(firstAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Second run should still work." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(secondAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    const failedToolCallMessage = messages.items.find((message) =>
+      hasToolCallPart(message, "Write", "call_write_fail")
+    );
+    const failedToolResultMessage = messages.items.find((message) =>
+      hasToolResultPart(message, "Write", "call_write_fail")
+    );
+
+    expect(failedToolCallMessage).toBeDefined();
+    expect(failedToolResultMessage).toBeDefined();
+    expect(messageText(failedToolResultMessage)).toContain("requires the target file to be read first");
+    expect(messages.items.at(-1)?.role).toBe("assistant");
+    expect(messageText(messages.items.at(-1))).toBe("Second run completed without missing tool results.");
+
+    const firstRunSteps = await runtimeService.listRunSteps(firstAccepted.runId);
+    const firstModelCallStep = firstRunSteps.items.find((step) => step.stepType === "model_call");
+    expect(firstModelCallStep?.output).toMatchObject({
+      response: {
+        toolErrors: [
+          expect.objectContaining({
+            toolCallId: "call_write_fail",
+            toolName: "Write"
+          })
+        ]
+      },
+      runtime: {
+        toolCallsCount: 1,
+        toolResultsCount: 0,
+        toolErrorsCount: 1
+      }
+    });
+
+    const secondRun = await runtimeService.getRun(secondAccepted.runId);
+    expect(secondRun.errorCode).toBeUndefined();
+    expect(secondRun.errorMessage).toBeUndefined();
+  });
+
+  it("auto-repairs legacy sessions with missing tool results before continuing the conversation", async () => {
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = () => ({
+      text: "Recovered the legacy session."
+    });
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_legacy_history_repair",
+      name: "legacy-history-repair",
+      rootPath: "/tmp/legacy-history-repair",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Continue helping the user.",
+          tools: {
+            native: ["Write"],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_legacy_history_repair",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: ["Write"]
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_legacy_history_repair",
+      caller,
+      input: {}
+    });
+
+    await persistence.messageRepository.create({
+      id: "msg_legacy_user",
+      sessionId: session.id,
+      role: "user",
+      content: "Earlier request",
+      createdAt: "2026-04-07T10:00:00.000Z"
+    });
+    await persistence.messageRepository.create({
+      id: "msg_legacy_tool_call",
+      sessionId: session.id,
+      runId: "run_legacy_missing_tool_result",
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: "call_legacy_write",
+          toolName: "Write",
+          input: {
+            file_path: "index.html",
+            content: "<html>legacy</html>"
+          }
+        }
+      ],
+      createdAt: "2026-04-07T10:00:01.000Z"
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Please continue the legacy session." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    const repairedToolMessage = messages.items.find((message) => message.id === "msg_legacy_tool_call~missing-tool-result");
+    expect(repairedToolMessage).toBeDefined();
+    expect(hasToolResultPart(repairedToolMessage, "Write", "call_legacy_write")).toBe(true);
+    expect(messageText(repairedToolMessage)).toContain(
+      "Tool result unavailable because the original run ended before this tool call result was recorded."
+    );
+    expect(messages.items.at(-1)?.role).toBe("assistant");
+    expect(messageText(messages.items.at(-1))).toBe("Recovered the legacy session.");
+  });
+
   it("writes hook and tool call audit records when hooks and actions run", async () => {
     const gateway = new FakeModelGateway();
     gateway.streamScenarioFactory = () => ({
@@ -4365,7 +5317,7 @@ describe("runtime service", () => {
             handler: {
               type: "command",
               command:
-                "cat >/dev/null; node -e 'process.stdout.write(JSON.stringify({systemMessage:\"Hook warning.\",hookSpecificOutput:{additionalContext:\"Check secrets before answering.\",patch:{model_request:{temperature:0.7}}}}))'"
+                "cat >/dev/null; node -e 'process.stdout.write(JSON.stringify({systemMessage:\"Hook warning.\",hookSpecificOutput:{additionalContext:\"Check secrets before answering.\",patch:{model_request:{temperature:0.7,top_p:0.6}}}}))'"
             }
           }
         }
@@ -4416,6 +5368,7 @@ describe("runtime service", () => {
       runSteps.items.find((step) => step.stepType === "hook" && step.name === "rewrite-request")?.status
     ).toBe("completed");
     expect(gateway.invocations.at(0)?.input.temperature).toBe(0.7);
+    expect(gateway.invocations.at(0)?.input.topP).toBe(0.6);
     expect(gateway.invocations.at(0)?.input.messages?.some((message) => message.content.includes("Hook warning."))).toBe(true);
     expect(
       gateway.invocations.at(0)?.input.messages?.some((message) => message.content.includes("Check secrets before answering."))
@@ -4636,7 +5589,7 @@ describe("runtime service", () => {
       eventName: "after_model_call",
       errorCode: "hook_execution_failed"
     });
-    expect(assistantMessages.items.find((message) => message.role === "assistant")?.content).toBe("reply:hello");
+    expect(messageText(assistantMessages.items.find((message) => message.role === "assistant"))).toBe("reply:hello");
   });
 
   it("applies context build hooks before and after composing model messages", async () => {
@@ -5061,6 +6014,6 @@ describe("runtime service", () => {
     ).toBe("completed");
 
     const page = await runtimeService.listSessionMessages(session.id, 50);
-    expect(page.items.find((message) => message.role === "assistant")?.content).toBe("hooked reply");
+    expect(messageText(page.items.find((message) => message.role === "assistant"))).toBe("hooked reply");
   });
 });

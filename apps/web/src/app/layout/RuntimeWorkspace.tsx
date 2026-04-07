@@ -10,20 +10,31 @@ import { InspectorWorkspace } from "../inspector/InspectorWorkspace";
 
 type RuntimeProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"];
 
+function sessionAgentLabel(agent: { name: string; mode: "primary" | "subagent" | "all" }) {
+  return `${agent.name} · ${agent.mode}`;
+}
+
 export function RuntimeWorkspace(props: RuntimeProps) {
-  const selectedAgentName = props.session?.activeAgentName ?? props.run?.effectiveAgentName ?? "";
-  const workspacePrimaryAgents = (props.catalog?.agents ?? []).filter(
-    (agent) => agent.mode === "primary" && agent.source === "workspace"
-  );
-  const visiblePrimaryAgents =
-    selectedAgentName && !workspacePrimaryAgents.some((agent) => agent.name === selectedAgentName)
-      ? [
-          ...workspacePrimaryAgents,
-          ...(props.catalog?.agents ?? []).filter(
-            (agent) => agent.mode === "primary" && agent.name === selectedAgentName
-          )
-        ]
-      : workspacePrimaryAgents;
+  const sessionWorkspaceCatalog =
+    props.session && (props.workspace?.id === props.session.workspaceId || props.workspaceId === props.session.workspaceId)
+      ? props.catalog
+      : null;
+  const selectedAgentName = props.pendingSessionAgentName ?? props.session?.activeAgentName ?? props.run?.effectiveAgentName ?? "";
+  const visibleSessionAgents = [...new Map(
+    (sessionWorkspaceCatalog?.agents ?? [])
+      .filter((agent) => agent.mode === "primary" || agent.mode === "all")
+      .sort((left, right) => {
+        if (left.source === right.source) {
+          return left.name.localeCompare(right.name);
+        }
+
+        return left.source === "workspace" ? -1 : 1;
+      })
+      .map((agent) => [agent.name, agent] as const)
+  ).values()];
+  const selectedAgent = visibleSessionAgents.find((agent) => agent.name === selectedAgentName);
+  const selectedAgentValue = selectedAgent?.name;
+  const agentSelectorSession = visibleSessionAgents.length > 0 && props.session ? props.session : null;
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -43,28 +54,33 @@ export function RuntimeWorkspace(props: RuntimeProps) {
 
         <div className="flex flex-wrap items-center gap-2">
           {props.hasActiveSession ? (
-            visiblePrimaryAgents.length > 0 && props.session ? (
+            agentSelectorSession ? (
               <div className="flex items-center gap-2">
                 <Select
-                  value={selectedAgentName}
+                  {...(selectedAgentValue ? { value: selectedAgentValue } : {})}
+                  disabled={props.isSwitchingSessionAgent}
                   onValueChange={(value) => {
-                    if (value !== props.session?.activeAgentName) {
-                      props.switchSessionAgent(props.session.id, value);
+                    if (value !== agentSelectorSession.activeAgentName) {
+                      props.switchSessionAgent(agentSelectorSession.id, value);
                     }
                   }}
                 >
                   <SelectTrigger className="min-w-36" size="sm" aria-label="Session agent">
-                    <SelectValue placeholder="Select agent" />
+                    <SelectValue placeholder="Select agent">{selectedAgent ? sessionAgentLabel(selectedAgent) : undefined}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {visiblePrimaryAgents.map((agent) => (
+                    {visibleSessionAgents.map((agent) => (
                       <SelectItem key={agent.name} value={agent.name}>
-                        {agent.name}
+                        {sessionAgentLabel(agent)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                {props.isRunning ? <span className="text-xs text-muted-foreground">Applies to the next run</span> : null}
+                {props.isSwitchingSessionAgent ? (
+                  <span className="text-xs text-muted-foreground">Updating…</span>
+                ) : props.isRunning ? (
+                  <span className="text-xs text-muted-foreground">Applies to the next run</span>
+                ) : null}
               </div>
             ) : (
               <Badge variant="secondary">{selectedAgentName || "no agent"}</Badge>

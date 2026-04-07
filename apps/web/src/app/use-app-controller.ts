@@ -5,6 +5,7 @@ import type {
   MessageAccepted,
   ModelGenerateResponse,
   Run,
+  RunPage,
   RunStep,
   SessionEventContract
 } from "@oah/api-contracts";
@@ -56,9 +57,10 @@ export function useAppController() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<SessionEventContract[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
+  const [sessionRuns, setSessionRuns] = useState<Run[]>([]);
   const [run, setRun] = useState<Run | null>(null);
   const [runSteps, setRunSteps] = useState<RunStep[]>([]);
-  const [draftMessage, setDraftMessage] = useState("你好，帮我简单确认一下当前 session 和 run 是否正常工作。");
+  const [draftMessage, setDraftMessage] = useState("");
   const [liveOutput, setLiveOutput] = useState<Record<string, string>>({});
   const [healthStatus, setHealthStatus] = useState("idle");
   const [healthReport, setHealthReport] = useState<HealthReportResponse | null>(null);
@@ -80,7 +82,9 @@ export function useAppController() {
   const [selectedMessageId, setSelectedMessageId] = useState("");
   const [selectedStepId, setSelectedStepId] = useState("");
   const [selectedEventId, setSelectedEventId] = useState("");
-  const [timelineInspectorMode, setTimelineInspectorMode] = useState<"all" | "messages" | "calls" | "steps" | "events">("all");
+  const [timelineInspectorMode, setTimelineInspectorMode] = useState<"all" | "execution" | "messages" | "calls" | "steps" | "events">("all");
+  const [pendingSessionAgentName, setPendingSessionAgentName] = useState<string | null>(null);
+  const [switchingSessionAgentId, setSwitchingSessionAgentId] = useState<string | null>(null);
   const navigation = useNavigationState();
   const {
     workspaceDraft,
@@ -99,6 +103,8 @@ export function useAppController() {
     setRecentSessions,
     expandedWorkspaceIds,
     setExpandedWorkspaceIds,
+    expandedSessionIds,
+    setExpandedSessionIds,
     workspace,
     setWorkspace,
     workspaceTemplates,
@@ -130,7 +136,10 @@ export function useAppController() {
   const lastCursorRef = useRef<string | undefined>(undefined);
   const messageRefreshTimerRef = useRef<number | undefined>(undefined);
   const runRefreshTimerRef = useRef<number | undefined>(undefined);
+  const workspaceIndexRefreshTimerRef = useRef<number | undefined>(undefined);
   const runPollingTimerRef = useRef<number | undefined>(undefined);
+  const sessionAgentSwitchRef = useRef<{ sessionId: string; promise: Promise<boolean> } | null>(null);
+  const sessionAgentSwitchSeqRef = useRef(0);
   const conversationThreadRef = useRef<HTMLDivElement | null>(null);
   const conversationTailRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoFollowConversationRef = useRef(true);
@@ -156,6 +165,7 @@ export function useAppController() {
     storedMessageCounts,
     latestModelMessageCounts,
     selectedSessionMessage,
+    selectedMessageSystemMessages,
     selectedRunStep,
     selectedSessionEvent,
     allRuntimeToolNames,
@@ -203,6 +213,7 @@ export function useAppController() {
     setErrorMessage,
     navigation: {
       workspaceDraft,
+      setWorkspaceDraft,
       workspaceId,
       setWorkspaceId,
       sessionId,
@@ -216,6 +227,7 @@ export function useAppController() {
       setRecentSessions,
       expandedWorkspaceIds,
       setExpandedWorkspaceIds,
+      setExpandedSessionIds,
       workspace,
       setWorkspace,
       setWorkspaceTemplates,
@@ -329,6 +341,13 @@ export function useAppController() {
     }, 140);
   }
 
+  function scheduleWorkspaceIndexRefresh() {
+    window.clearTimeout(workspaceIndexRefreshTimerRef.current);
+    workspaceIndexRefreshTimerRef.current = window.setTimeout(() => {
+      void navigationActions.refreshWorkspaceIndex(true);
+    }, 140);
+  }
+
   async function pingHealth() {
     try {
       setHealthStatus("checking");
@@ -415,6 +434,99 @@ export function useAppController() {
     }
   }
 
+  function sortRunSteps(items: RunStep[]) {
+    return [...items].sort((left, right) => {
+      const leftTime = left.endedAt ?? left.startedAt ?? "";
+      const rightTime = right.endedAt ?? right.startedAt ?? "";
+      if (leftTime !== rightTime) {
+        return leftTime.localeCompare(rightTime);
+      }
+
+      if (left.runId !== right.runId) {
+        return left.runId.localeCompare(right.runId);
+      }
+
+      if (left.seq !== right.seq) {
+        return left.seq - right.seq;
+      }
+
+      return left.id.localeCompare(right.id);
+    });
+  }
+
+  function mergeRunStepsForRun(current: RunStep[], targetRunId: string, nextItems: RunStep[]) {
+    return sortRunSteps([...current.filter((step) => step.runId !== targetRunId), ...nextItems]);
+  }
+
+  async function refreshSessionRunStepsForRuns(runs: Run[], quiet = false) {
+    if (runs.length === 0) {
+      startTransition(() => {
+        setRunSteps([]);
+      });
+      return;
+    }
+
+    try {
+      const pages = await Promise.all(
+        runs.map(async (sessionRun) => {
+          const page = await request<{ items: RunStep[] }>(`/api/v1/runs/${sessionRun.id}/steps?pageSize=200`);
+          return page.items;
+        })
+      );
+
+      startTransition(() => {
+        setRunSteps(sortRunSteps(pages.flatMap((items) => items)));
+      });
+
+      if (!quiet) {
+        setErrorMessage("");
+      }
+    } catch (error) {
+      if (!quiet) {
+        setErrorMessage(toErrorMessage(error));
+      }
+    }
+  }
+
+  async function refreshSessionRuns(quiet = false, options?: { includeSteps?: boolean }) {
+    if (!sessionId.trim()) {
+      return;
+    }
+
+    try {
+      const page = await request<RunPage>(`/api/v1/sessions/${sessionId}/runs?pageSize=200`);
+      startTransition(() => {
+        setSessionRuns(page.items);
+      });
+      if (options?.includeSteps) {
+        await refreshSessionRunStepsForRuns(page.items, true);
+      }
+
+      const activeSelectedRunId = selectedRunId.trim();
+      const nextSelectedRun = page.items.find((item) => item.id === activeSelectedRunId) ?? page.items[0];
+      if (nextSelectedRun && nextSelectedRun.id !== activeSelectedRunId) {
+        startTransition(() => {
+          setSelectedRunId(nextSelectedRun.id);
+          setRun(nextSelectedRun);
+        });
+      } else if (!nextSelectedRun) {
+        startTransition(() => {
+          setSelectedRunId("");
+          setRun(null);
+          setRunSteps([]);
+        });
+      }
+
+      if (!quiet) {
+        setErrorMessage("");
+      }
+    } catch (error) {
+      if (!quiet) {
+        setErrorMessage(toErrorMessage(error));
+      }
+    }
+  }
+
   async function refreshRun(targetId = selectedRunId, quiet = false) {
     if (!targetId.trim()) {
       return;
@@ -444,7 +556,7 @@ export function useAppController() {
     try {
       const page = await request<{ items: RunStep[] }>(`/api/v1/runs/${targetId}/steps?pageSize=200`);
       startTransition(() => {
-        setRunSteps(page.items);
+        setRunSteps((current) => mergeRunStepsForRun(current, targetId, page.items));
       });
       if (!quiet) {
         setErrorMessage("");
@@ -452,6 +564,61 @@ export function useAppController() {
     } catch (error) {
       if (!quiet) {
         setErrorMessage(toErrorMessage(error));
+      }
+    }
+  }
+
+  useEffect(() => {
+    setPendingSessionAgentName(null);
+    setSwitchingSessionAgentId(null);
+    sessionAgentSwitchRef.current = null;
+  }, [session?.id]);
+
+  async function switchSessionAgent(targetId: string, activeAgentName: string) {
+    const nextAgentName = activeAgentName.trim();
+    if (!targetId.trim() || !nextAgentName) {
+      return false;
+    }
+
+    const currentSession = session?.id === targetId ? session : null;
+    const switchSeq = sessionAgentSwitchSeqRef.current + 1;
+    sessionAgentSwitchSeqRef.current = switchSeq;
+    setSwitchingSessionAgentId(targetId);
+    if (currentSession) {
+      setPendingSessionAgentName(nextAgentName);
+      setSession({
+        ...currentSession,
+        activeAgentName: nextAgentName,
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    const switchPromise = navigationActions.switchSessionAgent(targetId, nextAgentName).then((updated) => updated !== null);
+    sessionAgentSwitchRef.current = {
+      sessionId: targetId,
+      promise: switchPromise
+    };
+
+    try {
+      const switched = await switchPromise;
+      if (!switched) {
+        if (currentSession) {
+          setSession(currentSession);
+        }
+        return false;
+      }
+
+      if (sessionId === targetId) {
+        await navigationActions.refreshSession(targetId, true);
+        await refreshSessionRuns(true, { includeSteps: true });
+      }
+
+      return true;
+    } finally {
+      if (sessionAgentSwitchSeqRef.current === switchSeq) {
+        sessionAgentSwitchRef.current = null;
+        setSwitchingSessionAgentId(null);
+        setPendingSessionAgentName(null);
       }
     }
   }
@@ -468,6 +635,14 @@ export function useAppController() {
     }
 
     try {
+      const pendingAgentSwitch = sessionAgentSwitchRef.current;
+      if (pendingAgentSwitch?.sessionId === sessionId) {
+        const switched = await pendingAgentSwitch.promise;
+        if (!switched) {
+          return;
+        }
+      }
+
       shouldAutoFollowConversationRef.current = true;
       const accepted = await request<MessageAccepted>(`/api/v1/sessions/${sessionId}/messages`, {
         method: "POST",
@@ -490,7 +665,12 @@ export function useAppController() {
       if (autoStream) {
         setStreamRevision((current) => current + 1);
       }
-      await Promise.all([refreshMessages(true), refreshRun(accepted.runId, true), refreshRunSteps(accepted.runId, true)]);
+      await Promise.all([
+        refreshMessages(true),
+        refreshSessionRuns(true, { includeSteps: true }),
+        refreshRun(accepted.runId, true),
+        refreshRunSteps(accepted.runId, true)
+      ]);
       setActivity(`消息已入队，run=${accepted.runId}`);
       setErrorMessage("");
     } catch (error) {
@@ -540,6 +720,28 @@ export function useAppController() {
     } finally {
       setGenerateBusy(false);
     }
+  }
+
+  function syncCurrentSessionAgent(agentName: string, updatedAt: string) {
+    const nextAgentName = agentName.trim();
+    if (!sessionId.trim() || !nextAgentName) {
+      return;
+    }
+
+    startTransition(() => {
+      setSession((current) =>
+        current?.id === sessionId
+          ? {
+              ...current,
+              activeAgentName: nextAgentName,
+              updatedAt
+            }
+          : current
+      );
+      setSavedSessions((current) =>
+        current.map((entry) => (entry.id === sessionId ? { ...entry, agentName: nextAgentName } : entry))
+      );
+    });
   }
 
   const handleSessionEvent = useEffectEvent((frame: SseFrame) => {
@@ -601,6 +803,10 @@ export function useAppController() {
       scheduleRunRefresh(event.runId);
     }
 
+    if (event.event === "agent.switched" && typeof event.data.toAgent === "string") {
+      syncCurrentSessionAgent(event.data.toAgent, event.createdAt);
+    }
+
     if (
       typeof event.runId === "string" &&
       [
@@ -618,10 +824,16 @@ export function useAppController() {
         "agent.delegate.failed"
       ].includes(event.event)
     ) {
+      void refreshSessionRuns(true);
       scheduleRunRefresh(event.runId);
     }
 
+    if (event.event === "agent.delegate.started") {
+      scheduleWorkspaceIndexRefresh();
+    }
+
     if (typeof event.runId === "string" && isTerminalRunEvent(event.event)) {
+      void navigationActions.refreshSession(sessionId, true);
       scheduleMessagesRefresh();
     }
 
@@ -633,6 +845,7 @@ export function useAppController() {
       streamAbortRef.current?.abort();
       window.clearTimeout(messageRefreshTimerRef.current);
       window.clearTimeout(runRefreshTimerRef.current);
+      window.clearTimeout(workspaceIndexRefreshTimerRef.current);
       window.clearTimeout(runPollingTimerRef.current);
     };
   }, []);
@@ -646,18 +859,26 @@ export function useAppController() {
     void navigationActions.refreshWorkspaceTemplates(true);
     void refreshModelProviders(true);
     void refreshPlatformModels(true);
-  }, [connection.baseUrl, connection.token]);
+  }, [connection.baseUrl, connection.token, sessionId, workspaceId]);
 
   useEffect(() => {
     if (sessionId.trim()) {
       void navigationActions.refreshSession(sessionId, true);
+      void refreshSessionRuns(true, { includeSteps: true });
       return;
     }
+
+    startTransition(() => {
+      setSessionRuns([]);
+      setRun(null);
+      setRunSteps([]);
+      setSelectedRunId("");
+    });
 
     if (workspaceId.trim()) {
       void navigationActions.refreshWorkspace(workspaceId, true);
     }
-  }, [connection.baseUrl, connection.token]);
+  }, [connection.baseUrl, connection.token, sessionId, workspaceId]);
 
   useEffect(() => {
     if (!sessionId.trim() || !autoStream || session?.id !== sessionId) {
@@ -764,7 +985,11 @@ export function useAppController() {
 
         startTransition(() => {
           setRun(nextRun);
-          setRunSteps(nextSteps.items);
+          setSessionRuns((current) => {
+            const next = [...current.filter((item) => item.id !== nextRun.id), nextRun];
+            return next.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+          });
+          setRunSteps((current) => mergeRunStepsForRun(current, selectedRunIdValue, nextSteps.items));
           setMessages(nextMessages.items);
         });
 
@@ -896,8 +1121,13 @@ export function useAppController() {
       renameSession: (targetId: string, title: string) => void navigationActions.renameSession(targetId, title),
       sessionsByWorkspaceId,
       expandedWorkspaceIds,
+      expandedSessionIds,
       openWorkspace: navigationActions.openWorkspace,
       toggleWorkspaceExpansion: navigationActions.toggleWorkspaceExpansion,
+      toggleSessionExpansion: (targetId: string) =>
+        setExpandedSessionIds((current) =>
+          current.includes(targetId) ? current.filter((entry) => entry !== targetId) : [targetId, ...current].slice(0, 64)
+        ),
       deleteWorkspace: (targetId: string) => void navigationActions.deleteWorkspace(targetId),
       autoStream,
       setAutoStream,
@@ -956,6 +1186,8 @@ export function useAppController() {
       workspace,
       workspaceId,
       selectedRunId,
+      sessionRuns,
+      refreshSessionRuns: () => void refreshSessionRuns(false, { includeSteps: true }),
       setSelectedRunId,
       run,
       runSteps,
@@ -979,6 +1211,7 @@ export function useAppController() {
       firstModelCallTrace,
       composedSystemMessages,
       selectedSessionMessage,
+      selectedMessageSystemMessages,
       setSelectedMessageId,
       selectedModelCallTrace,
       setSelectedTraceId,
@@ -998,8 +1231,9 @@ export function useAppController() {
       selectedSessionEvent,
       setSelectedEventId,
       catalog,
-      switchSessionAgent: (targetId: string, activeAgentName: string) =>
-        void navigationActions.switchSessionAgent(targetId, activeAgentName),
+      pendingSessionAgentName,
+      isSwitchingSessionAgent: switchingSessionAgentId === session?.id && pendingSessionAgentName !== null,
+      switchSessionAgent: (targetId: string, activeAgentName: string) => void switchSessionAgent(targetId, activeAgentName),
       mirrorStatus,
       mirrorToggleBusy,
       mirrorRebuildBusy,

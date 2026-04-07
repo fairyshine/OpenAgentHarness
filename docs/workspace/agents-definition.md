@@ -9,7 +9,7 @@ Agent 用于定义一个协作主体的行为、模型和可访问能力。
 - 文件名表示 workspace agent 名
 - YAML frontmatter 承载结构化配置
 - Markdown 正文承载主 system prompt
-- 额外支持 `system_reminder` 字段，用于 agent 激活或切换时注入专门的提醒段
+- 额外支持 `system_reminder` 字段，用于 agent 切换后的首轮输入中注入专门的提醒段
 - frontmatter 只保留少量高价值字段，避免 agent 重新演化成复杂 DSL
 - 额外支持 agent 间切换和 subagent 调用的显式 allowlist
 - 若与平台内建 agent 同名，则 workspace agent 覆盖该内建 agent
@@ -113,7 +113,7 @@ subagents:
 - `model`
   - 指定模型入口和推理参数
 - `system_reminder`
-  - 可选；定义 agent 激活或切换时的提醒段内容
+  - 可选；定义 agent 切换后的提醒段内容
 - `tools`
   - 可选；声明该 agent 可见的 native tools、actions、skills、external tools
 - `switch`

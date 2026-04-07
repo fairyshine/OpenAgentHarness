@@ -5,6 +5,7 @@ type MessageParts = Extract<Message["content"], unknown[]>;
 type MessagePart = MessageParts[number];
 type ToolCallMessagePart = Extract<MessagePart, { type: "tool-call" }>;
 type ToolResultMessagePart = Extract<MessagePart, { type: "tool-result" }>;
+type ToolResultOutput = ToolResultMessagePart["output"];
 
 function isTextMessagePart(part: MessagePart): part is Extract<MessagePart, { type: "text" }> {
   return part.type === "text";
@@ -57,6 +58,34 @@ function isToolApprovalRequestMessagePart(value: unknown): boolean {
 
 function isToolApprovalResponseMessagePart(value: unknown): boolean {
   return isJsonObject(value) && value.type === "tool-approval-response" && typeof value.approvalId === "string" && typeof value.approved === "boolean";
+}
+
+function normalizeAssistantMessagePart(value: unknown): MessagePart | null {
+  if (isJsonObject(value) && value.type === "text" && typeof value.text === "string") {
+    return value as Extract<MessagePart, { type: "text" }>;
+  }
+
+  if (isFileMessagePart(value)) {
+    return value as Extract<MessagePart, { type: "file" }>;
+  }
+
+  if (isReasoningMessagePart(value)) {
+    return value as Extract<MessagePart, { type: "reasoning" }>;
+  }
+
+  if (isToolCallMessagePart(value)) {
+    return value;
+  }
+
+  if (isToolResultMessagePart(value)) {
+    return value;
+  }
+
+  if (isToolApprovalRequestMessagePart(value)) {
+    return value as Extract<MessagePart, { type: "tool-approval-request" }>;
+  }
+
+  return null;
 }
 
 export function isMessageRole(value: unknown): value is Message["role"] {
@@ -140,19 +169,60 @@ export function textContent(text: string): MessageContent {
   return text;
 }
 
+export function assistantContentFromModelOutput(output: {
+  text?: string | undefined;
+  content?: unknown[] | undefined;
+  reasoning?: unknown[] | undefined;
+}): MessageContent {
+  const parts: MessagePart[] = [];
+  const seenSerializedParts = new Set<string>();
+  const pushPart = (part: MessagePart) => {
+    const serialized = JSON.stringify(part);
+    if (seenSerializedParts.has(serialized)) {
+      return;
+    }
+
+    seenSerializedParts.add(serialized);
+    parts.push(part);
+  };
+
+  for (const part of output.content ?? []) {
+    const normalized = normalizeAssistantMessagePart(part);
+    if (normalized) {
+      pushPart(normalized);
+    }
+  }
+
+  for (const part of output.reasoning ?? []) {
+    if (isReasoningMessagePart(part)) {
+      pushPart(part as Extract<MessagePart, { type: "reasoning" }>);
+    }
+  }
+
+  const hasTextPart = parts.some((part) => part.type === "text" && part.text.length > 0);
+  if (!hasTextPart && typeof output.text === "string" && output.text.length > 0) {
+    pushPart({
+      type: "text",
+      text: output.text
+    });
+  }
+
+  return parts.length > 0 ? parts : textContent(typeof output.text === "string" ? output.text : "");
+}
+
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isTextToolResultOutput(value: unknown): value is Record<string, unknown> {
+function isTextToolResultOutput(value: unknown): value is Extract<ToolResultOutput, { type: "text" }> {
   return isJsonObject(value) && value.type === "text" && typeof value.value === "string";
 }
 
-function isJsonToolResultOutput(value: unknown): value is Record<string, unknown> {
+function isJsonToolResultOutput(value: unknown): value is Extract<ToolResultOutput, { type: "json" }> {
   return isJsonObject(value) && value.type === "json" && "value" in value;
 }
 
-function isExecutionDeniedToolResultOutput(value: unknown): value is Record<string, unknown> {
+function isExecutionDeniedToolResultOutput(value: unknown): value is Extract<ToolResultOutput, { type: "execution-denied" }> {
   return (
     isJsonObject(value) &&
     value.type === "execution-denied" &&
@@ -160,19 +230,19 @@ function isExecutionDeniedToolResultOutput(value: unknown): value is Record<stri
   );
 }
 
-function isErrorTextToolResultOutput(value: unknown): value is Record<string, unknown> {
+function isErrorTextToolResultOutput(value: unknown): value is Extract<ToolResultOutput, { type: "error-text" }> {
   return isJsonObject(value) && value.type === "error-text" && typeof value.value === "string";
 }
 
-function isErrorJsonToolResultOutput(value: unknown): value is Record<string, unknown> {
+function isErrorJsonToolResultOutput(value: unknown): value is Extract<ToolResultOutput, { type: "error-json" }> {
   return isJsonObject(value) && value.type === "error-json" && "value" in value;
 }
 
-function isContentToolResultOutput(value: unknown): value is Record<string, unknown> {
+function isContentToolResultOutput(value: unknown): value is Extract<ToolResultOutput, { type: "content" }> {
   return isJsonObject(value) && value.type === "content" && Array.isArray(value.value);
 }
 
-export function isStructuredToolResultOutput(value: unknown): value is Record<string, unknown> {
+export function isStructuredToolResultOutput(value: unknown): value is ToolResultOutput {
   return (
     isTextToolResultOutput(value) ||
     isJsonToolResultOutput(value) ||
@@ -183,7 +253,7 @@ export function isStructuredToolResultOutput(value: unknown): value is Record<st
   );
 }
 
-export function normalizeToolResultOutput(output: unknown): Record<string, unknown> {
+export function normalizeToolResultOutput(output: unknown): ToolResultOutput {
   if (isStructuredToolResultOutput(output)) {
     return output;
   }
@@ -204,6 +274,34 @@ export function normalizeToolResultOutput(output: unknown): Record<string, unkno
   };
 }
 
+export function normalizeToolErrorOutput(error: unknown): ToolResultOutput {
+  if (isStructuredToolResultOutput(error)) {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return {
+      type: "error-text",
+      value: error.message
+    };
+  }
+
+  if (typeof error === "string") {
+    return {
+      type: "error-text",
+      value: error
+    };
+  }
+
+  return {
+    type: "error-json",
+    value:
+      isJsonObject(error) || Array.isArray(error) || typeof error === "number" || typeof error === "boolean" || error === null
+        ? error
+        : error ?? null
+  };
+}
+
 export function toolCallContent(
   toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }>
 ): MessageContent {
@@ -219,13 +317,28 @@ export function toolResultContent(toolResult: {
   toolCallId: string;
   toolName: string;
   output: unknown;
-}): MessageContent {
+}): ToolResultMessagePart[] {
   return [
     {
       type: "tool-result" as const,
       toolCallId: toolResult.toolCallId,
       toolName: toolResult.toolName,
-      ...(toolResult.output !== undefined ? { output: normalizeToolResultOutput(toolResult.output) } : {})
+      output: normalizeToolResultOutput(toolResult.output)
+    }
+  ];
+}
+
+export function toolErrorResultContent(toolResult: {
+  toolCallId: string;
+  toolName: string;
+  error: unknown;
+}): ToolResultMessagePart[] {
+  return [
+    {
+      type: "tool-result" as const,
+      toolCallId: toolResult.toolCallId,
+      toolName: toolResult.toolName,
+      output: normalizeToolErrorOutput(toolResult.error)
     }
   ];
 }
@@ -245,5 +358,5 @@ export function contentToPromptMessage(role: Message["role"], content: MessageCo
   return {
     role,
     content
-  };
+  } as ChatMessage;
 }

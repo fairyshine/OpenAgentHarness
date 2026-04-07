@@ -575,8 +575,6 @@ default_agent: assistant
       modelRef: "platform/openai-default",
       tools: {
         native: ["Bash"],
-        actions: [],
-        skills: [],
         external: []
       },
       policy: {
@@ -586,15 +584,8 @@ default_agent: assistant
         maxConcurrentSubagents: 2
       }
     });
-    expect(project?.agents.assistant).toMatchObject({
-      name: "assistant",
-      description: "Platform assistant",
-      modelRef: "platform/openai-default"
-    });
-    expect(project?.catalog.agents).toEqual([
-      { name: "builder", mode: "primary", source: "workspace", description: "Build things" },
-      { name: "assistant", mode: "primary", source: "platform", description: "Platform assistant" }
-    ]);
+    expect(project?.agents.assistant).toBeUndefined();
+    expect(project?.catalog.agents).toEqual([{ name: "builder", mode: "primary", source: "workspace", description: "Build things" }]);
     expect(project?.catalog.models.map((model) => model.ref)).toEqual(["platform/openai-default", "workspace/repo-model"]);
     expect(project?.workspaceModels["repo-model"]).toMatchObject({
       provider: "openai",
@@ -724,6 +715,104 @@ Use the workspace model.
     });
   });
 
+  it("parses extended agent config fields and omits hidden agents from the catalog", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-discovery-agent-fields-"));
+    tempDirs.push(tempDir);
+
+    await mkdir(path.join(tempDir, ".openharness", "agents"), { recursive: true });
+
+    await writeFile(
+      path.join(tempDir, ".openharness", "agents", "builder.md"),
+      `---
+description: Workspace builder
+model:
+  model_ref: platform/openai-default
+  temperature: 0.2
+  top_p: 0.85
+  max_tokens: 512
+background: true
+color: amber
+tools:
+  native:
+    - Bash
+  external:
+    - docs-server
+actions:
+  - debug.echo
+skills:
+  - repo-explorer
+disallowed:
+  tools:
+    native:
+      - WebSearch
+    external:
+      - shared-browser
+  actions:
+    - danger.delete
+  skills:
+    - secret-skill
+---
+
+# Builder
+
+Use the extended workspace agent config.
+`,
+      "utf8"
+    );
+
+    await writeFile(
+      path.join(tempDir, ".openharness", "agents", "shadow.md"),
+      `---
+mode: subagent
+description: Hidden helper
+hidden: true
+---
+
+# Shadow
+
+Stay hidden from the catalog.
+`,
+      "utf8"
+    );
+
+    const workspace = await discoverWorkspace(tempDir, "project", {
+      platformModels: {
+        "openai-default": {
+          provider: "openai",
+          name: "gpt-4o-mini"
+        }
+      }
+    });
+
+    expect(workspace.agents.builder).toMatchObject({
+      description: "Workspace builder",
+      modelRef: "platform/openai-default",
+      temperature: 0.2,
+      topP: 0.85,
+      maxTokens: 512,
+      background: true,
+      color: "amber",
+      tools: {
+        native: ["Bash"],
+        external: ["docs-server"]
+      },
+      actions: ["debug.echo"],
+      skills: ["repo-explorer"],
+      disallowed: {
+        tools: {
+          native: ["WebSearch"],
+          external: ["shared-browser"]
+        },
+        actions: ["danger.delete"],
+        skills: ["secret-skill"]
+      }
+    });
+    expect(workspace.agents.shadow?.hidden).toBe(true);
+    expect(workspace.catalog.agents).toEqual([
+      { name: "builder", mode: "primary", source: "workspace", description: "Workspace builder" }
+    ]);
+  });
+
   it("builds distinct discovered workspace ids for the same name under different roots", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-discovery-unique-id-"));
     tempDirs.push(tempDir);
@@ -746,7 +835,7 @@ Use the workspace model.
     expect(second.id).toBe(buildWorkspaceId("project", "demo-app", secondRoot));
   });
 
-  it("lets a workspace default agent point at a platform agent and preserves workspace override precedence", async () => {
+  it("ignores platform agents when the workspace declares local agents", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-discovery-platform-agent-"));
     tempDirs.push(tempDir);
 
@@ -754,7 +843,7 @@ Use the workspace model.
     await writeFile(
       path.join(tempDir, ".openharness", "settings.yaml"),
       `
-default_agent: assistant
+default_agent: builder
 `,
       "utf8"
     );
@@ -819,11 +908,9 @@ Workspace implementation prompt.
       platformAgents
     });
 
-    expect(workspace.defaultAgent).toBe("assistant");
-    expect(workspace.catalog.agents).toEqual([
-      { name: "builder", mode: "primary", source: "workspace", description: "Workspace builder" },
-      { name: "assistant", mode: "primary", source: "platform", description: "Platform assistant" }
-    ]);
+    expect(workspace.defaultAgent).toBe("builder");
+    expect(workspace.catalog.agents).toEqual([{ name: "builder", mode: "primary", source: "workspace", description: "Workspace builder" }]);
+    expect(workspace.agents.assistant).toBeUndefined();
     expect(workspace.agents.builder).toMatchObject({
       description: "Workspace builder",
       prompt: "# Builder\n\nWorkspace implementation prompt."

@@ -16,6 +16,7 @@ import {
 import type { ServerConfig } from "@oah/config";
 import { AppError, RuntimeService, createId, parseCursor } from "@oah/runtime-core";
 import type {
+  RuntimeLogger,
   Run,
   RunRepository,
   Session,
@@ -134,6 +135,43 @@ async function fileExists(targetPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return value !== undefined && /^(1|true|yes|on)$/iu.test(value.trim());
+}
+
+function buildRuntimeDebugLogger(enabled: boolean): RuntimeLogger | undefined {
+  if (!enabled) {
+    return undefined;
+  }
+
+  return {
+    debug(message, details) {
+      if (details) {
+        console.debug(`[oah-runtime-debug] ${message}`, details);
+        return;
+      }
+
+      console.debug(`[oah-runtime-debug] ${message}`);
+    },
+    warn(message, details) {
+      if (details) {
+        console.warn(`[oah-runtime-debug] ${message}`, details);
+        return;
+      }
+
+      console.warn(`[oah-runtime-debug] ${message}`);
+    },
+    error(message, details) {
+      if (details) {
+        console.error(`[oah-runtime-debug] ${message}`, details);
+        return;
+      }
+
+      console.error(`[oah-runtime-debug] ${message}`);
+    }
+  };
 }
 
 function workspaceDiscoveryKey(workspace: Pick<WorkspaceRecord, "kind" | "rootPath">): string {
@@ -404,6 +442,11 @@ class ScopedRunRepository implements RunRepository {
     return this.inner.update(input);
   }
 
+  async listBySessionId(sessionId: string): Promise<Run[]> {
+    const runs = await this.inner.listBySessionId(sessionId);
+    return runs.filter((run) => this.visibleWorkspaceIds.has(run.workspaceId));
+  }
+
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
     const runs = await this.inner.listRecoverableActiveRuns(staleBefore, limit * 4);
     return runs.filter((run) => this.visibleWorkspaceIds.has(run.workspaceId)).slice(0, limit);
@@ -575,6 +618,22 @@ export function describeRuntimeProcess(options: {
   };
 }
 
+export function shouldRunHistoryMirrorSync(options: {
+  processKind: "api" | "worker";
+  startWorker: boolean;
+  hasRedisRunQueue: boolean;
+}): boolean {
+  if (options.processKind === "worker") {
+    return true;
+  }
+
+  if (options.startWorker) {
+    return true;
+  }
+
+  return !options.hasRedisRunQueue;
+}
+
 export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<BootstrappedRuntime> {
   const argv = options.argv ?? process.argv.slice(2);
   const startWorker = options.startWorker ?? false;
@@ -620,9 +679,11 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           platformModels: models,
           platformAgents
         } as Parameters<typeof discoverWorkspaces>[0]);
+  const runtimeDebugLogger = buildRuntimeDebugLogger(isTruthyEnvValue(process.env.OAH_RUNTIME_DEBUG));
   const modelGateway = new AiSdkModelGateway({
     defaultModelName: config.llm.default_model,
-    models
+    models,
+    logger: runtimeDebugLogger
   });
   const postgresConfigured = Boolean(config.storage.postgres_url && config.storage.postgres_url.trim().length > 0);
   const persistence = postgresConfigured
@@ -825,6 +886,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   const runtimeService = new RuntimeService({
     defaultModel: config.llm.default_model,
     modelGateway,
+    logger: runtimeDebugLogger,
     platformModels: models,
     ...persistence,
     workspaceRepository,
@@ -927,7 +989,14 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       : undefined;
   redisRunWorker?.start();
   const historyMirrorSyncer =
-    primaryStorageMode === "postgres" && startWorker && "historyEventRepository" in persistence && persistence.historyEventRepository
+    primaryStorageMode === "postgres" &&
+    shouldRunHistoryMirrorSync({
+      processKind,
+      startWorker,
+      hasRedisRunQueue: Boolean(redisRunQueue)
+    }) &&
+    "historyEventRepository" in persistence &&
+    persistence.historyEventRepository
       ? new HistoryMirrorSyncer({
           workspaceRepository,
           historyEventRepository: persistence.historyEventRepository,

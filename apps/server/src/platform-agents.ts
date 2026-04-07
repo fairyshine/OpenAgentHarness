@@ -15,10 +15,10 @@ export function createBuiltInPlatformAgents(): PlatformAgentRegistry {
       ].join("\n"),
       tools: {
         native: [],
-        actions: [],
-        skills: [],
         external: []
       },
+      actions: [],
+      skills: [],
       switch: ["builder"],
       subagents: []
     },
@@ -35,10 +35,10 @@ export function createBuiltInPlatformAgents(): PlatformAgentRegistry {
       ].join("\n"),
       tools: {
         native: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"],
-        actions: [],
-        skills: [],
         external: []
       },
+      actions: [],
+      skills: [],
       switch: ["assistant"],
       subagents: []
     }

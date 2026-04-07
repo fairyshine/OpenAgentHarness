@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { describeRuntimeProcess, parseSingleWorkspaceOptions, shouldStartEmbeddedWorker } from "../apps/server/src/bootstrap.ts";
+import {
+  describeRuntimeProcess,
+  parseSingleWorkspaceOptions,
+  shouldRunHistoryMirrorSync,
+  shouldStartEmbeddedWorker
+} from "../apps/server/src/bootstrap.ts";
 
 describe("server runtime process modes", () => {
   it("defaults the api process to an embedded worker", () => {
@@ -59,6 +64,40 @@ describe("server runtime process modes", () => {
       label: "standalone worker",
       execution: "redis_queue"
     });
+  });
+
+  it("runs history mirror sync in processes that own local execution", () => {
+    expect(
+      shouldRunHistoryMirrorSync({
+        processKind: "api",
+        startWorker: true,
+        hasRedisRunQueue: true
+      })
+    ).toBe(true);
+    expect(
+      shouldRunHistoryMirrorSync({
+        processKind: "api",
+        startWorker: false,
+        hasRedisRunQueue: false
+      })
+    ).toBe(true);
+    expect(
+      shouldRunHistoryMirrorSync({
+        processKind: "worker",
+        startWorker: true,
+        hasRedisRunQueue: true
+      })
+    ).toBe(true);
+  });
+
+  it("does not run history mirror sync in api-only redis mode", () => {
+    expect(
+      shouldRunHistoryMirrorSync({
+        processKind: "api",
+        startWorker: false,
+        hasRedisRunQueue: true
+      })
+    ).toBe(false);
   });
 
   it("parses single-workspace startup flags", () => {

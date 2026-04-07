@@ -160,6 +160,12 @@ export class InMemoryRunRepository implements RunRepository {
     return input;
   }
 
+  async listBySessionId(sessionId: string): Promise<Run[]> {
+    return [...this.#items.values()]
+      .filter((run) => run.sessionId === sessionId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+  }
+
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
     return [...this.#items.values()]
       .filter((run) => {

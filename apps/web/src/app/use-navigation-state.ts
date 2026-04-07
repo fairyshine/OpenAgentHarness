@@ -23,6 +23,7 @@ export function useNavigationState() {
   const [recentWorkspaces, setRecentWorkspaces] = usePersistentState<string[]>(storageKeys.recentWorkspaces, []);
   const [recentSessions, setRecentSessions] = usePersistentState<string[]>(storageKeys.recentSessions, []);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = usePersistentState<string[]>(storageKeys.expandedWorkspaces, []);
+  const [expandedSessionIds, setExpandedSessionIds] = usePersistentState<string[]>(storageKeys.expandedSessions, []);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [workspaceTemplates, setWorkspaceTemplates] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<WorkspaceCatalog | null>(null);
@@ -69,6 +70,8 @@ export function useNavigationState() {
     setRecentSessions,
     expandedWorkspaceIds,
     setExpandedWorkspaceIds,
+    expandedSessionIds,
+    setExpandedSessionIds,
     workspace,
     setWorkspace,
     workspaceTemplates,

@@ -36,7 +36,7 @@ Agent 采用 Markdown 目录注册：
 - 文件名作为 workspace agent 的默认名称
 - frontmatter 承载少量结构化字段
 - Markdown 正文作为 agent 主 prompt
-- `system_reminder` 为可选字段，用于 agent 激活或切换时注入额外系统提示
+- `system_reminder` 为可选字段，用于 agent 切换后的首轮输入中注入额外提示
 - 若同名，workspace agent 覆盖 platform agent
 
 frontmatter 建议字段：
@@ -54,7 +54,9 @@ frontmatter 建议字段：
 
 - 运行时统一包装为 `<system_reminder>...</system_reminder>`
 - 可叠加平台内建提醒和 agent 自定义提醒
-- 注入位置应晚于历史消息装配、早于当前消息输入
+- 注入位置应是发送给模型的最新一条 user message，而不是 system prompt
+- 触发场景包括同一 run 内 `AgentSwitch` 之后的下一次模型调用，以及用户手动切换 session agent 后的下一条 user message
+- 创建 session 时显式选择 agent 默认不注入
 
 agent 间控制建议：
 

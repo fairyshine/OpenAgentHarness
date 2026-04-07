@@ -687,6 +687,19 @@ describe("http api", () => {
           },
           switch: ["assistant"],
           subagents: []
+        },
+        planner: {
+          name: "planner",
+          mode: "all",
+          prompt: "You are the planner agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: ["assistant"],
+          subagents: []
         }
       },
       actions: {},
@@ -697,7 +710,8 @@ describe("http api", () => {
         workspaceId: "workspace_http_agent_patch",
         agents: [
           { name: "assistant", mode: "primary", source: "workspace" },
-          { name: "builder", mode: "primary", source: "workspace" }
+          { name: "builder", mode: "primary", source: "workspace" },
+          { name: "planner", mode: "all", source: "workspace" }
         ],
         models: [],
         actions: [],
@@ -735,7 +749,7 @@ describe("http api", () => {
       headers: authHeaders,
       body: JSON.stringify({
         title: "builder session",
-        activeAgentName: "builder"
+        activeAgentName: "planner"
       })
     });
 
@@ -743,7 +757,7 @@ describe("http api", () => {
     await expect(patchResponse.json()).resolves.toMatchObject({
       id: session.id,
       title: "builder session",
-      activeAgentName: "builder"
+      activeAgentName: "planner"
     });
   });
 

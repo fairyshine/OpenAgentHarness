@@ -1,6 +1,6 @@
 import { Pool, type PoolConfig } from "pg";
 
-import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { boolean, integer, jsonb, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
 
@@ -75,6 +75,7 @@ const sessions = pgTable("sessions", {
   workspaceId: text("workspace_id")
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
+  parentSessionId: text("parent_session_id"),
   subjectRef: text("subject_ref").notNull(),
   agentName: text("agent_name"),
   activeAgentName: text("active_agent_name").notNull(),
@@ -303,6 +304,7 @@ function buildSessionRow(input: Session) {
   return {
     id: input.id,
     workspaceId: input.workspaceId,
+    parentSessionId: input.parentSessionId ?? null,
     subjectRef: input.subjectRef,
     agentName: input.agentName ?? null,
     activeAgentName: input.activeAgentName,
@@ -318,6 +320,7 @@ function toSession(row: typeof sessions.$inferSelect): Session {
   return {
     id: row.id,
     workspaceId: row.workspaceId,
+    ...(row.parentSessionId ? { parentSessionId: row.parentSessionId } : {}),
     subjectRef: row.subjectRef,
     ...(row.agentName ? { agentName: row.agentName } : {}),
     activeAgentName: row.activeAgentName,
@@ -798,6 +801,16 @@ class PostgresRunRepository implements RunRepository {
     });
   }
 
+  async listBySessionId(sessionId: string): Promise<Run[]> {
+    const rows = await this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.sessionId, sessionId))
+      .orderBy(desc(runs.createdAt), desc(runs.id));
+
+    return rows.map(toRun);
+  }
+
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
     const rows = await this.db
       .select()
@@ -1080,6 +1093,7 @@ const schemaStatements = [
   `create table if not exists sessions (
     id text primary key,
     workspace_id text not null references workspaces(id) on delete cascade,
+    parent_session_id text references sessions(id) on delete set null,
     subject_ref text not null,
     agent_name text,
     active_agent_name text not null,
@@ -1089,7 +1103,9 @@ const schemaStatements = [
     created_at timestamptz not null,
     updated_at timestamptz not null
   )`,
+  `alter table sessions add column if not exists parent_session_id text references sessions(id) on delete set null`,
   `create index if not exists sessions_workspace_created_idx on sessions (workspace_id, created_at desc)`,
+  `create index if not exists sessions_parent_session_idx on sessions (parent_session_id)`,
   `create index if not exists sessions_subject_created_idx on sessions (subject_ref, created_at desc)`,
   `create table if not exists runs (
     id text primary key,

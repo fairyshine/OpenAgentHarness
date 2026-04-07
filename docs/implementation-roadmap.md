@@ -97,7 +97,7 @@
 - 解析 `.openharness/tools/settings.yaml`
 - 发现 `.openharness/tools/servers/*`
 - 解析 `.openharness/hooks/*.yaml`
-- 实现 agent 切换检测与 `<system_reminder>` 注入
+- 实现 agent 切换检测，以及在最新 user message 上附加 `<system_reminder>`
 - 实现 `agent.switch` 与 `agent.delegate` 的 allowlist 校验
 - 实现 `agent.await` 与并发 subagent 调度
 - 将 `paths.chat_dir` 下子目录自动注册为 `kind=chat` workspace

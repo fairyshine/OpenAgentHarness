@@ -1,6 +1,42 @@
 import type { Message, RunStep, SessionEventContract } from "@oah/api-contracts";
 
-import { countMessagesByRole, toModelCallTrace, uniqueStrings, type ModelCallTrace } from "./support";
+import {
+  countMessagesByRole,
+  readMessageModelCallStepRef,
+  readMessageSystemPromptSnapshot,
+  toModelCallTrace,
+  uniqueStrings,
+  type ModelCallTrace,
+  type ModelCallTraceMessage
+} from "./support";
+
+function resolveMessageSystemMessages(message: Message | null, traces: ModelCallTrace[]): ModelCallTraceMessage[] {
+  if (!message) {
+    return [];
+  }
+
+  const snapshot = readMessageSystemPromptSnapshot(message);
+  if (snapshot.length > 0) {
+    return snapshot;
+  }
+
+  const stepRef = readMessageModelCallStepRef(message);
+  if (stepRef?.stepId) {
+    const matchedTrace = traces.find((trace) => trace.id === stepRef.stepId);
+    if (matchedTrace) {
+      return matchedTrace.input.messages.filter((traceMessage) => traceMessage.role === "system");
+    }
+  }
+
+  if (stepRef?.stepSeq !== undefined) {
+    const matchedTrace = traces.find((trace) => trace.seq === stepRef.stepSeq);
+    if (matchedTrace) {
+      return matchedTrace.input.messages.filter((traceMessage) => traceMessage.role === "system");
+    }
+  }
+
+  return [];
+}
 
 export function buildRuntimeViewModel(params: {
   messages: Message[];
@@ -21,6 +57,7 @@ export function buildRuntimeViewModel(params: {
   const storedMessageCounts = countMessagesByRole(params.messages);
   const latestModelMessageCounts = countMessagesByRole(latestModelCallTrace?.input.messages ?? []);
   const selectedSessionMessage = params.messages.find((message) => message.id === params.selectedMessageId) ?? params.messages[0] ?? null;
+  const selectedMessageSystemMessages = resolveMessageSystemMessages(selectedSessionMessage, modelCallTraces);
   const selectedRunStep = params.runSteps.find((step) => step.id === params.selectedStepId) ?? params.runSteps[0] ?? null;
   const selectedSessionEvent =
     params.deferredEvents.find((event) => event.id === params.selectedEventId) ?? params.deferredEvents[0] ?? null;
@@ -66,6 +103,7 @@ export function buildRuntimeViewModel(params: {
     storedMessageCounts,
     latestModelMessageCounts,
     selectedSessionMessage,
+    selectedMessageSystemMessages,
     selectedRunStep,
     selectedSessionEvent,
     allRuntimeToolNames,

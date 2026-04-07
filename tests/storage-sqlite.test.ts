@@ -544,6 +544,63 @@ describe("storage sqlite", () => {
         content: "legacy migrated message"
       })
     ]);
+    await expect(persistence.sessionRepository.listByWorkspaceId(workspace.id, 10)).resolves.toEqual([
+      expect.objectContaining({
+        id: "ses_legacy",
+        workspaceId: workspace.id
+      })
+    ]);
+    await persistence.close();
+  });
+
+  it("rebinds copied workspace records to the current workspace id on startup", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-copied-workspace-"));
+    tempDirs.push(tempDir);
+
+    const workspaceRoot = path.join(tempDir, "copied-workspace");
+    const shadowRoot = path.join(tempDir, "shadow");
+    const dbPath = path.join(workspaceRoot, ".openharness", "data", "history.db");
+    await mkdir(path.dirname(dbPath), { recursive: true });
+
+    const sourceWorkspaceId = "ws_source_workspace";
+    const workspace = createWorkspace({
+      id: "ws_copied_workspace",
+      rootPath: workspaceRoot
+    });
+
+    seedCurrentSchemaWithLegacyPayloads(dbPath, sourceWorkspaceId);
+
+    const persistence = await createSQLiteRuntimePersistence({ shadowRoot });
+    await persistence.workspaceRepository.upsert(workspace);
+
+    await expect(persistence.sessionRepository.listByWorkspaceId(workspace.id, 10)).resolves.toEqual([
+      expect.objectContaining({
+        id: "ses_dirty",
+        workspaceId: workspace.id
+      })
+    ]);
+    await expect(persistence.runRepository.getById("run_dirty")).resolves.toEqual(
+      expect.objectContaining({
+        id: "run_dirty",
+        workspaceId: workspace.id
+      })
+    );
+    await expect(persistence.historyEventRepository.listByWorkspaceId(workspace.id, 10)).resolves.toEqual([
+      expect.objectContaining({
+        workspaceId: workspace.id
+      })
+    ]);
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      const sourceRows = db.prepare("select count(*) as count from history_events where workspace_id = ?").get(sourceWorkspaceId) as {
+        count: number;
+      };
+      expect(sourceRows.count).toBe(0);
+    } finally {
+      db.close();
+    }
+
     await persistence.close();
   });
 

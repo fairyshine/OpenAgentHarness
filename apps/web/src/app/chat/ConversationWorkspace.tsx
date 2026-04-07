@@ -6,7 +6,7 @@ import { Bot, ChevronRight, Folder, Loader2, RefreshCw, Send, Square, Wrench, Co
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
-import { formatTimestamp, isRecord, statusTone } from "../support";
+import { formatTimestamp, readMessageAgentSnapshot, statusTone } from "../support";
 import type { Message } from "@oah/api-contracts";
 import type { useAppController } from "../use-app-controller";
 import { Badge } from "@/components/ui/badge";
@@ -24,35 +24,22 @@ function agentModeTone(mode: "primary" | "subagent" | "all") {
   }
 }
 
-function readMessageAgentName(message: Message): string | undefined {
-  if (!message.metadata || !isRecord(message.metadata)) {
-    return undefined;
-  }
-
-  if (typeof message.metadata.agentName === "string" && message.metadata.agentName.trim()) {
-    return message.metadata.agentName;
-  }
-
-  if (typeof message.metadata.effectiveAgentName === "string" && message.metadata.effectiveAgentName.trim()) {
-    return message.metadata.effectiveAgentName;
-  }
-
-  return undefined;
-}
-
 function resolveMessageAgentInfo(message: Message, props: RuntimeProps) {
   if (message.role !== "assistant" && message.role !== "tool") {
     return null;
   }
 
   const agentModeByName = new Map((props.catalog?.agents ?? []).map((agent) => [agent.name, agent.mode]));
+  const snapshot = readMessageAgentSnapshot(message);
   const latestStepForMessageRun =
-    message.runId && props.run?.id === message.runId
-      ? [...props.runSteps].reverse().find((step) => typeof step.agentName === "string" && step.agentName.trim())
+    message.runId
+      ? [...props.runSteps]
+          .reverse()
+          .find((step) => step.runId === message.runId && typeof step.agentName === "string" && step.agentName.trim())
       : undefined;
 
   const agentName =
-    readMessageAgentName(message) ??
+    snapshot?.name ??
     latestStepForMessageRun?.agentName ??
     (message.runId && props.run?.id === message.runId ? props.run?.effectiveAgentName ?? props.run?.agentName : undefined) ??
     props.session?.activeAgentName ??
@@ -65,7 +52,7 @@ function resolveMessageAgentInfo(message: Message, props: RuntimeProps) {
   const mode = agentModeByName.get(agentName);
   return {
     name: agentName,
-    mode
+    mode: snapshot?.mode ?? mode
   };
 }
 
@@ -311,7 +298,7 @@ function isToolOnlyMessage(content: Message["content"]) {
 /** Render message content — text parts as prose, reasoning as collapsible, tool calls/results as chips */
 function MessageContent({ content, isUser }: { content: Message["content"]; isUser?: boolean }) {
   if (typeof content === "string") {
-    return <MarkdownText text={content} isUser={isUser} />;
+    return <MarkdownText text={content} {...(isUser !== undefined ? { isUser } : {})} />;
   }
 
   const textParts = content.filter((p) => p.type === "text");
@@ -341,7 +328,7 @@ function MessageContent({ content, isUser }: { content: Message["content"]; isUs
       )}
       {textParts.map((part, i) => (
         <div key={i}>
-          {"text" in part && part.text ? <MarkdownText text={part.text} isUser={isUser} /> : null}
+          {"text" in part && part.text ? <MarkdownText text={part.text} {...(isUser !== undefined ? { isUser } : {})} /> : null}
         </div>
       ))}
       {approvalParts.length > 0 && (
@@ -393,6 +380,11 @@ export function ConversationWorkspace(props: RuntimeProps) {
   const hasStreamingMessage = props.messageFeed.some((m) => m.id.startsWith("live:"));
   const isRunning = props.isRunning;
   const canSend = !isRunning && props.draftMessage.trim().length > 0;
+  const inputPlaceholder = isRunning
+    ? "Agent is running…"
+    : props.isSwitchingSessionAgent
+    ? "Updating session agent…"
+    : "Message the current session";
 
   // Reset restored flag when session changes
   useEffect(() => {
@@ -627,7 +619,7 @@ export function ConversationWorkspace(props: RuntimeProps) {
                   value={props.draftMessage}
                   onChange={(event) => props.setDraftMessage(event.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder={isRunning ? "Agent is running…" : "Message the current session"}
+                  placeholder={inputPlaceholder}
                   disabled={isRunning}
                   rows={1}
                   className="min-h-[24px] max-h-[200px] flex-1 resize-none border-none bg-transparent px-0 py-2 text-sm shadow-none outline-none focus-visible:ring-0 disabled:opacity-50"

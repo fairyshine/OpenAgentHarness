@@ -58,6 +58,12 @@ export interface SessionEvent {
   createdAt: string;
 }
 
+export interface RuntimeLogger {
+  debug?(message: string, details?: Record<string, unknown>): void;
+  warn?(message: string, details?: Record<string, unknown>): void;
+  error?(message: string, details?: Record<string, unknown>): void;
+}
+
 export interface ModelDefinition {
   provider: string;
   key?: string;
@@ -128,6 +134,7 @@ export interface ModelStreamOptions {
 export interface ModelStepPreparation {
   model?: string | undefined;
   modelDefinition?: ModelDefinition | undefined;
+  messages?: ChatMessage[] | undefined;
   systemMessages?: Array<{ role: "system"; content: string }> | undefined;
   activeToolNames?: string[] | undefined;
 }
@@ -145,13 +152,30 @@ export interface AgentDefinition {
   systemReminder?: string | undefined;
   modelRef?: string | undefined;
   temperature?: number | undefined;
+  topP?: number | undefined;
   maxTokens?: number | undefined;
+  background?: boolean | undefined;
+  hidden?: boolean | undefined;
+  color?: string | undefined;
   tools: {
     native: string[];
-    actions: string[];
-    skills: string[];
     external: string[];
+    /**
+     * Deprecated compatibility fields. Prefer top-level `actions` / `skills`.
+     */
+    actions?: string[] | undefined;
+    skills?: string[] | undefined;
   };
+  actions?: string[] | undefined;
+  skills?: string[] | undefined;
+  disallowed?: {
+    tools?: {
+      native?: string[] | undefined;
+      external?: string[] | undefined;
+    } | undefined;
+    actions?: string[] | undefined;
+    skills?: string[] | undefined;
+  } | undefined;
   switch: string[];
   subagents: string[];
   policy?: {
@@ -376,6 +400,7 @@ export interface HistoryEventRepository {
 export interface RuntimeServiceOptions {
   defaultModel: string;
   modelGateway: ModelGateway;
+  logger?: RuntimeLogger | undefined;
   runHeartbeatIntervalMs?: number | undefined;
   platformModels?: Record<string, ModelDefinition> | undefined;
   workspaceRepository: WorkspaceRepository;
@@ -425,6 +450,7 @@ export interface RunRepository {
   create(input: Run): Promise<Run>;
   getById(id: string): Promise<Run | null>;
   update(input: Run): Promise<Run>;
+  listBySessionId(sessionId: string): Promise<Run[]>;
   listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]>;
 }
 
@@ -494,6 +520,11 @@ export interface WorkspaceListResult {
 
 export interface SessionListResult {
   items: Session[];
+  nextCursor?: string | undefined;
+}
+
+export interface RunListResult {
+  items: Run[];
   nextCursor?: string | undefined;
 }
 

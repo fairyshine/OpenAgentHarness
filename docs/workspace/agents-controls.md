@@ -135,8 +135,8 @@ policy:
 
 运行时在以下场景注入该段：
 
-- 创建 session 时显式选择了某个 agent
-- 同一 session 内从 agent A 切换到 agent B
+- 同一 run 内通过 `AgentSwitch` 从 agent A 切换到 agent B
+- 用户手动更新 session 的 `activeAgentName` 后，下一条 user message 首次进入新 agent
 
 注入形式建议为：
 
@@ -150,6 +150,8 @@ policy:
 
 - `system_reminder` 是可选字段
 - 运行时负责包裹 `<system_reminder>` 标签
-- 该段默认只在 agent 激活或切换时注入，不在每轮对话重复注入
+- 注入位置是发送给模型的最新一条 user message，而不是 system prompt
+- 创建 session 时即使显式选择了 agent，默认也不注入该段
+- 该段默认只在切换后的首轮注入一次，不在每轮对话重复注入
 - 适合放角色切换提醒、边界说明、交接要求、工具偏好等内容
 - 不建议把完整主 prompt 重复写入 `system_reminder`

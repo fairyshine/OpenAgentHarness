@@ -4,7 +4,6 @@ import {
   Bot,
   Database,
   FolderPlus,
-  Globe,
   Lock,
   Network,
   Orbit,
@@ -29,7 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 
-import { probeTone } from "../support";
+import { probeTone, type SavedSessionRecord } from "../support";
 import type { useAppController } from "../use-app-controller";
 import { SessionNavItem, WorkspaceNavItem } from "./sidebar-items";
 
@@ -214,6 +213,70 @@ function ToggleRow(props: { label: string; checked: boolean; onCheckedChange: (c
 }
 
 function RuntimeSidebar(props: SidebarProps) {
+  function hasActiveDescendant(
+    sessionId: string,
+    childSessionsByParentId: Map<string, SavedSessionRecord[]>,
+    activeSessionId: string
+  ): boolean {
+    const childSessions = childSessionsByParentId.get(sessionId) ?? [];
+    for (const childSession of childSessions) {
+      if (childSession.id === activeSessionId || hasActiveDescendant(childSession.id, childSessionsByParentId, activeSessionId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function renderSessionTree(
+    entries: SavedSessionRecord[],
+    options?: {
+      depth?: number;
+      childSessionsByParentId?: Map<string, SavedSessionRecord[]>;
+      workspaceId?: string;
+    }
+  ): ReactNode {
+    const depth = options?.depth ?? 0;
+    const childSessionsByParentId = options?.childSessionsByParentId;
+    const workspaceId = options?.workspaceId ?? "";
+
+    return entries.map((sessionEntry) => {
+      const childSessions = childSessionsByParentId?.get(sessionEntry.id) ?? [];
+      const shouldExpand =
+        childSessions.length > 0 &&
+        (props.expandedSessionIds.includes(sessionEntry.id) ||
+          (props.sessionId === sessionEntry.id ? true : hasActiveDescendant(sessionEntry.id, childSessionsByParentId ?? new Map(), props.sessionId)));
+      return (
+        <div key={sessionEntry.id} className="space-y-0.5">
+          <SessionNavItem
+            entry={sessionEntry}
+            depth={depth}
+            active={sessionEntry.id === props.sessionId}
+            expanded={shouldExpand}
+            hasChildren={childSessions.length > 0}
+            onSelect={() => {
+              if (workspaceId.trim()) {
+                props.expandWorkspaceInSidebar(workspaceId);
+              }
+              props.refreshSessionById(sessionEntry.id);
+            }}
+            onToggleExpanded={() => props.toggleSessionExpansion(sessionEntry.id)}
+            onRename={(title) => props.renameSession(sessionEntry.id, title)}
+            onRemove={() => props.removeSavedSession(sessionEntry.id)}
+          />
+          {childSessions.length > 0 && shouldExpand ? (
+            <div className="space-y-0.5">
+              {renderSessionTree(childSessions, {
+                depth: depth + 1,
+                childSessionsByParentId,
+                workspaceId
+              })}
+            </div>
+          ) : null}
+        </div>
+      );
+    });
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -269,6 +332,19 @@ function RuntimeSidebar(props: SidebarProps) {
           ) : (
             props.orderedSavedWorkspaces.map((entry) => {
               const workspaceSessions = props.sessionsByWorkspaceId.get(entry.id) ?? [];
+              const sessionIds = new Set(workspaceSessions.map((sessionEntry) => sessionEntry.id));
+              const childSessionsByParentId = new Map<string, typeof workspaceSessions>();
+              for (const sessionEntry of workspaceSessions) {
+                if (!sessionEntry.parentSessionId || !sessionIds.has(sessionEntry.parentSessionId)) {
+                  continue;
+                }
+                const children = childSessionsByParentId.get(sessionEntry.parentSessionId) ?? [];
+                children.push(sessionEntry);
+                childSessionsByParentId.set(sessionEntry.parentSessionId, children);
+              }
+              const topLevelSessions = workspaceSessions.filter(
+                (sessionEntry) => !sessionEntry.parentSessionId || !sessionIds.has(sessionEntry.parentSessionId)
+              );
               const isExpanded = props.expandedWorkspaceIds.includes(entry.id) || entry.id === props.activeWorkspaceId;
               const lastEditedAt = workspaceSessions.reduce<string | undefined>((latest, sessionEntry) => {
                 if (!sessionEntry.lastRunAt) {
@@ -297,22 +373,13 @@ function RuntimeSidebar(props: SidebarProps) {
                   />
                   {isExpanded ? (
                     <div className="ml-4 space-y-1">
-                      {workspaceSessions.length === 0 ? (
+                      {topLevelSessions.length === 0 ? (
                         <div className="rounded-md px-2 py-2 text-xs text-muted-foreground">No sessions yet.</div>
                       ) : (
-                        workspaceSessions.map((sessionEntry) => (
-                          <SessionNavItem
-                            key={sessionEntry.id}
-                            entry={sessionEntry}
-                            active={sessionEntry.id === props.sessionId}
-                            onSelect={() => {
-                              props.expandWorkspaceInSidebar(entry.id);
-                              props.refreshSessionById(sessionEntry.id);
-                            }}
-                            onRename={(title) => props.renameSession(sessionEntry.id, title)}
-                            onRemove={() => props.removeSavedSession(sessionEntry.id)}
-                          />
-                        ))
+                        renderSessionTree(topLevelSessions, {
+                          childSessionsByParentId,
+                          workspaceId: entry.id
+                        })
                       )}
                     </div>
                   ) : null}
@@ -351,14 +418,7 @@ function StorageSidebar(props: SidebarProps) {
 
   return (
     <div className="space-y-5 px-3 py-4">
-      <SidebarHero
-        icon={<Table2 className="h-4 w-4 text-foreground" />}
-        action={
-          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl" onClick={props.onRefreshStorageOverview} disabled={props.storageBusy}>
-            <RefreshCw className="h-4 w-4" />
-          </Button>
-        }
-      >
+      <div className="space-y-3 border-b border-border/60 pb-4">
         <SidebarModeToggle
           activeKey={props.storageBrowserTab}
           onChange={(key) => props.onStorageBrowserTabChange(key as "postgres" | "redis")}
@@ -371,33 +431,10 @@ function StorageSidebar(props: SidebarProps) {
           <SidebarMetric label="Postgres" value={postgresAvailable ? "online" : "offline"} tone={postgresAvailable ? "emerald" : "rose"} />
           <SidebarMetric label="Redis" value={redisAvailable ? "online" : "offline"} tone={redisAvailable ? "emerald" : "rose"} />
         </div>
-      </SidebarHero>
+      </div>
 
       {props.storageBrowserTab === "postgres" ? (
         <>
-          <SidebarSection title="Entities" description={postgresTableCount > 0 ? `${postgresTableCount} tables` : undefined}>
-            {!postgresAvailable ? (
-              <p className="text-sm text-muted-foreground">Postgres 当前不可用。</p>
-            ) : (
-              <div className="space-y-1.5">
-                {props.storageOverview?.postgres.tables.map((table) => (
-                  <SidebarActionItem
-                    key={table.name}
-                    title={tableLabel(table.name)}
-                    subtitle={`${table.description} · order by ${table.orderBy}`}
-                    badge={String(table.rowCount)}
-                    icon={<Database className="h-4 w-4" />}
-                    active={props.selectedStorageTable === table.name}
-                    onClick={() => {
-                      props.onStorageBrowserTabChange("postgres");
-                      props.onSelectStorageTable(table.name);
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-          </SidebarSection>
-
           <SidebarSection
             title="Filters"
             description={postgresFilterCount > 0 ? `${postgresFilterCount} active` : undefined}
@@ -447,6 +484,29 @@ function StorageSidebar(props: SidebarProps) {
             </div>
           )}
           </SidebarSection>
+
+          {!postgresAvailable ? (
+            <div className="border-t border-border/60 pt-4">
+              <p className="text-sm text-muted-foreground">Postgres 当前不可用。</p>
+            </div>
+          ) : (
+            <div className="space-y-1.5 border-t border-border/60 pt-4">
+              {props.storageOverview?.postgres.tables.map((table) => (
+                <SidebarActionItem
+                  key={table.name}
+                  title={tableLabel(table.name)}
+                  subtitle={`${table.description} · order by ${table.orderBy}`}
+                  badge={String(table.rowCount)}
+                  icon={<Database className="h-4 w-4" />}
+                  active={props.selectedStorageTable === table.name}
+                  onClick={() => {
+                    props.onStorageBrowserTabChange("postgres");
+                    props.onSelectStorageTable(table.name);
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </>
       ) : (
         <>
@@ -566,28 +626,22 @@ function ProviderSidebar(props: SidebarProps) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4">
         <div className="space-y-5">
-          <SidebarHero
-            icon={<Network className="h-4 w-4 text-foreground" />}
-            title="Provider"
-          >
+          <div className="space-y-3 border-b border-border/60 pb-4">
             <div className="grid grid-cols-2 gap-2">
               <SidebarMetric label="Health" value={props.healthStatus} tone={probeTone(props.healthStatus)} />
               <SidebarMetric label="Stream" value={props.streamState} tone={streamTone(props.streamState)} />
               <SidebarMetric label="Models" value={String(props.platformModels.length)} tone="emerald" />
               <SidebarMetric label="Providers" value={String(props.modelProviders.length)} tone="sky" />
             </div>
-            <div className="space-y-2 rounded-[18px] border border-border/70 bg-background/80 px-3 py-3">
-              <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                <Globe className="h-3.5 w-3.5" />
-                Base URL
-              </div>
+            <div className="space-y-2 border-l border-border/70 pl-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Base URL</p>
               <p className="truncate text-xs text-foreground">{props.connection.baseUrl || "not configured"}</p>
               <div className="flex flex-wrap gap-1.5">
                 <Badge variant="outline">ready {props.readinessReport?.status ?? "unknown"}</Badge>
                 {defaultModel ? <Badge variant="outline">default {defaultModel.id}</Badge> : null}
               </div>
             </div>
-          </SidebarHero>
+          </div>
 
           <SidebarSection title="Quick Actions">
             <div className="grid grid-cols-2 gap-2">
@@ -654,14 +708,28 @@ export function AppSidebar(props: SidebarProps) {
     <>
       <aside className="bg-background flex min-h-0 w-[288px] shrink-0 flex-col border-r border-border">
         <div className="border-b border-border/80 bg-gradient-to-b from-muted/35 to-transparent px-3 py-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-background shadow-sm">
-              {icon}
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-background shadow-sm">
+                {icon}
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold tracking-tight text-foreground">{title}</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{subtitle}</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold tracking-tight text-foreground">{title}</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">{subtitle}</p>
-            </div>
+            {props.surfaceMode === "storage" ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0 rounded-xl"
+                onClick={props.onRefreshStorageOverview}
+                disabled={props.storageBusy}
+                title="Refresh storage overview"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            ) : null}
           </div>
         </div>
 

@@ -142,13 +142,30 @@ export interface DiscoveredAgent {
   systemReminder?: string | undefined;
   modelRef?: string | undefined;
   temperature?: number | undefined;
+  topP?: number | undefined;
   maxTokens?: number | undefined;
+  background?: boolean | undefined;
+  hidden?: boolean | undefined;
+  color?: string | undefined;
   tools: {
     native: string[];
-    actions: string[];
-    skills: string[];
     external: string[];
+    /**
+     * Deprecated compatibility fields. Prefer top-level `actions` / `skills`.
+     */
+    actions?: string[] | undefined;
+    skills?: string[] | undefined;
   };
+  actions?: string[] | undefined;
+  skills?: string[] | undefined;
+  disallowed?: {
+    tools?: {
+      native?: string[] | undefined;
+      external?: string[] | undefined;
+    } | undefined;
+    actions?: string[] | undefined;
+    skills?: string[] | undefined;
+  } | undefined;
   switch: string[];
   subagents: string[];
   policy?: {
@@ -351,12 +368,14 @@ function toAgentCatalogItems(
   agents: Record<string, DiscoveredAgent>,
   sources?: Record<string, "platform" | "workspace">
 ): AgentCatalogItem[] {
-  return Object.values(agents).map((agent) => ({
-    name: agent.name,
-    mode: agent.mode,
-    source: sources?.[agent.name] ?? "workspace",
-    ...(agent.description ? { description: agent.description } : {})
-  }));
+  return Object.values(agents)
+    .filter((agent) => agent.hidden !== true)
+    .map((agent) => ({
+      name: agent.name,
+      mode: agent.mode,
+      source: sources?.[agent.name] ?? "workspace",
+      ...(agent.description ? { description: agent.description } : {})
+    }));
 }
 
 function toActionCatalogItems(actions: Record<string, DiscoveredAction>): ActionCatalogItem[] {
@@ -921,10 +940,38 @@ export async function loadWorkspaceAgents(workspaceRoot: string): Promise<Record
       data.mode === "primary" || data.mode === "subagent" || data.mode === "all" ? data.mode : "primary";
     const model = data.model && typeof data.model === "object" ? (data.model as Record<string, unknown>) : undefined;
     const tools = data.tools && typeof data.tools === "object" ? (data.tools as Record<string, unknown>) : undefined;
+    const disallowed =
+      data.disallowed && typeof data.disallowed === "object" ? (data.disallowed as Record<string, unknown>) : undefined;
+    const disallowedTools =
+      disallowed?.tools && typeof disallowed.tools === "object"
+        ? (disallowed.tools as Record<string, unknown>)
+        : undefined;
     const policy = data.policy && typeof data.policy === "object" ? (data.policy as Record<string, unknown>) : undefined;
 
     const externalTools = Array.isArray(tools?.external)
       ? tools.external.filter((item): item is string => typeof item === "string")
+      : [];
+    const configuredActions = Array.isArray(data.actions)
+      ? data.actions.filter((item): item is string => typeof item === "string")
+      : Array.isArray(tools?.actions)
+        ? tools.actions.filter((item): item is string => typeof item === "string")
+        : [];
+    const configuredSkills = Array.isArray(data.skills)
+      ? data.skills.filter((item): item is string => typeof item === "string")
+      : Array.isArray(tools?.skills)
+        ? tools.skills.filter((item): item is string => typeof item === "string")
+        : [];
+    const disallowedNativeTools = Array.isArray(disallowedTools?.native)
+      ? disallowedTools.native.filter((item): item is string => typeof item === "string")
+      : [];
+    const disallowedExternalTools = Array.isArray(disallowedTools?.external)
+      ? disallowedTools.external.filter((item): item is string => typeof item === "string")
+      : [];
+    const disallowedActions = Array.isArray(disallowed?.actions)
+      ? disallowed.actions.filter((item): item is string => typeof item === "string")
+      : [];
+    const disallowedSkills = Array.isArray(disallowed?.skills)
+      ? disallowed.skills.filter((item): item is string => typeof item === "string")
       : [];
 
     agents[name] = {
@@ -935,13 +982,42 @@ export async function loadWorkspaceAgents(workspaceRoot: string): Promise<Record
       ...(typeof data.system_reminder === "string" ? { systemReminder: data.system_reminder } : {}),
       ...(typeof model?.model_ref === "string" ? { modelRef: model.model_ref } : {}),
       ...(typeof model?.temperature === "number" ? { temperature: model.temperature } : {}),
+      ...(typeof model?.top_p === "number" ? { topP: model.top_p } : {}),
       ...(typeof model?.max_tokens === "number" ? { maxTokens: model.max_tokens } : {}),
+      ...(typeof data.background === "boolean" ? { background: data.background } : {}),
+      ...(typeof data.hidden === "boolean" ? { hidden: data.hidden } : {}),
+      ...(typeof data.color === "string" ? { color: data.color } : {}),
       tools: {
         native: Array.isArray(tools?.native) ? tools.native.filter((item): item is string => typeof item === "string") : [],
-        actions: Array.isArray(tools?.actions) ? tools.actions.filter((item): item is string => typeof item === "string") : [],
-        skills: Array.isArray(tools?.skills) ? tools.skills.filter((item): item is string => typeof item === "string") : [],
-        external: externalTools
+        external: externalTools,
+        ...(Array.isArray(tools?.actions)
+          ? { actions: tools.actions.filter((item): item is string => typeof item === "string") }
+          : {}),
+        ...(Array.isArray(tools?.skills)
+          ? { skills: tools.skills.filter((item): item is string => typeof item === "string") }
+          : {})
       },
+      ...(configuredActions.length > 0 ? { actions: configuredActions } : {}),
+      ...(configuredSkills.length > 0 ? { skills: configuredSkills } : {}),
+      ...(disallowedNativeTools.length > 0 ||
+      disallowedExternalTools.length > 0 ||
+      disallowedActions.length > 0 ||
+      disallowedSkills.length > 0
+        ? {
+            disallowed: {
+              ...(disallowedNativeTools.length > 0 || disallowedExternalTools.length > 0
+                ? {
+                    tools: {
+                      ...(disallowedNativeTools.length > 0 ? { native: disallowedNativeTools } : {}),
+                      ...(disallowedExternalTools.length > 0 ? { external: disallowedExternalTools } : {})
+                    }
+                  }
+                : {}),
+              ...(disallowedActions.length > 0 ? { actions: disallowedActions } : {}),
+              ...(disallowedSkills.length > 0 ? { skills: disallowedSkills } : {})
+            }
+          }
+        : {}),
       switch: Array.isArray(data.switch) ? data.switch.filter((item): item is string => typeof item === "string") : [],
       subagents: Array.isArray(data.subagents)
         ? data.subagents.filter((item): item is string => typeof item === "string")
@@ -1107,11 +1183,10 @@ export async function discoverWorkspace(
   const settings = await loadWorkspaceSettings(rootPath);
   const workspaceModels = await loadWorkspaceModels(rootPath);
   const workspaceAgents = await loadWorkspaceAgents(rootPath);
-  const agents = input.platformAgents ? mergeWithPrecedence(workspaceAgents, input.platformAgents) : workspaceAgents;
-  const agentSources = Object.fromEntries([
-    ...Object.keys(input.platformAgents ?? {}).map((name) => [name, "platform" as const]),
-    ...Object.keys(workspaceAgents).map((name) => [name, "workspace" as const])
-  ]);
+  const agents = Object.keys(workspaceAgents).length > 0 ? workspaceAgents : (input.platformAgents ?? {});
+  const agentSources = Object.fromEntries(
+    Object.keys(agents).map((name) => [name, name in workspaceAgents ? ("workspace" as const) : ("platform" as const)])
+  );
   const actions = kind === "chat" ? {} : await loadWorkspaceActions(rootPath);
   const workspaceSkillRoots = [
     path.join(rootPath, ".openharness", "skills"),

@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 describe("bootstrap platform agents", () => {
-  it("injects built-in platform agents by default", async () => {
+  it("uses built-in platform agents only for workspaces without local agents", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-bootstrap-platform-agents-"));
     tempDirs.push(tempDir);
 
@@ -39,7 +39,7 @@ describe("bootstrap platform agents", () => {
       mkdir(modelsDir, { recursive: true }),
       mkdir(toolDir, { recursive: true }),
       mkdir(skillDir, { recursive: true }),
-      mkdir(path.join(projectRoot, ".openharness"), { recursive: true }),
+      mkdir(path.join(projectRoot, ".openharness", "agents"), { recursive: true }),
       mkdir(path.join(chatRoot, ".openharness"), { recursive: true })
     ]);
 
@@ -75,6 +75,20 @@ openai-default:
 
     await writeFile(path.join(projectRoot, ".openharness", "settings.yaml"), "default_agent: builder\n", "utf8");
     await writeFile(path.join(chatRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(
+      path.join(projectRoot, ".openharness", "agents", "builder.md"),
+      `---
+description: Workspace builder
+model:
+  model_ref: platform/openai-default
+---
+
+# Builder
+
+Use the workspace-defined builder.
+`,
+      "utf8"
+    );
 
     const runtime = await bootstrapRuntime({
       argv: ["--config", path.join(tempDir, "server.yaml")],
@@ -87,25 +101,11 @@ openai-default:
       const chat = await runtime.runtimeService.getWorkspaceRecord(buildWorkspaceId("chat", "pair-mode", chatRoot));
 
       expect(project.defaultAgent).toBe("builder");
-      expect(project.catalog.agents).toEqual(
-        expect.arrayContaining([
-          { name: "assistant", mode: "primary", source: "platform", description: expect.any(String) },
-          { name: "builder", mode: "primary", source: "platform", description: expect.any(String) }
-        ])
-      );
-      expect(project.agents.builder.tools.native).toEqual([
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "Glob",
-        "Grep",
-        "WebFetch",
-        "WebSearch",
-        "TodoWrite"
+      expect(project.catalog.agents).toEqual([
+        { name: "builder", mode: "primary", source: "workspace", description: "Workspace builder" }
       ]);
-      expect(project.agents.assistant.switch).toEqual(["builder"]);
-      expect(project.agents.builder.switch).toEqual(["assistant"]);
+      expect(project.agents.assistant).toBeUndefined();
+      expect(project.agents.builder.description).toBe("Workspace builder");
 
       expect(chat.defaultAgent).toBe("assistant");
       expect(chat.catalog.agents).toEqual(
