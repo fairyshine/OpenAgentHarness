@@ -126,6 +126,7 @@ export function AppSidebar(props: SidebarProps) {
                                 props.expandWorkspaceInSidebar(entry.id);
                                 props.refreshSessionById(sessionEntry.id);
                               }}
+                              onRename={(title) => props.renameSession(sessionEntry.id, title)}
                               onRemove={() => props.removeSavedSession(sessionEntry.id)}
                             />
                           ))

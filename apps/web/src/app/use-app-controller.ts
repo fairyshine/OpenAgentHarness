@@ -860,6 +860,7 @@ export function useAppController() {
       sessionId,
       refreshSessionById: (targetId: string) => void navigationActions.refreshSession(targetId),
       removeSavedSession: navigationActions.removeSavedSession,
+      renameSession: (targetId: string, title: string) => void navigationActions.renameSession(targetId, title),
       sessionsByWorkspaceId,
       expandedWorkspaceIds,
       openWorkspace: navigationActions.openWorkspace,

@@ -36,6 +36,7 @@ interface SavedSessionRecord {
   workspaceId: string;
   title?: string;
   agentName?: string;
+  lastRunAt?: string;
   createdAt: string;
   lastOpenedAt: string;
 }

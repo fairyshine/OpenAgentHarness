@@ -133,6 +133,10 @@ export function useNavigationActions(params: {
       nextRecord.agentName = sessionRecord.activeAgentName;
     }
 
+    if (sessionRecord.lastRunAt) {
+      nextRecord.lastRunAt = sessionRecord.lastRunAt;
+    }
+
     params.navigation.setSavedSessions((current) => {
       const existingIndex = current.findIndex((entry) => entry.id === sessionRecord.id);
       if (existingIndex >= 0) {
@@ -282,6 +286,41 @@ export function useNavigationActions(params: {
     params.setErrorMessage("");
   }
 
+  async function renameSession(sessionToRenameId: string, title: string) {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      params.setErrorMessage("Session 名称不能为空。");
+      return;
+    }
+
+    try {
+      const updated = await params.request<Session>(`/api/v1/sessions/${sessionToRenameId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ title: nextTitle })
+      });
+
+      rememberSession(updated);
+      if (params.navigation.session?.id === updated.id) {
+        params.navigation.setSession(updated);
+      }
+      params.setActivity(`Session ${updated.id} 已重命名`);
+      params.setErrorMessage("");
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        if (params.navigation.session?.id === sessionToRenameId || params.navigation.sessionId === sessionToRenameId) {
+          clearSessionSelection(sessionToRenameId, { forgetSession: true });
+        } else {
+          params.navigation.setSavedSessions((current) => current.filter((entry) => entry.id !== sessionToRenameId));
+          params.navigation.setRecentSessions((current) => current.filter((entry) => entry !== sessionToRenameId));
+        }
+      }
+      params.setErrorMessage(toErrorMessage(error));
+    }
+  }
+
   async function refreshWorkspaceTemplates(quiet = false) {
     try {
       const response = await params.request<WorkspaceTemplateList>("/api/v1/workspace-templates");
@@ -364,8 +403,9 @@ export function useNavigationActions(params: {
               workspaceId: session.workspaceId,
               ...(session.title ? { title: session.title } : {}),
               ...(session.activeAgentName ? { agentName: session.activeAgentName } : {}),
+              ...(session.lastRunAt ? { lastRunAt: session.lastRunAt } : {}),
               createdAt: session.createdAt,
-              lastOpenedAt: existing?.lastOpenedAt ?? session.updatedAt ?? session.createdAt
+              lastOpenedAt: existing?.lastOpenedAt ?? session.createdAt
             });
           }
         } else {
@@ -730,6 +770,7 @@ export function useNavigationActions(params: {
     toggleWorkspaceExpansion,
     deleteWorkspace,
     removeSavedSession,
+    renameSession,
     clearSessionSelection,
     clearWorkspaceSelection,
     openWorkspace,

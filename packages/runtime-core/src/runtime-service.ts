@@ -45,6 +45,7 @@ import {
   type CancelRunResult,
   type CreateSessionMessageParams,
   type CreateSessionParams,
+  type UpdateSessionParams,
   type CreateWorkspaceParams,
   type GenerateModelInput,
   type MessageListResult,
@@ -406,6 +407,15 @@ export class RuntimeService {
     }
 
     return session;
+  }
+
+  async updateSession({ sessionId, input }: UpdateSessionParams): Promise<Session> {
+    const session = await this.getSession(sessionId);
+    return this.#sessionRepository.update({
+      ...session,
+      title: input.title,
+      updatedAt: nowIso()
+    });
   }
 
   async deleteSession(sessionId: string): Promise<void> {

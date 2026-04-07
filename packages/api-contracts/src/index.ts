@@ -531,6 +531,10 @@ export const createSessionRequestSchema = z.object({
   agentName: z.string().optional()
 });
 
+export const updateSessionRequestSchema = z.object({
+  title: z.string().trim().min(1).max(120)
+});
+
 export const createMessageRequestSchema = z.object({
   content: z.string().min(1),
   metadata: jsonObjectSchema.optional()
@@ -705,6 +709,7 @@ export type WorkspaceSkillInput = z.infer<typeof workspaceSkillInputSchema>;
 export type CreateWorkspaceRequest = z.infer<typeof createWorkspaceRequestSchema>;
 export type UpdateWorkspaceSettingsRequest = z.infer<typeof updateWorkspaceSettingsRequestSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
+export type UpdateSessionRequest = z.infer<typeof updateSessionRequestSchema>;
 export type CreateMessageRequest = z.infer<typeof createMessageRequestSchema>;
 export type MessageAccepted = z.infer<typeof messageAcceptedSchema>;
 export type CancelRunAccepted = z.infer<typeof cancelRunAcceptedSchema>;

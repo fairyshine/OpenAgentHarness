@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, ChevronRight, Folder, MoreHorizontal, Trash2 } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, Folder, MoreHorizontal, PencilLine, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -101,13 +101,14 @@ export function SessionNavItem(props: {
   entry: SavedSessionRecord;
   active: boolean;
   onSelect: () => void;
+  onRename: (title: string) => void | Promise<void>;
   onRemove: () => void;
 }) {
-  const subtitle = [props.entry.agentName, formatTimestamp(props.entry.lastOpenedAt || props.entry.createdAt)].filter(Boolean).join(" · ");
+  const subtitle = [props.entry.agentName, formatTimestamp(props.entry.lastRunAt || props.entry.createdAt)].filter(Boolean).join(" · ");
 
   return (
     <div
-      className={`group flex items-center gap-2 rounded-md px-2 py-2.5 transition-colors cursor-pointer ${sessionItemClass(props.active)}`}
+      className={`group relative flex items-center gap-2 rounded-md px-2 py-2.5 pr-[4.25rem] transition-colors cursor-pointer ${sessionItemClass(props.active)}`}
       onClick={() => {
         if (hasTextSelection()) return;
         props.onSelect();
@@ -122,24 +123,36 @@ export function SessionNavItem(props: {
           <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
         </div>
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 shrink-0 text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition hover:text-foreground"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <MoreHorizontal className="h-3.5 w-3.5" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem variant="destructive" onClick={props.onRemove}>
-            <Trash2 className="h-4 w-4" />
-            Remove Session
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <div className={`absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-md bg-background/72 px-1 py-0.5 backdrop-blur-sm transition-opacity ${props.active ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 shrink-0 rounded-md text-muted-foreground/72 hover:bg-background/70 hover:text-foreground"
+          title="Rename session"
+          onClick={(event) => {
+            event.stopPropagation();
+            const nextTitle = window.prompt("请输入新的 Session 名称", props.entry.title ?? "");
+            if (nextTitle == null) {
+              return;
+            }
+            void props.onRename(nextTitle);
+          }}
+        >
+          <PencilLine className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 shrink-0 rounded-md text-muted-foreground/72 hover:bg-background/70 hover:text-rose-600 dark:hover:text-rose-400"
+          title="Delete session"
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onRemove();
+          }}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
     </div>
   );
 }

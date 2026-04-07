@@ -86,7 +86,7 @@ function SessionSidebarItem(props: {
   const subtitleParts = [
     props.contextLabel,
     props.entry.agentName,
-    formatTimestamp(props.entry.lastOpenedAt || props.entry.createdAt)
+    formatTimestamp(props.entry.lastRunAt || props.entry.createdAt)
   ].filter(Boolean);
 
   return (

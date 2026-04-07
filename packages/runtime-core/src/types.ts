@@ -440,6 +440,11 @@ export interface CreateSessionParams {
   input: CreateSessionRequest;
 }
 
+export interface UpdateSessionParams {
+  sessionId: string;
+  input: import("@oah/api-contracts").UpdateSessionRequest;
+}
+
 export interface CreateSessionMessageParams {
   sessionId: string;
   caller: CallerContext;

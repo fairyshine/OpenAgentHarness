@@ -27,6 +27,7 @@ import {
   runEventsQuerySchema,
   runStepPageSchema,
   sessionPageSchema,
+  updateSessionRequestSchema,
   updateWorkspaceSettingsRequestSchema,
   workspaceHistoryMirrorStatusSchema,
   workspacePageSchema,
@@ -439,6 +440,16 @@ export function createApp(dependencies: AppDependencies) {
   app.get("/api/v1/sessions/:sessionId", async (request, reply) => {
     const params = createParamsSchema("sessionId").parse(request.params);
     const session = await dependencies.runtimeService.getSession(params.sessionId);
+    return reply.send(session);
+  });
+
+  app.patch("/api/v1/sessions/:sessionId", async (request, reply) => {
+    const params = createParamsSchema("sessionId").parse(request.params);
+    const input = updateSessionRequestSchema.parse(request.body);
+    const session = await dependencies.runtimeService.updateSession({
+      sessionId: params.sessionId,
+      input
+    });
     return reply.send(session);
   });
 
