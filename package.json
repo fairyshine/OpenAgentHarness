@@ -14,6 +14,9 @@
     "worker": "node ./apps/server/dist/worker.js",
     "infra:up": "docker compose -f docker-compose.dev.yml up -d",
     "infra:down": "docker compose -f docker-compose.dev.yml down",
+    "version:sync": "node ./scripts/sync-root-version.mjs",
+    "version:check": "node ./scripts/sync-root-version.mjs --check",
+    "postversion": "pnpm version:sync",
     "typecheck": "pnpm -r exec tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:dist": "pnpm build && vitest run"

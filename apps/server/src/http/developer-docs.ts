@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,6 +8,17 @@ import YAML from "yaml";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const openApiSpecPath = path.join(repoRoot, "docs", "openapi", "openapi.yaml");
+const brandLogoPath = path.join(repoRoot, "assets", "logo-readme.png");
+
+function loadPngDataUrl(filePath: string): string {
+  try {
+    return `data:image/png;base64,${readFileSync(filePath).toString("base64")}`;
+  } catch {
+    return "";
+  }
+}
+
+const brandLogoDataUrl = loadPngDataUrl(brandLogoPath);
 
 function escapeHtml(input: string): string {
   return input
@@ -32,6 +44,24 @@ export async function loadOpenApiSpec(origin: string): Promise<string> {
 
 export async function loadOpenApiDocument(origin: string): Promise<Record<string, unknown>> {
   return YAML.parse(await loadOpenApiSpec(origin)) as Record<string, unknown>;
+}
+
+function buildBrandLogoHtml(): string {
+  if (!brandLogoDataUrl) {
+    return "";
+  }
+
+  return `<img class="brand-logo" src="${brandLogoDataUrl}" alt="Open Agent Harness logo" />`;
+}
+
+function buildFaviconLinks(): string {
+  if (!brandLogoDataUrl) {
+    return "";
+  }
+
+  return `
+    <link rel="icon" type="image/png" href="${brandLogoDataUrl}" />
+    <link rel="apple-touch-icon" href="${brandLogoDataUrl}" />`;
 }
 
 export function buildApiIndex(request: FastifyRequest) {
@@ -131,6 +161,7 @@ export function buildDeveloperLandingHtml(request: FastifyRequest): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Open Agent Harness</title>
+    ${buildFaviconLinks()}
     <style>
       :root {
         color-scheme: light;
@@ -312,6 +343,25 @@ export function buildDeveloperLandingHtml(request: FastifyRequest): string {
         text-transform: uppercase;
         color: rgba(20, 20, 20, 0.48);
       }
+      .brand-logo {
+        display: block;
+        width: 72px;
+        height: 72px;
+        object-fit: contain;
+      }
+      .brand-block {
+        display: inline-flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      .brand-block-copy {
+        display: grid;
+        gap: 8px;
+      }
+      .brand-block-copy .surface-kicker {
+        margin: 0;
+      }
       .meta-row {
         display: flex;
         flex-wrap: wrap;
@@ -432,8 +482,13 @@ export function buildDeveloperLandingHtml(request: FastifyRequest): string {
   <body>
     <main>
       <section class="hero">
-        <span class="eyebrow">Developer Entry</span>
-        <p class="surface-kicker">OpenAgentHarness / Runtime Endpoint</p>
+        <div class="brand-block">
+          ${buildBrandLogoHtml()}
+          <div class="brand-block-copy">
+            <span class="eyebrow">Developer Entry</span>
+            <p class="surface-kicker">OpenAgentHarness / Runtime Endpoint</p>
+          </div>
+        </div>
         <h1>Open Agent Harness is listening.</h1>
         <p class="lede">
           This server exposes a headless agent runtime over HTTP. Start here, then use the OpenAPI spec or the API index to
@@ -555,6 +610,7 @@ export function buildDeveloperDocsHtml(request: FastifyRequest): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Open Agent Harness Docs</title>
+    ${buildFaviconLinks()}
     <style>
       :root {
         color-scheme: light;
@@ -646,6 +702,26 @@ export function buildDeveloperDocsHtml(request: FastifyRequest): string {
         text-transform: uppercase;
         color: rgba(20, 20, 20, 0.48);
       }
+      .brand-logo {
+        display: block;
+        width: 64px;
+        height: 64px;
+        object-fit: contain;
+      }
+      .brand-block {
+        display: inline-flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      .brand-block-copy {
+        display: grid;
+        gap: 6px;
+      }
+      .brand-block-copy .surface-kicker,
+      .brand-block-copy h1 {
+        margin: 0;
+      }
       a {
         color: #111214;
       }
@@ -731,8 +807,13 @@ export function buildDeveloperDocsHtml(request: FastifyRequest): string {
   <body>
     <main>
       <section>
-        <p class="surface-kicker">OpenAgentHarness / Docs</p>
-        <h1>Developer Quickstart</h1>
+        <div class="brand-block">
+          ${buildBrandLogoHtml()}
+          <div class="brand-block-copy">
+            <p class="surface-kicker">OpenAgentHarness / Docs</p>
+            <h1>Developer Quickstart</h1>
+          </div>
+        </div>
         <p>
           Open Agent Harness serves its HTTP API under <code>/api/v1</code>. Use the API index and OpenAPI YAML below to inspect
           routes, payloads, and response shapes.

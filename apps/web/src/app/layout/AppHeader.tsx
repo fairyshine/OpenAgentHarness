@@ -1,4 +1,4 @@
-import { Bot, Loader2, Network, Orbit, Sparkles } from "lucide-react";
+import { Loader2, Network, Orbit } from "lucide-react";
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -35,15 +35,13 @@ export function AppHeader(props: HeaderProps) {
   return (
     <header className="app-topbar h-[60px] flex items-center justify-between gap-4 px-4 sm:px-6 overflow-hidden min-w-0">
       <div className="flex min-w-0 items-center gap-3">
-        <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-[1rem] border border-black/10 bg-white/58 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_12px_22px_-18px_rgba(17,17,17,0.24)]">
-          <Bot className="h-4 w-4 text-foreground/90" />
-          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-background shadow-md">
-            <Sparkles className="h-2.5 w-2.5" />
-          </span>
+        <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-[1rem] border border-black/10 bg-white/58 p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_12px_22px_-18px_rgba(17,17,17,0.24)] dark:border-white/10 dark:bg-white/8">
+          <img src="/oah-logo.png" alt="Open Agent Harness logo" className="h-full w-full object-contain dark:hidden" />
+          <img src="/oah-logo-dark.png" alt="" aria-hidden="true" className="hidden h-full w-full object-contain dark:block" />
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <p className="truncate text-[15px] font-semibold tracking-tight text-foreground">OpenAgentHarness</p>
+            <p className="truncate text-[15px] font-semibold tracking-tight text-foreground">Open Agent Harness</p>
             <span className="hidden rounded-full border border-black/8 bg-white/52 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-foreground/48 md:inline-flex">
               Beta
             </span>
