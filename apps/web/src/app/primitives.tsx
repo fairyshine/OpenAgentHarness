@@ -168,7 +168,7 @@ function InsightRow(props: { label: string; value: string }) {
 
 function EntityPreview(props: { title: string; data: unknown }) {
   return (
-    <div className="ob-subsection overflow-hidden">
+    <div className="ob-subsection min-w-0 overflow-hidden">
       <div className="px-4 py-2 text-xs text-muted-foreground">
         {props.title}
       </div>
@@ -179,7 +179,7 @@ function EntityPreview(props: { title: string; data: unknown }) {
 
 function JsonBlock(props: { title: string; value: unknown }) {
   return (
-    <div className="ob-subsection overflow-hidden">
+    <div className="ob-subsection min-w-0 overflow-hidden">
       <div className="px-3 py-2 text-xs text-muted-foreground">
         {props.title}
       </div>
@@ -226,16 +226,16 @@ function PayloadValueView(props: {
   if (typeof props.value === "string") {
     const lineCount = props.value.length === 0 ? 0 : props.value.split(/\r?\n/u).length;
     return (
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <div className="flex flex-wrap gap-2">
           <Badge>{props.mode === "result" ? "text result" : "text payload"}</Badge>
           <Badge>{`${lineCount} lines`}</Badge>
           <Badge>{`${props.value.length} chars`}</Badge>
         </div>
-        <div className="rounded-[16px] border border-border bg-muted/30 p-3">
+        <div className="min-w-0 rounded-[16px] border border-border bg-muted/30 p-3">
           <pre
             className={cn(
-              "overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80",
+              "min-w-0 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80",
               props.maxHeightClassName
             )}
           >
@@ -247,14 +247,14 @@ function PayloadValueView(props: {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap gap-2">
         <Badge>{props.mode === "result" ? "structured result" : "structured payload"}</Badge>
         <Badge>{kindLabel}</Badge>
         {sizeLabel ? <Badge>{sizeLabel}</Badge> : null}
       </div>
-      <div className="rounded-[16px] border border-border bg-muted/30 p-3">
-        <pre className={cn("overflow-auto text-xs leading-6 text-foreground/80", props.maxHeightClassName)}>{prettyJson(props.value)}</pre>
+      <div className="min-w-0 rounded-[16px] border border-border bg-muted/30 p-3">
+        <pre className={cn("min-w-0 overflow-auto text-xs leading-6 text-foreground/80", props.maxHeightClassName)}>{prettyJson(props.value)}</pre>
       </div>
     </div>
   );

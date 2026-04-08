@@ -71,7 +71,7 @@ function MessageToolRefChips(props: { content: Message["content"] }) {
 function MessageContentDetail(props: { content: Message["content"]; maxHeightClassName?: string }) {
   if (typeof props.content === "string") {
     return (
-      <pre className={cn("overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80", props.maxHeightClassName)}>
+      <pre className={cn("min-w-0 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80", props.maxHeightClassName)}>
         {props.content}
       </pre>
     );
@@ -82,9 +82,9 @@ function MessageContentDetail(props: { content: Message["content"]; maxHeightCla
   }
 
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 space-y-2">
       {props.content.map((part, index) => (
-        <div key={`${part.type}:${index}`} className="ob-subsection p-3">
+        <div key={`${part.type}:${index}`} className="ob-subsection min-w-0 p-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <Badge>{index + 1}</Badge>
             <Badge>{part.type}</Badge>
@@ -92,11 +92,11 @@ function MessageContentDetail(props: { content: Message["content"]; maxHeightCla
             {"toolCallId" in part ? <Badge>{part.toolCallId}</Badge> : null}
           </div>
           {part.type === "text" ? (
-            <pre className={cn("overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80", props.maxHeightClassName)}>
+            <pre className={cn("min-w-0 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80", props.maxHeightClassName)}>
               {part.text}
             </pre>
           ) : part.type === "reasoning" ? (
-            <pre className={cn("overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80", props.maxHeightClassName)}>
+            <pre className={cn("min-w-0 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80", props.maxHeightClassName)}>
               {part.text}
             </pre>
           ) : part.type === "tool-call" ? (

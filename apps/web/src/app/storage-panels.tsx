@@ -28,8 +28,8 @@ import {
   toModelCallTrace,
   type StorageBrowserTab
 } from "./support";
-import { EmptyState, InsightRow, JsonBlock, PayloadValueView, modelMessageTone } from "./primitives";
-import { InspectorPanelHeader, MessageContentDetail, MessageToolRefChips, ModelCallTraceCard } from "./inspector-panels";
+import { EmptyState, modelMessageTone } from "./primitives";
+import { MessageToolRefChips } from "./inspector-panels";
 
 const STORAGE_TABLE_META: Record<
   StoragePostgresTableName,
@@ -108,6 +108,53 @@ function StorageToolbarMeta(props: { label: string; value: string | number }) {
   );
 }
 
+function StoragePlainRowDetail(props: { row: Record<string, unknown> }) {
+  return (
+    <div className="min-w-0">
+      <pre className="overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80">{prettyJson(props.row)}</pre>
+    </div>
+  );
+}
+
+function StorageDetailFacts(props: { items: Array<{ label: string; value: string }> }) {
+  return (
+    <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
+      {props.items.map((item) => (
+        <div key={item.label} className="min-w-0">
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{item.label}</p>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-foreground [overflow-wrap:anywhere]">{item.value}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StorageDetailSection(props: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="min-w-0 space-y-2">
+      <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">{props.title}</p>
+      {props.children}
+    </section>
+  );
+}
+
+function StorageDetailPre(props: { value: string; maxHeightClassName?: string }) {
+  return (
+    <pre
+      className={cn(
+        "min-w-0 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-foreground/80",
+        props.maxHeightClassName
+      )}
+    >
+      {props.value}
+    </pre>
+  );
+}
+
+function StorageDetailJson(props: { value: unknown; maxHeightClassName?: string }) {
+  return <StorageDetailPre value={prettyJson(props.value)} maxHeightClassName={props.maxHeightClassName} />;
+}
+
 function StorageWorkbench(props: {
   browserTab: StorageBrowserTab;
   overview: StorageOverview | null;
@@ -136,7 +183,7 @@ function StorageWorkbench(props: {
   busy: boolean;
 }) {
   return (
-    <section className="flex min-h-0 flex-col">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {props.browserTab === "postgres" ? (
         <StoragePostgresPanel
           overview={props.overview}
@@ -190,11 +237,11 @@ function StoragePostgresPanel(props: {
   const selectedMeta = STORAGE_TABLE_META[props.selectedTable];
 
   return (
-    <section className="min-w-0">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {!props.overview?.postgres.available ? (
         <EmptyState title="Postgres unavailable" description="当前服务没有启用 Postgres，或者 Postgres 暂时不可达。" />
       ) : props.tablePage ? (
-        <div className="space-y-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4">
           <div className="flex flex-col gap-3 border-b border-border/70 pb-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary">{selectedMeta.label}</Badge>
@@ -223,46 +270,67 @@ function StoragePostgresPanel(props: {
             </div>
           </div>
 
-          <div className="grid items-start gap-4 2xl:grid-cols-[minmax(0,1.24fr)_minmax(320px,0.76fr)]">
-            <StorageDataGrid
-              tableName={props.tablePage.table}
-              columns={props.tablePage.columns}
-              rows={props.tablePage.rows}
-              selectedRow={props.selectedRow}
-              onSelectRow={props.onSelectRow}
-            />
+          <div className="grid min-h-0 min-w-0 flex-1 gap-3 [grid-template-rows:minmax(11rem,0.58fr)_minmax(24rem,1.42fr)]">
+            <div className="min-h-0 min-w-0 overflow-hidden">
+              <div className="flex h-full min-h-0 min-w-0 flex-col">
+                <div className="flex items-start justify-between gap-3 px-1 py-1">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">
+                      {props.tablePage.table === "messages"
+                        ? "Message Detail"
+                        : props.tablePage.table === "run_steps"
+                          ? "Run Step Detail"
+                          : props.tablePage.table === "tool_calls"
+                            ? "Tool Call Detail"
+                          : props.tablePage.table === "session_events"
+                              ? "Session Event Detail"
+                              : "Row Detail"}
+                    </p>
+                  </div>
+                  {props.selectedRow ? <Badge variant="outline">selected</Badge> : null}
+                </div>
 
-            <div className="space-y-3 border-t border-border/70 pt-4 2xl:border-t-0 2xl:border-l 2xl:pt-0 2xl:pl-4">
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-semibold text-foreground">
-                  {props.tablePage.table === "messages"
-                    ? "Message Detail"
-                    : props.tablePage.table === "run_steps"
-                      ? "Run Step Detail"
-                      : props.tablePage.table === "tool_calls"
-                        ? "Tool Call Detail"
-                        : props.tablePage.table === "session_events"
-                          ? "Session Event Detail"
-                          : "Row Detail"}
-                </p>
-                {props.selectedRow ? <Badge variant="outline">selected</Badge> : null}
+                <div className="min-h-0 min-w-0 flex-1 overflow-auto px-1 py-2">
+                  {props.selectedRow ? (
+                    props.tablePage.table === "messages" ? (
+                      <StorageMessageRowDetail row={props.selectedRow} />
+                    ) : props.tablePage.table === "run_steps" ? (
+                      <StorageRunStepRowDetail row={props.selectedRow} />
+                    ) : props.tablePage.table === "tool_calls" ? (
+                      <StorageToolCallRowDetail row={props.selectedRow} />
+                    ) : props.tablePage.table === "session_events" ? (
+                      <StorageSessionEventRowDetail row={props.selectedRow} />
+                    ) : (
+                      <StoragePlainRowDetail row={props.selectedRow} />
+                    )
+                  ) : (
+                    <EmptyState title="No row selected" description="Select a row from the preview grid to inspect the stored record." />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="min-h-0 min-w-0 flex flex-col gap-3 overflow-hidden">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Table Preview</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    下半区展示当前页记录，保留更大的滚动空间来浏览表格内容。
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{props.tablePage.columns.length} cols</Badge>
+                  <Badge variant="outline">{props.tablePage.rows.length} rows</Badge>
+                </div>
               </div>
 
-              {props.selectedRow ? (
-                props.tablePage.table === "messages" ? (
-                  <StorageMessageRowDetail row={props.selectedRow} />
-                ) : props.tablePage.table === "run_steps" ? (
-                  <StorageRunStepRowDetail row={props.selectedRow} />
-                ) : props.tablePage.table === "tool_calls" ? (
-                  <StorageToolCallRowDetail row={props.selectedRow} />
-                ) : props.tablePage.table === "session_events" ? (
-                  <StorageSessionEventRowDetail row={props.selectedRow} />
-                ) : (
-                  <JsonBlock title="Row" value={props.selectedRow} />
-                )
-              ) : (
-                <EmptyState title="No row selected" description="Select a row from the preview grid to inspect the stored record." />
-              )}
+              <StorageDataGrid
+                tableName={props.tablePage.table}
+                columns={props.tablePage.columns}
+                rows={props.tablePage.rows}
+                selectedRow={props.selectedRow}
+                onSelectRow={props.onSelectRow}
+              />
             </div>
           </div>
         </div>
@@ -293,11 +361,11 @@ function StorageRedisPanel(props: {
   const selectedCount = props.selectedRedisKeys.length;
 
   return (
-    <section className="min-w-0">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {!props.overview?.redis.available ? (
         <EmptyState title="Redis unavailable" description="当前服务没有启用 Redis，或者 Redis 暂时不可达。" />
       ) : (
-        <div className="space-y-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4">
           <div className="flex flex-col gap-3 border-b border-border/70 pb-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary">Redis Keys</Badge>
@@ -317,8 +385,65 @@ function StorageRedisPanel(props: {
             </div>
           </div>
 
-          <div className="grid items-start gap-4 2xl:grid-cols-[minmax(0,0.96fr)_minmax(320px,1.04fr)]">
-            <div className="space-y-3">
+          <div className="grid min-h-0 min-w-0 flex-1 gap-3 [grid-template-rows:minmax(11rem,0.58fr)_minmax(24rem,1.42fr)]">
+            <div className="min-h-0 min-w-0 overflow-hidden">
+              <div className="flex h-full min-h-0 min-w-0 flex-col">
+                <div className="flex flex-wrap items-start justify-between gap-3 px-1 py-1">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Selected Key</p>
+                    <p className="mt-0.5 break-all text-xs leading-5 text-muted-foreground">
+                      {props.redisKeyDetail?.key ?? "Pick a key from the list or from the queue / lock snapshots."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" size="sm" onClick={props.onRefreshKey} disabled={props.busy || !props.selectedRedisKey}>
+                      Refresh
+                    </Button>
+                    {props.selectedRedisKey.endsWith(":queue") ? (
+                      <Button variant="secondary" size="sm" onClick={() => props.onClearSessionQueue(props.selectedRedisKey)} disabled={props.busy}>
+                        Clear Queue
+                      </Button>
+                    ) : null}
+                    {props.selectedRedisKey.endsWith(":lock") ? (
+                      <Button variant="secondary" size="sm" onClick={() => props.onReleaseSessionLock(props.selectedRedisKey)} disabled={props.busy}>
+                        Release Lock
+                      </Button>
+                    ) : null}
+                    <Button variant="destructive" size="sm" onClick={props.onDeleteKey} disabled={props.busy || !props.selectedRedisKey}>
+                      Delete Key
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="min-h-0 min-w-0 flex-1 overflow-auto px-1 py-2">
+                  {props.redisKeyDetail ? (
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap gap-2">
+                        <Badge>{props.redisKeyDetail.type}</Badge>
+                        {props.redisKeyDetail.size !== undefined ? <Badge>{`size ${props.redisKeyDetail.size}`}</Badge> : null}
+                        {props.redisKeyDetail.ttlMs !== undefined ? <Badge>{`ttl ${props.redisKeyDetail.ttlMs}ms`}</Badge> : <Badge>persistent</Badge>}
+                      </div>
+                      <JsonBlock title="Value" value={props.redisKeyDetail.value ?? {}} />
+                    </div>
+                  ) : (
+                    <EmptyState title="No key selected" description="Choose a Redis key to inspect its current value and metadata." />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="min-h-0 min-w-0 flex flex-col gap-3 overflow-hidden">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Key Table</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">下半区保留更大的键列表浏览空间，方便批量勾选和连续检查。</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{props.redisKeyPage?.items.length ?? 0} loaded</Badge>
+                  {selectedCount > 0 ? <Badge variant="outline">{selectedCount} selected</Badge> : null}
+                </div>
+              </div>
+
               <StorageRedisKeyGrid
                 items={props.redisKeyPage?.items ?? []}
                 selectedKey={props.selectedRedisKey}
@@ -344,48 +469,6 @@ function StorageRedisPanel(props: {
                   Load More
                 </Button>
               ) : null}
-            </div>
-
-            <div className="space-y-3 border-t border-border/70 pt-4 2xl:border-t-0 2xl:border-l 2xl:pt-0 2xl:pl-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">Selected Key</p>
-                  <p className="mt-1 break-all text-xs leading-5 text-muted-foreground">
-                    {props.redisKeyDetail?.key ?? "Pick a key from the list or from the queue / lock snapshots."}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="secondary" size="sm" onClick={props.onRefreshKey} disabled={props.busy || !props.selectedRedisKey}>
-                    Refresh
-                  </Button>
-                  {props.selectedRedisKey.endsWith(":queue") ? (
-                    <Button variant="secondary" size="sm" onClick={() => props.onClearSessionQueue(props.selectedRedisKey)} disabled={props.busy}>
-                      Clear Queue
-                    </Button>
-                  ) : null}
-                  {props.selectedRedisKey.endsWith(":lock") ? (
-                    <Button variant="secondary" size="sm" onClick={() => props.onReleaseSessionLock(props.selectedRedisKey)} disabled={props.busy}>
-                      Release Lock
-                    </Button>
-                  ) : null}
-                  <Button variant="destructive" size="sm" onClick={props.onDeleteKey} disabled={props.busy || !props.selectedRedisKey}>
-                    Delete Key
-                  </Button>
-                </div>
-              </div>
-
-              {props.redisKeyDetail ? (
-                <div className="space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    <Badge>{props.redisKeyDetail.type}</Badge>
-                    {props.redisKeyDetail.size !== undefined ? <Badge>{`size ${props.redisKeyDetail.size}`}</Badge> : null}
-                    {props.redisKeyDetail.ttlMs !== undefined ? <Badge>{`ttl ${props.redisKeyDetail.ttlMs}ms`}</Badge> : <Badge>persistent</Badge>}
-                  </div>
-                  <JsonBlock title="Value" value={props.redisKeyDetail.value ?? {}} />
-                </div>
-              ) : (
-                <EmptyState title="No key selected" description="Choose a Redis key to inspect its current value and metadata." />
-              )}
             </div>
           </div>
         </div>
@@ -496,8 +579,8 @@ function StorageDataGrid(props: {
   }
 
   return (
-    <div className="data-grid-shell overflow-hidden rounded-[18px] border border-border/70 bg-background/80">
-      <div className="max-h-[34rem] overflow-auto">
+    <div className="data-grid-shell flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-border/70 bg-background/80">
+      <div className="min-h-0 flex-1 overflow-auto">
         <table className="min-w-full border-collapse text-left text-xs text-foreground/80">
           <thead className="sticky top-0 z-10 bg-background/95 backdrop-blur">
             <tr>
@@ -544,7 +627,7 @@ function StorageMessageRowDetail(props: { row: Record<string, unknown> }) {
   const message = storageMessageFromRow(props.row);
 
   if (!message) {
-    return <JsonBlock title="Row" value={props.row} />;
+    return <StoragePlainRowDetail row={props.row} />;
   }
 
   const text = contentText(message.content);
@@ -560,39 +643,37 @@ function StorageMessageRowDetail(props: { row: Record<string, unknown> }) {
         <MessageToolRefChips content={message.content} />
         <Badge>{formatTimestamp(message.createdAt)}</Badge>
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <InsightRow label="Message ID" value={message.id} />
-        <InsightRow label="Session ID" value={message.sessionId} />
-        <InsightRow label="Parts" value={String(Array.isArray(message.content) ? message.content.length : 1)} />
-        <InsightRow label="Text Size" value={String(text.length)} />
-      </div>
+      <StorageDetailFacts
+        items={[
+          { label: "Message ID", value: message.id },
+          { label: "Session ID", value: message.sessionId },
+          { label: "Parts", value: String(Array.isArray(message.content) ? message.content.length : 1) },
+          { label: "Text Size", value: String(text.length) }
+        ]}
+      />
 
-      <div>
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Message Content</p>
-        <div className="mt-3">
-          <MessageContentDetail content={message.content} maxHeightClassName="max-h-[26rem]" />
-        </div>
-      </div>
+      <StorageDetailSection title="Message Content">
+        <StorageDetailPre value={text || prettyJson(message.content)} maxHeightClassName="max-h-[18rem]" />
+      </StorageDetailSection>
 
       {refs.length > 0 ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Tool Trace</p>
-          <div className="mt-3 space-y-2">
+        <StorageDetailSection title="Tool Trace">
+          <div className="flex flex-wrap gap-2">
             {refs.map((ref, index) => (
-              <div key={`${ref.type}:${ref.toolCallId}:${index}`} className="subtle-panel rounded-[16px] border border-border px-3 py-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge>{ref.type}</Badge>
-                  <Badge>{ref.toolName}</Badge>
-                  <Badge>{ref.toolCallId}</Badge>
-                </div>
-              </div>
+              <Badge key={`${ref.type}:${ref.toolCallId}:${index}`}>{`${ref.type} · ${ref.toolName} · ${ref.toolCallId}`}</Badge>
             ))}
           </div>
-        </div>
+        </StorageDetailSection>
       ) : null}
 
-      {message.metadata ? <JsonBlock title="Metadata" value={message.metadata} /> : null}
-      <JsonBlock title="Raw Row" value={props.row} />
+      {message.metadata ? (
+        <StorageDetailSection title="Metadata">
+          <StorageDetailJson value={message.metadata} maxHeightClassName="max-h-40" />
+        </StorageDetailSection>
+      ) : null}
+      <StorageDetailSection title="Raw Row">
+        <StorageDetailJson value={props.row} maxHeightClassName="max-h-56" />
+      </StorageDetailSection>
     </div>
   );
 }
@@ -601,7 +682,7 @@ function StorageRunStepRowDetail(props: { row: Record<string, unknown> }) {
   const step = storageRunStepFromRow(props.row);
 
   if (!step) {
-    return <JsonBlock title="Row" value={props.row} />;
+    return <StoragePlainRowDetail row={props.row} />;
   }
 
   const modelTrace = toModelCallTrace(step);
@@ -615,32 +696,33 @@ function StorageRunStepRowDetail(props: { row: Record<string, unknown> }) {
         {step.name ? <Badge>{step.name}</Badge> : null}
         {step.agentName ? <Badge>{step.agentName}</Badge> : null}
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <InsightRow label="Step ID" value={step.id} />
-        <InsightRow label="Run ID" value={step.runId} />
-        <InsightRow label="Started" value={formatTimestamp(step.startedAt)} />
-        <InsightRow label="Ended" value={formatTimestamp(step.endedAt)} />
-      </div>
+      <StorageDetailFacts
+        items={[
+          { label: "Step ID", value: step.id },
+          { label: "Run ID", value: step.runId },
+          { label: "Started", value: formatTimestamp(step.startedAt) },
+          { label: "Ended", value: formatTimestamp(step.endedAt) }
+        ]}
+      />
 
       {modelTrace ? (
-        <div className="space-y-3">
-          <InspectorPanelHeader
-            title="Model Call Trace"
-            description="Storage 里的 run_step 已直接还原成 model call 视图，方便在数据库维度核对一次模型请求与返回。"
-          />
-          <ModelCallTraceCard trace={modelTrace} />
-        </div>
+        <StorageDetailSection title="Model Call Trace">
+          <StorageDetailJson value={modelTrace} maxHeightClassName="max-h-[18rem]" />
+        </StorageDetailSection>
       ) : (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Structured Step Payload</p>
-          <div className="mt-3 grid gap-3 lg:grid-cols-2">
-            <JsonBlock title="Input" value={step.input ?? {}} />
-            <JsonBlock title="Output" value={step.output ?? {}} />
-          </div>
-        </div>
+        <>
+          <StorageDetailSection title="Input">
+            <StorageDetailJson value={step.input ?? {}} maxHeightClassName="max-h-40" />
+          </StorageDetailSection>
+          <StorageDetailSection title="Output">
+            <StorageDetailJson value={step.output ?? {}} maxHeightClassName="max-h-40" />
+          </StorageDetailSection>
+        </>
       )}
 
-      <JsonBlock title="Raw Row" value={props.row} />
+      <StorageDetailSection title="Raw Row">
+        <StorageDetailJson value={props.row} maxHeightClassName="max-h-56" />
+      </StorageDetailSection>
     </div>
   );
 }
@@ -649,7 +731,7 @@ function StorageToolCallRowDetail(props: { row: Record<string, unknown> }) {
   const record = storageToolCallFromRow(props.row);
 
   if (!record) {
-    return <JsonBlock title="Row" value={props.row} />;
+    return <StoragePlainRowDetail row={props.row} />;
   }
 
   return (
@@ -661,32 +743,25 @@ function StorageToolCallRowDetail(props: { row: Record<string, unknown> }) {
         {record.stepId ? <Badge>{record.stepId}</Badge> : null}
         {record.durationMs !== undefined ? <Badge>{`${record.durationMs}ms`}</Badge> : null}
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <InsightRow label="Tool Call ID" value={record.id} />
-        <InsightRow label="Run ID" value={record.runId} />
-        <InsightRow label="Started" value={formatTimestamp(record.startedAt)} />
-        <InsightRow label="Ended" value={formatTimestamp(record.endedAt)} />
-      </div>
+      <StorageDetailFacts
+        items={[
+          { label: "Tool Call ID", value: record.id },
+          { label: "Run ID", value: record.runId },
+          { label: "Started", value: formatTimestamp(record.startedAt) },
+          { label: "Ended", value: formatTimestamp(record.endedAt) }
+        ]}
+      />
 
-      <div>
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Tool Audit Payload</p>
-        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          <div className="panel-card overflow-hidden rounded-[18px] border">
-            <div className="border-b border-border px-3 py-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">Request</div>
-            <div className="p-3">
-              <PayloadValueView value={record.request ?? {}} maxHeightClassName="max-h-72" mode="input" />
-            </div>
-          </div>
-          <div className="panel-card overflow-hidden rounded-[18px] border">
-            <div className="border-b border-border px-3 py-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">Response</div>
-            <div className="p-3">
-              <PayloadValueView value={record.response ?? {}} maxHeightClassName="max-h-72" mode="result" />
-            </div>
-          </div>
-        </div>
-      </div>
+      <StorageDetailSection title="Request">
+        <StorageDetailJson value={record.request ?? {}} maxHeightClassName="max-h-40" />
+      </StorageDetailSection>
+      <StorageDetailSection title="Response">
+        <StorageDetailJson value={record.response ?? {}} maxHeightClassName="max-h-40" />
+      </StorageDetailSection>
 
-      <JsonBlock title="Raw Row" value={props.row} />
+      <StorageDetailSection title="Raw Row">
+        <StorageDetailJson value={props.row} maxHeightClassName="max-h-56" />
+      </StorageDetailSection>
     </div>
   );
 }
@@ -695,7 +770,7 @@ function StorageSessionEventRowDetail(props: { row: Record<string, unknown> }) {
   const event = storageSessionEventFromRow(props.row);
 
   if (!event) {
-    return <JsonBlock title="Row" value={props.row} />;
+    return <StoragePlainRowDetail row={props.row} />;
   }
 
   const eventContent = normalizeMessageContent(event.data.content);
@@ -709,24 +784,27 @@ function StorageSessionEventRowDetail(props: { row: Record<string, unknown> }) {
         {typeof event.data.toolName === "string" ? <Badge>{String(event.data.toolName)}</Badge> : null}
         {typeof event.data.toolCallId === "string" ? <Badge>{String(event.data.toolCallId)}</Badge> : null}
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <InsightRow label="Event ID" value={event.id} />
-        <InsightRow label="Session ID" value={event.sessionId} />
-        <InsightRow label="Created" value={formatTimestamp(event.createdAt)} />
-        <InsightRow label="Payload Keys" value={String(Object.keys(event.data).length)} />
-      </div>
+      <StorageDetailFacts
+        items={[
+          { label: "Event ID", value: event.id },
+          { label: "Session ID", value: event.sessionId },
+          { label: "Created", value: formatTimestamp(event.createdAt) },
+          { label: "Payload Keys", value: String(Object.keys(event.data).length) }
+        ]}
+      />
 
       {eventContent !== null ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Message Payload</p>
-          <div className="mt-3">
-            <MessageContentDetail content={eventContent} maxHeightClassName="max-h-[24rem]" />
-          </div>
-        </div>
+        <StorageDetailSection title="Message Payload">
+          <StorageDetailJson value={eventContent} maxHeightClassName="max-h-[18rem]" />
+        </StorageDetailSection>
       ) : null}
 
-      <JsonBlock title="Event Data" value={event.data} />
-      <JsonBlock title="Raw Row" value={props.row} />
+      <StorageDetailSection title="Event Data">
+        <StorageDetailJson value={event.data} maxHeightClassName="max-h-40" />
+      </StorageDetailSection>
+      <StorageDetailSection title="Raw Row">
+        <StorageDetailJson value={props.row} maxHeightClassName="max-h-56" />
+      </StorageDetailSection>
     </div>
   );
 }
@@ -744,8 +822,8 @@ function StorageRedisKeyGrid(props: {
   }
 
   return (
-    <div className="data-grid-shell overflow-hidden rounded-[18px] border border-border/70 bg-background/80">
-      <div className="max-h-[34rem] overflow-auto">
+    <div className="data-grid-shell flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-border/70 bg-background/80">
+      <div className="min-h-0 flex-1 overflow-auto">
         <table className="min-w-full border-collapse text-left text-xs text-foreground/80">
           <thead className="sticky top-0 z-10 bg-background/95 backdrop-blur">
             <tr>

@@ -6,7 +6,7 @@ type StorageProps = ReturnType<typeof useAppController>["storageSurfaceProps"];
 export function StorageWorkspace(props: StorageProps) {
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <div className="min-h-0 flex-1 overflow-auto px-5 py-5">
+      <div className="min-h-0 flex-1 overflow-hidden px-5 py-5">
         <StorageWorkbench
           browserTab={props.storageBrowserTab}
           overview={props.storageOverview}

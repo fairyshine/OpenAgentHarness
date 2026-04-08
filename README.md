@@ -1,129 +1,105 @@
-# Open Agent Harness
+<h1 align="center">Open Agent Harness</h1>
 
-[中文版本](./README.zh-CN.md) | English
+<p align="center">
+  Headless, workspace-first agent runtime for teams building agent products, internal AI platforms, and embedded copilots.
+</p>
 
-Open Agent Harness is a headless, workspace-first agent runtime for teams building agent products, internal AI platforms, and embedded copilots.
+<p align="center">
+  <a href="./README.zh-CN.md">中文版本</a> · <a href="./docs/getting-started.en.md">Getting Started</a> · <a href="./docs/README.md">Documentation</a>
+</p>
 
-It is designed for the part that gets difficult fast in real systems: serving many workspaces, sessions, and runs while keeping behavior flexible, governable, and easy to embed into your own product.
+---
 
-## In One Sentence
+## What is Open Agent Harness?
 
-Build your own agent product on top of a reusable runtime, instead of rebuilding the runtime itself.
+Open Agent Harness is a **deployable backend runtime** that handles agent conversations and task execution. You bring your own frontend, auth, and product experience — the runtime handles everything underneath.
 
-## At a Glance
+**Build your own agent product on top of a reusable runtime, instead of rebuilding the runtime itself.**
 
-| Question | Answer |
+> Not a ready-made chat UI. Not an identity system. Not a SaaS control plane.
+> It is the programmable kernel that sits behind all of those.
+
+## Web Console
+
+The project ships with a debug web console for development and inspection:
+
+<p align="center">
+  <img src="assets/web-console-screenshot.png" width="820" alt="Web Console Screenshot" />
+</p>
+
+The console provides:
+- **Conversation view** with streaming, tool call chips, and run tracking
+- **Inspector** showing model-facing messages, tools, run steps, and runtime traces
+- **Storage workbench** for PostgreSQL and Redis, including structured `messages.content` inspection
+
+## Architecture
+
+The runtime is organized into clear layers:
+
+| Layer | Responsibility |
 | --- | --- |
-| What is it? | A deployable backend runtime for agent conversations and task execution. |
-| Who is it for? | Teams building internal AI platforms, team-facing agent products, or embedded copilots. |
-| What is the core idea? | Let each workspace define its own agents, prompts, skills, actions, hooks, and tools while sharing one runtime core. |
-| What is it not? | Not a ready-made chat product, identity system, or SaaS control plane. |
+| **API Gateway** | OpenAPI entry point, parameter validation, access control, SSE streaming |
+| **Session Orchestrator** | Run creation, per-session serial scheduling, cancellation, timeout, failure recovery |
+| **Context Engine** | Assembles prompts, history, agent config, and capability catalog at run start |
+| **LLM Loop + Dispatcher** | Model inference, tool calling, routing, and result backfill |
+| **Execution Backend** | Local directory-level execution (swappable to container/VM/remote sandbox) |
+| **Storage** | PostgreSQL (source of truth) + Redis (queues, locks, SSE) + local history mirror |
 
-## Why Open Agent Harness
+## Workspace-First Design
 
-- Headless and embeddable behind your own web app, desktop app, CLI, automation system, or API gateway
-- Workspace-first customization instead of one fixed global agent setup
-- Supports both executable `project` workspaces and read-only `chat` workspaces
-- Conversation state persists as AI SDK-style message content, including text, tool-call, and tool-result parts
-- Flexible capability model with separate `agent`, `skill`, `action`, `tool`, `hook`, and context layers
-- One runtime that works for single-workspace setups and multi-workspace platform deployments
+The **workspace** is the core customization boundary. A single runtime can host many workspaces, each with its own:
 
-## What Makes It Different
+- Agents and prompt strategies
+- Skills, actions, and tools
+- Hooks and lifecycle policies
+- Model configurations
+- Tool servers (local or remote)
 
-| Dimension | Open Agent Harness focuses on... |
+Two workspaces on the same runtime can behave completely differently for different teams, repos, or product scenarios.
+
+| Workspace Type | Description |
 | --- | --- |
-| Product boundary | A backend runtime kernel you embed into your own product |
-| Customization model | Workspace-level composition instead of one fixed workflow |
-| Capability design | Separate layers for roles, methods, tasks, tools, hooks, and context |
-| Platform fit | Integration into existing identity, policy, and product surfaces |
-| Deployment path | Easy local startup and production-friendly split deployment |
+| **`project`** | Writable, executable — enables shell, actions, skills, tools, and hooks |
+| **`chat`** | Read-only conversation mode — no file modifications, no execution tools |
 
-## A Flexible Capability Model
+## Capability Model
 
-The main strength of Open Agent Harness is not just that it supports many concepts, but that those concepts stay separate so you can combine them differently per workspace.
+Each capability layer stays separate so you can compose them differently per workspace:
 
-| Capability | What it is for |
+| Capability | Purpose |
 | --- | --- |
-| `agent` | Defines the role, behavior, and permissions of a working persona |
-| `primary agent` / `subagent` | Supports both user-facing specialists and delegated background specialists |
-| `tool` | Gives an agent access to built-in or external execution capabilities |
-| `skill` | Packages reusable know-how for a class of tasks |
-| `action` | Exposes a stable named task that users, APIs, or agents can trigger |
-| `hook` | Adds lifecycle interception, policy, or extension logic around runtime events |
+| `agent` | Defines role, behavior, and permissions of a working persona |
+| `primary agent` / `subagent` | User-facing specialists and delegated background specialists |
+| `tool` | Built-in or external execution capabilities for agents |
+| `skill` | Reusable know-how packaged for a class of tasks |
+| `action` | Stable named tasks that users, APIs, or agents can trigger |
+| `hook` | Lifecycle interception, policy, and extension logic around runtime events |
 | `context` | Controls how prompts and workspace instructions are assembled for the model |
-
-This gives you a lot of freedom in practice:
-
-- Different workspaces can use different agent sets and prompt strategies.
-- Different agents can see different tools, actions, skills, and subagents.
-- Skills can capture reusable methods without turning into hard-coded product logic.
-- Actions can represent stable product tasks without becoming a workflow DSL.
-- Hooks can add governance and extension points without changing the core runtime behavior.
-
-## Workspace-First Customization
-
-The workspace is the main customization boundary. A single runtime can host many workspaces, and each workspace can bring its own combination of:
-
-- agents
-- prompts and shared instructions
-- skills
-- actions
-- hooks
-- models
-- tool servers
-
-That means two workspaces can share the same runtime but still behave very differently for different teams, repos, or product scenarios.
-
-## Best Fit
-
-Open Agent Harness is a strong fit when:
-
-- you are building an internal AI platform or a team-facing agent product
-- you need one backend to serve many workspaces in parallel
-- you want to keep your own frontend, auth, and product experience
-- you need more control than a fixed agent UI or a thin local agent loop can provide
-
-It is less suitable when:
-
-- you only want a ready-made chat UI
-- you only need a tiny single-user local script
-- you do not need workspace isolation or runtime lifecycle management
-
-## Typical Use Cases
-
-| Scenario | Why it fits |
-| --- | --- |
-| Internal engineering copilot | Different repos or teams can have different agent setups on one shared runtime |
-| Team-facing agent product | You keep your own UX and policy layer while reusing the runtime |
-| Embedded copilot inside an existing product | The runtime stays headless and fits behind your existing app |
-| Dedicated backend for one repo or one chat preset | `single workspace` mode gives you a focused deployment path |
 
 ## Quick Start
 
 ```bash
+# Install dependencies
 pnpm install
+
+# Start infrastructure (PostgreSQL + Redis)
 pnpm infra:up
+
+# Start the backend server
 pnpm dev:server -- --config ./server.example.yaml
+
+# Start the web console (in another terminal)
 pnpm dev:web
 ```
 
-Common local addresses:
+**Local addresses:**
 
-- Debug web console: `http://localhost:5174`
-- Default backend address: `http://127.0.0.1:8787`
+| Service | URL |
+| --- | --- |
+| Web Console | `http://localhost:5174` |
+| Backend API | `http://127.0.0.1:8787` |
 
-The debug web console includes:
-
-- a session Inspector that shows model-facing messages, tools, run steps, and runtime traces
-- a global Storage workbench for PostgreSQL and Redis, including structured `messages.content` inspection
-
-Useful commands:
-
-```bash
-pnpm build
-pnpm test
-pnpm dev:worker -- --config ./server.example.yaml
-```
+### Single Workspace Mode
 
 Run a dedicated backend for one workspace:
 
@@ -134,11 +110,43 @@ pnpm dev:server -- \
   --default-model openai-default
 ```
 
+### Common Commands
+
+```bash
+pnpm build          # Build all packages
+pnpm test           # Run tests
+pnpm dev:worker -- --config ./server.example.yaml  # Start worker
+```
+
+## Who Is It For?
+
+**Good fit:**
+- Teams building internal AI platforms or agent products — developers define agent logic, users switch agents by scenario
+- Projects that need one backend serving many workspaces in parallel
+- Products that want to keep their own frontend, auth, and UX while reusing a shared runtime
+- Scenarios requiring more control than a fixed agent UI or thin local agent loop
+
+**Not the best fit:**
+- You just want a ready-made chat UI
+- You only need a tiny single-user local script
+- You don't need workspace isolation or runtime lifecycle management
+
+## Use Cases
+
+| Scenario | Why it works |
+| --- | --- |
+| Internal engineering copilot | Different repos/teams share one runtime with different agent setups |
+| Multi-agent product | Developers define agent logic, users switch agents by scenario — all on one runtime |
+| Embedded copilot in an existing product | Runtime stays headless, fits behind your app |
+| Single-repo dedicated backend | `single workspace` mode gives a focused deployment path |
+
 ## Documentation
 
-- [docs/README.md](./docs/README.md)
-- [docs/getting-started.en.md](./docs/getting-started.en.md)
-- [docs/deploy.en.md](./docs/deploy.en.md)
-- [docs/architecture-overview.en.md](./docs/architecture-overview.en.md)
-- [docs/workspace/README.en.md](./docs/workspace/README.en.md)
-- [templates/README.md](./templates/README.md)
+| Document | Description |
+| --- | --- |
+| [Getting Started](./docs/getting-started.en.md) | Setup guide and first steps |
+| [Architecture Overview](./docs/design-overview.md) | Design principles and system architecture |
+| [Workspace Guide](./docs/workspace/README.en.md) | Workspace configuration and capabilities |
+| [Runtime Internals](./docs/runtime/README.en.md) | Runtime lifecycle and context engine |
+| [API Reference](./docs/openapi/README.en.md) | OpenAPI specification and endpoints |
+| [Templates](./templates/README.md) | Workspace template usage |
