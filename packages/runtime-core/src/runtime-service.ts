@@ -1,7 +1,3 @@
-import { spawn } from "node:child_process";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
-
 import type {
   ChatMessage,
   Message,
@@ -13,7 +9,43 @@ import type {
 } from "@oah/api-contracts";
 
 import { AppError } from "./errors.js";
-import { normalizePersistedMessages } from "./persisted-history-normalization.js";
+import { HookApplicationService } from "./runtime/hook-application.js";
+import { HookService } from "./runtime/hooks.js";
+import { ActionRunService } from "./runtime/action-runs.js";
+import { ModelStreamCoordinator } from "./runtime/model-stream.js";
+import {
+  applyModelRequestPatch,
+  applyModelResponsePatch,
+  collapseLeadingSystemMessages,
+  extractFailedToolResults,
+  previewValue,
+  serializeModelCallStepInput,
+  serializeModelCallStepOutput,
+  serializeModelRequest,
+  summarizeMessageRoles,
+  type ToolErrorContentPart
+} from "./runtime/model-call-serialization.js";
+import { RunStateService } from "./runtime/run-state.js";
+import {
+  extractMessageDisplayText,
+  hasMeaningfulText,
+  normalizePromptMessages,
+  SessionHistoryService
+} from "./runtime/session-history.js";
+import { ToolAuditService } from "./runtime/tool-audit.js";
+import { ToolExecutionService } from "./runtime/tool-execution.js";
+import { ToolMessageService } from "./runtime/tool-messages.js";
+import { RunStepService } from "./runtime/run-steps.js";
+import {
+  type SortOrder,
+  type WorkspaceDeleteResult,
+  type WorkspaceEntry,
+  type WorkspaceEntryPage,
+  type WorkspaceEntrySortBy,
+  type WorkspaceFileContentResult,
+  type WorkspaceFileDownloadResult,
+  WorkspaceFileService
+} from "./workspace-files.js";
 import { buildAvailableAgentSwitchesMessage, buildAvailableSubagentsMessage } from "./agent-control.js";
 import { NATIVE_TOOL_NAMES } from "./native-tools.js";
 import { buildAvailableActionsMessage } from "./action-dispatch.js";
@@ -22,15 +54,7 @@ import { formatToolOutput } from "./tool-output.js";
 import {
   assistantContentFromModelOutput,
   contentToPromptMessage,
-  extractTextFromContent,
-  isMessageContentForRole,
-  isMessagePartList,
-  isMessageRole,
-  normalizeToolErrorOutput,
-  textContent,
-  toolCallContent,
-  toolErrorResultContent,
-  toolResultContent
+  textContent
 } from "./runtime-message-content.js";
 import {
   activeToolNamesForAgent as resolveActiveToolNamesForAgent,
@@ -72,64 +96,12 @@ import {
   type WorkspaceRecord
 } from "./types.js";
 import { createId, nowIso, parseCursor } from "./utils.js";
-import { z } from "zod";
-
-function canTransitionRunStatus(from: Run["status"], to: Run["status"]): boolean {
-  if (from === to) {
-    return true;
-  }
-
-  switch (from) {
-    case "queued":
-      return to === "running" || to === "cancelled" || to === "failed";
-    case "running":
-      return to === "waiting_tool" || to === "completed" || to === "failed" || to === "cancelled" || to === "timed_out";
-    case "waiting_tool":
-      return to === "running" || to === "completed" || to === "failed" || to === "cancelled" || to === "timed_out";
-    default:
-      return false;
-  }
-}
 
 interface ResolvedRunModel {
   model: string;
   canonicalModelRef: string;
   provider?: string | undefined;
   modelDefinition?: ModelDefinition | undefined;
-}
-
-interface HookEnvelope {
-  workspace_id: string;
-  session_id?: string | undefined;
-  run_id: string;
-  cwd: string;
-  hook_event_name: string;
-  agent_name?: string | undefined;
-  effective_agent_name: string;
-  trigger_type: Run["triggerType"];
-  run_status: Run["status"];
-  model_ref?: string | undefined;
-  model_request?: Record<string, unknown> | undefined;
-  model_response?: Record<string, unknown> | undefined;
-  context?: Record<string, unknown> | undefined;
-  tool_name?: string | undefined;
-  tool_input?: unknown;
-  tool_output?: unknown;
-  tool_call_id?: string | undefined;
-}
-
-interface HookResult {
-  continue?: boolean | undefined;
-  stopReason?: string | undefined;
-  suppressOutput?: boolean | undefined;
-  systemMessage?: string | undefined;
-  decision?: string | undefined;
-  reason?: string | undefined;
-  hookSpecificOutput?: {
-    hookEventName?: string | undefined;
-    additionalContext?: string | undefined;
-    patch?: Record<string, unknown> | undefined;
-  } | undefined;
 }
 
 interface ModelExecutionInput {
@@ -159,44 +131,6 @@ interface DelegatedRunRecord {
 interface AwaitedRunSummary {
   run: Run;
   outputContent?: string | undefined;
-}
-
-type WorkspaceEntrySortBy = "name" | "updatedAt" | "sizeBytes" | "type";
-type SortOrder = "asc" | "desc";
-
-interface WorkspaceEntry {
-  path: string;
-  name: string;
-  type: "file" | "directory";
-  sizeBytes?: number | undefined;
-  mimeType?: string | undefined;
-  etag?: string | undefined;
-  updatedAt?: string | undefined;
-  createdAt?: string | undefined;
-  readOnly: boolean;
-}
-
-interface WorkspaceEntryPage {
-  workspaceId: string;
-  path: string;
-  items: WorkspaceEntry[];
-  nextCursor?: string | undefined;
-}
-
-interface WorkspaceDeleteResult {
-  workspaceId: string;
-  path: string;
-  type: "file" | "directory";
-  deleted: boolean;
-}
-
-interface ToolErrorContentPart {
-  type: "tool-error";
-  toolCallId: string;
-  toolName: string;
-  error: unknown;
-  input?: unknown;
-  providerExecuted?: boolean | undefined;
 }
 
 function escapeXml(value: string): string {
@@ -232,14 +166,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isToolErrorContentPart(value: unknown): value is ToolErrorContentPart {
-  return (
-    isRecord(value) &&
-    value.type === "tool-error" &&
-    typeof value.toolCallId === "string" &&
-    typeof value.toolName === "string" &&
-    "error" in value
-  );
+function asJsonRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return undefined;
 }
 
 async function withTimeout<T>(
@@ -280,93 +212,6 @@ function createAbortError(): Error {
   return error;
 }
 
-function normalizeRelativePath(value: string): string {
-  return value.split(path.sep).join("/");
-}
-
-function resolveWorkspaceFsPath(
-  workspaceRoot: string,
-  targetPath: string,
-  options?: { allowRoot?: boolean; defaultPath?: string }
-): { absolutePath: string; relativePath: string } {
-  const normalizedTarget = targetPath.trim().length > 0 ? targetPath.trim() : (options?.defaultPath ?? ".");
-  const absolutePath = path.resolve(workspaceRoot, normalizedTarget);
-  const relativePath = path.relative(workspaceRoot, absolutePath);
-
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
-    throw new AppError(403, "workspace_path_not_allowed", `Path ${targetPath} is outside the workspace root.`);
-  }
-
-  const publicPath = relativePath.length > 0 ? normalizeRelativePath(relativePath) : ".";
-  if (publicPath === "." && !options?.allowRoot) {
-    throw new AppError(400, "workspace_root_mutation_not_allowed", "The workspace root cannot be modified directly.");
-  }
-
-  return {
-    absolutePath,
-    relativePath: publicPath
-  };
-}
-
-function createStatEtag(entry: { size: number; mtimeMs: number; ino?: number | bigint }): string {
-  const ino = typeof entry.ino === "bigint" ? Number(entry.ino) : (entry.ino ?? 0);
-  return `W/"${entry.size.toString(16)}-${Math.floor(entry.mtimeMs).toString(16)}-${ino.toString(16)}"`;
-}
-
-function guessMimeType(filePath: string): string | undefined {
-  switch (path.extname(filePath).toLowerCase()) {
-    case ".txt":
-      return "text/plain; charset=utf-8";
-    case ".md":
-      return "text/markdown; charset=utf-8";
-    case ".json":
-      return "application/json; charset=utf-8";
-    case ".js":
-      return "text/javascript; charset=utf-8";
-    case ".ts":
-      return "text/plain; charset=utf-8";
-    case ".tsx":
-      return "text/plain; charset=utf-8";
-    case ".jsx":
-      return "text/javascript; charset=utf-8";
-    case ".html":
-      return "text/html; charset=utf-8";
-    case ".css":
-      return "text/css; charset=utf-8";
-    case ".svg":
-      return "image/svg+xml";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".gif":
-      return "image/gif";
-    case ".webp":
-      return "image/webp";
-    case ".pdf":
-      return "application/pdf";
-    default:
-      return undefined;
-  }
-}
-
-function compareNumbers(left: number | undefined, right: number | undefined): number {
-  if (left === right) {
-    return 0;
-  }
-
-  if (left === undefined) {
-    return 1;
-  }
-
-  if (right === undefined) {
-    return -1;
-  }
-
-  return left - right;
-}
-
 export class RuntimeService {
   readonly #defaultModel: string;
   readonly #modelGateway: RuntimeServiceOptions["modelGateway"];
@@ -381,9 +226,18 @@ export class RuntimeService {
   readonly #sessionEventStore: RuntimeServiceOptions["sessionEventStore"];
   readonly #runQueue: RuntimeServiceOptions["runQueue"];
   readonly #toolCallAuditRepository: RuntimeServiceOptions["toolCallAuditRepository"];
-  readonly #hookRunAuditRepository: RuntimeServiceOptions["hookRunAuditRepository"];
   readonly #workspaceDeletionHandler: RuntimeServiceOptions["workspaceDeletionHandler"];
   readonly #workspaceInitializer: RuntimeServiceOptions["workspaceInitializer"];
+  readonly #workspaceFiles: WorkspaceFileService;
+  readonly #sessionHistory: SessionHistoryService;
+  readonly #runSteps: RunStepService;
+  readonly #runState: RunStateService;
+  readonly #hooks: HookService;
+  readonly #hookApplications: HookApplicationService<ModelExecutionInput>;
+  readonly #toolAudit: ToolAuditService;
+  readonly #toolExecution: ToolExecutionService;
+  readonly #toolMessages: ToolMessageService;
+  readonly #actions: ActionRunService;
   readonly #sessionChains = new Map<string, Promise<void>>();
   readonly #runAbortControllers = new Map<string, AbortController>();
 
@@ -401,9 +255,109 @@ export class RuntimeService {
     this.#sessionEventStore = options.sessionEventStore;
     this.#runQueue = options.runQueue;
     this.#toolCallAuditRepository = options.toolCallAuditRepository;
-    this.#hookRunAuditRepository = options.hookRunAuditRepository;
     this.#workspaceDeletionHandler = options.workspaceDeletionHandler;
     this.#workspaceInitializer = options.workspaceInitializer;
+    this.#workspaceFiles = new WorkspaceFileService();
+    this.#sessionHistory = new SessionHistoryService({
+      messageRepository: this.#messageRepository,
+      logger: this.#logger
+    });
+    this.#runSteps = new RunStepService({
+      runStepRepository: this.#runStepRepository,
+      createId,
+      nowIso
+    });
+    this.#runState = new RunStateService({
+      runRepository: this.#runRepository,
+      getRun: (runId) => this.getRun(runId),
+      appendEvent: (input) => this.#appendEvent(input),
+      recordSystemStep: (run, name, output) => this.#runSteps.recordSystemStep(run, name, output),
+      nowIso
+    });
+    this.#hooks = new HookService({
+      defaultModel: this.#defaultModel,
+      modelGateway: this.#modelGateway,
+      hookRunAuditRepository: options.hookRunAuditRepository,
+      startRunStep: (input) => this.#runSteps.startRunStep(input),
+      completeRunStep: (step, status, output) => this.#runSteps.completeRunStep(step, status, output),
+      appendEvent: (input) => this.#appendEvent(input),
+      resolveModelForRun: (workspace, modelRef) => this.#resolveModelForRun(workspace, modelRef),
+      createId,
+      timeoutMsFromSeconds,
+      withTimeout,
+      isAbortError
+    });
+    this.#hookApplications = new HookApplicationService<ModelExecutionInput>({
+      executeHook: (workspace, session, run, hook, envelope) =>
+        this.#hooks.executeHook(workspace, session, run, hook, envelope),
+      serializeModelRequest: (modelInput) => this.#serializeModelRequest(modelInput),
+      applyModelRequestPatch: (workspace, current, patch) => this.#applyModelRequestPatch(workspace, current, patch),
+      applyModelResponsePatch: (response, patch) => this.#applyModelResponsePatch(response, patch)
+    });
+    this.#toolAudit = new ToolAuditService({
+      toolCallAuditRepository: options.toolCallAuditRepository,
+      createId,
+      resolveToolSourceType
+    });
+    this.#toolExecution = new ToolExecutionService({
+      logger: this.#logger,
+      startRunStep: (input) => this.#runSteps.startRunStep(input),
+      completeRunStep: (step, status, output) => this.#runSteps.completeRunStep(step, status, output),
+      recordToolCallAuditFromStep: (step, toolName, status) =>
+        this.#toolAudit.recordToolCallAuditFromStep(step, toolName, status),
+      appendEvent: (input) => this.#appendEvent(input),
+      setRunStatusIfPossible: (runId, nextStatus) => this.#runState.setRunStatusIfPossible(runId, nextStatus),
+      applyBeforeToolDispatchHooks: (workspace, session, run, activeAgentName, toolName, toolCallId, input) =>
+        this.#hookApplications.applyBeforeToolDispatchHooks(
+          workspace,
+          session,
+          run,
+          activeAgentName,
+          toolName,
+          toolCallId,
+          input
+        ),
+      applyAfterToolDispatchHooks: (workspace, session, run, activeAgentName, toolName, toolCallId, input, output) =>
+        this.#hookApplications.applyAfterToolDispatchHooks(
+          workspace,
+          session,
+          run,
+          activeAgentName,
+          toolName,
+          toolCallId,
+          input,
+          output
+        ),
+      resolveToolRetryPolicy,
+      resolveToolSourceType,
+      timeoutMsFromSeconds,
+      createAbortError,
+      normalizeJsonObject: (value) => this.#normalizeJsonObject(value),
+      previewValue: (value, maxLength) => this.#previewValue(value, maxLength)
+    });
+    this.#toolMessages = new ToolMessageService({
+      messageRepository: this.#messageRepository,
+      logger: this.#logger,
+      appendEvent: (input) => this.#appendEvent(input),
+      createId,
+      nowIso,
+      previewValue: (value, maxLength) => this.#previewValue(value, maxLength)
+    });
+    this.#actions = new ActionRunService({
+      defaultModel: this.#defaultModel,
+      sessionRepository: this.#sessionRepository,
+      toolMessages: this.#toolMessages,
+      startRunStep: (input) => this.#runSteps.startRunStep(input),
+      completeRunStep: (step, status, output) => this.#runSteps.completeRunStep(step, status, output),
+      setRunStatus: (run, nextStatus, patch) => this.#runState.setRunStatus(run, nextStatus, patch),
+      getRun: (runId) => this.getRun(runId),
+      recordSystemStep: (run, name, output) => this.#runSteps.recordSystemStep(run, name, output),
+      recordToolCallAuditFromStep: (step, toolName, status) =>
+        this.#toolAudit.recordToolCallAuditFromStep(step, toolName, status),
+      appendEvent: (input) => this.#appendEvent(input),
+      nowIso,
+      normalizeJsonObject: (value) => this.#normalizeJsonObject(value)
+    });
   }
 
   async createWorkspace({ input }: CreateWorkspaceParams): Promise<import("@oah/api-contracts").Workspace> {
@@ -477,83 +431,6 @@ export class RuntimeService {
     return this.#publicWorkspaceCatalog(workspace);
   }
 
-  #assertWorkspaceMutable(workspace: WorkspaceRecord): void {
-    if (workspace.readOnly || workspace.kind === "chat") {
-      throw new AppError(403, "workspace_read_only", `Workspace ${workspace.id} is read-only.`);
-    }
-  }
-
-  async #buildWorkspaceEntry(
-    workspace: WorkspaceRecord,
-    resolved: { absolutePath: string; relativePath: string }
-  ): Promise<WorkspaceEntry> {
-    const entry = await stat(resolved.absolutePath).catch(() => null);
-    if (!entry) {
-      throw new AppError(404, "workspace_entry_not_found", `Path ${resolved.relativePath} was not found.`);
-    }
-
-    return {
-      path: resolved.relativePath,
-      name: resolved.relativePath === "." ? path.basename(workspace.rootPath) : path.basename(resolved.absolutePath),
-      type: entry.isDirectory() ? "directory" : "file",
-      ...(entry.isFile()
-        ? {
-            sizeBytes: entry.size,
-            mimeType: guessMimeType(resolved.absolutePath),
-            etag: createStatEtag(entry)
-          }
-        : {}),
-      updatedAt: entry.mtime.toISOString(),
-      createdAt: entry.birthtime.toISOString(),
-      readOnly: workspace.readOnly
-    };
-  }
-
-  async #writeWorkspaceFileBytes(
-    workspace: WorkspaceRecord,
-    input: {
-      path: string;
-      bytes: Buffer;
-      overwrite?: boolean | undefined;
-      ifMatch?: string | undefined;
-    }
-  ): Promise<WorkspaceEntry> {
-    this.#assertWorkspaceMutable(workspace);
-    const resolved = resolveWorkspaceFsPath(workspace.rootPath, input.path);
-    const existing = await stat(resolved.absolutePath).catch(() => null);
-
-    if (existing?.isDirectory()) {
-      throw new AppError(409, "workspace_entry_conflict", `Path ${resolved.relativePath} already exists as a directory.`);
-    }
-
-    if (input.ifMatch !== undefined) {
-      if (!existing?.isFile()) {
-        throw new AppError(
-          412,
-          "workspace_precondition_failed",
-          `Path ${resolved.relativePath} does not match the requested precondition.`
-        );
-      }
-
-      const currentEtag = createStatEtag(existing);
-      if (currentEtag !== input.ifMatch) {
-        throw new AppError(
-          412,
-          "workspace_precondition_failed",
-          `Path ${resolved.relativePath} has changed since it was last read.`
-        );
-      }
-    }
-
-    if (existing?.isFile() && input.overwrite === false) {
-      throw new AppError(409, "workspace_entry_exists", `Path ${resolved.relativePath} already exists.`);
-    }
-
-    await mkdir(path.dirname(resolved.absolutePath), { recursive: true });
-    await writeFile(resolved.absolutePath, input.bytes);
-    return this.#buildWorkspaceEntry(workspace, resolved);
-  }
-
   async listWorkspaceEntries(
     workspaceId: string,
     input: {
@@ -564,111 +441,14 @@ export class RuntimeService {
       sortOrder: SortOrder;
     }
   ): Promise<WorkspaceEntryPage> {
-    const workspace = await this.getWorkspaceRecord(workspaceId);
-    const resolved = resolveWorkspaceFsPath(workspace.rootPath, input.path ?? ".", { allowRoot: true, defaultPath: "." });
-    const directoryEntry = await stat(resolved.absolutePath).catch(() => null);
-    if (!directoryEntry?.isDirectory()) {
-      throw new AppError(404, "workspace_directory_not_found", `Directory ${resolved.relativePath} was not found.`);
-    }
-
-    const entries = await readdir(resolved.absolutePath, { withFileTypes: true });
-    const items = await Promise.all(
-      entries.map(async (entry) =>
-        this.#buildWorkspaceEntry(workspace, {
-          absolutePath: path.join(resolved.absolutePath, entry.name),
-          relativePath:
-            resolved.relativePath === "."
-              ? normalizeRelativePath(entry.name)
-              : normalizeRelativePath(path.posix.join(resolved.relativePath, entry.name))
-        })
-      )
-    );
-
-    items.sort((left: WorkspaceEntry, right: WorkspaceEntry) => {
-      let comparison = 0;
-      switch (input.sortBy) {
-        case "updatedAt":
-          comparison = compareNumbers(
-            left.updatedAt ? Date.parse(left.updatedAt) : undefined,
-            right.updatedAt ? Date.parse(right.updatedAt) : undefined
-          );
-          break;
-        case "sizeBytes":
-          comparison = compareNumbers(left.sizeBytes, right.sizeBytes);
-          break;
-        case "type":
-          comparison =
-            (left.type === "directory" ? 0 : 1) - (right.type === "directory" ? 0 : 1) ||
-            left.name.localeCompare(right.name);
-          break;
-        case "name":
-        default:
-          comparison = left.name.localeCompare(right.name);
-          break;
-      }
-
-      if (comparison === 0) {
-        comparison = left.path.localeCompare(right.path);
-      }
-
-      return input.sortOrder === "desc" ? comparison * -1 : comparison;
-    });
-
-    const startIndex = parseCursor(input.cursor);
-    const pageItems = items.slice(startIndex, startIndex + input.pageSize);
-    const nextCursor = startIndex + input.pageSize < items.length ? String(startIndex + input.pageSize) : undefined;
-
-    return nextCursor === undefined
-      ? {
-          workspaceId: workspace.id,
-          path: resolved.relativePath,
-          items: pageItems
-        }
-      : {
-          workspaceId: workspace.id,
-          path: resolved.relativePath,
-          items: pageItems,
-          nextCursor
-        };
+    return this.#workspaceFiles.listEntries(await this.getWorkspaceRecord(workspaceId), input);
   }
 
   async getWorkspaceFileContent(
     workspaceId: string,
     input: { path: string; encoding: "utf8" | "base64"; maxBytes?: number | undefined }
-  ): Promise<{
-    workspaceId: string;
-    path: string;
-    encoding: "utf8" | "base64";
-    content: string;
-    truncated: boolean;
-    sizeBytes?: number | undefined;
-    mimeType?: string | undefined;
-    etag?: string | undefined;
-    updatedAt?: string | undefined;
-    readOnly: boolean;
-  }> {
-    const workspace = await this.getWorkspaceRecord(workspaceId);
-    const resolved = resolveWorkspaceFsPath(workspace.rootPath, input.path);
-    const entry = await stat(resolved.absolutePath).catch(() => null);
-    if (!entry?.isFile()) {
-      throw new AppError(404, "workspace_file_not_found", `File ${resolved.relativePath} was not found.`);
-    }
-
-    const raw = await readFile(resolved.absolutePath);
-    const truncated = input.maxBytes !== undefined && raw.length > input.maxBytes;
-    const contentBytes = truncated ? raw.subarray(0, input.maxBytes) : raw;
-    return {
-      workspaceId: workspace.id,
-      path: resolved.relativePath,
-      encoding: input.encoding,
-      content: input.encoding === "base64" ? contentBytes.toString("base64") : contentBytes.toString("utf8"),
-      truncated,
-      sizeBytes: raw.length,
-      mimeType: guessMimeType(resolved.absolutePath),
-      etag: createStatEtag(entry),
-      updatedAt: entry.mtime.toISOString(),
-      readOnly: workspace.readOnly
-    };
+  ): Promise<WorkspaceFileContentResult> {
+    return this.#workspaceFiles.getFileContent(await this.getWorkspaceRecord(workspaceId), input);
   }
 
   async putWorkspaceFileContent(
@@ -681,147 +461,42 @@ export class RuntimeService {
       ifMatch?: string | undefined;
     }
   ): Promise<WorkspaceEntry> {
-    return this.#writeWorkspaceFileBytes(await this.getWorkspaceRecord(workspaceId), {
-      path: input.path,
-      bytes: Buffer.from(input.content, input.encoding),
-      overwrite: input.overwrite,
-      ifMatch: input.ifMatch
-    });
+    return this.#workspaceFiles.putFileContent(await this.getWorkspaceRecord(workspaceId), input);
   }
 
   async uploadWorkspaceFile(
     workspaceId: string,
     input: { path: string; data: Buffer; overwrite?: boolean | undefined; ifMatch?: string | undefined }
   ): Promise<WorkspaceEntry> {
-    return this.#writeWorkspaceFileBytes(await this.getWorkspaceRecord(workspaceId), {
-      path: input.path,
-      bytes: input.data,
-      overwrite: input.overwrite,
-      ifMatch: input.ifMatch
-    });
+    return this.#workspaceFiles.uploadFile(await this.getWorkspaceRecord(workspaceId), input);
   }
 
   async createWorkspaceDirectory(
     workspaceId: string,
     input: { path: string; createParents: boolean }
   ): Promise<WorkspaceEntry> {
-    const workspace = await this.getWorkspaceRecord(workspaceId);
-    this.#assertWorkspaceMutable(workspace);
-    const resolved = resolveWorkspaceFsPath(workspace.rootPath, input.path);
-    const existing = await stat(resolved.absolutePath).catch(() => null);
-
-    if (existing?.isFile()) {
-      throw new AppError(409, "workspace_entry_conflict", `Path ${resolved.relativePath} already exists as a file.`);
-    }
-
-    await mkdir(resolved.absolutePath, { recursive: input.createParents });
-    return this.#buildWorkspaceEntry(workspace, resolved);
+    return this.#workspaceFiles.createDirectory(await this.getWorkspaceRecord(workspaceId), input);
   }
 
   async deleteWorkspaceEntry(
     workspaceId: string,
     input: { path: string; recursive: boolean }
   ): Promise<WorkspaceDeleteResult> {
-    const workspace = await this.getWorkspaceRecord(workspaceId);
-    this.#assertWorkspaceMutable(workspace);
-    const resolved = resolveWorkspaceFsPath(workspace.rootPath, input.path);
-    const existing = await stat(resolved.absolutePath).catch(() => null);
-    if (!existing) {
-      throw new AppError(404, "workspace_entry_not_found", `Path ${resolved.relativePath} was not found.`);
-    }
-
-    const type = existing.isDirectory() ? "directory" : "file";
-    if (existing.isDirectory() && !input.recursive) {
-      const children = await readdir(resolved.absolutePath);
-      if (children.length > 0) {
-        throw new AppError(
-          409,
-          "workspace_directory_not_empty",
-          `Directory ${resolved.relativePath} is not empty. Set recursive=true to delete it.`
-        );
-      }
-    }
-
-    await rm(resolved.absolutePath, {
-      recursive: input.recursive,
-      force: false
-    });
-
-    return {
-      workspaceId: workspace.id,
-      path: resolved.relativePath,
-      type,
-      deleted: true
-    };
+    return this.#workspaceFiles.deleteEntry(await this.getWorkspaceRecord(workspaceId), input);
   }
 
   async moveWorkspaceEntry(
     workspaceId: string,
     input: { sourcePath: string; targetPath: string; overwrite: boolean }
   ): Promise<WorkspaceEntry> {
-    const workspace = await this.getWorkspaceRecord(workspaceId);
-    this.#assertWorkspaceMutable(workspace);
-    const source = resolveWorkspaceFsPath(workspace.rootPath, input.sourcePath);
-    const target = resolveWorkspaceFsPath(workspace.rootPath, input.targetPath);
-
-    const existingSource = await stat(source.absolutePath).catch(() => null);
-    if (!existingSource) {
-      throw new AppError(404, "workspace_entry_not_found", `Path ${source.relativePath} was not found.`);
-    }
-
-    if (source.relativePath === target.relativePath) {
-      return this.#buildWorkspaceEntry(workspace, target);
-    }
-
-    const existingTarget = await stat(target.absolutePath).catch(() => null);
-    if (existingTarget && !input.overwrite) {
-      throw new AppError(409, "workspace_entry_exists", `Path ${target.relativePath} already exists.`);
-    }
-
-    if (existingTarget) {
-      await rm(target.absolutePath, {
-        recursive: true,
-        force: true
-      });
-    }
-
-    await mkdir(path.dirname(target.absolutePath), { recursive: true });
-    await rename(source.absolutePath, target.absolutePath);
-    return this.#buildWorkspaceEntry(workspace, target);
+    return this.#workspaceFiles.moveEntry(await this.getWorkspaceRecord(workspaceId), input);
   }
 
   async getWorkspaceFileDownload(
     workspaceId: string,
     targetPath: string
-  ): Promise<{
-    workspaceId: string;
-    path: string;
-    absolutePath: string;
-    name: string;
-    sizeBytes: number;
-    mimeType?: string | undefined;
-    etag: string;
-    updatedAt: string;
-    readOnly: boolean;
-  }> {
-    const workspace = await this.getWorkspaceRecord(workspaceId);
-    const resolved = resolveWorkspaceFsPath(workspace.rootPath, targetPath);
-    const entry = await stat(resolved.absolutePath).catch(() => null);
-    if (!entry?.isFile()) {
-      throw new AppError(404, "workspace_file_not_found", `File ${resolved.relativePath} was not found.`);
-    }
-
-    return {
-      workspaceId: workspace.id,
-      path: resolved.relativePath,
-      absolutePath: resolved.absolutePath,
-      name: path.basename(resolved.absolutePath),
-      sizeBytes: entry.size,
-      mimeType: guessMimeType(resolved.absolutePath),
-      etag: createStatEtag(entry),
-      updatedAt: entry.mtime.toISOString(),
-      readOnly: workspace.readOnly
-    };
+  ): Promise<WorkspaceFileDownloadResult> {
+    return this.#workspaceFiles.getFileDownload(await this.getWorkspaceRecord(workspaceId), targetPath);
   }
 
   async deleteWorkspace(workspaceId: string): Promise<void> {
@@ -834,6 +509,7 @@ export class RuntimeService {
     const workspace = await this.getWorkspaceRecord(workspaceId);
     const now = nowIso();
     const activeAgentName = input.agentName ?? this.#resolveWorkspaceDefaultAgentName(workspace);
+    const modelRef = this.#normalizeSessionModelRef(workspace, input.modelRef);
     if (!activeAgentName) {
       throw new AppError(
         409,
@@ -859,6 +535,7 @@ export class RuntimeService {
       id: createId("ses"),
       workspaceId: workspace.id,
       subjectRef: caller.subjectRef,
+      ...(modelRef ? { modelRef } : {}),
       agentName: input.agentName,
       activeAgentName,
       title: input.title,
@@ -899,6 +576,7 @@ export class RuntimeService {
     const session = await this.getSession(sessionId);
     const workspace = await this.getWorkspaceRecord(session.workspaceId);
     let nextActiveAgentName = session.activeAgentName;
+    let nextModelRef = session.modelRef;
 
     if (input.activeAgentName !== undefined) {
       const targetAgent = workspace.agents[input.activeAgentName];
@@ -921,12 +599,32 @@ export class RuntimeService {
       nextActiveAgentName = input.activeAgentName;
     }
 
-    return this.#sessionRepository.update({
+    if (input.modelRef !== undefined) {
+      const normalizedModelRef = input.modelRef === null ? undefined : this.#normalizeSessionModelRef(workspace, input.modelRef);
+      if (normalizedModelRef !== session.modelRef && (await this.#sessionHasStarted(session.id))) {
+        throw new AppError(
+          409,
+          "session_model_locked",
+          `Session ${session.id} model cannot be changed after the conversation has started.`
+        );
+      }
+
+      nextModelRef = normalizedModelRef;
+    }
+
+    const updatedSession: Session = {
       ...session,
       ...(input.title !== undefined ? { title: input.title } : {}),
       activeAgentName: nextActiveAgentName,
       updatedAt: nowIso()
-    });
+    };
+    if (nextModelRef) {
+      updatedSession.modelRef = nextModelRef;
+    } else {
+      delete updatedSession.modelRef;
+    }
+
+    return this.#sessionRepository.update(updatedSession);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -1304,6 +1002,7 @@ export class RuntimeService {
             abortController.abort();
           }, runTimeoutMs)
         : undefined;
+    let streamCoordinator: ModelStreamCoordinator<ModelExecutionInput> | undefined;
 
     try {
       if (run.triggerType === "api_action") {
@@ -1332,31 +1031,92 @@ export class RuntimeService {
         executionContext.currentAgentName
       );
       const hookedModelInput = await this.#applyBeforeModelHooks(workspace, session, run, modelInput);
-      let latestHookedModelInput = hookedModelInput;
       const runtimeTools = this.#buildRuntimeTools(workspace, run, session, executionContext);
-      const toolCallStartedAt = new Map<string, number>();
-      const toolCallSteps = new Map<string, RunStep>();
-      const activeToolCallIds = new Set<string>();
-      const modelCallMessageMetadata = new Map<number, Record<string, unknown>>();
-      let latestMessageGenerationMetadata: Record<string, unknown> | undefined;
-      let completedModelStepCount = 0;
-      const syncRunStatusFromActiveTools = async () => {
-        await this.#setRunStatusIfPossible(run.id, activeToolCallIds.size > 0 ? "waiting_tool" : "running");
-      };
-      const observableRuntimeTools = this.#wrapRuntimeToolsForEvents(
+      const activeToolServers = listVisibleEnabledToolServers(workspace, executionContext.currentAgentName);
+      const runtimeToolNames = Object.keys(runtimeTools);
+      streamCoordinator = new ModelStreamCoordinator({
+        workspace,
+        session,
+        run,
+        executionContext,
+        allMessages,
+        initialModelInput: hookedModelInput,
+        runtimeTools,
+        activeToolServers,
+        runtimeToolNames,
+        logger: this.#logger,
+        buildModelInput: (
+          targetWorkspace,
+          targetSession,
+          targetRun,
+          targetMessages,
+          activeAgentName,
+          injectSystemReminder
+        ) =>
+          this.#buildModelInput(
+            targetWorkspace,
+            targetSession,
+            targetRun,
+            targetMessages,
+            activeAgentName,
+            injectSystemReminder
+          ),
+        applyBeforeModelHooks: (targetWorkspace, targetSession, targetRun, nextModelInput) =>
+          this.#applyBeforeModelHooks(targetWorkspace, targetSession, targetRun, nextModelInput),
+        getRun: (targetRunId) => this.getRun(targetRunId),
+        getActiveToolNames: (agentName) => resolveActiveToolNamesForAgent(workspace, agentName),
+        startRunStep: (input) => this.#startRunStep(input),
+        completeRunStep: (step, status, output) => this.#completeRunStep(step, status, output),
+        setRunStatusIfPossible: (targetRunId, nextStatus) => this.#setRunStatusIfPossible(targetRunId, nextStatus),
+        ensureAssistantMessage: (targetSession, targetRun, currentMessage, targetMessages, content, metadata) =>
+          this.#ensureAssistantMessage(targetSession, targetRun, currentMessage, targetMessages, content, metadata),
+        persistAssistantToolCalls: (targetSession, targetRun, step, targetMessages, metadata) =>
+          this.#persistAssistantToolCalls(targetSession, targetRun, step, targetMessages, metadata),
+        persistToolResults: (targetSession, targetRun, step, failedToolResults, persistedToolCalls, targetMessages, metadata) =>
+          this.#persistToolResults(
+            targetSession,
+            targetRun,
+            step,
+            failedToolResults,
+            persistedToolCalls,
+            targetMessages,
+            metadata
+          ),
+        appendEvent: (input) => this.#appendEvent(input),
+        updateMessageContent: (message, content) =>
+          this.#messageRepository.update({
+            ...message,
+            content: textContent(content)
+          }) as Promise<Extract<Message, { role: "assistant" }>>,
+        serializeModelCallStepInput: (modelExecutionInput, activeToolNames, toolServers, currentRuntimeToolNames, currentRuntimeTools) =>
+          this.#serializeModelCallStepInput(
+            modelExecutionInput,
+            activeToolNames,
+            toolServers,
+            currentRuntimeToolNames,
+            currentRuntimeTools
+          ),
+        serializeModelCallStepOutput: (step, failedToolResults) =>
+          this.#serializeModelCallStepOutput(step, failedToolResults),
+        extractFailedToolResults: (step) => this.#extractFailedToolResults(step),
+        buildGeneratedMessageMetadata: (targetWorkspace, agentName, currentModelInput, modelCallStep) =>
+          this.#buildGeneratedMessageMetadata(targetWorkspace, agentName, currentModelInput, modelCallStep),
+        recordToolCallAuditFromStep: (step, toolName, status) =>
+          this.#recordToolCallAuditFromStep(step, toolName, status),
+        runStepRetryPolicy: (step) => this.#toolExecution.runStepRetryPolicy(step),
+        normalizeJsonObject: (value) => this.#normalizeJsonObject(value),
+        resolveToolSourceType,
+        previewValue: (value, maxLength) => this.#previewValue(value, maxLength)
+      });
+      const observableRuntimeTools = this.#toolExecution.wrapRuntimeToolsForEvents({
         workspace,
         session,
         run,
         runtimeTools,
         executionContext,
-        toolCallStartedAt,
-        toolCallSteps
-      );
-      const activeToolServers = listVisibleEnabledToolServers(workspace, executionContext.currentAgentName);
-      const runtimeToolNames = Object.keys(observableRuntimeTools);
-      const persistedToolCalls = new Set<string>();
-      let assistantMessage: Extract<Message, { role: "assistant" }> | undefined;
-      let finalAssistantStep: ModelStepResult | undefined;
+        toolCallStartedAt: streamCoordinator.toolCallStartedAt,
+        toolCallSteps: streamCoordinator.toolCallSteps
+      });
       this.#logger?.debug?.("Runtime run starting model stream.", {
         workspaceId: workspace.id,
         sessionId: session.id,
@@ -1394,232 +1154,12 @@ export class RuntimeService {
             : {}),
           maxSteps: workspace.agents[executionContext.currentAgentName]?.policy?.maxSteps ?? 8,
           parallelToolCalls: workspace.agents[executionContext.currentAgentName]?.policy?.parallelToolCalls,
-          prepareStep: async (stepNumber) => {
-            const activeToolNames = resolveActiveToolNamesForAgent(workspace, executionContext.currentAgentName);
-            if (stepNumber === 0) {
-              const initialModelCallStep = await this.#startRunStep({
-                runId: run.id,
-                stepType: "model_call",
-                name: hookedModelInput.model,
-                agentName: executionContext.currentAgentName,
-                input: this.#serializeModelCallStepInput(
-                  hookedModelInput,
-                  activeToolNames,
-                  activeToolServers,
-                  runtimeToolNames,
-                  runtimeTools
-                )
-              });
-              modelCallSteps.set(stepNumber, initialModelCallStep);
-              latestMessageGenerationMetadata = this.#buildGeneratedMessageMetadata(
-                workspace,
-                executionContext.currentAgentName,
-                hookedModelInput,
-                initialModelCallStep
-              );
-              modelCallMessageMetadata.set(stepNumber, latestMessageGenerationMetadata);
-              this.#logger?.debug?.("Runtime prepared initial model step.", {
-                workspaceId: workspace.id,
-                sessionId: session.id,
-                runId: run.id,
-                stepNumber,
-                agentName: executionContext.currentAgentName,
-                model: hookedModelInput.model,
-                provider: hookedModelInput.provider,
-                canonicalModelRef: hookedModelInput.canonicalModelRef,
-                messageCount: hookedModelInput.messages.length,
-                activeToolNames
-              });
-              return activeToolNames ? { activeToolNames } : undefined;
-            }
-
-            const latestRun = await this.getRun(run.id);
-            const nextInput = await this.#buildModelInput(
-              workspace,
-              session,
-              latestRun,
-              allMessages,
-              executionContext.currentAgentName,
-              executionContext.injectSystemReminder
-            );
-            const hookedNextInput = await this.#applyBeforeModelHooks(workspace, session, latestRun, nextInput);
-            latestHookedModelInput = hookedNextInput;
-            executionContext.injectSystemReminder = false;
-            const followupModelCallStep = await this.#startRunStep({
-              runId: run.id,
-              stepType: "model_call",
-              name: hookedNextInput.model,
-              agentName: executionContext.currentAgentName,
-              input: this.#serializeModelCallStepInput(
-                hookedNextInput,
-                activeToolNames,
-                activeToolServers,
-                runtimeToolNames,
-                runtimeTools
-              )
-            });
-            modelCallSteps.set(stepNumber, followupModelCallStep);
-            latestMessageGenerationMetadata = this.#buildGeneratedMessageMetadata(
-              workspace,
-              executionContext.currentAgentName,
-              hookedNextInput,
-              followupModelCallStep
-            );
-            modelCallMessageMetadata.set(stepNumber, latestMessageGenerationMetadata);
-            this.#logger?.debug?.("Runtime prepared follow-up model step.", {
-              workspaceId: workspace.id,
-              sessionId: session.id,
-              runId: run.id,
-              stepNumber,
-              agentName: executionContext.currentAgentName,
-              model: hookedNextInput.model,
-              provider: hookedNextInput.provider,
-              canonicalModelRef: hookedNextInput.canonicalModelRef,
-              messageCount: hookedNextInput.messages.length,
-              activeToolNames
-            });
-
-            return {
-              model: hookedNextInput.model,
-              ...(hookedNextInput.modelDefinition ? { modelDefinition: hookedNextInput.modelDefinition } : {}),
-              messages: hookedNextInput.messages,
-              ...(activeToolNames ? { activeToolNames } : {})
-            };
-          },
-          onToolCallStart: async (toolCall) => {
-            toolCallStartedAt.set(toolCall.toolCallId, Date.now());
-            activeToolCallIds.add(toolCall.toolCallId);
-            this.#logger?.debug?.("Runtime tool call started.", {
-              workspaceId: workspace.id,
-              sessionId: session.id,
-              runId: run.id,
-              agentName: executionContext.currentAgentName,
-              toolCallId: toolCall.toolCallId,
-              toolName: toolCall.toolName,
-              inputPreview: this.#previewValue(toolCall.input)
-            });
-            await syncRunStatusFromActiveTools();
-          },
-          onToolCallFinish: async (toolResult) => {
-            const startedAt = toolCallStartedAt.get(toolResult.toolCallId);
-            toolCallStartedAt.delete(toolResult.toolCallId);
-            activeToolCallIds.delete(toolResult.toolCallId);
-            const toolStep = toolCallSteps.get(toolResult.toolCallId);
-            const retryPolicy = toolStep ? this.#runStepRetryPolicy(toolStep) : undefined;
-            if (toolStep) {
-              const completedToolStep = await this.#completeRunStep(toolStep, "completed", {
-                sourceType: resolveToolSourceType(toolResult.toolName),
-                ...(retryPolicy ? { retryPolicy } : {}),
-                output: this.#normalizeJsonObject(toolResult.output),
-                ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
-              });
-              await this.#recordToolCallAuditFromStep(completedToolStep, toolResult.toolName, "completed");
-              toolCallSteps.delete(toolResult.toolCallId);
-            }
-            await this.#appendEvent({
-              sessionId: session.id,
-              runId: run.id,
-              event: "tool.completed",
-              data: {
-                runId: run.id,
-                sessionId: session.id,
-                toolCallId: toolResult.toolCallId,
-                toolName: toolResult.toolName,
-                sourceType: resolveToolSourceType(toolResult.toolName),
-                ...(retryPolicy ? { retryPolicy } : {}),
-                output: toolResult.output,
-                ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
-              }
-            });
-            this.#logger?.debug?.("Runtime tool call finished.", {
-              workspaceId: workspace.id,
-              sessionId: session.id,
-              runId: run.id,
-              agentName: executionContext.currentAgentName,
-              toolCallId: toolResult.toolCallId,
-              toolName: toolResult.toolName,
-              outputPreview: this.#previewValue(toolResult.output),
-              ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
-            });
-            await syncRunStatusFromActiveTools();
-          },
-          onStepFinish: async (step) => {
-            const messageMetadata = modelCallMessageMetadata.get(completedModelStepCount) ?? latestMessageGenerationMetadata;
-            const failedToolResults = this.#extractFailedToolResults(step);
-            for (const toolError of failedToolResults) {
-              toolCallStartedAt.delete(toolError.toolCallId);
-              toolCallSteps.delete(toolError.toolCallId);
-              activeToolCallIds.delete(toolError.toolCallId);
-            }
-            await syncRunStatusFromActiveTools();
-            const modelCallStep = modelCallSteps.get(completedModelStepCount);
-            if (modelCallStep) {
-              await this.#completeRunStep(
-                modelCallStep,
-                "completed",
-                this.#serializeModelCallStepOutput(step, failedToolResults)
-              );
-              modelCallSteps.delete(completedModelStepCount);
-            }
-            modelCallMessageMetadata.delete(completedModelStepCount);
-            completedModelStepCount += 1;
-            this.#logger?.debug?.("Runtime model step finished.", {
-              workspaceId: workspace.id,
-              sessionId: session.id,
-              runId: run.id,
-              stepNumber: completedModelStepCount - 1,
-              finishReason: step.finishReason ?? "unknown",
-              toolCallsCount: step.toolCalls.length,
-              toolResultsCount: step.toolResults.length,
-              toolErrorsCount: failedToolResults.length,
-              toolErrorIds: failedToolResults.map((toolError) => toolError.toolCallId)
-            });
-            if (
-              step.toolCalls.length === 0 &&
-              step.toolResults.length === 0 &&
-              (typeof step.text === "string" || Array.isArray(step.content) || Array.isArray(step.reasoning))
-            ) {
-              finalAssistantStep = step;
-            }
-            await this.#persistAssistantToolCalls(session, run, step, allMessages, messageMetadata);
-            await this.#persistToolResults(
-              session,
-              run,
-              step,
-              failedToolResults,
-              persistedToolCalls,
-              allMessages,
-              messageMetadata
-            );
-          }
+          ...streamCoordinator.buildStreamOptions()
         }
       );
 
-      let accumulatedText = "";
       for await (const chunk of response.chunks) {
-        assistantMessage = await this.#ensureAssistantMessage(
-          session,
-          run,
-          assistantMessage,
-          allMessages,
-          "",
-          modelCallMessageMetadata.get(completedModelStepCount) ?? latestMessageGenerationMetadata
-        );
-        accumulatedText += chunk;
-        await this.#messageRepository.update({
-          ...assistantMessage,
-          content: textContent(accumulatedText)
-        });
-        await this.#appendEvent({
-          sessionId: session.id,
-          runId: run.id,
-          event: "message.delta",
-          data: {
-            runId: run.id,
-            messageId: assistantMessage.id,
-            delta: chunk
-          }
-        });
+        await streamCoordinator.consumeChunk(chunk);
       }
 
       const completed = await response.completed;
@@ -1628,24 +1168,25 @@ export class RuntimeService {
         workspace,
         session,
         latestRun,
-        latestHookedModelInput,
+        streamCoordinator.latestHookedModelInput,
         completed
       );
       await this.#finalizeSuccessfulRun(
         workspace,
         session,
         latestRun,
-        assistantMessage,
+        streamCoordinator.assistantMessage,
         hookedCompleted,
-        finalAssistantStep,
-        latestMessageGenerationMetadata
+        streamCoordinator.finalAssistantStep,
+        streamCoordinator.latestMessageGenerationMetadata
       );
     } catch (error) {
       const pendingModelStepStatus = runTimedOut ? "failed" : abortController.signal.aborted ? "cancelled" : "failed";
-      for (const step of modelCallSteps.values()) {
-        await this.#completeRunStep(step, pendingModelStepStatus, {
-          errorMessage: error instanceof Error ? error.message : "Unknown model execution error."
-        });
+      if (streamCoordinator) {
+        await streamCoordinator.completePendingModelSteps(
+          pendingModelStepStatus,
+          error instanceof Error ? error.message : "Unknown model execution error."
+        );
       }
       if (abortController.signal.aborted) {
         if (runTimedOut) {
@@ -1810,80 +1351,27 @@ export class RuntimeService {
   }
 
   async #markRunCancelled(sessionId: string, run: Run): Promise<void> {
-    const cancelledRun =
-      run.status === "cancelled"
-        ? run
-        : await this.#setRunStatus(run, "cancelled", {
-            endedAt: nowIso(),
-            cancelRequestedAt: run.cancelRequestedAt ?? nowIso()
-          });
-    await this.#recordSystemStep(cancelledRun, "run.cancelled", {
-      status: cancelledRun.status
-    });
-
-    await this.#appendEvent({
-      sessionId,
-      runId: cancelledRun.id,
-      event: "run.cancelled",
-      data: {
-        runId: cancelledRun.id,
-        sessionId,
-        status: cancelledRun.status
-      }
-    });
+    await this.#runState.markRunCancelled(sessionId, run);
   }
 
   async #markRunTimedOut(run: Run, runTimeoutMs: number | undefined): Promise<Run> {
-    if (run.status === "timed_out") {
-      return run;
-    }
-
-    return this.#setRunStatus(run, "timed_out", {
-      endedAt: nowIso(),
-      errorCode: "run_timed_out",
-      errorMessage:
-        runTimeoutMs !== undefined
-          ? `Run exceeded configured timeout of ${runTimeoutMs}ms.`
-          : "Run exceeded the configured timeout."
-    });
+    return this.#runState.markRunTimedOut(run, runTimeoutMs);
   }
 
   async #setRunStatus(run: Run, nextStatus: Run["status"], patch: Partial<Run>): Promise<Run> {
-    if (!canTransitionRunStatus(run.status, nextStatus)) {
-      throw new AppError(409, "invalid_run_transition", `Cannot transition run from ${run.status} to ${nextStatus}.`);
-    }
-
-    return this.#updateRun(run, {
-      ...patch,
-      status: nextStatus
-    });
+    return this.#runState.setRunStatus(run, nextStatus, patch);
   }
 
   async #setRunStatusIfPossible(runId: string, nextStatus: Run["status"]): Promise<void> {
-    const run = await this.getRun(runId);
-    if (run.status === nextStatus || !canTransitionRunStatus(run.status, nextStatus)) {
-      return;
-    }
-
-    await this.#setRunStatus(run, nextStatus, {});
+    await this.#runState.setRunStatusIfPossible(runId, nextStatus);
   }
 
   async #refreshRunHeartbeat(runId: string): Promise<void> {
-    const run = await this.getRun(runId);
-    if (run.status !== "running" && run.status !== "waiting_tool") {
-      return;
-    }
-
-    await this.#updateRun(run, {
-      heartbeatAt: nowIso()
-    });
+    await this.#runState.refreshRunHeartbeat(runId);
   }
 
   async #updateRun(run: Run, patch: Partial<Run>): Promise<Run> {
-    return this.#runRepository.update({
-      ...run,
-      ...patch
-    });
+    return this.#runState.updateRun(run, patch);
   }
 
   async #startRunStep(input: {
@@ -1893,18 +1381,7 @@ export class RuntimeService {
     agentName?: string | undefined;
     input?: Record<string, unknown> | undefined;
   }): Promise<RunStep> {
-    const existingSteps = await this.#runStepRepository.listByRunId(input.runId);
-    return this.#runStepRepository.create({
-      id: createId("step"),
-      runId: input.runId,
-      seq: existingSteps.length + 1,
-      stepType: input.stepType,
-      ...(input.name ? { name: input.name } : {}),
-      ...(input.agentName ? { agentName: input.agentName } : {}),
-      status: "running",
-      ...(input.input ? { input: input.input } : {}),
-      startedAt: nowIso()
-    });
+    return this.#runSteps.startRunStep(input);
   }
 
   async #completeRunStep(
@@ -1912,12 +1389,7 @@ export class RuntimeService {
     status: Extract<RunStepStatus, "completed" | "failed" | "cancelled">,
     output?: Record<string, unknown> | undefined
   ): Promise<RunStep> {
-    return this.#runStepRepository.update({
-      ...step,
-      status,
-      ...(output ? { output } : {}),
-      endedAt: nowIso()
-    });
+    return this.#runSteps.completeRunStep(step, status, output);
   }
 
   async #recordSystemStep(
@@ -1925,14 +1397,7 @@ export class RuntimeService {
     name: string,
     output?: Record<string, unknown> | undefined
   ): Promise<RunStep> {
-    const step = await this.#startRunStep({
-      runId: run.id,
-      stepType: "system",
-      name,
-      ...(run.effectiveAgentName ? { agentName: run.effectiveAgentName } : {})
-    });
-
-    return this.#completeRunStep(step, "completed", output);
+    return this.#runSteps.recordSystemStep(run, name, output);
   }
 
   #normalizeJsonObject(value: unknown): Record<string, unknown> {
@@ -1946,121 +1411,19 @@ export class RuntimeService {
   }
 
   #normalizePromptMessages(rawMessages: unknown): ChatMessage[] {
-    if (!Array.isArray(rawMessages)) {
-      return [];
-    }
-
-    return rawMessages.flatMap((message) => {
-      if (
-        typeof message === "object" &&
-        message !== null &&
-        isMessageRole((message as { role?: unknown }).role)
-      ) {
-        const role = (message as { role: Message["role"] }).role;
-        const content = (message as { content?: unknown }).content;
-        if (isMessageContentForRole(role, content)) {
-          return [contentToPromptMessage(role, content)];
-        }
-      }
-
-      return [];
-    });
+    return normalizePromptMessages(rawMessages);
   }
 
   async #repairSessionHistoryIfNeeded(sessionId: string, messages: Message[]): Promise<Message[]> {
-    const normalized = normalizePersistedMessages(messages);
-    if (!normalized.changed) {
-      return messages;
-    }
-
-    const existingMessagesById = new Map(messages.map((message) => [message.id, message]));
-    let createdCount = 0;
-    let updatedCount = 0;
-    const repairedToolCallIds: string[] = [];
-
-    for (const normalizedMessage of normalized.messages) {
-      const existingMessage = existingMessagesById.get(normalizedMessage.id);
-      if (!existingMessage) {
-        await this.#messageRepository.create(normalizedMessage);
-        createdCount += 1;
-        repairedToolCallIds.push(...this.#messageToolCallIds(normalizedMessage));
-        continue;
-      }
-
-      if (!this.#messagesEqual(existingMessage, normalizedMessage)) {
-        await this.#messageRepository.update(normalizedMessage);
-        updatedCount += 1;
-      }
-    }
-
-    this.#logger?.warn?.("Runtime auto-repaired persisted session history before model execution.", {
-      sessionId,
-      createdCount,
-      updatedCount,
-      repairedToolCallIds
-    });
-
-    return normalized.messages;
-  }
-
-  #messagesEqual(left: Message, right: Message): boolean {
-    return JSON.stringify(left) === JSON.stringify(right);
-  }
-
-  #messageToolCallIds(message: Message): string[] {
-    if (!Array.isArray(message.content)) {
-      return [];
-    }
-
-    return message.content.flatMap((part) => {
-      if (part.type === "tool-call" || part.type === "tool-result") {
-        return [part.toolCallId];
-      }
-
-      return [];
-    });
+    return this.#sessionHistory.repairSessionHistoryIfNeeded(sessionId, messages);
   }
 
   #extractMessageDisplayText(message: Message): string {
-    if (typeof message.content === "string") {
-      return message.content;
-    }
-
-    return message.content
-      .flatMap((part) => {
-        if (part.type === "text") {
-          return [part.text];
-        }
-
-        if (part.type !== "tool-result") {
-          return [];
-        }
-
-        switch (part.output.type) {
-          case "text":
-          case "error-text":
-            return [part.output.value];
-          case "json":
-          case "error-json":
-          case "content":
-            return [this.#stringifyMessageDisplayValue(part.output.value)];
-          case "execution-denied":
-            return [part.output.reason?.trim() ? part.output.reason : "Execution denied."];
-        }
-      })
-      .join("\n\n");
-  }
-
-  #stringifyMessageDisplayValue(value: unknown): string {
-    try {
-      return JSON.stringify(value, null, 2) ?? String(value);
-    } catch {
-      return String(value);
-    }
+    return extractMessageDisplayText(message);
   }
 
   #hasMeaningfulText(value: string | undefined): value is string {
-    return typeof value === "string" && value.trim().length > 0;
+    return hasMeaningfulText(value);
   }
 
   #formatSystemReminder(reminder: string): string {
@@ -2111,7 +1474,7 @@ export class RuntimeService {
     const activeAgent = workspace.agents[activeAgentName];
     const inheritedModelRef =
       typeof run.metadata?.inheritedModelRef === "string" ? run.metadata.inheritedModelRef : undefined;
-    const resolvedModel = this.#resolveModelForRun(workspace, activeAgent?.modelRef ?? inheritedModelRef);
+    const resolvedModel = this.#resolveModelForRun(workspace, session.modelRef ?? activeAgent?.modelRef ?? inheritedModelRef);
     let contextMessages = await this.#applyContextHooks(
       workspace,
       session,
@@ -2244,6 +1607,49 @@ export class RuntimeService {
       model: modelRef,
       canonicalModelRef: modelRef
     };
+  }
+
+  #normalizeSessionModelRef(workspace: WorkspaceRecord, modelRef?: string): string | undefined {
+    const candidate = modelRef?.trim();
+    if (!candidate) {
+      return undefined;
+    }
+
+    if (candidate.startsWith("platform/")) {
+      const platformModelName = candidate.slice("platform/".length);
+      if (!this.#platformModels[platformModelName]) {
+        throw new AppError(404, "model_not_found", `Platform model ${platformModelName} was not found.`);
+      }
+
+      return candidate;
+    }
+
+    if (candidate.startsWith("workspace/")) {
+      const workspaceModelName = candidate.slice("workspace/".length);
+      if (!workspace.workspaceModels[workspaceModelName]) {
+        throw new AppError(404, "model_not_found", `Workspace model ${workspaceModelName} was not found in workspace ${workspace.id}.`);
+      }
+
+      return candidate;
+    }
+
+    if (workspace.workspaceModels[candidate]) {
+      return `workspace/${candidate}`;
+    }
+
+    if (this.#platformModels[candidate]) {
+      return `platform/${candidate}`;
+    }
+
+    throw new AppError(404, "model_not_found", `Model ${candidate} was not found in workspace ${workspace.id}.`);
+  }
+
+  async #sessionHasStarted(sessionId: string): Promise<boolean> {
+    const [messages, runs] = await Promise.all([
+      this.#messageRepository.listBySessionId(sessionId),
+      this.#runRepository.listBySessionId(sessionId)
+    ]);
+    return messages.length > 0 || runs.length > 0;
   }
 
   #buildStaticPromptMessages(
@@ -2458,227 +1864,6 @@ export class RuntimeService {
     });
   }
 
-  #wrapRuntimeToolsForEvents(
-    workspace: WorkspaceRecord,
-    session: Session,
-    run: Run,
-    runtimeTools: RuntimeToolSet,
-    executionContext: RunExecutionContext,
-    toolCallStartedAt: Map<string, number>,
-    toolCallSteps: Map<string, RunStep>
-  ): RuntimeToolSet {
-    return Object.fromEntries(
-      Object.entries(runtimeTools).map(([toolName, definition]) => [
-        toolName,
-        {
-          ...definition,
-          execute: async (input, context) => {
-            const currentAgentName = executionContext.currentAgentName;
-            const toolStartedAt = context.toolCallId ? (toolCallStartedAt.get(context.toolCallId) ?? Date.now()) : Date.now();
-            let executedInput = input;
-            let retryPolicy = resolveToolRetryPolicy(workspace, toolName, input, definition);
-
-            try {
-              executedInput = await this.#applyBeforeToolDispatchHooks(
-                workspace,
-                session,
-                run,
-                currentAgentName,
-                toolName,
-                context.toolCallId,
-                input
-              );
-              retryPolicy = resolveToolRetryPolicy(workspace, toolName, executedInput, definition);
-
-              if (context.toolCallId) {
-                toolCallStartedAt.set(context.toolCallId, toolStartedAt);
-                toolCallSteps.set(
-                  context.toolCallId,
-                  await this.#startRunStep({
-                    runId: run.id,
-                    stepType: "tool_call",
-                    name: toolName,
-                    agentName: currentAgentName,
-                    input: {
-                      toolCallId: context.toolCallId,
-                      sourceType: resolveToolSourceType(toolName),
-                      retryPolicy,
-                      input: this.#normalizeJsonObject(executedInput)
-                    }
-                  })
-                );
-              }
-
-              await this.#appendEvent({
-                sessionId: session.id,
-                runId: run.id,
-                event: "tool.started",
-                data: {
-                  runId: run.id,
-                  sessionId: session.id,
-                  ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
-                  toolName,
-                  sourceType: resolveToolSourceType(toolName),
-                  retryPolicy,
-                  input: executedInput
-                }
-              });
-              await this.#setRunStatusIfPossible(run.id, "waiting_tool");
-
-              const toolTimeoutMs = timeoutMsFromSeconds(
-                workspace.agents[currentAgentName]?.policy?.toolTimeoutSeconds
-              );
-              const output = await this.#executeRuntimeToolWithPolicy(
-                definition,
-                executedInput,
-                context,
-                toolName,
-                toolTimeoutMs
-              );
-              return this.#applyAfterToolDispatchHooks(
-                workspace,
-                session,
-                run,
-                currentAgentName,
-                toolName,
-                context.toolCallId,
-                executedInput,
-                output
-              );
-            } catch (error) {
-              const startedAt = context.toolCallId ? toolCallStartedAt.get(context.toolCallId) : undefined;
-              const toolStep = context.toolCallId ? toolCallSteps.get(context.toolCallId) : undefined;
-              if (context.toolCallId) {
-                toolCallStartedAt.delete(context.toolCallId);
-                toolCallSteps.delete(context.toolCallId);
-              }
-              if (toolStep) {
-                const failedToolStep = await this.#completeRunStep(toolStep, "failed", {
-                  sourceType: resolveToolSourceType(toolName),
-                  retryPolicy,
-                  errorCode: error instanceof AppError ? error.code : "tool_execution_failed",
-                  errorMessage: error instanceof Error ? error.message : "Unknown tool execution error.",
-                  ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
-                });
-                await this.#recordToolCallAuditFromStep(failedToolStep, toolName, "failed");
-              }
-              await this.#appendEvent({
-                sessionId: session.id,
-                runId: run.id,
-                event: "tool.failed",
-                data: {
-                  runId: run.id,
-                  sessionId: session.id,
-                  ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
-                  toolName,
-                  sourceType: resolveToolSourceType(toolName),
-                  retryPolicy,
-                  errorCode: error instanceof AppError ? error.code : "tool_execution_failed",
-                  errorMessage: error instanceof Error ? error.message : "Unknown tool execution error.",
-                  ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
-                }
-              });
-              this.#logger?.error?.("Runtime tool call failed.", {
-                workspaceId: workspace.id,
-                sessionId: session.id,
-                runId: run.id,
-                agentName: currentAgentName,
-                toolCallId: context.toolCallId,
-                toolName,
-                sourceType: resolveToolSourceType(toolName),
-                retryPolicy,
-                errorCode: error instanceof AppError ? error.code : "tool_execution_failed",
-                errorMessage: error instanceof Error ? error.message : "Unknown tool execution error.",
-                ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {})
-              });
-              throw error;
-            }
-          }
-        }
-      ])
-    );
-  }
-
-  async #executeRuntimeToolWithPolicy(
-    definition: RuntimeToolSet[string],
-    input: unknown,
-    context: RuntimeToolExecutionContext,
-    toolName: string,
-    timeoutMs: number | undefined
-  ): Promise<unknown> {
-    if (timeoutMs === undefined) {
-      return definition.execute(input, context);
-    }
-
-    const abortController = new AbortController();
-    const parentSignal = context.abortSignal;
-    let timedOut = false;
-    const forwardParentAbort = () => {
-      abortController.abort();
-    };
-
-    if (parentSignal) {
-      if (parentSignal.aborted) {
-        abortController.abort();
-      } else {
-        parentSignal.addEventListener("abort", forwardParentAbort, { once: true });
-      }
-    }
-
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      abortController.abort();
-    }, timeoutMs);
-
-    try {
-      return await Promise.race([
-        Promise.resolve(
-          definition.execute(input, {
-            ...context,
-            abortSignal: abortController.signal
-          })
-        ),
-        new Promise<unknown>((_resolve, reject) => {
-          const rejectForAbort = () => {
-            reject(
-              timedOut
-                ? new AppError(408, "tool_timed_out", `Tool ${toolName} timed out after ${timeoutMs}ms.`)
-                : createAbortError()
-            );
-          };
-
-          if (abortController.signal.aborted) {
-            rejectForAbort();
-            return;
-          }
-
-          abortController.signal.addEventListener("abort", rejectForAbort, { once: true });
-        })
-      ]);
-    } finally {
-      clearTimeout(timeout);
-      if (parentSignal && !parentSignal.aborted) {
-        parentSignal.removeEventListener("abort", forwardParentAbort);
-      }
-    }
-  }
-
-  #runStepRetryPolicy(step: RunStep): ActionRetryPolicy | undefined {
-    const inputPayload = this.#asJsonRecord(step.input);
-    const inputRetryPolicy = inputPayload?.retryPolicy;
-    if (isActionRetryPolicy(inputRetryPolicy)) {
-      return inputRetryPolicy;
-    }
-
-    const outputPayload = this.#asJsonRecord(step.output);
-    const outputRetryPolicy = outputPayload?.retryPolicy;
-    if (isActionRetryPolicy(outputRetryPolicy)) {
-      return outputRetryPolicy;
-    }
-
-    return undefined;
-  }
-
   #buildAgentSwitchMessage(workspace: WorkspaceRecord, activeAgentName: string): string | undefined {
     if (workspace.kind === "chat") {
       return undefined;
@@ -2816,12 +2001,16 @@ export class RuntimeService {
     const now = nowIso();
     const childSessionId = resumedSession?.id ?? createId("ses");
     const childRunId = createId("run");
-    const parentModelRef = this.#resolveModelForRun(workspace, workspace.agents[currentAgentName]?.modelRef).canonicalModelRef;
+    const parentModelRef = this.#resolveModelForRun(
+      workspace,
+      parentSession.modelRef ?? workspace.agents[currentAgentName]?.modelRef
+    ).canonicalModelRef;
     const childSession: Session = resumedSession ?? {
       id: childSessionId,
       workspaceId: workspace.id,
       parentSessionId: parentSession.id,
       subjectRef: parentSession.subjectRef,
+      ...(parentSession.modelRef ? { modelRef: parentSession.modelRef } : {}),
       agentName: resolvedTargetAgentName,
       activeAgentName: resolvedTargetAgentName,
       title: `Agent ${resolvedTargetAgentName}`,
@@ -3123,47 +2312,7 @@ export class RuntimeService {
     run: Run,
     modelInput: ModelExecutionInput
   ): Promise<ModelExecutionInput> {
-    let current = modelInput;
-    const additionalMessages: Array<{ role: "system"; content: string }> = [];
-
-    for (const hook of this.#selectHooks(workspace, "before_model_call", modelInput.canonicalModelRef)) {
-      const result = await this.#executeHook(workspace, session, run, hook, {
-        workspace_id: workspace.id,
-        session_id: session.id,
-        run_id: run.id,
-        cwd: workspace.rootPath,
-        hook_event_name: "before_model_call",
-        agent_name: run.agentName,
-        effective_agent_name: run.effectiveAgentName,
-        trigger_type: run.triggerType,
-        run_status: run.status,
-        model_ref: current.canonicalModelRef,
-        model_request: this.#serializeModelRequest(current)
-      });
-
-      this.#ensureHookCanContinue(result, hook.name);
-      if (result?.systemMessage) {
-        additionalMessages.push({ role: "system", content: result.systemMessage });
-      }
-      if (result?.hookSpecificOutput?.additionalContext) {
-        additionalMessages.push({ role: "system", content: result.hookSpecificOutput.additionalContext });
-      }
-
-      const patch = result?.hookSpecificOutput?.patch?.model_request;
-      if (patch && hook.capabilities.includes("rewrite_model_request") && typeof patch === "object") {
-        current = this.#applyModelRequestPatch(workspace, current, patch as Record<string, unknown>);
-      }
-    }
-
-    return additionalMessages.length === 0
-      ? {
-          ...current,
-          messages: current.messages
-        }
-      : {
-          ...current,
-          messages: this.#insertSystemMessages(current.messages, additionalMessages)
-        };
+    return this.#hookApplications.applyBeforeModelHooks(workspace, session, run, modelInput);
   }
 
   async #applyAfterModelHooks(
@@ -3173,46 +2322,7 @@ export class RuntimeService {
     modelInput: ModelExecutionInput,
     response: ModelGenerateResponse
   ): Promise<ModelGenerateResponse> {
-    let currentResponse = response;
-
-    for (const hook of this.#selectHooks(workspace, "after_model_call", modelInput.canonicalModelRef)) {
-      const result = await this.#executeHook(workspace, session, run, hook, {
-        workspace_id: workspace.id,
-        session_id: session.id,
-        run_id: run.id,
-        cwd: workspace.rootPath,
-        hook_event_name: "after_model_call",
-        agent_name: run.agentName,
-        effective_agent_name: run.effectiveAgentName,
-        trigger_type: run.triggerType,
-        run_status: run.status,
-        model_ref: modelInput.canonicalModelRef,
-        model_request: this.#serializeModelRequest(modelInput),
-        model_response: {
-          model: currentResponse.model,
-          text: currentResponse.text,
-          finishReason: currentResponse.finishReason
-        }
-      });
-
-      this.#ensureHookCanContinue(result, hook.name);
-      const patch = result?.hookSpecificOutput?.patch?.model_response;
-      if (patch && hook.capabilities.includes("rewrite_model_response") && typeof patch === "object") {
-        currentResponse = this.#applyModelResponsePatch(currentResponse, patch as Record<string, unknown>);
-      }
-
-      const trailingNotes = [result?.systemMessage, result?.hookSpecificOutput?.additionalContext].filter(
-        (value): value is string => typeof value === "string" && value.length > 0
-      );
-      if (trailingNotes.length > 0) {
-        currentResponse = {
-          ...currentResponse,
-          text: [currentResponse.text, ...trailingNotes].join("\n\n")
-        };
-      }
-    }
-
-    return currentResponse;
+    return this.#hookApplications.applyAfterModelHooks(workspace, session, run, modelInput, response);
   }
 
   async #applyContextHooks(
@@ -3222,53 +2332,7 @@ export class RuntimeService {
     eventName: "before_context_build" | "after_context_build",
     messages: ChatMessage[]
   ): Promise<ChatMessage[]> {
-    let currentMessages = messages;
-
-    for (const hook of this.#selectHooks(workspace, eventName)) {
-      const result = await this.#executeHook(workspace, session, run, hook, {
-        workspace_id: workspace.id,
-        session_id: session.id,
-        run_id: run.id,
-        cwd: workspace.rootPath,
-        hook_event_name: eventName,
-        agent_name: run.agentName,
-        effective_agent_name: run.effectiveAgentName,
-        trigger_type: run.triggerType,
-        run_status: run.status,
-        context: {
-          messages: currentMessages
-        }
-      });
-
-      this.#ensureHookCanContinue(result, hook.name);
-      const patch = result?.hookSpecificOutput?.patch?.context;
-      if (patch && hook.capabilities.includes("rewrite_context") && typeof patch === "object") {
-        currentMessages = this.#applyContextPatch(currentMessages, patch as Record<string, unknown>);
-      }
-
-      const notes = [result?.systemMessage, result?.hookSpecificOutput?.additionalContext].filter(
-        (value): value is string => typeof value === "string" && value.length > 0
-      );
-      if (notes.length > 0) {
-        currentMessages = this.#insertSystemMessages(
-          currentMessages,
-          notes.map((content) => ({
-            role: "system",
-            content
-          }))
-        );
-      }
-    }
-
-    return currentMessages;
-  }
-
-  #applyContextPatch(currentMessages: ChatMessage[], patch: Record<string, unknown>): ChatMessage[] {
-    if (Array.isArray(patch.messages)) {
-      return this.#normalizePromptMessages(patch.messages);
-    }
-
-    return currentMessages;
+    return this.#hookApplications.applyContextHooks(workspace, session, run, eventName, messages);
   }
 
   async #applyBeforeToolDispatchHooks(
@@ -3280,32 +2344,15 @@ export class RuntimeService {
     toolCallId: string | undefined,
     input: unknown
   ): Promise<unknown> {
-    let currentInput = input;
-
-    for (const hook of this.#selectHooks(workspace, "before_tool_dispatch", toolName)) {
-      const result = await this.#executeHook(workspace, session, run, hook, {
-        workspace_id: workspace.id,
-        session_id: session.id,
-        run_id: run.id,
-        cwd: workspace.rootPath,
-        hook_event_name: "before_tool_dispatch",
-        agent_name: run.agentName,
-        effective_agent_name: activeAgentName,
-        trigger_type: run.triggerType,
-        run_status: run.status,
-        tool_name: toolName,
-        tool_input: currentInput,
-        ...(toolCallId ? { tool_call_id: toolCallId } : {})
-      });
-
-      this.#ensureHookCanContinue(result, hook.name);
-      const patch = result?.hookSpecificOutput?.patch?.tool_input;
-      if (patch !== undefined && hook.capabilities.includes("rewrite_tool_request")) {
-        currentInput = this.#applyToolPatch(currentInput, patch);
-      }
-    }
-
-    return currentInput;
+    return this.#hookApplications.applyBeforeToolDispatchHooks(
+      workspace,
+      session,
+      run,
+      activeAgentName,
+      toolName,
+      toolCallId,
+      input
+    );
   }
 
   async #applyAfterToolDispatchHooks(
@@ -3318,80 +2365,16 @@ export class RuntimeService {
     input: unknown,
     output: unknown
   ): Promise<unknown> {
-    let currentOutput = output;
-
-    for (const hook of this.#selectHooks(workspace, "after_tool_dispatch", toolName)) {
-      const result = await this.#executeHook(workspace, session, run, hook, {
-        workspace_id: workspace.id,
-        session_id: session.id,
-        run_id: run.id,
-        cwd: workspace.rootPath,
-        hook_event_name: "after_tool_dispatch",
-        agent_name: run.agentName,
-        effective_agent_name: activeAgentName,
-        trigger_type: run.triggerType,
-        run_status: run.status,
-        tool_name: toolName,
-        tool_input: input,
-        tool_output: currentOutput,
-        ...(toolCallId ? { tool_call_id: toolCallId } : {})
-      });
-
-      this.#ensureHookCanContinue(result, hook.name);
-      const patch = result?.hookSpecificOutput?.patch?.tool_output;
-      if (patch !== undefined && hook.capabilities.includes("rewrite_tool_response")) {
-        currentOutput = this.#applyToolPatch(currentOutput, patch);
-      }
-      if (result?.suppressOutput && hook.capabilities.includes("suppress_output")) {
-        currentOutput = "";
-      }
-
-      const notes = [result?.systemMessage, result?.hookSpecificOutput?.additionalContext].filter(
-        (value): value is string => typeof value === "string" && value.length > 0
-      );
-      if (notes.length > 0) {
-        currentOutput = this.#appendToolOutputNotes(currentOutput, notes);
-      }
-    }
-
-    return currentOutput;
-  }
-
-  #applyToolPatch(currentValue: unknown, patch: unknown): unknown {
-    if (
-      currentValue &&
-      typeof currentValue === "object" &&
-      !Array.isArray(currentValue) &&
-      patch &&
-      typeof patch === "object" &&
-      !Array.isArray(patch)
-    ) {
-      return {
-        ...(currentValue as Record<string, unknown>),
-        ...(patch as Record<string, unknown>)
-      };
-    }
-
-    return patch;
-  }
-
-  #appendToolOutputNotes(currentValue: unknown, notes: string[]): unknown {
-    if (typeof currentValue === "string") {
-      return [currentValue, ...notes].filter((value) => value.length > 0).join("\n\n");
-    }
-
-    if (currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)) {
-      const existingNotes = Array.isArray((currentValue as { hookNotes?: unknown }).hookNotes)
-        ? ((currentValue as { hookNotes: unknown[] }).hookNotes.filter((value): value is string => typeof value === "string") ??
-          [])
-        : [];
-      return {
-        ...(currentValue as Record<string, unknown>),
-        hookNotes: [...existingNotes, ...notes]
-      };
-    }
-
-    return notes.join("\n\n");
+    return this.#hookApplications.applyAfterToolDispatchHooks(
+      workspace,
+      session,
+      run,
+      activeAgentName,
+      toolName,
+      toolCallId,
+      input,
+      output
+    );
   }
 
   async #runLifecycleHooks(
@@ -3400,141 +2383,17 @@ export class RuntimeService {
     run: Run,
     eventName: "run_completed" | "run_failed"
   ): Promise<void> {
-    const hooks = this.#selectHooks(workspace, eventName, run.triggerType);
-    for (const hook of hooks) {
-      try {
-        await this.#executeHook(workspace, session, run, hook, {
-          workspace_id: workspace.id,
-          ...(session ? { session_id: session.id } : {}),
-          run_id: run.id,
-          cwd: workspace.rootPath,
-          hook_event_name: eventName,
-          agent_name: run.agentName,
-          effective_agent_name: run.effectiveAgentName,
-          trigger_type: run.triggerType,
-          run_status: run.status
-        });
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  #selectHooks(workspace: WorkspaceRecord, eventName: string, matcherValue?: string): WorkspaceRecord["hooks"][string][] {
-    if (workspace.kind === "chat") {
-      return [];
-    }
-
-    return Object.values(workspace.hooks).filter((hook) => {
-      if (!hook.events.includes(eventName)) {
-        return false;
-      }
-
-      if (!hook.matcher || !matcherValue) {
-        return true;
-      }
-
-      try {
-        return new RegExp(hook.matcher, "u").test(matcherValue);
-      } catch {
-        return false;
-      }
-    });
-  }
-
-  #ensureHookCanContinue(result: HookResult | undefined, hookName: string): void {
-    if (!result) {
-      return;
-    }
-
-    if (result.continue === false || result.decision === "block") {
-      throw new AppError(409, "hook_blocked", result.stopReason ?? result.reason ?? `Hook ${hookName} blocked execution.`);
-    }
-  }
-
-  #insertSystemMessages(
-    messages: ChatMessage[],
-    extraSystemMessages: Array<{ role: "system"; content: string }>
-  ): ChatMessage[] {
-    const firstNonSystemIndex = messages.findIndex((message) => message.role !== "system");
-    if (firstNonSystemIndex === -1) {
-      return this.#collapseLeadingSystemMessages([...messages, ...extraSystemMessages]);
-    }
-
-    return this.#collapseLeadingSystemMessages([
-      ...messages.slice(0, firstNonSystemIndex),
-      ...extraSystemMessages,
-      ...messages.slice(firstNonSystemIndex)
-    ]);
+    await this.#hookApplications.runLifecycleHooks(workspace, session, run, eventName);
   }
 
   #collapseLeadingSystemMessages(
     messages: ChatMessage[]
   ): ChatMessage[] {
-    const leadingSystemMessages: string[] = [];
-    let firstNonSystemIndex = 0;
-
-    while (firstNonSystemIndex < messages.length && messages[firstNonSystemIndex]?.role === "system") {
-      leadingSystemMessages.push(extractTextFromContent(messages[firstNonSystemIndex]!.content));
-      firstNonSystemIndex += 1;
-    }
-
-    if (leadingSystemMessages.length <= 1) {
-      return messages;
-    }
-
-    return [
-      {
-        role: "system",
-        content: leadingSystemMessages.join("\n\n")
-      },
-      ...messages.slice(firstNonSystemIndex)
-    ];
+    return collapseLeadingSystemMessages(messages);
   }
 
   #serializeModelRequest(modelInput: ModelExecutionInput): Record<string, unknown> {
-    return {
-      model: modelInput.model,
-      canonicalModelRef: modelInput.canonicalModelRef,
-      ...(modelInput.temperature !== undefined ? { temperature: modelInput.temperature } : {}),
-      ...(modelInput.topP !== undefined ? { topP: modelInput.topP } : {}),
-      ...(modelInput.maxTokens !== undefined ? { maxTokens: modelInput.maxTokens } : {}),
-      messages: modelInput.messages
-    };
-  }
-
-  #serializeModelCallRequestSnapshot(modelInput: ModelExecutionInput): Record<string, unknown> {
-    return {
-      ...this.#serializeModelRequest(modelInput),
-      ...(modelInput.provider ? { provider: modelInput.provider } : {})
-    };
-  }
-
-  #serializeModelCallRuntimeSnapshot(
-    modelInput: ModelExecutionInput,
-    activeToolNames: string[] | undefined,
-    toolServers: WorkspaceRecord["toolServers"][string][],
-    runtimeToolNames: string[],
-    runtimeTools?: RuntimeToolSet | undefined
-  ): Record<string, unknown> {
-    return {
-      messageCount: modelInput.messages.length,
-      runtimeToolNames,
-      ...(runtimeTools ? { runtimeTools: this.#serializeRuntimeTools(runtimeTools) } : {}),
-      ...(activeToolNames ? { activeToolNames } : {}),
-      ...(toolServers.length > 0
-        ? {
-            toolServers: toolServers.map((server) => ({
-              name: server.name,
-              transportType: server.transportType,
-              ...(server.toolPrefix ? { toolPrefix: server.toolPrefix } : {}),
-              ...(server.timeout !== undefined ? { timeout: server.timeout } : {}),
-              ...(server.include ? { include: server.include } : {}),
-              ...(server.exclude ? { exclude: server.exclude } : {})
-            }))
-          }
-        : {})
-    };
+    return serializeModelRequest(modelInput);
   }
 
   #serializeModelCallStepInput(
@@ -3544,116 +2403,26 @@ export class RuntimeService {
     runtimeToolNames: string[],
     runtimeTools?: RuntimeToolSet | undefined
   ): Record<string, unknown> {
-    return {
-      request: this.#serializeModelCallRequestSnapshot(modelInput),
-      runtime: this.#serializeModelCallRuntimeSnapshot(
-        modelInput,
-        activeToolNames,
-        toolServers,
-        runtimeToolNames,
-        runtimeTools
-      )
-    };
-  }
-
-  #serializeRuntimeTools(runtimeTools: RuntimeToolSet): Array<Record<string, unknown>> {
-    return Object.entries(runtimeTools).map(([name, definition]) => ({
-      name,
-      description: definition.description,
-      ...(definition.retryPolicy ? { retryPolicy: definition.retryPolicy } : {}),
-      inputSchema: JSON.parse(JSON.stringify(z.toJSONSchema(definition.inputSchema))) as Record<string, unknown>
-    }));
+    return serializeModelCallStepInput(modelInput, activeToolNames, toolServers, runtimeToolNames, runtimeTools);
   }
 
   #serializeModelCallStepOutput(
     step: ModelStepResult,
     failedToolResults = this.#extractFailedToolResults(step)
   ): Record<string, unknown> {
-    return {
-      response: {
-        ...(typeof step.stepType === "string" ? { stepType: step.stepType } : {}),
-        ...(typeof step.text === "string" ? { text: step.text } : {}),
-        ...(Array.isArray(step.content) ? { content: step.content } : {}),
-        ...(Array.isArray(step.reasoning) && step.reasoning.length > 0 ? { reasoning: step.reasoning } : {}),
-        ...(step.usage ? { usage: step.usage } : {}),
-        ...(Array.isArray(step.warnings) && step.warnings.length > 0 ? { warnings: step.warnings } : {}),
-        ...(step.request ? { request: step.request } : {}),
-        ...(step.response ? { response: step.response } : {}),
-        ...(step.providerMetadata ? { providerMetadata: step.providerMetadata } : {}),
-        finishReason: step.finishReason ?? "unknown",
-        toolCalls: step.toolCalls.map((toolCall) => ({
-          toolCallId: toolCall.toolCallId,
-          toolName: toolCall.toolName,
-          input: toolCall.input
-        })),
-        toolResults: step.toolResults.map((toolResult) => ({
-          toolCallId: toolResult.toolCallId,
-          toolName: toolResult.toolName,
-          output: toolResult.output
-        })),
-        ...(failedToolResults.length > 0
-          ? {
-              toolErrors: failedToolResults.map((toolError) => ({
-                toolCallId: toolError.toolCallId,
-                toolName: toolError.toolName,
-                output: normalizeToolErrorOutput(toolError.error)
-              }))
-            }
-          : {})
-      },
-      runtime: {
-        toolCallsCount: step.toolCalls.length,
-        toolResultsCount: step.toolResults.length,
-        toolErrorsCount: failedToolResults.length
-      }
-    };
+    return serializeModelCallStepOutput(step, failedToolResults);
   }
 
   #extractFailedToolResults(step: ModelStepResult): ToolErrorContentPart[] {
-    const responseContent = isRecord(step.response) && Array.isArray(step.response.content) ? step.response.content : [];
-    const stepContent = Array.isArray(step.content) ? step.content : [];
-    const successfulToolCallIds = new Set(step.toolResults.map((toolResult) => toolResult.toolCallId));
-    const failedToolResults = new Map<string, ToolErrorContentPart>();
-
-    for (const part of [...stepContent, ...responseContent]) {
-      if (!isToolErrorContentPart(part) || successfulToolCallIds.has(part.toolCallId)) {
-        continue;
-      }
-
-      failedToolResults.set(part.toolCallId, part);
-    }
-
-    return [...failedToolResults.values()];
+    return extractFailedToolResults(step);
   }
 
   #summarizeMessageRoles(messages: ChatMessage[]): Record<string, number> {
-    return messages.reduce<Record<string, number>>((summary, message) => {
-      summary[message.role] = (summary[message.role] ?? 0) + 1;
-      return summary;
-    }, {});
+    return summarizeMessageRoles(messages);
   }
 
   #previewValue(value: unknown, maxLength = 240): string {
-    if (value instanceof Error) {
-      return value.message;
-    }
-
-    const serialized =
-      typeof value === "string"
-        ? value
-        : (() => {
-            try {
-              return JSON.stringify(value);
-            } catch {
-              return String(value);
-            }
-          })();
-
-    if (serialized.length <= maxLength) {
-      return serialized;
-    }
-
-    return `${serialized.slice(0, maxLength)}...`;
+    return previewValue(value, maxLength);
   }
 
   #applyModelRequestPatch(
@@ -3661,54 +2430,15 @@ export class RuntimeService {
     current: ModelExecutionInput,
     patch: Record<string, unknown>
   ): ModelExecutionInput {
-    let next = { ...current };
-
-    const patchedModelRef =
-      typeof patch.model_ref === "string" ? patch.model_ref : typeof patch.model === "string" ? patch.model : undefined;
-    if (patchedModelRef) {
-      const resolved = this.#resolveModelForRun(workspace, patchedModelRef);
-      next = {
-        ...next,
-        model: resolved.model,
-        canonicalModelRef: resolved.canonicalModelRef,
-        provider: resolved.provider,
-        modelDefinition: resolved.modelDefinition
-      };
-    }
-
-    if (typeof patch.temperature === "number") {
-      next.temperature = patch.temperature;
-    }
-    if (typeof patch.topP === "number" || typeof patch.top_p === "number") {
-      next.topP = typeof patch.topP === "number" ? patch.topP : (patch.top_p as number);
-    }
-    if (typeof patch.maxTokens === "number") {
-      next.maxTokens = patch.maxTokens;
-    }
-    if (Array.isArray(patch.messages)) {
-      next.messages = this.#collapseLeadingSystemMessages(
-        patch.messages
-        .filter(
-          (message): message is ChatMessage =>
-            typeof message === "object" &&
-            message !== null &&
-            isMessageRole((message as { role?: unknown }).role) &&
-            (typeof (message as { content?: unknown }).content === "string" ||
-              isMessagePartList((message as { content?: unknown }).content))
-        )
-        .map((message) => contentToPromptMessage(message.role, message.content))
-      );
-    }
-
-    return next;
+    return applyModelRequestPatch(workspace, current, patch, {
+      resolveModelForRun: (targetWorkspace, modelRef) => this.#resolveModelForRun(targetWorkspace, modelRef),
+      collapseLeadingSystemMessages: (messages) => this.#collapseLeadingSystemMessages(messages),
+      createModelExecutionInput: (input) => ({ ...input })
+    });
   }
 
   #applyModelResponsePatch(response: ModelGenerateResponse, patch: Record<string, unknown>): ModelGenerateResponse {
-    return {
-      ...response,
-      ...(typeof patch.text === "string" ? { text: patch.text } : {}),
-      ...(typeof patch.finishReason === "string" ? { finishReason: patch.finishReason } : {})
-    };
+    return applyModelResponsePatch(response, patch);
   }
 
   #buildGeneratedMessageMetadata(
@@ -3742,22 +2472,7 @@ export class RuntimeService {
     content = "",
     metadata?: Record<string, unknown> | undefined
   ): Promise<Extract<Message, { role: "assistant" }>> {
-    if (currentMessage) {
-      return currentMessage;
-    }
-
-    const message = (await this.#messageRepository.create({
-      id: createId("msg"),
-      sessionId: session.id,
-      runId: run.id,
-      role: "assistant",
-      content: textContent(content),
-      ...(metadata ? { metadata } : {}),
-      createdAt: nowIso()
-    })) as Extract<Message, { role: "assistant" }>;
-
-    allMessages?.push(message);
-    return message;
+    return this.#toolMessages.ensureAssistantMessage(session, run, currentMessage, allMessages, content, metadata);
   }
 
   async #persistAssistantToolCalls(
@@ -3767,38 +2482,7 @@ export class RuntimeService {
     allMessages: Message[],
     metadata?: Record<string, unknown> | undefined
   ): Promise<void> {
-    if (step.toolCalls.length === 0) {
-      return;
-    }
-
-    this.#logger?.debug?.("Persisting assistant tool-call message.", {
-      sessionId: session.id,
-      runId: run.id,
-      toolCallIds: step.toolCalls.map((toolCall) => toolCall.toolCallId),
-      toolNames: step.toolCalls.map((toolCall) => toolCall.toolName)
-    });
-
-    const assistantToolCallMessage = await this.#messageRepository.create({
-      id: createId("msg"),
-      sessionId: session.id,
-      runId: run.id,
-      role: "assistant",
-      content: toolCallContent(step.toolCalls),
-      ...(metadata ? { metadata } : {}),
-      createdAt: nowIso()
-    });
-
-    allMessages.push(assistantToolCallMessage);
-    await this.#appendEvent({
-      sessionId: session.id,
-      runId: run.id,
-      event: "message.completed",
-      data: {
-        runId: run.id,
-        messageId: assistantToolCallMessage.id,
-        content: assistantToolCallMessage.content
-      }
-    });
+    await this.#toolMessages.persistAssistantToolCalls(session, run, step, allMessages, metadata);
   }
 
   async #persistToolResults(
@@ -3810,445 +2494,15 @@ export class RuntimeService {
     allMessages: Message[],
     metadata?: Record<string, unknown> | undefined
   ): Promise<void> {
-    for (const toolResult of step.toolResults) {
-      if (persistedToolCalls.has(toolResult.toolCallId)) {
-        continue;
-      }
-
-      persistedToolCalls.add(toolResult.toolCallId);
-      this.#logger?.debug?.("Persisting tool result message.", {
-        sessionId: session.id,
-        runId: run.id,
-        toolCallId: toolResult.toolCallId,
-        toolName: toolResult.toolName,
-        resultType: "success",
-        outputPreview: this.#previewValue(toolResult.output)
-      });
-      const toolMessage = await this.#messageRepository.create({
-        id: createId("msg"),
-        sessionId: session.id,
-        runId: run.id,
-        role: "tool",
-        content: toolResultContent(toolResult),
-        ...(metadata ? { metadata } : {}),
-        createdAt: nowIso()
-      });
-      allMessages.push(toolMessage);
-
-      await this.#appendEvent({
-        sessionId: session.id,
-        runId: run.id,
-        event: "message.completed",
-        data: {
-          runId: run.id,
-          messageId: toolMessage.id,
-          content: toolMessage.content,
-          toolName: toolResult.toolName,
-          toolCallId: toolResult.toolCallId
-        }
-      });
-    }
-
-    for (const toolError of failedToolResults) {
-      if (persistedToolCalls.has(toolError.toolCallId)) {
-        continue;
-      }
-
-      persistedToolCalls.add(toolError.toolCallId);
-      this.#logger?.debug?.("Persisting failed tool result message.", {
-        sessionId: session.id,
-        runId: run.id,
-        toolCallId: toolError.toolCallId,
-        toolName: toolError.toolName,
-        resultType: "error",
-        errorPreview: this.#previewValue(toolError.error)
-      });
-      const toolMessage = await this.#messageRepository.create({
-        id: createId("msg"),
-        sessionId: session.id,
-        runId: run.id,
-        role: "tool",
-        content: toolErrorResultContent(toolError),
-        ...(metadata ? { metadata } : {}),
-        createdAt: nowIso()
-      });
-      allMessages.push(toolMessage);
-
-      await this.#appendEvent({
-        sessionId: session.id,
-        runId: run.id,
-        event: "message.completed",
-        data: {
-          runId: run.id,
-          messageId: toolMessage.id,
-          content: toolMessage.content,
-          toolName: toolError.toolName,
-          toolCallId: toolError.toolCallId,
-          resultType: "error"
-        }
-      });
-    }
-  }
-
-  async #executeHook(
-    workspace: WorkspaceRecord,
-    session: Session | undefined,
-    run: Run,
-    hook: WorkspaceRecord["hooks"][string],
-    envelope: HookEnvelope
-  ): Promise<HookResult | undefined> {
-    const handler = hook.definition.handler as Record<string, unknown> | undefined;
-    if (!handler || typeof handler.type !== "string") {
-      return undefined;
-    }
-
-    const hookStep = await this.#startRunStep({
-      runId: run.id,
-      stepType: "hook",
-      name: hook.name,
-      agentName: run.effectiveAgentName,
-      input: {
-        hookEventName: envelope.hook_event_name,
-        handlerType: handler.type,
-        ...(hook.matcher ? { matcher: hook.matcher } : {})
-      }
-    });
-
-    try {
-      let result: HookResult | undefined;
-      switch (handler.type) {
-        case "command":
-          result = await this.#executeCommandHook(workspace, handler, envelope);
-          break;
-        case "http":
-          result = await this.#executeHttpHook(handler, envelope);
-          break;
-        case "prompt":
-          result = await this.#executePromptHook(workspace, hook, handler, envelope);
-          break;
-        case "agent":
-          result = await this.#executeAgentHook(workspace, hook, handler, session, run, envelope);
-          break;
-        default:
-          result = undefined;
-          break;
-      }
-
-      const completedHookStep = await this.#completeRunStep(hookStep, "completed", this.#serializeHookResult(result));
-      await this.#recordHookRunAudit(hook, envelope, completedHookStep, "completed", result);
-      return result;
-    } catch (error) {
-      const failedHookStep = await this.#completeRunStep(hookStep, "failed", {
-        errorMessage: error instanceof Error ? error.message : "Unknown hook execution error."
-      });
-      await this.#recordHookRunAudit(hook, envelope, failedHookStep, "failed", undefined, error);
-      if (session) {
-        const errorCode = error instanceof AppError ? error.code : "hook_execution_failed";
-        await this.#appendEvent({
-          sessionId: session.id,
-          runId: run.id,
-          event: "hook.notice",
-          data: {
-            runId: run.id,
-            sessionId: session.id,
-            hookName: hook.name,
-            eventName: envelope.hook_event_name,
-            handlerType: handler.type,
-            errorCode,
-            errorMessage: error instanceof Error ? error.message : "Unknown hook execution error."
-          }
-        });
-      }
-      return undefined;
-    }
-  }
-
-  async #executeCommandHook(
-    workspace: WorkspaceRecord,
-    handler: Record<string, unknown>,
-    envelope: HookEnvelope
-  ): Promise<HookResult | undefined> {
-    if (typeof handler.command !== "string") {
-      return undefined;
-    }
-
-    const cwd =
-      typeof handler.cwd === "string" ? path.resolve(workspace.rootPath, handler.cwd) : workspace.rootPath;
-    const child = spawn(handler.command, {
-      cwd,
-      env: {
-        ...process.env,
-        ...(handler.environment && typeof handler.environment === "object"
-          ? (handler.environment as Record<string, string>)
-          : {})
-      },
-      shell: true
-    });
-    const timeoutMs = timeoutMsFromSeconds(handler.timeout_seconds);
-
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    child.stdin.write(JSON.stringify(envelope));
-    child.stdin.end();
-    child.stdout.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
-    });
-    const killTimer =
-      timeoutMs !== undefined
-        ? setTimeout(() => {
-            timedOut = true;
-            child.kill("SIGTERM");
-          }, timeoutMs)
-        : undefined;
-
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      child.on("error", reject);
-      child.on("close", (code) => resolve(code ?? 0));
-    }).finally(() => {
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
-    });
-
-    if (timedOut) {
-      throw new Error(`Command hook timed out after ${timeoutMs}ms.`);
-    }
-
-    if (exitCode === 2) {
-      return {
-        continue: false,
-        stopReason: stderr.trim() || `Hook blocked execution: ${handler.command}`
-      };
-    }
-
-    if (exitCode !== 0) {
-      throw new Error(stderr.trim() || `Command hook exited with code ${exitCode}.`);
-    }
-
-    if (stdout.trim().length === 0) {
-      return undefined;
-    }
-
-    const parsed = this.#parseHookResult(stdout);
-    if (!parsed) {
-      throw new Error("Command hook returned invalid JSON output.");
-    }
-
-    return parsed;
-  }
-
-  async #executeHttpHook(handler: Record<string, unknown>, envelope: HookEnvelope): Promise<HookResult | undefined> {
-    if (typeof handler.url !== "string") {
-      return undefined;
-    }
-
-    const timeoutMs = timeoutMsFromSeconds(handler.timeout_seconds);
-    const abortController = timeoutMs !== undefined ? new AbortController() : undefined;
-    const abortTimer =
-      timeoutMs !== undefined && abortController
-        ? setTimeout(() => {
-            abortController.abort();
-          }, timeoutMs)
-        : undefined;
-
-    const response = await fetch(handler.url, {
-      method: typeof handler.method === "string" ? handler.method : "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(handler.headers && typeof handler.headers === "object" ? (handler.headers as Record<string, string>) : {})
-      },
-      body: JSON.stringify(envelope),
-      ...(abortController ? { signal: abortController.signal } : {})
-    })
-      .catch((error) => {
-        if (isAbortError(error)) {
-          throw new Error(`HTTP hook timed out after ${timeoutMs}ms.`);
-        }
-
-        throw error;
-      })
-      .finally(() => {
-        if (abortTimer) {
-          clearTimeout(abortTimer);
-        }
-      });
-
-    if (!response.ok) {
-      throw new Error(`HTTP hook returned ${response.status}.`);
-    }
-
-    const body = await response.text();
-    if (!body.trim()) {
-      return undefined;
-    }
-
-    const parsed = this.#parseHookResult(body);
-    if (!parsed) {
-      throw new Error("HTTP hook returned invalid JSON output.");
-    }
-
-    return parsed;
-  }
-
-  async #executePromptHook(
-    workspace: WorkspaceRecord,
-    hook: WorkspaceRecord["hooks"][string],
-    handler: Record<string, unknown>,
-    envelope: HookEnvelope
-  ): Promise<HookResult | undefined> {
-    const prompt = await this.#resolveHookPromptSource(workspace, handler.prompt as Record<string, unknown> | undefined);
-    if (!prompt) {
-      return undefined;
-    }
-
-    const resolvedModel = this.#resolveModelForRun(
-      workspace,
-      typeof handler.model_ref === "string" ? handler.model_ref : this.#defaultModel
+    await this.#toolMessages.persistToolResults(
+      session,
+      run,
+      step,
+      failedToolResults,
+      persistedToolCalls,
+      allMessages,
+      metadata
     );
-    const timeoutMs = timeoutMsFromSeconds(handler.timeout_seconds);
-    const result = await withTimeout(
-      async (signal) => {
-        const request = {
-          model: resolvedModel.model,
-          ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
-          prompt: [
-            prompt,
-            "Return only JSON matching the Open Agent Harness hook output protocol.",
-            JSON.stringify({
-              hook: hook.name,
-              envelope
-            })
-          ].join("\n\n")
-        };
-        return this.#modelGateway.generate(request, signal ? { signal } : undefined);
-      },
-      timeoutMs,
-      `Prompt hook timed out after ${timeoutMs}ms.`
-    );
-
-    const parsed = this.#parseHookResult(result.text);
-    if (!parsed) {
-      throw new Error("Prompt hook returned invalid JSON output.");
-    }
-
-    return parsed;
-  }
-
-  async #executeAgentHook(
-    workspace: WorkspaceRecord,
-    hook: WorkspaceRecord["hooks"][string],
-    handler: Record<string, unknown>,
-    _session: Session | undefined,
-    _run: Run,
-    envelope: HookEnvelope
-  ): Promise<HookResult | undefined> {
-    if (typeof handler.agent !== "string") {
-      return undefined;
-    }
-
-    const agent = workspace.agents[handler.agent];
-    if (!agent) {
-      throw new AppError(404, "agent_not_found", `Agent ${handler.agent} was not found in workspace ${workspace.id}.`);
-    }
-
-    const task = await this.#resolveHookPromptSource(workspace, handler.task as Record<string, unknown> | undefined);
-    if (!task) {
-      return undefined;
-    }
-
-    const resolvedModel = this.#resolveModelForRun(workspace, agent.modelRef);
-    const timeoutMs = timeoutMsFromSeconds(handler.timeout_seconds);
-    const result = await withTimeout(
-      async (signal) => {
-        const request: GenerateModelInput = {
-          model: resolvedModel.model,
-          ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
-          ...(agent.maxTokens !== undefined ? { maxTokens: agent.maxTokens } : {}),
-          ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
-          ...(agent.topP !== undefined ? { topP: agent.topP } : {}),
-          messages: [
-            { role: "system", content: agent.prompt },
-            { role: "user", content: task },
-            {
-              role: "user",
-              content: `Return only JSON matching the Open Agent Harness hook output protocol.\n\n${JSON.stringify({
-                hook: hook.name,
-                envelope
-              })}`
-            }
-          ]
-        };
-        return this.#modelGateway.generate(request, signal ? { signal } : undefined);
-      },
-      timeoutMs,
-      `Agent hook timed out after ${timeoutMs}ms.`
-    );
-
-    const parsed = this.#parseHookResult(result.text);
-    if (!parsed) {
-      throw new Error("Agent hook returned invalid JSON output.");
-    }
-
-    return parsed;
-  }
-
-  async #resolveHookPromptSource(
-    workspace: WorkspaceRecord,
-    promptSource: Record<string, unknown> | undefined
-  ): Promise<string | undefined> {
-    if (!promptSource) {
-      return undefined;
-    }
-
-    if (typeof promptSource.inline === "string") {
-      return promptSource.inline;
-    }
-
-    if (typeof promptSource.file === "string") {
-      return readFile(path.resolve(workspace.rootPath, promptSource.file), "utf8");
-    }
-
-    return undefined;
-  }
-
-  #parseHookResult(rawOutput: string): HookResult | undefined {
-    const trimmed = rawOutput.trim();
-    if (trimmed.length === 0) {
-      return undefined;
-    }
-
-    const jsonMatch = trimmed.match(/\{[\s\S]*\}/u);
-    if (!jsonMatch) {
-      return undefined;
-    }
-
-    try {
-      return JSON.parse(jsonMatch[0]) as HookResult;
-    } catch {
-      return undefined;
-    }
-  }
-
-  #serializeHookResult(result: HookResult | undefined): Record<string, unknown> {
-    if (!result) {
-      return {
-        result: null
-      };
-    }
-
-    return {
-      ...(result.continue !== undefined ? { continue: result.continue } : {}),
-      ...(result.stopReason ? { stopReason: result.stopReason } : {}),
-      ...(result.suppressOutput !== undefined ? { suppressOutput: result.suppressOutput } : {}),
-      ...(result.systemMessage ? { systemMessage: result.systemMessage } : {}),
-      ...(result.decision ? { decision: result.decision } : {}),
-      ...(result.reason ? { reason: result.reason } : {}),
-      ...(result.hookSpecificOutput ? { hookSpecificOutput: result.hookSpecificOutput } : {})
-    };
   }
 
   async #processActionRun(
@@ -4257,116 +2511,7 @@ export class RuntimeService {
     session: Session | undefined,
     signal: AbortSignal
   ): Promise<void> {
-    const actionName = typeof run.metadata?.actionName === "string" ? run.metadata.actionName : run.triggerRef;
-    if (!actionName) {
-      throw new AppError(500, "action_name_missing", `Run ${run.id} is missing an action name.`);
-    }
-
-    const action = workspace.actions[actionName];
-    if (!action) {
-      throw new AppError(404, "action_not_found", `Action ${actionName} was not found in workspace ${workspace.id}.`);
-    }
-
-    const actionStep = await this.#startRunStep({
-      runId: run.id,
-      stepType: "tool_call",
-      name: action.name,
-      ...(run.effectiveAgentName ? { agentName: run.effectiveAgentName } : {}),
-      input: {
-        sourceType: "action",
-        actionName: action.name,
-        input: this.#normalizeJsonObject(run.metadata?.input ?? null)
-      }
-    });
-
-    let result: { stdout: string; stderr: string; exitCode: number; output: string };
-    try {
-      result = await this.#executeAction(workspace, action, run, signal);
-    } catch (error) {
-      const latestRun = await this.getRun(run.id);
-      const failedStatus = signal.aborted || latestRun.status === "cancelled" ? "cancelled" : "failed";
-      const completedActionStep = await this.#completeRunStep(actionStep, failedStatus, {
-        sourceType: "action",
-        actionName: action.name,
-        ...(latestRun.errorCode ? { errorCode: latestRun.errorCode } : {}),
-        ...(latestRun.errorMessage ? { errorMessage: latestRun.errorMessage } : {})
-      });
-      await this.#recordToolCallAuditFromStep(completedActionStep, action.name, failedStatus);
-      throw error;
-    }
-
-    const completedActionStep = await this.#completeRunStep(actionStep, "completed", {
-      sourceType: "action",
-      actionName: action.name,
-      exitCode: result.exitCode,
-      stdout: result.stdout,
-      stderr: result.stderr
-    });
-    await this.#recordToolCallAuditFromStep(completedActionStep, action.name, "completed");
-
-    if (session) {
-      const actionToolCallId = `action-run:${run.id}:${action.name}`;
-      const toolMessage = await this.#messageRepository.create({
-        id: createId("msg"),
-        sessionId: session.id,
-        runId: run.id,
-        role: "tool",
-        content: toolResultContent({
-          toolCallId: actionToolCallId,
-          toolName: action.name,
-          output: result.output
-        }),
-        createdAt: nowIso()
-      });
-
-      await this.#appendEvent({
-        sessionId: session.id,
-        runId: run.id,
-        event: "message.completed",
-        data: {
-          runId: run.id,
-          messageId: toolMessage.id,
-          content: toolMessage.content,
-          actionName: action.name,
-          toolCallId: actionToolCallId,
-          toolName: action.name
-        }
-      });
-    }
-
-    const endedAt = nowIso();
-    const completedRun = await this.#setRunStatus(run, "completed", {
-      endedAt,
-      metadata: {
-        ...(run.metadata ?? {}),
-        actionName: action.name,
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr
-      }
-    });
-    await this.#recordSystemStep(completedRun, "run.completed", {
-      status: completedRun.status
-    });
-
-    if (session) {
-      await this.#sessionRepository.update({
-        ...session,
-        lastRunAt: endedAt,
-        updatedAt: endedAt
-      });
-
-      await this.#appendEvent({
-        sessionId: session.id,
-        runId: completedRun.id,
-        event: "run.completed",
-        data: {
-          runId: completedRun.id,
-          sessionId: session.id,
-          status: completedRun.status
-        }
-      });
-    }
+    await this.#actions.processActionRun(workspace, run, session, signal);
   }
 
   async #executeAction(
@@ -4376,103 +2521,7 @@ export class RuntimeService {
     signal: AbortSignal | undefined,
     explicitInput?: unknown
   ): Promise<{ stdout: string; stderr: string; exitCode: number; output: string }> {
-    if (workspace.kind === "chat") {
-      throw new AppError(400, "actions_not_supported", `Workspace ${workspace.id} does not allow action execution.`);
-    }
-
-    const cwd = action.entry.cwd ? path.resolve(action.directory, action.entry.cwd) : action.directory;
-    const env = {
-      ...process.env,
-      ...(action.entry.environment ?? {}),
-      OPENHARNESS_WORKSPACE_ROOT: workspace.rootPath,
-      OPENHARNESS_ACTION_NAME: action.name,
-      OPENHARNESS_RUN_ID: run.id,
-      OPENHARNESS_DEFAULT_MODEL: this.#defaultModel,
-      OPENHARNESS_ACTION_INPUT: JSON.stringify(explicitInput ?? run.metadata?.input ?? null)
-    };
-
-    const child = spawn(action.entry.command, {
-      cwd,
-      env,
-      ...(signal ? { signal } : {}),
-      shell: true
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-
-    const timeout =
-      action.entry.timeoutSeconds !== undefined
-        ? setTimeout(() => {
-            timedOut = true;
-            child.kill("SIGTERM");
-          }, action.entry.timeoutSeconds * 1000)
-        : undefined;
-
-    child.stdout.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
-    });
-
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      child.on("error", reject);
-      child.on("close", (code) => resolve(code ?? 0));
-    }).finally(() => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    });
-
-    if (signal?.aborted) {
-      throw new Error("aborted");
-    }
-
-    if (timedOut) {
-      const timedOutRun = await this.#setRunStatus(run, "timed_out", {
-        endedAt: nowIso(),
-        errorCode: "action_timed_out",
-        errorMessage: `Action ${action.name} timed out.`
-      });
-      await this.#recordSystemStep(timedOutRun, "run.timed_out", {
-        status: timedOutRun.status,
-        errorCode: timedOutRun.errorCode,
-        errorMessage: timedOutRun.errorMessage
-      });
-      throw new AppError(408, "action_timed_out", `Action ${action.name} timed out.`);
-    }
-
-    if (exitCode !== 0) {
-      const failedRun = await this.#setRunStatus(run, "failed", {
-        endedAt: nowIso(),
-        errorCode: "action_failed",
-        errorMessage: stderr.trim() || `Action ${action.name} exited with code ${exitCode}.`,
-        metadata: {
-          ...(run.metadata ?? {}),
-          actionName: action.name,
-          exitCode,
-          stdout,
-          stderr
-        }
-      });
-      await this.#recordSystemStep(failedRun, "run.failed", {
-        status: failedRun.status,
-        errorCode: failedRun.errorCode,
-        errorMessage: failedRun.errorMessage
-      });
-      throw new AppError(500, "action_failed", stderr.trim() || `Action ${action.name} exited with code ${exitCode}.`);
-    }
-
-    const output = stdout || stderr || "";
-    return {
-      stdout,
-      stderr,
-      exitCode,
-      output
-    };
+    return this.#actions.executeAction(workspace, action, run, signal, explicitInput);
   }
 
   async #recordToolCallAuditFromStep(
@@ -4480,87 +2529,7 @@ export class RuntimeService {
     toolName: string,
     status: "completed" | "failed" | "cancelled"
   ): Promise<void> {
-    if (!this.#toolCallAuditRepository || !step.endedAt) {
-      return;
-    }
-
-    const inputPayload = this.#asJsonRecord(step.input);
-    const outputPayload = this.#asJsonRecord(step.output);
-    const rawDurationMs =
-      outputPayload && typeof outputPayload.durationMs === "number" ? outputPayload.durationMs : undefined;
-
-    await this.#toolCallAuditRepository.create({
-      id: createId("tool"),
-      runId: step.runId,
-      stepId: step.id,
-      sourceType: this.#toolCallAuditSourceType(inputPayload, toolName),
-      toolName,
-      ...(inputPayload ? { request: inputPayload } : {}),
-      ...(outputPayload ? { response: outputPayload } : {}),
-      status,
-      ...(rawDurationMs !== undefined ? { durationMs: rawDurationMs } : {}),
-      startedAt: step.startedAt ?? step.endedAt,
-      endedAt: step.endedAt
-    });
-  }
-
-  #asJsonRecord(value: unknown): Record<string, unknown> | undefined {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
-    }
-
-    return undefined;
-  }
-
-  #toolCallAuditSourceType(inputPayload: Record<string, unknown> | undefined, toolName: string) {
-    const sourceType = inputPayload?.sourceType;
-    if (
-      sourceType === "action" ||
-      sourceType === "skill" ||
-      sourceType === "agent" ||
-      sourceType === "mcp" ||
-      sourceType === "tool" ||
-      sourceType === "native"
-    ) {
-      return sourceType === "mcp" ? "tool" : sourceType;
-    }
-
-    return resolveToolSourceType(toolName);
-  }
-
-  async #recordHookRunAudit(
-    hook: WorkspaceRecord["hooks"][string],
-    envelope: HookEnvelope,
-    step: RunStep,
-    status: "completed" | "failed",
-    result?: HookResult | undefined,
-    error?: unknown
-  ): Promise<void> {
-    if (!this.#hookRunAuditRepository || !step.endedAt) {
-      return;
-    }
-
-    const patch =
-      result?.hookSpecificOutput?.patch && typeof result.hookSpecificOutput.patch === "object"
-        ? (result.hookSpecificOutput.patch as Record<string, unknown>)
-        : undefined;
-
-    await this.#hookRunAuditRepository.create({
-      id: createId("hookrun"),
-      runId: step.runId,
-      hookName: hook.name,
-      eventName: envelope.hook_event_name,
-      capabilities: hook.capabilities,
-      ...(patch ? { patch } : {}),
-      status,
-      startedAt: step.startedAt ?? step.endedAt,
-      endedAt: step.endedAt,
-      ...(status === "failed"
-        ? {
-            errorMessage: error instanceof Error ? error.message : "Unknown hook execution error."
-          }
-        : {})
-    });
+    await this.#toolAudit.recordToolCallAuditFromStep(step, toolName, status);
   }
 
   #publicWorkspaceCatalog(workspace: WorkspaceRecord): RuntimeWorkspaceCatalog {

@@ -34,10 +34,11 @@ interface SavedWorkspaceRecord {
 interface SavedSessionRecord {
   id: string;
   workspaceId: string;
-  parentSessionId?: string;
-  title?: string;
-  agentName?: string;
-  lastRunAt?: string;
+  parentSessionId?: string | undefined;
+  title?: string | undefined;
+  modelRef?: string | undefined;
+  agentName?: string | undefined;
+  lastRunAt?: string | undefined;
   createdAt: string;
   lastOpenedAt: string;
 }

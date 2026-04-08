@@ -31,6 +31,10 @@ function createAjv() {
 type ActionRetryPolicy = "manual" | "safe";
 type DiscoveredWorkspaceCatalog = WorkspaceCatalog;
 
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
+}
+
 export interface ServerConfig {
   server: {
     host: string;
@@ -335,7 +339,14 @@ async function readDirectoryEntriesIfExists(directoryPath: string) {
   return readdir(directoryPath, { withFileTypes: true });
 }
 
-async function loadModelRegistryFromDirectory(modelsDir: string): Promise<PlatformModelRegistry> {
+interface ModelRegistryLoadOptions {
+  onError?: ((input: { filePath: string; error: unknown }) => void) | undefined;
+}
+
+async function loadModelRegistryFromDirectory(
+  modelsDir: string,
+  options?: ModelRegistryLoadOptions
+): Promise<PlatformModelRegistry> {
   const schema = await loadSchema<object>("../../../docs/schemas/models.schema.json");
   const directoryEntries = await readDirectoryEntriesIfExists(modelsDir);
   const validate = createAjv().compile<PlatformModelRegistry>(schema);
@@ -347,13 +358,24 @@ async function loadModelRegistryFromDirectory(modelsDir: string): Promise<Platfo
     }
 
     const filePath = path.join(modelsDir, entry.name);
-    const fileContent = await readFile(filePath, "utf8");
-    const parsed = expandEnv(YAML.parse(fileContent) ?? {});
-    if (!validate(parsed)) {
-      throw new Error(`Invalid model config in ${filePath}: ${validationMessage(validate.errors)}`);
-    }
+    try {
+      const fileContent = await readFile(filePath, "utf8");
+      const parsed = expandEnv(YAML.parse(fileContent) ?? {});
+      if (!validate(parsed)) {
+        throw new Error(`Invalid model config in ${filePath}: ${validationMessage(validate.errors)}`);
+      }
 
-    Object.assign(registry, parsed);
+      Object.assign(registry, parsed);
+    } catch (error) {
+      if (!options?.onError) {
+        throw error;
+      }
+
+      options.onError({
+        filePath,
+        error
+      });
+    }
   }
 
   return registry;
@@ -608,8 +630,11 @@ export async function loadServerConfig(configPath: string): Promise<ServerConfig
   );
 }
 
-export async function loadPlatformModels(modelsDir: string): Promise<PlatformModelRegistry> {
-  return loadModelRegistryFromDirectory(modelsDir);
+export async function loadPlatformModels(
+  modelsDir: string,
+  options?: ModelRegistryLoadOptions
+): Promise<PlatformModelRegistry> {
+  return loadModelRegistryFromDirectory(modelsDir, options);
 }
 
 async function appendAgentsMd(rootPath: string, agentsMd: string): Promise<void> {
@@ -1435,6 +1460,7 @@ export async function discoverWorkspaces(input: {
   paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir" | "tool_dir" | "skill_dir">;
   platformModels: PlatformModelRegistry;
   platformAgents?: PlatformAgentRegistry;
+  onError?: ((input: { rootPath: string; kind: "project" | "chat"; error: unknown }) => void) | undefined;
 }): Promise<DiscoveredWorkspace[]> {
   const projectEntries = await readDirectoryEntriesIfExists(input.paths.workspace_dir);
   const chatEntries = await readDirectoryEntriesIfExists(input.paths.chat_dir);
@@ -1442,24 +1468,52 @@ export async function discoverWorkspaces(input: {
   const projects = await Promise.all(
     projectEntries
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map((entry) =>
-        discoverWorkspace(path.join(input.paths.workspace_dir, entry.name), "project", {
-          platformModels: input.platformModels,
-          ...(input.platformAgents ? { platformAgents: input.platformAgents } : {})
-        })
-      )
+      .map(async (entry) => {
+        const rootPath = path.join(input.paths.workspace_dir, entry.name);
+        try {
+          return await discoverWorkspace(rootPath, "project", {
+            platformModels: input.platformModels,
+            ...(input.platformAgents ? { platformAgents: input.platformAgents } : {})
+          });
+        } catch (error) {
+          if (!input.onError) {
+            throw error;
+          }
+
+          input.onError({
+            rootPath,
+            kind: "project",
+            error
+          });
+          return undefined;
+        }
+      })
   );
 
   const chats = await Promise.all(
     chatEntries
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map((entry) =>
-        discoverWorkspace(path.join(input.paths.chat_dir, entry.name), "chat", {
-          platformModels: input.platformModels,
-          ...(input.platformAgents ? { platformAgents: input.platformAgents } : {})
-        })
-      )
+      .map(async (entry) => {
+        const rootPath = path.join(input.paths.chat_dir, entry.name);
+        try {
+          return await discoverWorkspace(rootPath, "chat", {
+            platformModels: input.platformModels,
+            ...(input.platformAgents ? { platformAgents: input.platformAgents } : {})
+          });
+        } catch (error) {
+          if (!input.onError) {
+            throw error;
+          }
+
+          input.onError({
+            rootPath,
+            kind: "chat",
+            error
+          });
+          return undefined;
+        }
+      })
   );
 
-  return [...projects, ...chats];
+  return [...projects, ...chats].filter(isDefined);
 }

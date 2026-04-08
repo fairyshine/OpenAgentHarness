@@ -1,9 +1,8 @@
 import path from "node:path";
-import { watch, type FSWatcher } from "node:fs";
-import { access, readdir, rm } from "node:fs/promises";
+import type { FSWatcher } from "node:fs";
+import { access, rm } from "node:fs/promises";
 
 import {
-  type DiscoveredWorkspace,
   discoverWorkspace,
   discoverWorkspaces,
   initializeWorkspaceFromTemplate,
@@ -14,15 +13,7 @@ import {
 } from "@oah/config";
 import type { ServerConfig } from "@oah/config";
 import { AppError, RuntimeService, createId, parseCursor } from "@oah/runtime-core";
-import type {
-  RuntimeLogger,
-  Run,
-  RunRepository,
-  Session,
-  SessionRepository,
-  WorkspaceRecord,
-  WorkspaceRepository
-} from "@oah/runtime-core";
+import type { RuntimeLogger, WorkspaceRecord } from "@oah/runtime-core";
 import { AiSdkModelGateway } from "@oah/model-gateway";
 import { createPostgresRuntimePersistence } from "@oah/storage-postgres";
 import { createSQLiteRuntimePersistence } from "@oah/storage-sqlite";
@@ -32,23 +23,52 @@ import {
   createRedisSessionEventBus,
   createRedisSessionRunQueue
 } from "@oah/storage-redis";
+import {
+  buildSingleWorkspaceConfig,
+  describeRuntimeProcess,
+  type RuntimeProcessDescriptor,
+  parseConfigPath,
+  parseSingleWorkspaceOptions,
+  shouldRunHistoryMirrorSync,
+  shouldStartEmbeddedWorker
+} from "./bootstrap/runtime-process.js";
+import {
+  ScopedRunRepository,
+  ScopedSessionRepository,
+  ScopedWorkspaceRepository
+} from "./bootstrap/scoped-repositories.js";
+import {
+  discoverProjectWorkspaces,
+  findManagedWorkspaceIdsToDelete,
+  hasPersistedWorkspaceListing,
+  hasWorkspaceSnapshotListing,
+  isManagedWorkspace,
+  isManagedWorkspaceRoot,
+  listAllWorkspaces,
+  openFsWatcher,
+  reconcileDiscoveredWorkspaces,
+  type PlatformAgentRegistry
+} from "./bootstrap/workspace-registry.js";
 import { HistoryMirrorSyncer, inspectHistoryMirrorStatus } from "./history-mirror.js";
 import { createBuiltInPlatformAgents } from "./platform-agents.js";
 import { createStorageAdmin, type StorageAdmin } from "./storage-admin.js";
 
-type PlatformAgentRegistry = Record<string, import("@oah/config").DiscoveredAgent>;
+export {
+  buildSingleWorkspaceConfig,
+  describeRuntimeProcess,
+  parseConfigPath,
+  parseSingleWorkspaceOptions,
+  shouldRunHistoryMirrorSync,
+  shouldStartEmbeddedWorker,
+  shouldStartInlineWorker
+} from "./bootstrap/runtime-process.js";
+export { findManagedWorkspaceIdsToDelete, reconcileDiscoveredWorkspaces } from "./bootstrap/workspace-registry.js";
 
 export interface BootstrapOptions {
   argv?: string[] | undefined;
   startWorker?: boolean | undefined;
   processKind?: "api" | "worker" | undefined;
   platformAgents?: PlatformAgentRegistry | undefined;
-}
-
-export interface RuntimeProcessDescriptor {
-  mode: "api_embedded_worker" | "api_only" | "standalone_worker";
-  label: "API + embedded worker" | "API only" | "standalone worker";
-  execution: "redis_queue" | "local_inline" | "none";
 }
 
 export interface BootstrappedRuntime {
@@ -173,466 +193,6 @@ function buildRuntimeDebugLogger(enabled: boolean): RuntimeLogger | undefined {
   };
 }
 
-function workspaceDiscoveryKey(workspace: Pick<WorkspaceRecord, "kind" | "rootPath">): string {
-  return `${workspace.kind}:${path.resolve(workspace.rootPath)}`;
-}
-
-function managedWorkspaceDirForKind(
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir">,
-  kind: WorkspaceRecord["kind"]
-): string {
-  return kind === "chat" ? paths.chat_dir : paths.workspace_dir;
-}
-
-function isManagedWorkspace(
-  workspace: Pick<WorkspaceRecord, "kind" | "rootPath">,
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir">
-): boolean {
-  return isManagedWorkspaceRoot(workspace.rootPath, managedWorkspaceDirForKind(paths, workspace.kind));
-}
-
-async function listAllWorkspaces(repository: WorkspaceRepository): Promise<WorkspaceRecord[]> {
-  const workspaces: WorkspaceRecord[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const page = await repository.list(100, cursor);
-    workspaces.push(...page);
-    cursor = page.length === 100 ? String((cursor ? Number.parseInt(cursor, 10) : 0) + 100) : undefined;
-  } while (cursor);
-
-  return workspaces;
-}
-
-export function reconcileDiscoveredWorkspaces(
-  discoveredWorkspaces: WorkspaceRecord[],
-  persistedWorkspaces: WorkspaceRecord[]
-): WorkspaceRecord[] {
-  const persistedByKey = new Map<string, WorkspaceRecord[]>();
-  for (const workspace of persistedWorkspaces) {
-    const key = workspaceDiscoveryKey(workspace);
-    const existing = persistedByKey.get(key) ?? [];
-    existing.push(workspace);
-    persistedByKey.set(key, existing);
-  }
-
-  return discoveredWorkspaces.map((workspace) => {
-    const persistedGroup = persistedByKey.get(workspaceDiscoveryKey(workspace)) ?? [];
-    const persisted = persistedGroup.find((candidate) => candidate.id === workspace.id) ?? persistedGroup[0];
-    if (!persisted) {
-      return workspace;
-    }
-
-    return {
-      ...workspace,
-      id: persisted.id,
-      name: persisted.name,
-      executionPolicy: persisted.executionPolicy,
-      status: persisted.status,
-      createdAt: persisted.createdAt,
-      updatedAt: persisted.updatedAt,
-      ...(persisted.externalRef ? { externalRef: persisted.externalRef } : {})
-    };
-  });
-}
-
-export function findManagedWorkspaceIdsToDelete(
-  discoveredWorkspaces: WorkspaceRecord[],
-  persistedWorkspaces: WorkspaceRecord[],
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir">
-): string[] {
-  const discoveredKeys = new Set(discoveredWorkspaces.map((workspace) => workspaceDiscoveryKey(workspace)));
-  const canonicalWorkspaceIds = new Set(
-    reconcileDiscoveredWorkspaces(discoveredWorkspaces, persistedWorkspaces).map((workspace) => workspace.id)
-  );
-
-  return persistedWorkspaces
-    .filter((workspace) => isManagedWorkspace(workspace, paths))
-    .filter((workspace) => {
-      const key = workspaceDiscoveryKey(workspace);
-      return !discoveredKeys.has(key) || !canonicalWorkspaceIds.has(workspace.id);
-    })
-    .map((workspace) => workspace.id);
-}
-
-function isManagedWorkspaceRoot(workspaceRoot: string, managedWorkspaceDir: string): boolean {
-  const relativePath = path.relative(path.resolve(managedWorkspaceDir), path.resolve(workspaceRoot));
-  return relativePath.length > 0 && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
-}
-
-async function discoverProjectWorkspaces(input: {
-  workspaceDir: string;
-  models: Awaited<ReturnType<typeof loadPlatformModels>>;
-  platformAgents: PlatformAgentRegistry;
-  platformSkillDir: string;
-  platformToolDir: string;
-}): Promise<DiscoveredWorkspace[]> {
-  const entries = await readdir(input.workspaceDir, {
-    withFileTypes: true
-  }).catch(() => []);
-
-  const discovered = await Promise.all(
-    entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map(async (entry) =>
-        discoverWorkspace(path.join(input.workspaceDir, entry.name), "project", {
-          platformModels: input.models,
-          platformAgents: input.platformAgents,
-          platformSkillDir: input.platformSkillDir,
-          platformToolDir: input.platformToolDir
-        } as Parameters<typeof discoverWorkspace>[2])
-      )
-  );
-
-  return discovered.sort((left, right) => left.rootPath.localeCompare(right.rootPath));
-}
-
-function openFsWatcher(targetPath: string, onChange: () => void, recursive = false): FSWatcher | undefined {
-  try {
-    return watch(
-      targetPath,
-      {
-        persistent: false,
-        ...(recursive ? { recursive: true } : {})
-      },
-      () => onChange()
-    );
-  } catch {
-    if (!recursive) {
-      return undefined;
-    }
-
-    try {
-      return watch(
-        targetPath,
-        {
-          persistent: false
-        },
-        () => onChange()
-      );
-    } catch {
-      return undefined;
-    }
-  }
-}
-
-async function listVisibleWorkspaces(
-  repository: WorkspaceRepository,
-  visibleWorkspaceIds: ReadonlySet<string>,
-  pageSize: number,
-  cursor?: string
-): Promise<WorkspaceRecord[]> {
-  const visibleItems: WorkspaceRecord[] = [];
-  let rawCursor: string | undefined;
-
-  do {
-    const page = await repository.list(Math.max(pageSize, 100), rawCursor);
-    visibleItems.push(...page.filter((workspace) => visibleWorkspaceIds.has(workspace.id)));
-    rawCursor = page.length === Math.max(pageSize, 100) ? String(parseCursor(rawCursor) + Math.max(pageSize, 100)) : undefined;
-  } while (rawCursor);
-
-  const startIndex = parseCursor(cursor);
-  return visibleItems.slice(startIndex, startIndex + pageSize);
-}
-
-class ScopedWorkspaceRepository implements WorkspaceRepository {
-  constructor(
-    private readonly inner: WorkspaceRepository,
-    private readonly visibleWorkspaceIds: Set<string>
-  ) {}
-
-  async create(input: WorkspaceRecord): Promise<WorkspaceRecord> {
-    this.visibleWorkspaceIds.add(input.id);
-    return this.inner.create(input);
-  }
-
-  async upsert(input: WorkspaceRecord): Promise<WorkspaceRecord> {
-    this.visibleWorkspaceIds.add(input.id);
-    return this.inner.upsert(input);
-  }
-
-  async getById(id: string): Promise<WorkspaceRecord | null> {
-    if (!this.visibleWorkspaceIds.has(id)) {
-      return null;
-    }
-
-    return this.inner.getById(id);
-  }
-
-  async list(pageSize: number, cursor?: string): Promise<WorkspaceRecord[]> {
-    return listVisibleWorkspaces(this.inner, this.visibleWorkspaceIds, pageSize, cursor);
-  }
-
-  async delete(id: string): Promise<void> {
-    this.visibleWorkspaceIds.delete(id);
-    await this.inner.delete(id);
-  }
-}
-
-class ScopedSessionRepository implements SessionRepository {
-  constructor(
-    private readonly inner: SessionRepository,
-    private readonly visibleWorkspaceIds: ReadonlySet<string>
-  ) {}
-
-  async create(input: Session): Promise<Session> {
-    return this.inner.create(input);
-  }
-
-  async getById(id: string): Promise<Session | null> {
-    const session = await this.inner.getById(id);
-    if (!session || !this.visibleWorkspaceIds.has(session.workspaceId)) {
-      return null;
-    }
-
-    return session;
-  }
-
-  async update(input: Session): Promise<Session> {
-    if (!this.visibleWorkspaceIds.has(input.workspaceId)) {
-      throw new AppError(404, "session_not_found", `Session ${input.id} was not found.`);
-    }
-
-    return this.inner.update(input);
-  }
-
-  async listByWorkspaceId(workspaceId: string, pageSize: number, cursor?: string): Promise<Session[]> {
-    if (!this.visibleWorkspaceIds.has(workspaceId)) {
-      return [];
-    }
-
-    return this.inner.listByWorkspaceId(workspaceId, pageSize, cursor);
-  }
-
-  async delete(id: string): Promise<void> {
-    const session = await this.inner.getById(id);
-    if (!session || !this.visibleWorkspaceIds.has(session.workspaceId)) {
-      throw new AppError(404, "session_not_found", `Session ${id} was not found.`);
-    }
-
-    return this.inner.delete(id);
-  }
-}
-
-class ScopedRunRepository implements RunRepository {
-  constructor(
-    private readonly inner: RunRepository,
-    private readonly visibleWorkspaceIds: ReadonlySet<string>
-  ) {}
-
-  async create(input: Run): Promise<Run> {
-    return this.inner.create(input);
-  }
-
-  async getById(id: string): Promise<Run | null> {
-    const run = await this.inner.getById(id);
-    if (!run || !this.visibleWorkspaceIds.has(run.workspaceId)) {
-      return null;
-    }
-
-    return run;
-  }
-
-  async update(input: Run): Promise<Run> {
-    if (!this.visibleWorkspaceIds.has(input.workspaceId)) {
-      throw new AppError(404, "run_not_found", `Run ${input.id} was not found.`);
-    }
-
-    return this.inner.update(input);
-  }
-
-  async listBySessionId(sessionId: string): Promise<Run[]> {
-    const runs = await this.inner.listBySessionId(sessionId);
-    return runs.filter((run) => this.visibleWorkspaceIds.has(run.workspaceId));
-  }
-
-  async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
-    const runs = await this.inner.listRecoverableActiveRuns(staleBefore, limit * 4);
-    return runs.filter((run) => this.visibleWorkspaceIds.has(run.workspaceId)).slice(0, limit);
-  }
-}
-
-function readFlagValue(argv: string[], flag: string): string | undefined {
-  const flagIndex = argv.findIndex((value) => value === flag);
-  if (flagIndex < 0) {
-    return undefined;
-  }
-
-  const value = argv[flagIndex + 1];
-  if (!value || value.startsWith("--")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-
-  return value;
-}
-
-interface SingleWorkspaceCliOptions {
-  rootPath: string;
-  kind: "project" | "chat";
-  modelDir?: string | undefined;
-  defaultModel?: string | undefined;
-  toolDir?: string | undefined;
-  skillDir?: string | undefined;
-  host?: string | undefined;
-  port?: number | undefined;
-}
-
-export function parseSingleWorkspaceOptions(argv: string[]): SingleWorkspaceCliOptions | undefined {
-  const workspaceRoot = readFlagValue(argv, "--workspace");
-  if (!workspaceRoot) {
-    return undefined;
-  }
-
-  const workspaceKind = readFlagValue(argv, "--workspace-kind") ?? "project";
-  if (workspaceKind !== "project" && workspaceKind !== "chat") {
-    throw new Error(`Invalid value for --workspace-kind: ${workspaceKind}`);
-  }
-
-  const portValue = readFlagValue(argv, "--port");
-  let port: number | undefined;
-  if (portValue !== undefined) {
-    const parsed = Number.parseInt(portValue, 10);
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
-      throw new Error(`Invalid value for --port: ${portValue}`);
-    }
-    port = parsed;
-  }
-
-  return {
-    rootPath: path.resolve(process.cwd(), workspaceRoot),
-    kind: workspaceKind,
-    ...(readFlagValue(argv, "--model-dir") ? { modelDir: path.resolve(process.cwd(), readFlagValue(argv, "--model-dir")!) } : {}),
-    ...(readFlagValue(argv, "--default-model") ? { defaultModel: readFlagValue(argv, "--default-model") } : {}),
-    ...(readFlagValue(argv, "--tool-dir") ? { toolDir: path.resolve(process.cwd(), readFlagValue(argv, "--tool-dir")!) } : {}),
-    ...(readFlagValue(argv, "--skill-dir") ? { skillDir: path.resolve(process.cwd(), readFlagValue(argv, "--skill-dir")!) } : {}),
-    ...(readFlagValue(argv, "--host") ? { host: readFlagValue(argv, "--host") } : {}),
-    ...(port !== undefined ? { port } : {})
-  };
-}
-
-function buildSingleWorkspaceConfig(
-  baseConfig: Awaited<ReturnType<typeof loadServerConfig>> | undefined,
-  singleWorkspace: SingleWorkspaceCliOptions
-): ServerConfig {
-  const modelDir = singleWorkspace.modelDir ?? baseConfig?.paths.model_dir;
-  const defaultModel = singleWorkspace.defaultModel ?? baseConfig?.llm.default_model;
-  if (!modelDir) {
-    throw new Error("Single-workspace mode requires --model-dir or config.paths.model_dir.");
-  }
-  if (!defaultModel) {
-    throw new Error("Single-workspace mode requires --default-model or config.llm.default_model.");
-  }
-
-  return {
-    server: {
-      host: singleWorkspace.host ?? baseConfig?.server.host ?? "127.0.0.1",
-      port: singleWorkspace.port ?? baseConfig?.server.port ?? 8787
-    },
-    storage: {
-      ...(baseConfig?.storage ?? {})
-    },
-    paths: {
-      workspace_dir: baseConfig?.paths.workspace_dir ?? path.dirname(singleWorkspace.rootPath),
-      chat_dir: baseConfig?.paths.chat_dir ?? path.dirname(singleWorkspace.rootPath),
-      template_dir: baseConfig?.paths.template_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__templates__"),
-      model_dir: modelDir,
-      tool_dir: singleWorkspace.toolDir ?? baseConfig?.paths.tool_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__platform_tools__"),
-      skill_dir:
-        singleWorkspace.skillDir ?? baseConfig?.paths.skill_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__platform_skills__")
-    },
-    llm: {
-      default_model: defaultModel
-    }
-  };
-}
-
-export function parseConfigPath(argv: string[]): { path: string; explicit: boolean } {
-  const configFlagIndex = argv.findIndex((value) => value === "--config");
-  if (configFlagIndex >= 0) {
-    const configPath = argv[configFlagIndex + 1];
-    if (!configPath) {
-      throw new Error("Missing value for --config.");
-    }
-
-    return {
-      path: path.resolve(process.cwd(), configPath),
-      explicit: true
-    };
-  }
-
-  const envPath = process.env.OAH_CONFIG;
-  if (envPath) {
-    return {
-      path: path.resolve(process.cwd(), envPath),
-      explicit: true
-    };
-  }
-
-  return {
-    path: path.resolve(process.cwd(), "server.yaml"),
-    explicit: false
-  };
-}
-
-export function shouldStartEmbeddedWorker(argv: string[]): boolean {
-  if (argv.includes("--api-only") || argv.includes("--no-worker")) {
-    return false;
-  }
-
-  const inlineWorkerEnv = process.env.OAH_INLINE_WORKER;
-  if (inlineWorkerEnv !== undefined) {
-    return !["0", "false", "off"].includes(inlineWorkerEnv.toLowerCase());
-  }
-
-  return true;
-}
-
-export const shouldStartInlineWorker = shouldStartEmbeddedWorker;
-
-export function describeRuntimeProcess(options: {
-  processKind: "api" | "worker";
-  startWorker: boolean;
-  hasRedisRunQueue: boolean;
-}): RuntimeProcessDescriptor {
-  if (options.processKind === "worker") {
-    return {
-      mode: "standalone_worker",
-      label: "standalone worker",
-      execution: options.hasRedisRunQueue ? "redis_queue" : "none"
-    };
-  }
-
-  if (options.startWorker) {
-    return {
-      mode: "api_embedded_worker",
-      label: "API + embedded worker",
-      execution: options.hasRedisRunQueue ? "redis_queue" : "local_inline"
-    };
-  }
-
-  return {
-    mode: "api_only",
-    label: "API only",
-    execution: options.hasRedisRunQueue ? "redis_queue" : "local_inline"
-  };
-}
-
-export function shouldRunHistoryMirrorSync(options: {
-  processKind: "api" | "worker";
-  startWorker: boolean;
-  hasRedisRunQueue: boolean;
-}): boolean {
-  if (options.processKind === "worker") {
-    return true;
-  }
-
-  if (options.startWorker) {
-    return true;
-  }
-
-  return !options.hasRedisRunQueue;
-}
-
 export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<BootstrappedRuntime> {
   const argv = options.argv ?? process.argv.slice(2);
   const startWorker = options.startWorker ?? false;
@@ -658,7 +218,17 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         );
   const modelDir = config.paths.model_dir;
   const toolDir = config.paths.tool_dir;
-  const models = await loadPlatformModels(modelDir);
+  const logModelLoadError = (filePath: string, error: unknown): void => {
+    console.error(`[oah-bootstrap] Failed to load model definition from ${filePath}; skipping entry.`, error);
+  };
+  const logWorkspaceDiscoveryError = (rootPath: string, kind: "project" | "chat", error: unknown): void => {
+    console.error(`[oah-bootstrap] Failed to discover ${kind} workspace at ${rootPath}; skipping workspace.`, error);
+  };
+  const models = await loadPlatformModels(modelDir, {
+    onError: ({ filePath, error }: { filePath: string; error: unknown }) => {
+      logModelLoadError(filePath, error);
+    }
+  });
   const platformAgents: PlatformAgentRegistry = {
     ...createBuiltInPlatformAgents(),
     ...(options.platformAgents ?? {})
@@ -676,7 +246,10 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       : await discoverWorkspaces({
           paths: config.paths,
           platformModels: models,
-          platformAgents
+          platformAgents,
+          onError: ({ rootPath, kind, error }: { rootPath: string; kind: "project" | "chat"; error: unknown }) => {
+            logWorkspaceDiscoveryError(rootPath, kind, error);
+          }
         } as Parameters<typeof discoverWorkspaces>[0]);
   const runtimeDebugLogger = buildRuntimeDebugLogger(isTruthyEnvValue(process.env.OAH_RUNTIME_DEBUG));
   const modelGateway = new AiSdkModelGateway({
@@ -736,12 +309,11 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   const sessionEventStore = redisBus
     ? new FanoutSessionEventStore(persistence.sessionEventStore, redisBus)
     : persistence.sessionEventStore;
-  const persistedWorkspaceSnapshots =
-    "listPersistedWorkspaces" in persistence
-      ? await persistence.listPersistedWorkspaces()
-      : "listWorkspaceSnapshots" in persistence
-        ? await persistence.listWorkspaceSnapshots(discoveredWorkspaces as WorkspaceRecord[])
-        : await listAllWorkspaces(persistence.workspaceRepository);
+  const persistedWorkspaceSnapshots = hasPersistedWorkspaceListing(persistence)
+    ? await persistence.listPersistedWorkspaces()
+    : hasWorkspaceSnapshotListing(persistence)
+      ? await persistence.listWorkspaceSnapshots(discoveredWorkspaces as WorkspaceRecord[])
+      : await listAllWorkspaces(persistence.workspaceRepository);
   const bootWorkspaceCandidates =
     singleWorkspace === undefined
       ? [
@@ -787,7 +359,10 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               models,
               platformAgents,
               platformSkillDir: config.paths.skill_dir,
-              platformToolDir: toolDir
+              platformToolDir: toolDir,
+              onError: ({ rootPath, error }: { rootPath: string; kind: "project"; error: unknown }) => {
+                logWorkspaceDiscoveryError(rootPath, "project", error);
+              }
             });
             const persistedWorkspaces = await listAllWorkspaces(persistence.workspaceRepository);
             const staticWorkspaces = persistedWorkspaces.filter(

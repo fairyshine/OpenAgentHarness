@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildWorkspaceId } from "@oah/config";
 
@@ -258,6 +258,199 @@ openai-default:
         }
       });
     } finally {
+      await runtime.close();
+    }
+  });
+
+  it("skips invalid platform model files during multi-workspace bootstrap and logs the failure", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-bootstrap-bad-platform-model-"));
+    tempDirs.push(tempDir);
+
+    const workspaceDir = path.join(tempDir, "workspaces");
+    const chatDir = path.join(tempDir, "chat");
+    const templatesDir = path.join(tempDir, "templates");
+    const modelsDir = path.join(tempDir, "models");
+    const toolsDir = path.join(tempDir, "tools");
+    const skillsDir = path.join(tempDir, "skills");
+    const workspaceRoot = path.join(workspaceDir, "good-repo");
+    const configPath = path.join(tempDir, "server.yaml");
+    await Promise.all([
+      mkdir(path.join(workspaceRoot, ".openharness"), { recursive: true }),
+      mkdir(chatDir, { recursive: true }),
+      mkdir(templatesDir, { recursive: true }),
+      mkdir(modelsDir, { recursive: true }),
+      mkdir(toolsDir, { recursive: true }),
+      mkdir(skillsDir, { recursive: true })
+    ]);
+
+    await writeFile(path.join(workspaceRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(
+      path.join(modelsDir, "valid.yaml"),
+      `
+openai-default:
+  provider: openai
+  name: gpt-4o-mini
+`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(modelsDir, "broken.yaml"),
+      `
+broken-provider:
+  provider: openai-compatible
+  key: \${env.MISSING_PLATFORM_MODEL_KEY}
+  url: https://example.test/v1
+  name: broken-model
+`,
+      "utf8"
+    );
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+paths:
+  workspace_dir: ./workspaces
+  chat_dir: ./chat
+  template_dir: ./templates
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    delete process.env.MISSING_PLATFORM_MODEL_KEY;
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const runtime = await bootstrapRuntime({
+      argv: ["--config", configPath],
+      startWorker: false,
+      processKind: "api"
+    });
+
+    try {
+      await expect(runtime.listPlatformModels?.()).resolves.toEqual([
+        expect.objectContaining({
+          id: "openai-default",
+          provider: "openai",
+          modelName: "gpt-4o-mini",
+          isDefault: true
+        })
+      ]);
+
+      const workspaces = await runtime.runtimeService.listWorkspaces(10);
+      expect(workspaces.items).toEqual([
+        expect.objectContaining({
+          rootPath: workspaceRoot,
+          kind: "project"
+        })
+      ]);
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load model definition"),
+        expect.any(Error)
+      );
+      expect(consoleErrorSpy.mock.calls.some(([message]) => String(message).includes("broken.yaml"))).toBe(true);
+    } finally {
+      consoleErrorSpy.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("skips invalid workspaces during multi-workspace bootstrap and logs the failure", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-bootstrap-bad-workspace-model-"));
+    tempDirs.push(tempDir);
+
+    const workspaceDir = path.join(tempDir, "workspaces");
+    const chatDir = path.join(tempDir, "chat");
+    const templatesDir = path.join(tempDir, "templates");
+    const modelsDir = path.join(tempDir, "models");
+    const toolsDir = path.join(tempDir, "tools");
+    const skillsDir = path.join(tempDir, "skills");
+    const goodWorkspaceRoot = path.join(workspaceDir, "good-repo");
+    const badWorkspaceRoot = path.join(workspaceDir, "broken-repo");
+    const configPath = path.join(tempDir, "server.yaml");
+    await Promise.all([
+      mkdir(path.join(goodWorkspaceRoot, ".openharness"), { recursive: true }),
+      mkdir(path.join(badWorkspaceRoot, ".openharness", "models"), { recursive: true }),
+      mkdir(chatDir, { recursive: true }),
+      mkdir(templatesDir, { recursive: true }),
+      mkdir(modelsDir, { recursive: true }),
+      mkdir(toolsDir, { recursive: true }),
+      mkdir(skillsDir, { recursive: true })
+    ]);
+
+    await writeFile(path.join(goodWorkspaceRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(path.join(badWorkspaceRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(
+      path.join(badWorkspaceRoot, ".openharness", "models", "broken.yaml"),
+      `
+workspace-broken:
+  provider: openai
+  key: \${env.MISSING_WORKSPACE_MODEL_KEY}
+  name: gpt-4o-mini
+`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(modelsDir, "valid.yaml"),
+      `
+openai-default:
+  provider: openai
+  name: gpt-4o-mini
+`,
+      "utf8"
+    );
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+paths:
+  workspace_dir: ./workspaces
+  chat_dir: ./chat
+  template_dir: ./templates
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    delete process.env.MISSING_WORKSPACE_MODEL_KEY;
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const runtime = await bootstrapRuntime({
+      argv: ["--config", configPath],
+      startWorker: false,
+      processKind: "api"
+    });
+
+    try {
+      const workspaces = await runtime.runtimeService.listWorkspaces(10);
+      expect(workspaces.items).toEqual([
+        expect.objectContaining({
+          rootPath: goodWorkspaceRoot,
+          kind: "project"
+        })
+      ]);
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to discover project workspace"),
+        expect.any(Error)
+      );
+      expect(consoleErrorSpy.mock.calls.some(([message]) => String(message).includes("broken-repo"))).toBe(true);
+    } finally {
+      consoleErrorSpy.mockRestore();
       await runtime.close();
     }
   });

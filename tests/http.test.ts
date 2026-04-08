@@ -28,6 +28,41 @@ async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 5_00
   throw new Error("Timed out while waiting for condition.");
 }
 
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .flatMap((part) => {
+      if (typeof part !== "object" || part === null) {
+        return [];
+      }
+
+      if ((part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string") {
+        return [(part as { text: string }).text];
+      }
+
+      const output = (part as { output?: unknown }).output;
+      if (
+        (part as { type?: unknown }).type === "tool-result" &&
+        typeof output === "object" &&
+        output !== null &&
+        (((output as { type?: unknown }).type === "text" || (output as { type?: unknown }).type === "error-text") &&
+          typeof (output as { value?: unknown }).value === "string")
+      ) {
+        return [(output as { value: string }).value];
+      }
+
+      return [];
+    })
+    .join("\n\n");
+}
+
 async function readSseFrames(
   response: Response,
   stopWhen: (events: Array<{ event: string; data: Record<string, unknown>; cursor?: string }>) => boolean
@@ -1968,8 +2003,8 @@ describe("http api", () => {
           authorization: "Bearer token-1"
         }
       });
-      const page = (await messagesResponse.json()) as { items: Array<{ role: string; content: string }> };
-      return page.items.some((item) => item.role === "assistant" && item.content.includes("reply:hello there"));
+      const page = (await messagesResponse.json()) as { items: Array<{ role: string; content: unknown }> };
+      return page.items.some((item) => item.role === "assistant" && extractMessageText(item.content).includes("reply:hello there"));
     });
   });
 
@@ -2294,10 +2329,12 @@ Use ripgrep first.
           authorization: "Bearer token-1"
         }
       });
-      const page = (await messagesResponse.json()) as { items: Array<{ role: string; content: string }> };
+      const page = (await messagesResponse.json()) as { items: Array<{ role: string; content: unknown }> };
       return (
-        page.items.filter((item) => item.role === "assistant" && item.content.includes("reply:hello one")).length === 1 &&
-        page.items.filter((item) => item.role === "assistant" && item.content.includes("reply:hello two")).length === 1
+        page.items.filter((item) => item.role === "assistant" && extractMessageText(item.content).includes("reply:hello one"))
+          .length === 1 &&
+        page.items.filter((item) => item.role === "assistant" && extractMessageText(item.content).includes("reply:hello two"))
+          .length === 1
       );
     });
   });

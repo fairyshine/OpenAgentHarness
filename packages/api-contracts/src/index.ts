@@ -144,6 +144,7 @@ export const sessionSchema = z.object({
   workspaceId: z.string(),
   parentSessionId: z.string().optional(),
   subjectRef: z.string(),
+  modelRef: z.string().optional(),
   agentName: z.string().optional(),
   activeAgentName: z.string(),
   title: z.string().optional(),
@@ -610,15 +611,17 @@ export const moveWorkspaceEntryRequestSchema = z.object({
 
 export const createSessionRequestSchema = z.object({
   title: z.string().optional(),
-  agentName: z.string().optional()
+  agentName: z.string().optional(),
+  modelRef: z.string().trim().min(1).optional()
 });
 
 export const updateSessionRequestSchema = z
   .object({
     title: z.string().trim().min(1).max(120).optional(),
-    activeAgentName: z.string().trim().min(1).optional()
+    activeAgentName: z.string().trim().min(1).optional(),
+    modelRef: z.string().trim().min(1).nullable().optional()
   })
-  .refine((value) => value.title !== undefined || value.activeAgentName !== undefined, {
+  .refine((value) => value.title !== undefined || value.activeAgentName !== undefined || value.modelRef !== undefined, {
     message: "At least one session field must be provided."
   });
 

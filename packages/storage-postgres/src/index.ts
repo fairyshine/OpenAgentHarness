@@ -125,6 +125,7 @@ const sessions = pgTable("sessions", {
     .references(() => workspaces.id, { onDelete: "cascade" }),
   parentSessionId: text("parent_session_id"),
   subjectRef: text("subject_ref").notNull(),
+  modelRef: text("model_ref"),
   agentName: text("agent_name"),
   activeAgentName: text("active_agent_name").notNull(),
   title: text("title"),
@@ -354,6 +355,7 @@ function buildSessionRow(input: Session) {
     workspaceId: input.workspaceId,
     parentSessionId: input.parentSessionId ?? null,
     subjectRef: input.subjectRef,
+    modelRef: input.modelRef ?? null,
     agentName: input.agentName ?? null,
     activeAgentName: input.activeAgentName,
     title: input.title ?? null,
@@ -370,6 +372,7 @@ function toSession(row: typeof sessions.$inferSelect): Session {
     workspaceId: row.workspaceId,
     ...(row.parentSessionId ? { parentSessionId: row.parentSessionId } : {}),
     subjectRef: row.subjectRef,
+    ...(row.modelRef ? { modelRef: row.modelRef } : {}),
     ...(row.agentName ? { agentName: row.agentName } : {}),
     activeAgentName: row.activeAgentName,
     ...(row.title ? { title: row.title } : {}),
@@ -1143,6 +1146,7 @@ const schemaStatements = [
     workspace_id text not null references workspaces(id) on delete cascade,
     parent_session_id text references sessions(id) on delete set null,
     subject_ref text not null,
+    model_ref text,
     agent_name text,
     active_agent_name text not null,
     title text,
@@ -1152,6 +1156,7 @@ const schemaStatements = [
     updated_at timestamptz not null
   )`,
   `alter table sessions add column if not exists parent_session_id text references sessions(id) on delete set null`,
+  `alter table sessions add column if not exists model_ref text`,
   `create index if not exists sessions_workspace_created_idx on sessions (workspace_id, created_at desc)`,
   `create index if not exists sessions_parent_session_idx on sessions (parent_session_id)`,
   `create index if not exists sessions_subject_created_idx on sessions (subject_ref, created_at desc)`,
@@ -1368,15 +1373,16 @@ async function normalizePostgresPersistedData(queryable: SqlQueryable): Promise<
     }
 
     if (row.entity_type === "message" && isRecord(row.payload)) {
-      const normalized = normalizePersistedMessageRecord(createMessage({
+      const role = isMessageRole(row.payload.role) ? row.payload.role : "assistant";
+      const normalized = normalizePersistedMessageRecord({
         id: String(row.payload.id ?? ""),
         sessionId: String(row.payload.sessionId ?? ""),
         runId: typeof row.payload.runId === "string" ? row.payload.runId : undefined,
-        role: row.payload.role,
-        content: row.payload.content,
-        metadata: row.payload.metadata,
+        role,
+        content: row.payload.content as Message["content"],
+        ...(isRecord(row.payload.metadata) ? { metadata: row.payload.metadata } : {}),
         createdAt: String(row.payload.createdAt ?? "")
-      }));
+      } as Message);
       if (normalized.changed) {
         await queryable.query("update history_events set payload = $2::jsonb where id = $1", [row.id, normalized.message]);
       }

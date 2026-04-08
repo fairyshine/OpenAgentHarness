@@ -124,21 +124,13 @@ export function useNavigationActions(params: {
       id: sessionRecord.id,
       workspaceId: sessionRecord.workspaceId,
       ...(sessionRecord.parentSessionId ? { parentSessionId: sessionRecord.parentSessionId } : {}),
+      title: sessionRecord.title,
+      modelRef: sessionRecord.modelRef,
+      agentName: sessionRecord.activeAgentName,
+      lastRunAt: sessionRecord.lastRunAt,
       createdAt: sessionRecord.createdAt,
       lastOpenedAt: now
     };
-
-    if (sessionRecord.title) {
-      nextRecord.title = sessionRecord.title;
-    }
-
-    if (sessionRecord.activeAgentName) {
-      nextRecord.agentName = sessionRecord.activeAgentName;
-    }
-
-    if (sessionRecord.lastRunAt) {
-      nextRecord.lastRunAt = sessionRecord.lastRunAt;
-    }
 
     params.navigation.setSavedSessions((current) => {
       const existingIndex = current.findIndex((entry) => entry.id === sessionRecord.id);
@@ -387,6 +379,39 @@ export function useNavigationActions(params: {
     }
   }
 
+  async function updateSessionModel(sessionToUpdateId: string, modelRef: string | null): Promise<Session | null> {
+    try {
+      const updated = await params.request<Session>(`/api/v1/sessions/${sessionToUpdateId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ modelRef })
+      });
+
+      rememberSession(updated);
+      if (params.navigation.session?.id === updated.id) {
+        params.navigation.setSession(updated);
+      }
+      params.setActivity(
+        updated.modelRef ? `Session ${updated.id} 已绑定模型 ${updated.modelRef}` : `Session ${updated.id} 已恢复默认模型策略`
+      );
+      params.setErrorMessage("");
+      return updated;
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        if (params.navigation.session?.id === sessionToUpdateId || params.navigation.sessionId === sessionToUpdateId) {
+          clearSessionSelection(sessionToUpdateId, { forgetSession: true });
+        } else {
+          params.navigation.setSavedSessions((current) => current.filter((entry) => entry.id !== sessionToUpdateId));
+          params.navigation.setRecentSessions((current) => current.filter((entry) => entry !== sessionToUpdateId));
+        }
+      }
+      params.setErrorMessage(toErrorMessage(error));
+      return null;
+    }
+  }
+
   async function refreshWorkspaceTemplates(quiet = false) {
     try {
       const response = await params.request<WorkspaceTemplateList>("/api/v1/workspace-templates");
@@ -468,9 +493,10 @@ export function useNavigationActions(params: {
               id: session.id,
               workspaceId: session.workspaceId,
               ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
-              ...(session.title ? { title: session.title } : {}),
-              ...(session.activeAgentName ? { agentName: session.activeAgentName } : {}),
-              ...(session.lastRunAt ? { lastRunAt: session.lastRunAt } : {}),
+              title: session.title,
+              modelRef: session.modelRef,
+              agentName: session.activeAgentName,
+              lastRunAt: session.lastRunAt,
               createdAt: session.createdAt,
               lastOpenedAt: existing?.lastOpenedAt ?? session.createdAt
             });
@@ -809,6 +835,7 @@ export function useNavigationActions(params: {
     removeSavedSession,
     renameSession,
     switchSessionAgent,
+    updateSessionModel,
     clearSessionSelection,
     clearWorkspaceSelection,
     openWorkspace,

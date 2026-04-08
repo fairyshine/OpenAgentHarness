@@ -87,6 +87,8 @@ export function useAppController() {
   const [timelineInspectorMode, setTimelineInspectorMode] = useState<"all" | "execution" | "messages" | "calls" | "steps" | "events">("all");
   const [pendingSessionAgentName, setPendingSessionAgentName] = useState<string | null>(null);
   const [switchingSessionAgentId, setSwitchingSessionAgentId] = useState<string | null>(null);
+  const [pendingSessionModelRef, setPendingSessionModelRef] = useState<string | null>(null);
+  const [switchingSessionModelId, setSwitchingSessionModelId] = useState<string | null>(null);
   const navigation = useNavigationState();
   const {
     workspaceDraft,
@@ -140,6 +142,8 @@ export function useAppController() {
   const runPollingTimerRef = useRef<number | undefined>(undefined);
   const sessionAgentSwitchRef = useRef<{ sessionId: string; promise: Promise<boolean> } | null>(null);
   const sessionAgentSwitchSeqRef = useRef(0);
+  const sessionModelUpdateRef = useRef<{ sessionId: string; promise: Promise<boolean> } | null>(null);
+  const sessionModelUpdateSeqRef = useRef(0);
   const conversationThreadRef = useRef<HTMLDivElement | null>(null);
   const conversationTailRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoFollowConversationRef = useRef(true);
@@ -298,6 +302,7 @@ export function useAppController() {
               id: session.id,
               title: session.title ?? currentSessionName,
               workspaceId: session.workspaceId,
+              modelRef: session.modelRef,
               agentName: session.agentName,
               activeAgentName: session.activeAgentName,
               status: session.status,
@@ -595,6 +600,9 @@ export function useAppController() {
     setPendingSessionAgentName(null);
     setSwitchingSessionAgentId(null);
     sessionAgentSwitchRef.current = null;
+    setPendingSessionModelRef(null);
+    setSwitchingSessionModelId(null);
+    sessionModelUpdateRef.current = null;
   }, [session?.id]);
 
   async function switchSessionAgent(targetId: string, activeAgentName: string) {
@@ -646,6 +654,55 @@ export function useAppController() {
     }
   }
 
+  async function updateSessionModel(targetId: string, modelRef: string | null) {
+    if (!targetId.trim()) {
+      return false;
+    }
+
+    const currentSession = session?.id === targetId ? session : null;
+    const normalizedModelRef = modelRef?.trim() ? modelRef.trim() : null;
+    const updateSeq = sessionModelUpdateSeqRef.current + 1;
+    sessionModelUpdateSeqRef.current = updateSeq;
+    setSwitchingSessionModelId(targetId);
+    setPendingSessionModelRef(normalizedModelRef);
+    if (currentSession) {
+      setSession({
+        ...currentSession,
+        ...(normalizedModelRef ? { modelRef: normalizedModelRef } : {}),
+        ...(normalizedModelRef === null ? { modelRef: undefined } : {}),
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    const updatePromise = navigationActions.updateSessionModel(targetId, normalizedModelRef).then((updated) => updated !== null);
+    sessionModelUpdateRef.current = {
+      sessionId: targetId,
+      promise: updatePromise
+    };
+
+    try {
+      const updated = await updatePromise;
+      if (!updated) {
+        if (currentSession) {
+          setSession(currentSession);
+        }
+        return false;
+      }
+
+      if (sessionId === targetId) {
+        await navigationActions.refreshSession(targetId, true);
+      }
+
+      return true;
+    } finally {
+      if (sessionModelUpdateSeqRef.current === updateSeq) {
+        sessionModelUpdateRef.current = null;
+        setSwitchingSessionModelId(null);
+        setPendingSessionModelRef(null);
+      }
+    }
+  }
+
   async function sendMessage() {
     if (!sessionId.trim()) {
       setErrorMessage("请先创建或加载 session。");
@@ -662,6 +719,14 @@ export function useAppController() {
       if (pendingAgentSwitch?.sessionId === sessionId) {
         const switched = await pendingAgentSwitch.promise;
         if (!switched) {
+          return;
+        }
+      }
+
+      const pendingModelUpdate = sessionModelUpdateRef.current;
+      if (pendingModelUpdate?.sessionId === sessionId) {
+        const updated = await pendingModelUpdate.promise;
+        if (!updated) {
           return;
         }
       }
@@ -1262,6 +1327,9 @@ export function useAppController() {
       pendingSessionAgentName,
       isSwitchingSessionAgent: switchingSessionAgentId === session?.id && pendingSessionAgentName !== null,
       switchSessionAgent: (targetId: string, activeAgentName: string) => void switchSessionAgent(targetId, activeAgentName),
+      pendingSessionModelRef,
+      isSwitchingSessionModel: switchingSessionModelId === session?.id,
+      updateSessionModel: (targetId: string, modelRef: string | null) => void updateSessionModel(targetId, modelRef),
       mirrorStatus,
       mirrorRebuildBusy,
       refreshWorkspace: (targetId: string) => void navigationActions.refreshWorkspace(targetId, true),
