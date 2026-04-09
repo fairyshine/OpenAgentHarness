@@ -100,6 +100,9 @@ importers:
       tailwind-merge:
         specifier: 3.5.0
         version: 3.5.0
+      tslib:
+        specifier: ^2.8.1
+        version: 2.8.1
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
