@@ -8,6 +8,7 @@ import type {
 } from "@oah/api-contracts";
 
 import {
+  buildAuthHeaders,
   buildUrl,
   createHttpRequestError,
   pathLeaf,
@@ -114,15 +115,6 @@ function isTextEntry(entry: Pick<WorkspaceEntry, "path" | "mimeType">): boolean 
     "sql",
     "log"
   ].includes(pathExtension(entry.path));
-}
-
-function buildAuthHeaders(connection: ConnectionSettings, extraHeaders?: HeadersInit): Headers {
-  const headers = new Headers(extraHeaders);
-  const token = connection.token.trim();
-  if (token) {
-    headers.set("authorization", `Bearer ${token}`);
-  }
-  return headers;
 }
 
 export function useWorkspaceFileManager(params: {

@@ -16,6 +16,8 @@ import {
   storageRedisMaintenanceRequestSchema,
   storageRedisMaintenanceResponseSchema,
   storageTableQuerySchema,
+  uploadWorkspaceTemplateRequestSchema,
+  uploadWorkspaceTemplateResponseSchema,
   workspaceTemplateListSchema
 } from "@oah/api-contracts";
 import { SUPPORTED_MODEL_PROVIDERS } from "@oah/model-gateway";
@@ -85,6 +87,55 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
         items: templates
       })
     );
+  });
+
+  app.post("/api/v1/workspace-templates/upload", async (request, reply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadWorkspaceTemplate) {
+      throw new AppError(501, "template_upload_unavailable", "Template upload is not available on this server.");
+    }
+
+    if (!Buffer.isBuffer(request.body)) {
+      throw new AppError(415, "invalid_content_type", "Template upload requires Content-Type: application/octet-stream.");
+    }
+
+    const query = uploadWorkspaceTemplateRequestSchema.parse(request.query);
+
+    try {
+      const template = await dependencies.uploadWorkspaceTemplate({
+        templateName: query.name,
+        zipBuffer: request.body,
+        overwrite: query.overwrite
+      });
+      return reply.status(201).send(uploadWorkspaceTemplateResponseSchema.parse({ name: template.name }));
+    } catch (error) {
+      if (error instanceof Error && (error as Error & { code?: string }).code === "template_already_exists") {
+        throw new AppError(409, "template_already_exists", error.message);
+      }
+      if (error instanceof Error && (error as Error & { code?: string }).code === "empty_template_zip") {
+        throw new AppError(400, "empty_template_zip", error.message);
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/api/v1/workspace-templates/:templateName", async (request, reply) => {
+    if (options.workspaceMode === "single" || !dependencies.deleteWorkspaceTemplate) {
+      throw new AppError(501, "template_delete_unavailable", "Template deletion is not available on this server.");
+    }
+
+    const params = createParamsSchema("templateName").parse(request.params);
+
+    try {
+      await dependencies.deleteWorkspaceTemplate({
+        templateName: params.templateName
+      });
+      return reply.status(204).send();
+    } catch (error) {
+      if (error instanceof Error && (error as Error & { code?: string }).code === "template_not_found") {
+        throw new AppError(404, "template_not_found", error.message);
+      }
+      throw error;
+    }
   });
 
   app.get("/api/v1/model-providers", async (_request, reply) =>

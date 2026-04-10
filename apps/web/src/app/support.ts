@@ -342,6 +342,15 @@ function buildUrl(baseUrl: string, path: string) {
   return normalized ? `${normalized}${path}` : path;
 }
 
+function buildAuthHeaders(connection: ConnectionSettings, extraHeaders?: HeadersInit): Headers {
+  const headers = new Headers(extraHeaders);
+  const token = connection.token.trim();
+  if (token) {
+    headers.set("authorization", `Bearer ${token}`);
+  }
+  return headers;
+}
+
 async function readJsonResponse<T>(response: Response): Promise<T> {
   const raw = await response.text();
   if (!raw.trim()) {
@@ -1436,6 +1445,7 @@ export {
   usePersistentState,
   normalizeBaseUrl,
   buildUrl,
+  buildAuthHeaders,
   createHttpRequestError,
   readJsonResponse,
   toErrorMessage,

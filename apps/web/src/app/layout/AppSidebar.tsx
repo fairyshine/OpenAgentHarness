@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import {
   Bot,
@@ -12,6 +12,7 @@ import {
   Rows3,
   Search,
   Table2,
+  Upload,
   Workflow
 } from "lucide-react";
 
@@ -732,6 +733,12 @@ function ProviderSidebar(props: SidebarProps) {
 }
 
 export function AppSidebar(props: SidebarProps) {
+  const uploadTemplateInputRef = useRef<HTMLInputElement>(null);
+  const [uploadTemplateName, setUploadTemplateName] = useState("");
+  const [uploadTemplateOverwrite, setUploadTemplateOverwrite] = useState(false);
+  const [uploadTemplateFile, setUploadTemplateFile] = useState<File | null>(null);
+  const [showUploadTemplateDialog, setShowUploadTemplateDialog] = useState(false);
+
   const icon =
     props.surfaceMode === "storage" ? <Table2 className="h-4 w-4" /> : props.surfaceMode === "provider" ? <Network className="h-4 w-4" /> : <Bot className="h-4 w-4" />;
   const title = props.surfaceMode === "storage" ? "Storage" : props.surfaceMode === "provider" ? "Provider" : "Runtime";
@@ -801,31 +808,58 @@ export function AppSidebar(props: SidebarProps) {
               placeholder="Workspace name"
             />
             <div className="space-y-1">
-              <Select
-                {...(props.workspaceDraft.template.trim() ? { value: props.workspaceDraft.template.trim() } : {})}
-                onValueChange={(value) => props.setWorkspaceDraft((current) => ({ ...current, template: value }))}
-              >
-                <SelectTrigger className="h-10 w-full rounded-xl border-black/10 bg-white/68 text-sm shadow-none" aria-label="Workspace template">
-                  <SelectValue placeholder={props.workspaceTemplates.length > 0 ? "Select template" : "No templates available"} />
-                </SelectTrigger>
-                <SelectContent align="start">
-                  {props.workspaceTemplates.length > 0 ? (
-                    props.workspaceTemplates.map((template) => (
-                      <SelectItem key={template} value={template}>
-                        {template}
+              <div className="flex items-center gap-1">
+                <Select
+                  {...(props.workspaceDraft.template.trim() ? { value: props.workspaceDraft.template.trim() } : {})}
+                  onValueChange={(value) => props.setWorkspaceDraft((current) => ({ ...current, template: value }))}
+                >
+                  <SelectTrigger className="h-10 flex-1 rounded-xl border-black/10 bg-white/68 text-sm shadow-none" aria-label="Workspace template">
+                    <SelectValue placeholder={props.workspaceTemplates.length > 0 ? "Select template" : "No templates available"} />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    {props.workspaceTemplates.length > 0 ? (
+                      props.workspaceTemplates.map((template) => (
+                        <SelectItem key={template} value={template}>
+                          {template}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="__no_templates__" disabled>
+                        No templates available
                       </SelectItem>
-                    ))
-                  ) : (
-                    <SelectItem value="__no_templates__" disabled>
-                      No templates available
-                    </SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
+                    )}
+                  </SelectContent>
+                </Select>
+                <input
+                  ref={uploadTemplateInputRef}
+                  type="file"
+                  accept=".zip"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    const derivedName = file.name.replace(/\.zip$/i, "").replace(/[^a-zA-Z0-9_-]/g, "_");
+                    setUploadTemplateName(derivedName);
+                    setUploadTemplateFile(file);
+                    setUploadTemplateOverwrite(false);
+                    setShowUploadTemplateDialog(true);
+                    event.target.value = "";
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 shrink-0 rounded-xl"
+                  onClick={() => uploadTemplateInputRef.current?.click()}
+                  title="Upload template (.zip)"
+                >
+                  <Upload className="h-4 w-4" />
+                </Button>
+              </div>
               <p className="px-1 text-xs leading-5 text-muted-foreground">
                 {props.workspaceTemplates.length > 0
-                  ? "Choose one of the server-provided workspace templates."
-                  : "Template list is empty. Use the refresh button to load templates from the server."}
+                  ? "Choose a template or upload a .zip folder as a new template."
+                  : "Template list is empty. Upload a .zip or use the refresh button."}
               </p>
             </div>
             <Input
@@ -850,6 +884,66 @@ export function AppSidebar(props: SidebarProps) {
             >
               <FolderPlus className="h-4 w-4" />
               Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showUploadTemplateDialog} onOpenChange={setShowUploadTemplateDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Upload Template</DialogTitle>
+            <DialogDescription>
+              Upload a .zip file containing the template folder structure. It will be extracted as a new workspace template.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              value={uploadTemplateName}
+              onChange={(event) => setUploadTemplateName(event.target.value.replace(/[^a-zA-Z0-9_-]/g, "_"))}
+              placeholder="Template name"
+            />
+            <p className="px-1 text-xs leading-5 text-muted-foreground">
+              Only alphanumeric characters, hyphens, and underscores are allowed.
+            </p>
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={uploadTemplateOverwrite}
+                onCheckedChange={setUploadTemplateOverwrite}
+                id="overwrite-template"
+              />
+              <label htmlFor="overwrite-template" className="text-sm text-muted-foreground">
+                Overwrite if exists
+              </label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowUploadTemplateDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!uploadTemplateName.trim() || !uploadTemplateFile}
+              onClick={async () => {
+                if (!uploadTemplateFile) return;
+                const ok = await props.uploadWorkspaceTemplate(
+                  uploadTemplateFile,
+                  uploadTemplateName.trim(),
+                  uploadTemplateOverwrite
+                );
+                if (ok) {
+                  setShowUploadTemplateDialog(false);
+                  setUploadTemplateFile(null);
+                  setUploadTemplateName("");
+                  setUploadTemplateOverwrite(false);
+                  props.setWorkspaceDraft((current) => ({ ...current, template: uploadTemplateName.trim() }));
+                }
+              }}
+            >
+              <Upload className="h-4 w-4" />
+              Upload
             </Button>
           </DialogFooter>
         </DialogContent>
