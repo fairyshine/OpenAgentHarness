@@ -12,7 +12,6 @@ import { READ_STATE_DIRECTORY, TODO_STATE_DIRECTORY } from "./constants.js";
 import { ensureParentDirectory, readJsonFile } from "./fs-utils.js";
 import { createTodoWriteTool } from "./todo-write.js";
 import { createWebFetchTool } from "./web-fetch.js";
-import { createWebSearchTool } from "./web-search.js";
 import { createWriteTool } from "./write.js";
 import {
   type NativeToolFactoryContext,
@@ -85,7 +84,6 @@ export function createNativeToolSet(
     ...createGlobTool(context),
     ...createGrepTool(context),
     ...createWebFetchTool(context),
-    ...createWebSearchTool(context),
     ...createTodoWriteTool(context)
   };
 }

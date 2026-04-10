@@ -64,7 +64,42 @@ llm:
     const config = await loadServerConfig(configPath);
     expect(config.storage.postgres_url).toBe("postgres://local/test");
     expect(config.paths.model_dir).toBe(path.join(tempDir, "models"));
+    expect(config.paths.archive_dir).toBe(path.join(tempDir, "workspaces", ".openharness", "archives"));
     expect(config.llm.default_model).toBe("openai-default");
+  });
+
+  it("accepts an explicit archive_dir in server config", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-archive-dir-"));
+    tempDirs.push(tempDir);
+
+    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills", "archives"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+paths:
+  workspace_dir: ./workspaces
+  chat_dir: ./chat
+  template_dir: ./templates
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+  archive_dir: ./archives
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const config = await loadServerConfig(configPath);
+    expect(config.paths.archive_dir).toBe(path.join(tempDir, "archives"));
   });
 
   it("requires model_dir and tool_dir in server config", async () => {
@@ -755,7 +790,7 @@ skills:
 disallowed:
   tools:
     native:
-      - WebSearch
+      - WebFetch
     external:
       - shared-browser
   actions:
@@ -811,7 +846,7 @@ Stay hidden from the catalog.
       skills: ["repo-explorer"],
       disallowed: {
         tools: {
-          native: ["WebSearch"],
+          native: ["WebFetch"],
           external: ["shared-browser"]
         },
         actions: ["danger.delete"],

@@ -90,6 +90,30 @@ interface RegistryWorkspaceRow {
   payload: string;
 }
 
+interface RegistryWorkspaceIdRow {
+  workspaceId: string;
+}
+
+interface MessageRegistryEntryRow {
+  id: string;
+}
+
+interface SessionEventRegistryEntryRow {
+  id: string;
+}
+
+interface RunRegistryEntryRow {
+  id: string;
+  status: Run["status"];
+  heartbeat_at: string | null;
+  started_at: string | null;
+  created_at: string;
+}
+
+interface RecoverableRunRegistryRow {
+  id: string;
+}
+
 const schemaStatements = [
   `create table if not exists workspace_meta (
     id text primary key,
@@ -195,7 +219,34 @@ const registrySchemaStatements = [
     primary key (kind, root_path)
   )`,
   `create unique index if not exists workspace_registry_id_idx on workspace_registry (id)`,
-  `create index if not exists workspace_registry_updated_idx on workspace_registry (updated_at desc, id asc)`
+  `create index if not exists workspace_registry_updated_idx on workspace_registry (updated_at desc, id asc)`,
+  `create table if not exists session_registry (
+    id text primary key,
+    workspace_id text not null,
+    updated_at text not null
+  )`,
+  `create index if not exists session_registry_workspace_idx on session_registry (workspace_id, updated_at desc, id asc)`,
+  `create table if not exists message_registry (
+    id text primary key,
+    workspace_id text not null,
+    updated_at text not null
+  )`,
+  `create index if not exists message_registry_workspace_idx on message_registry (workspace_id, updated_at desc, id asc)`,
+  `create table if not exists session_event_registry (
+    id text primary key,
+    workspace_id text not null,
+    updated_at text not null
+  )`,
+  `create index if not exists session_event_registry_workspace_idx on session_event_registry (workspace_id, updated_at desc, id asc)`,
+  `create table if not exists run_registry (
+    id text primary key,
+    workspace_id text not null,
+    status text,
+    recover_at text,
+    updated_at text not null
+  )`,
+  `create index if not exists run_registry_workspace_idx on run_registry (workspace_id, updated_at desc, id asc)`,
+  `create index if not exists run_registry_recoverable_idx on run_registry (status, recover_at, id asc)`
 ];
 
 function defaultProjectDbPath(workspace: Pick<WorkspaceRecord, "rootPath">): string {
@@ -755,7 +806,7 @@ class SQLitePersistenceCoordinator {
         serializeJson(workspace),
         workspace.updatedAt
       );
-    this.reindexWorkspace(handle.db, workspace.id);
+    await this.reindexWorkspace(handle.db, workspace.id);
 
     const registryDb = await this.ensureRegistryDb();
     runInTransaction(registryDb, () => {
@@ -788,12 +839,24 @@ class SQLitePersistenceCoordinator {
 
     if (!workspace) {
       const registryDb = await this.ensureRegistryDb();
-      registryDb.prepare("delete from workspace_registry where id = ?").run(workspaceId);
+      runInTransaction(registryDb, () => {
+        registryDb.prepare("delete from workspace_registry where id = ?").run(workspaceId);
+        registryDb.prepare("delete from session_registry where workspace_id = ?").run(workspaceId);
+        registryDb.prepare("delete from message_registry where workspace_id = ?").run(workspaceId);
+        registryDb.prepare("delete from session_event_registry where workspace_id = ?").run(workspaceId);
+        registryDb.prepare("delete from run_registry where workspace_id = ?").run(workspaceId);
+      });
       return;
     }
 
     const registryDb = await this.ensureRegistryDb();
-    registryDb.prepare("delete from workspace_registry where id = ?").run(workspaceId);
+    runInTransaction(registryDb, () => {
+      registryDb.prepare("delete from workspace_registry where id = ?").run(workspaceId);
+      registryDb.prepare("delete from session_registry where workspace_id = ?").run(workspaceId);
+      registryDb.prepare("delete from message_registry where workspace_id = ?").run(workspaceId);
+      registryDb.prepare("delete from session_event_registry where workspace_id = ?").run(workspaceId);
+      registryDb.prepare("delete from run_registry where workspace_id = ?").run(workspaceId);
+    });
 
     const dbPath = this.dbPathForWorkspace(workspace);
     if (dbPath.startsWith(`${this.#shadowRoot}${path.sep}`) || dbPath === this.#shadowRoot) {
@@ -829,11 +892,17 @@ class SQLitePersistenceCoordinator {
       return indexed;
     }
 
+    const persisted = await this.lookupWorkspaceIdInRegistry("session_registry", sessionId);
+    if (persisted) {
+      this.#sessionIndex.set(sessionId, persisted);
+      return persisted;
+    }
+
     for (const workspace of this.#workspaceRecords.values()) {
       const handle = await this.ensureHandle(workspace);
       const row = handle.db.prepare("select id from sessions where id = ? limit 1").get(sessionId) as IdRow | undefined;
       if (row?.id) {
-        this.#sessionIndex.set(sessionId, workspace.id);
+        await this.indexSession(sessionId, workspace.id);
         return workspace.id;
       }
     }
@@ -847,11 +916,26 @@ class SQLitePersistenceCoordinator {
       return indexed;
     }
 
+    const persisted = await this.lookupWorkspaceIdInRegistry("run_registry", runId);
+    if (persisted) {
+      this.#runIndex.set(runId, persisted);
+      return persisted;
+    }
+
     for (const workspace of this.#workspaceRecords.values()) {
       const handle = await this.ensureHandle(workspace);
-      const row = handle.db.prepare("select id from runs where id = ? limit 1").get(runId) as IdRow | undefined;
+      const row = handle.db
+        .prepare("select id, status, heartbeat_at, started_at, created_at from runs where id = ? limit 1")
+        .get(runId) as RunRegistryEntryRow | undefined;
       if (row?.id) {
-        this.#runIndex.set(runId, workspace.id);
+        await this.indexRun({
+          id: row.id,
+          workspaceId: workspace.id,
+          status: row.status,
+          heartbeatAt: row.heartbeat_at ?? undefined,
+          startedAt: row.started_at ?? undefined,
+          createdAt: row.created_at
+        });
         return workspace.id;
       }
     }
@@ -935,8 +1019,12 @@ class SQLitePersistenceCoordinator {
     normalizePersistedWorkspaceData(db);
     const handle = { dbPath, db };
     this.#handles.set(workspace.id, handle);
-    this.reindexWorkspace(db, workspace.id);
+    await this.reindexWorkspace(db, workspace.id);
     return handle;
+  }
+
+  listWorkspaceRecords(): WorkspaceRecord[] {
+    return [...this.#workspaceRecords.values()];
   }
 
   async ensureRegistryDb(): Promise<DatabaseSync> {
@@ -951,11 +1039,12 @@ class SQLitePersistenceCoordinator {
     for (const statement of registrySchemaStatements) {
       db.exec(statement);
     }
+    this.ensureRegistrySchema(db);
     this.#registryDb = db;
     return db;
   }
 
-  reindexWorkspace(db: DatabaseSync, workspaceId: string): void {
+  async reindexWorkspace(db: DatabaseSync, workspaceId: string): Promise<void> {
     this.deleteWorkspaceIndexes(workspaceId);
 
     const sessionRows = coerceRows<IdRow>(db.prepare("select id from sessions where workspace_id = ?").all(workspaceId));
@@ -963,10 +1052,76 @@ class SQLitePersistenceCoordinator {
       this.#sessionIndex.set(row.id, workspaceId);
     }
 
-    const runRows = coerceRows<IdRow>(db.prepare("select id from runs where workspace_id = ?").all(workspaceId));
+    const messageRows = coerceRows<MessageRegistryEntryRow>(
+      db.prepare("select id from messages where session_id in (select id from sessions where workspace_id = ?)").all(workspaceId)
+    );
+    const sessionEventRows = coerceRows<SessionEventRegistryEntryRow>(
+      db.prepare("select id from session_events where session_id in (select id from sessions where workspace_id = ?)").all(workspaceId)
+    );
+
+    const runRows = coerceRows<RunRegistryEntryRow>(
+      db
+        .prepare("select id, status, heartbeat_at, started_at, created_at from runs where workspace_id = ?")
+        .all(workspaceId)
+    );
     for (const row of runRows) {
       this.#runIndex.set(row.id, workspaceId);
     }
+
+    const registryDb = await this.ensureRegistryDb();
+    const indexedAt = nowIso();
+    runInTransaction(registryDb, () => {
+      registryDb.prepare("delete from session_registry where workspace_id = ?").run(workspaceId);
+      registryDb.prepare("delete from message_registry where workspace_id = ?").run(workspaceId);
+      registryDb.prepare("delete from session_event_registry where workspace_id = ?").run(workspaceId);
+      registryDb.prepare("delete from run_registry where workspace_id = ?").run(workspaceId);
+
+      const insertSession = registryDb.prepare(
+        `insert into session_registry (id, workspace_id, updated_at)
+         values (?, ?, ?)
+         on conflict(id) do update set
+           workspace_id = excluded.workspace_id,
+           updated_at = excluded.updated_at`
+      );
+      for (const row of sessionRows) {
+        insertSession.run(row.id, workspaceId, indexedAt);
+      }
+
+      const insertMessage = registryDb.prepare(
+        `insert into message_registry (id, workspace_id, updated_at)
+         values (?, ?, ?)
+         on conflict(id) do update set
+           workspace_id = excluded.workspace_id,
+           updated_at = excluded.updated_at`
+      );
+      for (const row of messageRows) {
+        insertMessage.run(row.id, workspaceId, indexedAt);
+      }
+
+      const insertSessionEvent = registryDb.prepare(
+        `insert into session_event_registry (id, workspace_id, updated_at)
+         values (?, ?, ?)
+         on conflict(id) do update set
+           workspace_id = excluded.workspace_id,
+           updated_at = excluded.updated_at`
+      );
+      for (const row of sessionEventRows) {
+        insertSessionEvent.run(row.id, workspaceId, indexedAt);
+      }
+
+      const insertRun = registryDb.prepare(
+        `insert into run_registry (id, workspace_id, status, recover_at, updated_at)
+         values (?, ?, ?, ?, ?)
+         on conflict(id) do update set
+           workspace_id = excluded.workspace_id,
+           status = excluded.status,
+           recover_at = excluded.recover_at,
+           updated_at = excluded.updated_at`
+      );
+      for (const row of runRows) {
+        insertRun.run(row.id, workspaceId, row.status, this.runRecoverAt(row), indexedAt);
+      }
+    });
   }
 
   deleteWorkspaceIndexes(workspaceId: string): void {
@@ -983,16 +1138,190 @@ class SQLitePersistenceCoordinator {
     }
   }
 
-  indexSession(sessionId: string, workspaceId: string): void {
+  async indexSession(sessionId: string, workspaceId: string): Promise<void> {
     this.#sessionIndex.set(sessionId, workspaceId);
+    const registryDb = await this.ensureRegistryDb();
+    registryDb
+      .prepare(
+        `insert into session_registry (id, workspace_id, updated_at)
+         values (?, ?, ?)
+         on conflict(id) do update set
+           workspace_id = excluded.workspace_id,
+           updated_at = excluded.updated_at`
+      )
+      .run(sessionId, workspaceId, nowIso());
+  }
+
+  async indexMessage(messageId: string, workspaceId: string): Promise<void> {
+    const registryDb = await this.ensureRegistryDb();
+    registryDb
+      .prepare(
+        `insert into message_registry (id, workspace_id, updated_at)
+         values (?, ?, ?)
+         on conflict(id) do update set
+           workspace_id = excluded.workspace_id,
+           updated_at = excluded.updated_at`
+      )
+      .run(messageId, workspaceId, nowIso());
+  }
+
+  async indexSessionEvent(eventId: string, workspaceId: string): Promise<void> {
+    const registryDb = await this.ensureRegistryDb();
+    registryDb
+      .prepare(
+        `insert into session_event_registry (id, workspace_id, updated_at)
+         values (?, ?, ?)
+         on conflict(id) do update set
+           workspace_id = excluded.workspace_id,
+           updated_at = excluded.updated_at`
+      )
+      .run(eventId, workspaceId, nowIso());
   }
 
   forgetSession(sessionId: string): void {
     this.#sessionIndex.delete(sessionId);
   }
 
-  indexRun(runId: string, workspaceId: string): void {
-    this.#runIndex.set(runId, workspaceId);
+  async indexRun(
+    run:
+      | Pick<Run, "id" | "workspaceId" | "status" | "createdAt"> & Partial<Pick<Run, "heartbeatAt" | "startedAt">>
+      | { id: string; workspaceId: string; status: Run["status"]; createdAt: string; heartbeatAt?: string; startedAt?: string }
+  ): Promise<void> {
+    this.#runIndex.set(run.id, run.workspaceId);
+    const registryDb = await this.ensureRegistryDb();
+    registryDb
+      .prepare(
+        `insert into run_registry (id, workspace_id, status, recover_at, updated_at)
+         values (?, ?, ?, ?, ?)
+         on conflict(id) do update set
+           workspace_id = excluded.workspace_id,
+           status = excluded.status,
+           recover_at = excluded.recover_at,
+           updated_at = excluded.updated_at`
+      )
+      .run(run.id, run.workspaceId, run.status, this.runRecoverAt(run), nowIso());
+  }
+
+  async lookupWorkspaceIdInRegistry(
+    table: "session_registry" | "message_registry" | "session_event_registry" | "run_registry",
+    id: string
+  ): Promise<string | undefined> {
+    const registryDb = await this.ensureRegistryDb();
+    const row = registryDb
+      .prepare(`select workspace_id as workspaceId from ${table} where id = ? limit 1`)
+      .get(id) as RegistryWorkspaceIdRow | undefined;
+    if (!row?.workspaceId) {
+      return undefined;
+    }
+
+    if (this.#workspaceRecords.has(row.workspaceId)) {
+      return row.workspaceId;
+    }
+
+    registryDb.prepare(`delete from ${table} where id = ?`).run(id);
+    return undefined;
+  }
+
+  async deleteRegistryEntry(
+    table: "session_registry" | "message_registry" | "session_event_registry" | "run_registry",
+    id: string
+  ): Promise<void> {
+    const registryDb = await this.ensureRegistryDb();
+    registryDb.prepare(`delete from ${table} where id = ?`).run(id);
+  }
+
+  async getWorkspaceIdForMessage(messageId: string): Promise<string> {
+    const persisted = await this.lookupWorkspaceIdInRegistry("message_registry", messageId);
+    if (persisted) {
+      return persisted;
+    }
+
+    for (const workspace of this.#workspaceRecords.values()) {
+      const handle = await this.ensureHandle(workspace);
+      const row = handle.db.prepare("select id from messages where id = ? limit 1").get(messageId) as IdRow | undefined;
+      if (row?.id) {
+        await this.indexMessage(messageId, workspace.id);
+        return workspace.id;
+      }
+    }
+
+    throw new AppError(404, "message_not_found", `Message ${messageId} was not found.`);
+  }
+
+  async getWorkspaceIdForSessionEvent(eventId: string): Promise<string> {
+    const persisted = await this.lookupWorkspaceIdInRegistry("session_event_registry", eventId);
+    if (persisted) {
+      return persisted;
+    }
+
+    for (const workspace of this.#workspaceRecords.values()) {
+      const handle = await this.ensureHandle(workspace);
+      const row = handle.db.prepare("select id from session_events where id = ? limit 1").get(eventId) as IdRow | undefined;
+      if (row?.id) {
+        await this.indexSessionEvent(eventId, workspace.id);
+        return workspace.id;
+      }
+    }
+
+    throw new AppError(404, "session_event_not_found", `Session event ${eventId} was not found.`);
+  }
+
+  listRecoverableRunIds(staleBefore: string, limit: number): string[] {
+    if (limit <= 0) {
+      return [];
+    }
+
+    if (!this.#registryDb) {
+      return [];
+    }
+
+    const rows = coerceRows<RecoverableRunRegistryRow>(
+      this.#registryDb
+        .prepare(
+          `select id from run_registry
+           where status in ('running', 'waiting_tool')
+             and recover_at is not null
+             and recover_at <= ?
+           order by recover_at asc, id asc
+           limit ?`
+        )
+        .all(staleBefore, Math.max(1, limit))
+    );
+    return rows.map((row) => row.id);
+  }
+
+  ensureRegistrySchema(db: DatabaseSync): void {
+    this.ensureRegistryTableColumn(db, "run_registry", "status", "text");
+    this.ensureRegistryTableColumn(db, "run_registry", "recover_at", "text");
+    db.exec("create index if not exists run_registry_recoverable_idx on run_registry (status, recover_at, id asc)");
+  }
+
+  ensureRegistryTableColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
+    const rows = coerceRows<{ name?: unknown }>(db.prepare(`pragma table_info(${table})`).all());
+    if (rows.some((row) => row.name === column)) {
+      return;
+    }
+
+    db.exec(`alter table ${table} add column ${column} ${definition}`);
+  }
+
+  runRecoverAt(
+    run: {
+      createdAt?: string | undefined;
+      created_at?: string | undefined;
+      heartbeatAt?: string | undefined;
+      heartbeat_at?: string | null | undefined;
+      startedAt?: string | undefined;
+      started_at?: string | null | undefined;
+    }
+  ): string {
+    const resolved =
+      run.heartbeat_at ?? run.heartbeatAt ?? run.started_at ?? run.startedAt ?? run.created_at ?? run.createdAt;
+    if (!resolved) {
+      throw new Error("Run recovery timestamp is required.");
+    }
+
+    return resolved;
   }
 }
 
@@ -1018,7 +1347,7 @@ class SQLiteSessionRepository implements SessionRepository {
         occurredAt: nowIso()
       });
     });
-    this.#coordinator.indexSession(input.id, input.workspaceId);
+    await this.#coordinator.indexSession(input.id, input.workspaceId);
     return input;
   }
 
@@ -1053,7 +1382,7 @@ class SQLiteSessionRepository implements SessionRepository {
         occurredAt: nowIso()
       });
     });
-    this.#coordinator.indexSession(input.id, input.workspaceId);
+    await this.#coordinator.indexSession(input.id, input.workspaceId);
     return input;
   }
 
@@ -1141,7 +1470,7 @@ class SQLiteSessionRepository implements SessionRepository {
         nowIso()
       );
     });
-    this.#coordinator.reindexWorkspace(handle.db, workspaceId);
+    await this.#coordinator.reindexWorkspace(handle.db, workspaceId);
   }
 }
 
@@ -1168,18 +1497,25 @@ class SQLiteMessageRepository implements MessageRepository {
         occurredAt: nowIso()
       });
     });
+    await this.#coordinator.indexMessage(input.id, workspaceId);
     return input;
   }
 
   async getById(id: string): Promise<Message | null> {
-    for (const workspace of await this.listKnownWorkspaces()) {
-      const handle = await this.#coordinator.getWorkspaceHandle(workspace.id);
+    try {
+      const workspaceId = await this.#coordinator.getWorkspaceIdForMessage(id);
+      const handle = await this.#coordinator.getWorkspaceHandle(workspaceId);
       const row = handle.db.prepare("select payload from messages where id = ? limit 1").get(id) as JsonRow | undefined;
       if (row?.payload) {
         return parseJson<Message>(row.payload);
       }
+      return null;
+    } catch (error) {
+      if (error instanceof AppError && error.code === "message_not_found") {
+        return null;
+      }
+      throw error;
     }
-    return null;
   }
 
   async update(input: Message): Promise<Message> {
@@ -1201,6 +1537,7 @@ class SQLiteMessageRepository implements MessageRepository {
         occurredAt: nowIso()
       });
     });
+    await this.#coordinator.indexMessage(input.id, workspaceId);
     return input;
   }
 
@@ -1213,14 +1550,7 @@ class SQLiteMessageRepository implements MessageRepository {
   }
 
   async listKnownWorkspaces(): Promise<WorkspaceRecord[]> {
-    const items: WorkspaceRecord[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await this.workspaceRepository.list(100, cursor);
-      items.push(...page);
-      cursor = page.length === 100 ? String(parseCursor(cursor) + 100) : undefined;
-    } while (cursor);
-    return items;
+    return this.#coordinator.listWorkspaceRecords();
   }
 
   workspaceRepository!: WorkspaceRepository;
@@ -1298,7 +1628,7 @@ class SQLiteRunRepository implements RunRepository {
         occurredAt: nowIso()
       });
     });
-    this.#coordinator.indexRun(input.id, input.workspaceId);
+    await this.#coordinator.indexRun(input);
     return input;
   }
 
@@ -1343,7 +1673,7 @@ class SQLiteRunRepository implements RunRepository {
         occurredAt: nowIso()
       });
     });
-    this.#coordinator.indexRun(input.id, input.workspaceId);
+    await this.#coordinator.indexRun(input);
     return input;
   }
 
@@ -1356,24 +1686,10 @@ class SQLiteRunRepository implements RunRepository {
   }
 
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
-    const runs: Run[] = [];
-    for (const workspace of await this.listKnownWorkspaces()) {
-      const handle = await this.#coordinator.getWorkspaceHandle(workspace.id);
-      const rows = coerceRows<JsonRow>(
-        handle.db
-          .prepare(
-            `select payload from runs
-             where status in ('running', 'waiting_tool')
-               and coalesce(heartbeat_at, started_at, created_at) <= ?
-             order by coalesce(heartbeat_at, started_at, created_at) asc, id asc
-             limit ?`
-          )
-          .all(staleBefore, Math.max(1, limit))
-      );
-      runs.push(...rows.map((row) => parseJson<Run>(row.payload)));
-    }
-
+    const runIds = this.#coordinator.listRecoverableRunIds(staleBefore, Math.max(1, limit * 2));
+    const runs = await Promise.all(runIds.map((runId) => this.getById(runId)));
     return runs
+      .filter((run): run is Run => run !== null && (run.status === "running" || run.status === "waiting_tool"))
       .sort((left, right) => {
         const leftTimestamp = left.heartbeatAt ?? left.startedAt ?? left.createdAt;
         const rightTimestamp = right.heartbeatAt ?? right.startedAt ?? right.createdAt;
@@ -1383,14 +1699,7 @@ class SQLiteRunRepository implements RunRepository {
   }
 
   async listKnownWorkspaces(): Promise<WorkspaceRecord[]> {
-    const items: WorkspaceRecord[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await this.workspaceRepository.list(100, cursor);
-      items.push(...page);
-      cursor = page.length === 100 ? String(parseCursor(cursor) + 100) : undefined;
-    } while (cursor);
-    return items;
+    return this.#coordinator.listWorkspaceRecords();
   }
 
   workspaceRepository!: WorkspaceRepository;
@@ -1463,6 +1772,7 @@ class SQLiteSessionEventStore implements SessionEventStore {
 
   async append(input: Omit<SessionEvent, "id" | "cursor" | "createdAt">): Promise<SessionEvent> {
     const handle = await this.#coordinator.getSessionHandle(input.sessionId);
+    const workspaceId = await this.#coordinator.getWorkspaceIdForSession(input.sessionId);
     let created: SessionEvent | undefined;
     runInTransaction(handle.db, () => {
       const row = handle.db
@@ -1490,6 +1800,7 @@ class SQLiteSessionEventStore implements SessionEventStore {
     });
 
     const event = created!;
+    await this.#coordinator.indexSessionEvent(event.id, workspaceId);
     for (const listener of this.#listeners.get(input.sessionId) ?? []) {
       listener(event);
     }
@@ -1523,12 +1834,16 @@ class SQLiteSessionEventStore implements SessionEventStore {
   }
 
   async deleteById(eventId: string): Promise<void> {
-    const handles = await this.#coordinator.listOpenHandles();
-    for (const handle of handles) {
-      const result = handle.db.prepare("delete from session_events where id = ?").run(eventId);
-      if (result.changes > 0) {
+    try {
+      const workspaceId = await this.#coordinator.getWorkspaceIdForSessionEvent(eventId);
+      const handle = await this.#coordinator.getWorkspaceHandle(workspaceId);
+      handle.db.prepare("delete from session_events where id = ?").run(eventId);
+      await this.#coordinator.deleteRegistryEntry("session_event_registry", eventId);
+    } catch (error) {
+      if (error instanceof AppError && error.code === "session_event_not_found") {
         return;
       }
+      throw error;
     }
   }
 

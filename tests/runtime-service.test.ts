@@ -326,7 +326,10 @@ describe("runtime service", () => {
         async listByArchiveDate() {
           return [];
         },
-        async markExported() {}
+        async markExported() {},
+        async pruneExportedBefore() {
+          return 0;
+        }
       },
       workspaceDeletionHandler: {
         async deleteWorkspace(workspace) {
@@ -470,7 +473,10 @@ describe("runtime service", () => {
         async listByArchiveDate() {
           return [];
         },
-        async markExported() {}
+        async markExported() {},
+        async pruneExportedBefore() {
+          return 0;
+        }
       },
       workspaceInitializer: {
         async initialize(input) {
@@ -5297,7 +5303,6 @@ describe("runtime service", () => {
       "Glob",
       "Grep",
       "WebFetch",
-      "WebSearch",
       "TodoWrite"
     ]);
     expect(catalog.runtimeTools).toEqual(expect.arrayContaining(["Bash", "Read", "run_action", "Skill", "AgentSwitch", "SubAgent"]));

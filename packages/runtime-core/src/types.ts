@@ -441,6 +441,7 @@ export interface WorkspaceArchiveRepository {
   listPendingArchiveDates(beforeArchiveDate: string, limit: number): Promise<string[]>;
   listByArchiveDate(archiveDate: string): Promise<WorkspaceArchiveRecord[]>;
   markExported(ids: string[], input: { exportedAt: string; exportPath: string }): Promise<void>;
+  pruneExportedBefore(beforeArchiveDate: string, limit: number): Promise<number>;
 }
 
 export interface RuntimeServiceOptions {

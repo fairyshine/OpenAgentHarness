@@ -129,7 +129,7 @@ Run 内的步骤级记录，用于诊断、审计和可视化。
 
 ### Native Tool
 
-平台内建能力：`Bash`、`Read`、`Write`、`Edit`、`Glob`、`Grep`、`WebFetch`、`WebSearch`、`TodoWrite`。
+平台内建能力：`Bash`、`Read`、`Write`、`Edit`、`Glob`、`Grep`、`WebFetch`、`TodoWrite`。
 
 `chat` workspace 默认不暴露任何 native tool。
 

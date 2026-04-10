@@ -38,7 +38,6 @@ export interface ExecutionBackend {
 | `Glob` | 模式匹配搜索文件 | `listFiles()` |
 | `Grep` | 正则搜索文件内容 | `execShell()` (ripgrep) |
 | `WebFetch` | 获取网页内容 | 直接 HTTP |
-| `WebSearch` | 搜索互联网 | 直接 HTTP |
 | `TodoWrite` | session 级任务列表 | 内存状态 |
 
 安全：`Read` 强制 read-before-write，所有路径不超出 workspace 根目录，session 级状态隔离。

@@ -66,6 +66,10 @@
         },
         "skill_dir": {
           "type": "string"
+        },
+        "archive_dir": {
+          "type": "string",
+          "description": "Optional path for exported archive SQLite bundles."
         }
       }
     },

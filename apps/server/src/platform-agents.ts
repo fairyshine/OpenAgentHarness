@@ -34,7 +34,7 @@ export function createBuiltInPlatformAgents(): PlatformAgentRegistry {
         "When requirements are ambiguous, make the smallest safe assumption that keeps progress moving."
       ].join("\n"),
       tools: {
-        native: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"],
+        native: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "TodoWrite"],
         external: []
       },
       actions: [],

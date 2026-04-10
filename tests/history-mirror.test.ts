@@ -521,6 +521,110 @@ describe("history mirror syncer", () => {
     ]);
   });
 
+  it("syncs workspace pages with bounded concurrency", async () => {
+    const workspaceRootA = await mkdtemp(path.join(tmpdir(), "oah-history-concurrency-a-"));
+    const workspaceRootB = await mkdtemp(path.join(tmpdir(), "oah-history-concurrency-b-"));
+    tempRoots.push(workspaceRootA, workspaceRootB);
+
+    const persistence = createMemoryRuntimePersistence();
+    await persistence.workspaceRepository.upsert({
+      id: "ws_history_concurrency_a",
+      name: "history-concurrency-a",
+      rootPath: workspaceRootA,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
+      settings: {
+        historyMirrorEnabled: true,
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_history_concurrency_a",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+    await persistence.workspaceRepository.upsert({
+      id: "ws_history_concurrency_b",
+      name: "history-concurrency-b",
+      rootPath: workspaceRootB,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
+      settings: {
+        historyMirrorEnabled: true,
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_history_concurrency_b",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const startedWorkspaceIds: string[] = [];
+    let releaseBlockedReads: (() => void) | undefined;
+    const blockedReads = new Promise<void>((resolve) => {
+      releaseBlockedReads = resolve;
+    });
+    const syncer = new HistoryMirrorSyncer({
+      workspaceRepository: persistence.workspaceRepository,
+      historyEventRepository: {
+        async append() {
+          throw new Error("append should not be called in sync tests");
+        },
+        async listByWorkspaceId(workspaceId) {
+          startedWorkspaceIds.push(workspaceId);
+          await blockedReads;
+          return [];
+        }
+      },
+      maxConcurrentWorkspaces: 2
+    });
+
+    const syncPromise = syncer.syncOnce();
+    await expect
+      .poll(() => startedWorkspaceIds.length, {
+        timeout: 1_000
+      })
+      .toBe(2);
+    releaseBlockedReads?.();
+    await syncPromise;
+    await syncer.close();
+
+    expect(startedWorkspaceIds).toEqual(expect.arrayContaining(["ws_history_concurrency_a", "ws_history_concurrency_b"]));
+  });
+
   it("rebuilds a corrupted local history.db mirror from central history events", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-history-mirror-rebuild-"));
     tempRoots.push(workspaceRoot);
@@ -775,6 +879,236 @@ describe("history mirror syncer", () => {
       kind: "tool-call"
     });
     expect(runtimeMessageRow?.content).toContain("\"toolName\":\"Read\"");
+  });
+
+  it("does not refresh runtime messages on idle sync passes without new events", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-history-idle-runtime-refresh-"));
+    tempRoots.push(workspaceRoot);
+
+    const persistence = createMemoryRuntimePersistence();
+    await persistence.workspaceRepository.upsert({
+      id: "ws_history_idle_runtime",
+      name: "history-idle-runtime",
+      rootPath: workspaceRoot,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
+      settings: {
+        historyMirrorEnabled: true,
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_history_idle_runtime",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    let runtimeRefreshReads = 0;
+    const syncer = new HistoryMirrorSyncer({
+      workspaceRepository: persistence.workspaceRepository,
+      historyEventRepository: {
+        async append() {
+          throw new Error("append should not be called in sync tests");
+        },
+        async listByWorkspaceId() {
+          return [];
+        }
+      },
+      snapshotSource: {
+        async readWorkspaceSnapshot(workspaceId) {
+          return {
+            watermarkEventId: 0,
+            sessions: [
+              {
+                id: "ses_idle_runtime",
+                workspaceId,
+                subjectRef: "dev:test",
+                activeAgentName: "builder",
+                status: "active",
+                createdAt: "2026-04-01T00:00:00.000Z",
+                updatedAt: "2026-04-01T00:00:00.000Z"
+              }
+            ],
+            messages: [],
+            runtimeMessages: [
+              {
+                id: "rtm_idle_runtime",
+                sessionId: "ses_idle_runtime",
+                role: "assistant",
+                kind: "assistant_text",
+                content: "snapshot runtime",
+                createdAt: "2026-04-01T00:00:01.000Z"
+              }
+            ],
+            runs: [
+              {
+                id: "run_idle_runtime",
+                workspaceId,
+                sessionId: "ses_idle_runtime",
+                triggerType: "message",
+                effectiveAgentName: "builder",
+                status: "completed",
+                createdAt: "2026-04-01T00:00:01.000Z"
+              }
+            ],
+            runSteps: [],
+            toolCalls: [],
+            hookRuns: [],
+            artifacts: []
+          };
+        },
+        async readWorkspaceRuntimeMessages() {
+          runtimeRefreshReads += 1;
+          return [
+            {
+              id: "rtm_idle_runtime",
+              sessionId: "ses_idle_runtime",
+              role: "assistant",
+              kind: "assistant_text",
+              content: "snapshot runtime",
+              createdAt: "2026-04-01T00:00:01.000Z"
+            }
+          ];
+        }
+      }
+    });
+
+    await syncer.syncOnce();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const firstStatus = await inspectHistoryMirrorStatus(
+      (await persistence.workspaceRepository.getById("ws_history_idle_runtime"))!
+    );
+    await syncer.syncOnce();
+    const secondStatus = await inspectHistoryMirrorStatus(
+      (await persistence.workspaceRepository.getById("ws_history_idle_runtime"))!
+    );
+    await syncer.close();
+
+    expect(runtimeRefreshReads).toBe(0);
+    expect(firstStatus.lastSyncedAt).toBeTruthy();
+    expect(secondStatus.lastSyncedAt).toBe(firstStatus.lastSyncedAt);
+  });
+
+  it("keeps refreshing runtime messages while a mirrored run is still active", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-history-active-runtime-refresh-"));
+    tempRoots.push(workspaceRoot);
+
+    const persistence = createMemoryRuntimePersistence();
+    await persistence.workspaceRepository.upsert({
+      id: "ws_history_active_runtime",
+      name: "history-active-runtime",
+      rootPath: workspaceRoot,
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
+      settings: {
+        historyMirrorEnabled: true,
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_history_active_runtime",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    let runtimeRefreshReads = 0;
+    const syncer = new HistoryMirrorSyncer({
+      workspaceRepository: persistence.workspaceRepository,
+      historyEventRepository: {
+        async append() {
+          throw new Error("append should not be called in sync tests");
+        },
+        async listByWorkspaceId() {
+          return [];
+        }
+      },
+      snapshotSource: {
+        async readWorkspaceSnapshot(workspaceId) {
+          return {
+            watermarkEventId: 0,
+            sessions: [
+              {
+                id: "ses_active_runtime",
+                workspaceId,
+                subjectRef: "dev:test",
+                activeAgentName: "builder",
+                status: "active",
+                createdAt: "2026-04-01T00:00:00.000Z",
+                updatedAt: "2026-04-01T00:00:00.000Z"
+              }
+            ],
+            messages: [],
+            runtimeMessages: [],
+            runs: [
+              {
+                id: "run_active_runtime",
+                workspaceId,
+                sessionId: "ses_active_runtime",
+                triggerType: "message",
+                effectiveAgentName: "builder",
+                status: "running",
+                createdAt: "2026-04-01T00:00:01.000Z"
+              }
+            ],
+            runSteps: [],
+            toolCalls: [],
+            hookRuns: [],
+            artifacts: []
+          };
+        },
+        async readWorkspaceRuntimeMessages() {
+          runtimeRefreshReads += 1;
+          return [
+            {
+              id: `rtm_active_runtime_${runtimeRefreshReads}`,
+              sessionId: "ses_active_runtime",
+              role: "assistant",
+              kind: "assistant_text",
+              content: `refresh ${runtimeRefreshReads}`,
+              createdAt: `2026-04-01T00:00:0${runtimeRefreshReads}.000Z`
+            }
+          ];
+        }
+      }
+    });
+
+    await syncer.syncOnce();
+    await syncer.syncOnce();
+    await syncer.close();
+
+    expect(runtimeRefreshReads).toBe(2);
   });
 
   it("prunes mirrored history events older than the retention window", async () => {

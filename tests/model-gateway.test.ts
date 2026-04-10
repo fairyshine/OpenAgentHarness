@@ -350,8 +350,8 @@ describe("model gateway mcp tools", () => {
                 result: {
                   tools: [
                     {
-                      name: "search",
-                      description: "Legacy web search",
+                      name: "lookup",
+                      description: "Legacy HTTP lookup",
                       inputSchema: {
                         type: "object",
                         properties: {
@@ -414,11 +414,11 @@ describe("model gateway mcp tools", () => {
     const prepared = await prepareToolServers(
       [
         {
-          name: "legacy-web-search",
+          name: "legacy-http-lookup",
           enabled: true,
           transportType: "http",
           url: `http://127.0.0.1:${port}/mcp`,
-          toolPrefix: "mcp.websearch"
+          toolPrefix: "mcp.legacy"
         }
       ],
       {
@@ -431,8 +431,8 @@ describe("model gateway mcp tools", () => {
     );
     preparedClosers.push(() => prepared.close());
 
-    expect(Object.keys(prepared.tools).sort()).toEqual(["mcp.websearch.search", "search"]);
-    const result = await (prepared.tools["mcp.websearch.search"].execute as (...args: unknown[]) => Promise<unknown>)(
+    expect(Object.keys(prepared.tools).sort()).toEqual(["lookup", "mcp.legacy.lookup"]);
+    const result = await (prepared.tools["mcp.legacy.lookup"].execute as (...args: unknown[]) => Promise<unknown>)(
       { query: "openai" },
       {}
     );
@@ -441,14 +441,14 @@ describe("model gateway mcp tools", () => {
       content: [
         {
           type: "text",
-          text: "legacy:search:openai"
+          text: "legacy:lookup:openai"
         }
       ]
     });
     expect(warnings).toContainEqual({
       message: "Falling back to legacy MCP HTTP protocol version.",
       details: {
-        serverName: "legacy-web-search",
+        serverName: "legacy-http-lookup",
         transportType: "http",
         url: `http://127.0.0.1:${port}/mcp`,
         protocolVersion: "2025-06-18"

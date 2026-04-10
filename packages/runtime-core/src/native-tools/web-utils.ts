@@ -36,30 +36,6 @@ export function normalizeUrl(input: string): string {
   return parsed.toString();
 }
 
-function normalizeDomain(value: string): string {
-  return value.trim().toLowerCase().replace(/^\*\./, "");
-}
-
-function hostnameMatches(hostname: string, domain: string): boolean {
-  return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-
-export function filterSearchDomains(
-  hostname: string,
-  allowedDomains: string[],
-  blockedDomains: string[]
-): boolean {
-  const normalizedHostname = hostname.toLowerCase();
-  const allowed = allowedDomains.map(normalizeDomain);
-  const blocked = blockedDomains.map(normalizeDomain);
-
-  if (allowed.length > 0 && !allowed.some((domain) => hostnameMatches(normalizedHostname, domain))) {
-    return false;
-  }
-
-  return !blocked.some((domain) => hostnameMatches(normalizedHostname, domain));
-}
-
 export function isLikelyBinaryContent(contentType: string): boolean {
   const mime = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
   return mime.length > 0 && !mime.startsWith("text/") && !mime.includes("json") && !mime.includes("xml") && !mime.includes("javascript");

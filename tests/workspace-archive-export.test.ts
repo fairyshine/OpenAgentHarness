@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -113,6 +113,8 @@ describe("workspace archive exporter", () => {
     const calls: {
       pendingBefore?: string;
       marked?: { ids: string[]; exportPath: string };
+      prunedBefore?: string;
+      prunedLimit?: number;
     } = {};
 
     const repository: WorkspaceArchiveRepository = {
@@ -134,6 +136,11 @@ describe("workspace archive exporter", () => {
           ids,
           exportPath: input.exportPath
         };
+      },
+      async pruneExportedBefore(beforeArchiveDate, limit) {
+        calls.prunedBefore = beforeArchiveDate;
+        calls.prunedLimit = limit;
+        return 0;
       }
     };
 
@@ -147,11 +154,27 @@ describe("workspace archive exporter", () => {
     await exporter.exportPending();
     await exporter.close();
 
-    expect(calls.pendingBefore).toBe("2026-04-09");
+    const expectedToday = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(new Date());
+    expect(calls.pendingBefore).toBe(expectedToday);
     expect(calls.marked?.ids).toEqual(["warc_1"]);
     expect(calls.marked?.exportPath).toBe(path.join(exportRoot, "2026-04-08.sqlite"));
+    expect(calls.prunedBefore).toBe(
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).format(new Date(Date.now() - 29 * 24 * 60 * 60 * 1000))
+    );
+    expect(calls.prunedLimit).toBe(32);
 
     const dbPath = path.join(exportRoot, "2026-04-08.sqlite");
+    const checksumPath = `${dbPath}.sha256`;
     const db = new DatabaseSync(dbPath);
     const manifest = db
       .prepare("select archive_date as archiveDate, archive_count as archiveCount from archive_manifest where archive_date = ?")
@@ -173,5 +196,215 @@ describe("workspace archive exporter", () => {
     expect(archivedWorkspace?.scopeId).toBe("ws_1");
     expect(archivedMessage?.role).toBe("assistant");
     expect(JSON.parse(archivedMessage?.content ?? "null")).toBe("archived hello");
+    await expect(readFile(checksumPath, "utf8")).resolves.toMatch(
+      /^[a-f0-9]{64}  2026-04-08\.sqlite\n$/u
+    );
+  });
+
+  it("exports multiple archives for the same date into one sqlite bundle", async () => {
+    const exportRoot = await mkdtemp(path.join(tmpdir(), "oah-archive-export-multi-"));
+    tempDirs.push(exportRoot);
+
+    const archiveA = createArchiveRecord();
+    const archiveB = createArchiveRecord({
+      id: "warc_2",
+      workspaceId: "ws_2",
+      scopeId: "ses_2",
+      scopeType: "session",
+      workspace: {
+        ...createArchiveRecord().workspace,
+        id: "ws_2",
+        name: "demo-2",
+        rootPath: "/tmp/demo-2",
+        catalog: {
+          workspaceId: "ws_2",
+          agents: [],
+          models: [],
+          actions: [],
+          skills: [],
+          tools: [],
+          hooks: [],
+          nativeTools: []
+        }
+      },
+      sessions: [
+        {
+          id: "ses_2",
+          workspaceId: "ws_2",
+          subjectRef: "dev:test:2",
+          activeAgentName: "builder",
+          status: "archived",
+          createdAt: "2026-04-08T10:00:00.000Z",
+          updatedAt: "2026-04-08T11:00:00.000Z"
+        }
+      ],
+      runs: [],
+      messages: [
+        {
+          id: "msg_2",
+          sessionId: "ses_2",
+          role: "user",
+          content: "archived two",
+          createdAt: "2026-04-08T10:05:00.000Z"
+        }
+      ]
+    });
+    const marked: Array<{ ids: string[]; exportPath: string }> = [];
+
+    const repository: WorkspaceArchiveRepository = {
+      async archiveWorkspace() {
+        return archiveA;
+      },
+      async archiveSessionTree() {
+        return archiveB;
+      },
+      async listPendingArchiveDates() {
+        return ["2026-04-08"];
+      },
+      async listByArchiveDate(archiveDate) {
+        return archiveDate === "2026-04-08" ? [archiveA, archiveB] : [];
+      },
+      async markExported(ids, input) {
+        marked.push({
+          ids,
+          exportPath: input.exportPath
+        });
+      },
+      async pruneExportedBefore() {
+        return 0;
+      }
+    };
+
+    const exporter = new WorkspaceArchiveExporter({
+      repository,
+      exportRoot,
+      timeZone: "Asia/Shanghai"
+    });
+
+    await exporter.exportPending();
+    await exporter.close();
+
+    expect(marked).toEqual([
+      {
+        ids: ["warc_1", "warc_2"],
+        exportPath: path.join(exportRoot, "2026-04-08.sqlite")
+      }
+    ]);
+
+    const db = new DatabaseSync(path.join(exportRoot, "2026-04-08.sqlite"));
+    try {
+      const manifest = db
+        .prepare("select archive_count as archiveCount from archive_manifest where archive_date = ?")
+        .get("2026-04-08") as { archiveCount: number } | undefined;
+      const archiveCount = db.prepare("select count(*) as count from archives").get() as { count: number };
+      const messageCount = db.prepare("select count(*) as count from messages").get() as { count: number };
+
+      expect(manifest).toEqual({
+        archiveCount: 2
+      });
+      expect(archiveCount.count).toBe(2);
+      expect(messageCount.count).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("prunes exported archive metadata after the retention window", async () => {
+    const exportRoot = await mkdtemp(path.join(tmpdir(), "oah-archive-export-prune-"));
+    tempDirs.push(exportRoot);
+
+    const repository: WorkspaceArchiveRepository = {
+      async archiveWorkspace() {
+        return createArchiveRecord();
+      },
+      async archiveSessionTree() {
+        return createArchiveRecord();
+      },
+      async listPendingArchiveDates() {
+        return [];
+      },
+      async listByArchiveDate() {
+        return [];
+      },
+      async markExported() {},
+      async pruneExportedBefore() {
+        return 3;
+      }
+    };
+
+    const logs: string[] = [];
+    const exporter = new WorkspaceArchiveExporter({
+      repository,
+      exportRoot,
+      timeZone: "Asia/Shanghai",
+      batchLimit: 7,
+      exportedRetentionDays: 14,
+      logger: {
+        info(message) {
+          logs.push(message);
+        }
+      }
+    });
+
+    await exporter.exportPending();
+    await exporter.close();
+
+    expect(logs.some((message) => message.includes("Pruned 3 exported workspace archives older than"))).toBe(true);
+  });
+
+  it("warns about unexpected archive directory entries without deleting them", async () => {
+    const exportRoot = await mkdtemp(path.join(tmpdir(), "oah-archive-export-inspect-"));
+    tempDirs.push(exportRoot);
+
+    await Promise.all([
+      mkdir(path.join(exportRoot, "manual"), { recursive: true }),
+      writeFile(path.join(exportRoot, "2026-04-08.sqlite"), "bundle", "utf8"),
+      writeFile(path.join(exportRoot, "2026-04-08.sqlite.tmp"), "temp", "utf8"),
+      writeFile(path.join(exportRoot, "2026-04-09.sqlite.sha256"), "deadbeef", "utf8"),
+      writeFile(path.join(exportRoot, "notes.txt"), "note", "utf8")
+    ]);
+
+    const warnings: string[] = [];
+    const repository: WorkspaceArchiveRepository = {
+      async archiveWorkspace() {
+        return createArchiveRecord();
+      },
+      async archiveSessionTree() {
+        return createArchiveRecord();
+      },
+      async listPendingArchiveDates() {
+        return [];
+      },
+      async listByArchiveDate() {
+        return [];
+      },
+      async markExported() {},
+      async pruneExportedBefore() {
+        return 0;
+      }
+    };
+
+    const exporter = new WorkspaceArchiveExporter({
+      repository,
+      exportRoot,
+      logger: {
+        warn(message) {
+          warnings.push(message);
+        }
+      }
+    });
+
+    await exporter.exportPending();
+    await exporter.exportPending();
+    await exporter.close();
+
+    expect(warnings).toHaveLength(5);
+    expect(warnings.some((message) => message.includes("unexpected subdirectories"))).toBe(true);
+    expect(warnings.some((message) => message.includes("leftover temporary files"))).toBe(true);
+    expect(warnings.some((message) => message.includes("outside the YYYY-MM-DD.sqlite naming convention"))).toBe(true);
+    expect(warnings.some((message) => message.includes("without checksum files"))).toBe(true);
+    expect(warnings.some((message) => message.includes("without matching archive bundles"))).toBe(true);
+    await expect(readFile(path.join(exportRoot, "2026-04-08.sqlite.tmp"), "utf8")).resolves.toBe("temp");
+    await expect(readFile(path.join(exportRoot, "notes.txt"), "utf8")).resolves.toBe("note");
   });
 });

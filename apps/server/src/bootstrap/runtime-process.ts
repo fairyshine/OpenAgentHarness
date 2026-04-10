@@ -94,7 +94,10 @@ export function buildSingleWorkspaceConfig(
       model_dir: modelDir,
       tool_dir: singleWorkspace.toolDir ?? baseConfig?.paths.tool_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__platform_tools__"),
       skill_dir:
-        singleWorkspace.skillDir ?? baseConfig?.paths.skill_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__platform_skills__")
+        singleWorkspace.skillDir ?? baseConfig?.paths.skill_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__platform_skills__"),
+      archive_dir:
+        baseConfig?.paths.archive_dir ??
+        path.join(baseConfig?.paths.workspace_dir ?? path.dirname(singleWorkspace.rootPath), ".openharness", "archives")
     },
     llm: {
       default_model: defaultModel

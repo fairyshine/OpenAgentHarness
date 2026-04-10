@@ -13,6 +13,7 @@ paths:
   model_dir: ./tests/fixtures/models
   tool_dir: ./tmp/tools
   skill_dir: ./tmp/skills
+  archive_dir: ./tmp/archives
 
 llm:
   default_model: openai-default

@@ -520,6 +520,16 @@ export const storageOverviewSchema = z.object({
         rowCount: z.number().int().min(0),
         pendingExports: z.number().int().min(0),
         exportedRows: z.number().int().min(0),
+        exportRoot: z.string().optional(),
+        bundleCount: z.number().int().min(0).optional(),
+        checksumCount: z.number().int().min(0).optional(),
+        totalBytes: z.number().int().min(0).optional(),
+        latestArchiveDate: z.string().optional(),
+        leftoverTempFiles: z.number().int().min(0).optional(),
+        unexpectedFiles: z.number().int().min(0).optional(),
+        unexpectedDirectories: z.number().int().min(0).optional(),
+        missingChecksums: z.number().int().min(0).optional(),
+        orphanChecksums: z.number().int().min(0).optional(),
         oldestPendingArchiveDate: z.string().optional(),
         newestExportedAt: z.string().optional()
       })

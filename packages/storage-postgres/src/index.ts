@@ -1411,8 +1411,15 @@ class PostgresHistoryMirrorSnapshotSource {
   }
 
   async readWorkspaceRuntimeMessages(workspaceId: string): Promise<RuntimeMessage[]> {
-    const snapshot = await this.readWorkspaceSnapshot(workspaceId);
-    return snapshot.runtimeMessages;
+    const rows = await this.db
+      .select()
+      .from(runtimeMessages)
+      .where(
+        sql`${runtimeMessages.sessionId} in (select ${sessions.id} from ${sessions} where ${sessions.workspaceId} = ${workspaceId})`
+      )
+      .orderBy(asc(runtimeMessages.createdAt), asc(runtimeMessages.id));
+
+    return rows.map(toRuntimeMessageRecord);
   }
 }
 
@@ -1617,6 +1624,30 @@ class PostgresWorkspaceArchiveRepository implements WorkspaceArchiveRepository {
         exportPath: input.exportPath
       })
       .where(inArray(archives.id, ids));
+  }
+
+  async pruneExportedBefore(beforeArchiveDate: string, limit: number): Promise<number> {
+    if (limit <= 0) {
+      return 0;
+    }
+
+    const ids = await this.db
+      .select({ id: archives.id })
+      .from(archives)
+      .where(and(sql`${archives.exportedAt} is not null`, sql`${archives.archiveDate} < ${beforeArchiveDate}`))
+      .orderBy(asc(archives.archiveDate), asc(archives.archivedAt), asc(archives.id))
+      .limit(limit);
+
+    if (ids.length === 0) {
+      return 0;
+    }
+
+    const deleted = await this.db
+      .delete(archives)
+      .where(inArray(archives.id, ids.map((row) => row.id)))
+      .returning({ id: archives.id });
+
+    return deleted.length;
   }
 }
 

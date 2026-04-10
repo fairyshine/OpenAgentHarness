@@ -9,7 +9,6 @@ export const NATIVE_TOOL_NAMES = [
   "Glob",
   "Grep",
   "WebFetch",
-  "WebSearch",
   "TodoWrite"
 ] as const;
 
@@ -23,7 +22,6 @@ const NATIVE_TOOL_RETRY_POLICY: Record<NativeToolName, ActionRetryPolicy> = {
   Glob: "safe",
   Grep: "safe",
   WebFetch: "safe",
-  WebSearch: "safe",
   TodoWrite: "manual"
 };
 

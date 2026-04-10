@@ -22,6 +22,7 @@ paths:
   model_dir: /srv/openharness/models               # 平台模型目录
   tool_dir: /srv/openharness/tools                 # 公共 tool 目录
   skill_dir: /srv/openharness/skills               # 公共 skill 目录
+  archive_dir: /srv/openharness/archives           # 导出的归档 SQLite 存储目录（可选）
 
 llm:
   default_model: openai-default   # 默认模型名（须存在于 model_dir）
@@ -61,6 +62,7 @@ llm:
 | `model_dir` | string | 平台模型定义目录 |
 | `tool_dir` | string | 公共 MCP tool server 定义目录 |
 | `skill_dir` | string | 公共 skill 目录 |
+| `archive_dir` | string | 导出的归档 SQLite 目录；省略时默认使用 `<workspace_dir>/.openharness/archives` |
 
 ### `llm`
 
@@ -107,6 +109,16 @@ openai-default:
 
 > **warning**
 > `tool_dir` 和 `skill_dir` 的内容主要在模板初始化时导入。workspace 运行时默认只使用自身 `.openharness` 目录中声明的能力。
+
+### `archive_dir`
+
+用于存放历史归档导出的 SQLite 文件，文件名按归档日期生成，例如 `2026-04-08.sqlite`。
+
+每个归档文件旁边还会生成同名校验文件，例如 `2026-04-08.sqlite.sha256`，方便长期备份和完整性校验。
+
+服务启动后的归档巡检会检查这个目录中的残留 `.tmp` 文件、缺失校验文件的归档、孤立的 `.sha256` 文件，以及不符合 `YYYY-MM-DD.sqlite` 规范的文件名，并输出告警日志，但不会自动删除正式归档文件。
+
+如果不配置，默认路径为 `<workspace_dir>/.openharness/archives`。
 
 ---
 

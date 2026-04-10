@@ -470,6 +470,36 @@ describe("storage sqlite", () => {
     });
     await persistenceA.close();
 
+    const registryDb = new DatabaseSync(path.join(shadowRoot, "workspace-registry.db"));
+    try {
+      const sessionRegistryRow = registryDb
+        .prepare("select workspace_id as workspaceId from session_registry where id = ?")
+        .get(session.id) as { workspaceId: string } | undefined;
+      const messageRegistryRow = registryDb
+        .prepare("select workspace_id as workspaceId from message_registry where id = ?")
+        .get(message.id) as { workspaceId: string } | undefined;
+      const sessionEventRegistryRow = registryDb
+        .prepare("select workspace_id as workspaceId from session_event_registry where id in (select id from session_event_registry limit 1)")
+        .get() as { workspaceId: string } | undefined;
+      const runRegistryRow = registryDb
+        .prepare("select workspace_id as workspaceId from run_registry where id = ?")
+        .get(run.id) as { workspaceId: string } | undefined;
+      expect(sessionRegistryRow).toEqual({
+        workspaceId: workspace.id
+      });
+      expect(messageRegistryRow).toEqual({
+        workspaceId: workspace.id
+      });
+      expect(sessionEventRegistryRow).toEqual({
+        workspaceId: workspace.id
+      });
+      expect(runRegistryRow).toEqual({
+        workspaceId: workspace.id
+      });
+    } finally {
+      registryDb.close();
+    }
+
     const persistenceB = await createSQLiteRuntimePersistence({ shadowRoot });
     const restoredSnapshots = await persistenceB.listWorkspaceSnapshots([workspace]);
     expect(restoredSnapshots).toEqual([
@@ -482,6 +512,7 @@ describe("storage sqlite", () => {
     await persistenceB.workspaceRepository.upsert(workspace);
     await expect(persistenceB.sessionRepository.getById(session.id)).resolves.toEqual(session);
     await expect(persistenceB.runRepository.getById(run.id)).resolves.toEqual(run);
+    await expect(persistenceB.messageRepository.getById(message.id)).resolves.toEqual(message);
     await expect(persistenceB.messageRepository.listBySessionId(session.id)).resolves.toEqual([message]);
     await expect(persistenceB.sessionEventStore.listSince(session.id)).resolves.toEqual([
       expect.objectContaining({
@@ -602,6 +633,28 @@ describe("storage sqlite", () => {
     await expect(persistence.sessionRepository.getById(session.id)).resolves.toBeNull();
     await expect(persistence.runRepository.getById(run.id)).resolves.toBeNull();
 
+    const registryDb = new DatabaseSync(path.join(shadowRoot, "workspace-registry.db"));
+    try {
+      const sessionRegistryCount = registryDb
+        .prepare("select count(*) as count from session_registry where workspace_id = ?")
+        .get(workspace.id) as { count: number };
+      const messageRegistryCount = registryDb
+        .prepare("select count(*) as count from message_registry where workspace_id = ?")
+        .get(workspace.id) as { count: number };
+      const sessionEventRegistryCount = registryDb
+        .prepare("select count(*) as count from session_event_registry where workspace_id = ?")
+        .get(workspace.id) as { count: number };
+      const runRegistryCount = registryDb
+        .prepare("select count(*) as count from run_registry where workspace_id = ?")
+        .get(workspace.id) as { count: number };
+      expect(sessionRegistryCount.count).toBe(0);
+      expect(messageRegistryCount.count).toBe(0);
+      expect(sessionEventRegistryCount.count).toBe(0);
+      expect(runRegistryCount.count).toBe(0);
+    } finally {
+      registryDb.close();
+    }
+
     const historyEvents = await persistence.historyEventRepository.listByWorkspaceId(workspace.id, 50);
     expect(
       historyEvents
@@ -640,6 +693,167 @@ describe("storage sqlite", () => {
     }
 
     await persistence.close();
+  });
+
+  it("tracks recoverable runs in the registry across restarts", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-recoverable-runs-"));
+    tempDirs.push(tempDir);
+
+    const workspaceRoot = path.join(tempDir, "workspace");
+    const shadowRoot = path.join(tempDir, "shadow");
+    await mkdir(workspaceRoot, { recursive: true });
+
+    const workspace = createWorkspace({
+      id: "ws_recoverable_runs",
+      rootPath: workspaceRoot
+    });
+
+    const persistenceA = await createSQLiteRuntimePersistence({ shadowRoot });
+    await persistenceA.workspaceRepository.upsert(workspace);
+    await persistenceA.sessionRepository.create({
+      id: "ses_recoverable",
+      workspaceId: workspace.id,
+      subjectRef: "dev:test",
+      activeAgentName: "assistant",
+      status: "active",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    });
+
+    await persistenceA.runRepository.create({
+      id: "run_recoverable_stale",
+      workspaceId: workspace.id,
+      sessionId: "ses_recoverable",
+      triggerType: "message",
+      effectiveAgentName: "assistant",
+      status: "running",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      startedAt: "2026-01-01T00:00:10.000Z",
+      heartbeatAt: "2026-01-01T00:00:20.000Z"
+    });
+    await persistenceA.runRepository.create({
+      id: "run_recoverable_recent",
+      workspaceId: workspace.id,
+      sessionId: "ses_recoverable",
+      triggerType: "message",
+      effectiveAgentName: "assistant",
+      status: "waiting_tool",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      startedAt: "2026-01-01T00:00:30.000Z",
+      heartbeatAt: "2026-01-01T00:00:55.000Z"
+    });
+    await persistenceA.close();
+
+    const persistenceB = await createSQLiteRuntimePersistence({ shadowRoot });
+    await persistenceB.workspaceRepository.upsert(workspace);
+
+    await expect(
+      persistenceB.runRepository.listRecoverableActiveRuns("2026-01-01T00:00:40.000Z", 10)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "run_recoverable_stale",
+        status: "running"
+      })
+    ]);
+
+    await persistenceB.runRepository.update({
+      id: "run_recoverable_stale",
+      workspaceId: workspace.id,
+      sessionId: "ses_recoverable",
+      triggerType: "message",
+      effectiveAgentName: "assistant",
+      status: "completed",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      startedAt: "2026-01-01T00:00:10.000Z",
+      heartbeatAt: "2026-01-01T00:00:20.000Z",
+      endedAt: "2026-01-01T00:00:45.000Z"
+    });
+
+    await expect(
+      persistenceB.runRepository.listRecoverableActiveRuns("2026-01-01T00:00:40.000Z", 10)
+    ).resolves.toEqual([]);
+
+    const registryDb = new DatabaseSync(path.join(shadowRoot, "workspace-registry.db"));
+    try {
+      const staleRow = registryDb
+        .prepare("select status, recover_at as recoverAt from run_registry where id = ?")
+        .get("run_recoverable_stale") as { status: string; recoverAt: string } | undefined;
+      expect(staleRow).toEqual({
+        status: "completed",
+        recoverAt: "2026-01-01T00:00:20.000Z"
+      });
+    } finally {
+      registryDb.close();
+    }
+
+    await persistenceB.close();
+  });
+
+  it("deletes persisted session events by id across restarts", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-delete-event-"));
+    tempDirs.push(tempDir);
+
+    const workspaceRoot = path.join(tempDir, "workspace");
+    const shadowRoot = path.join(tempDir, "shadow");
+    await mkdir(workspaceRoot, { recursive: true });
+
+    const workspace = createWorkspace({
+      id: "ws_delete_event",
+      rootPath: workspaceRoot
+    });
+
+    const persistenceA = await createSQLiteRuntimePersistence({ shadowRoot });
+    await persistenceA.workspaceRepository.upsert(workspace);
+    await persistenceA.sessionRepository.create({
+      id: "ses_delete_event",
+      workspaceId: workspace.id,
+      subjectRef: "dev:test",
+      activeAgentName: "assistant",
+      status: "active",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    });
+
+    const first = await persistenceA.sessionEventStore.append({
+      sessionId: "ses_delete_event",
+      runId: "run_delete_event",
+      event: "run.started",
+      data: { step: 1 }
+    });
+    const second = await persistenceA.sessionEventStore.append({
+      sessionId: "ses_delete_event",
+      runId: "run_delete_event",
+      event: "tool.started",
+      data: { toolName: "bash" }
+    });
+    const third = await persistenceA.sessionEventStore.append({
+      sessionId: "ses_delete_event",
+      runId: "run_delete_event",
+      event: "tool.completed",
+      data: { toolName: "bash" }
+    });
+    await persistenceA.close();
+
+    const persistenceB = await createSQLiteRuntimePersistence({ shadowRoot });
+    await persistenceB.workspaceRepository.upsert(workspace);
+    await persistenceB.sessionEventStore.deleteById(second.id);
+
+    const registryDb = new DatabaseSync(path.join(shadowRoot, "workspace-registry.db"));
+    try {
+      const deletedRegistryRow = registryDb
+        .prepare("select count(*) as count from session_event_registry where id = ?")
+        .get(second.id) as { count: number };
+      expect(deletedRegistryRow.count).toBe(0);
+    } finally {
+      registryDb.close();
+    }
+
+    await expect(persistenceB.sessionEventStore.listSince("ses_delete_event")).resolves.toEqual([
+      expect.objectContaining({ id: first.id, cursor: "0" }),
+      expect.objectContaining({ id: third.id, cursor: "2" })
+    ]);
+
+    await persistenceB.close();
   });
 
   it("stores read-only chat workspace data under the shadow root", async () => {

@@ -390,7 +390,8 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         hasRedisRunQueue: Boolean(redisRunQueue)
       }) &&
       "workspaceArchiveRepository" in persistence &&
-      Boolean(persistence.workspaceArchiveRepository)
+      Boolean(persistence.workspaceArchiveRepository),
+    archiveExportRoot: config.paths.archive_dir
   });
   const runtimeProcess = describeRuntimeProcess({
     processKind,
@@ -865,7 +866,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     persistence.workspaceArchiveRepository
       ? new WorkspaceArchiveExporter({
           repository: persistence.workspaceArchiveRepository,
-          exportRoot: path.join(config.paths.workspace_dir, ".openharness", "archives"),
+          exportRoot: config.paths.archive_dir,
           logger: {
             info(message) {
               console.info(message);

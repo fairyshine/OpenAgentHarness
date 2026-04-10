@@ -405,6 +405,7 @@ openai-default:
         kind: "project"
       });
       expect(runtime.config.paths.model_dir).toBe(modelsDir);
+      expect(runtime.config.paths.archive_dir).toBe(path.join(path.dirname(workspaceRoot), ".openharness", "archives"));
       expect(runtime.config.llm.default_model).toBe("openai-default");
       await expect(runtime.healthReport()).resolves.toMatchObject({
         storage: {

@@ -183,23 +183,9 @@ describe("native tools", () => {
           status: 200,
           headers: { "content-type": "text/html; charset=utf-8" }
         })
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          [
-            "<html><body>",
-            '<a class="result__a" href="https://example.com/docs">Example Docs</a>',
-            '<a class="result__a" href="https://example.com/blog">Example Blog</a>',
-            "</body></html>"
-          ].join(""),
-          {
-            status: 200,
-            headers: { "content-type": "text/html; charset=utf-8" }
-          }
-        )
       );
 
-    const tools = createNativeToolSet(workspaceRoot, () => ["WebFetch", "WebSearch"]);
+    const tools = createNativeToolSet(workspaceRoot, () => ["WebFetch"]);
 
     const fetchResult = await tools.WebFetch.execute(
       {
@@ -214,20 +200,6 @@ describe("native tools", () => {
     expect(String(fetchResult)).toContain("Prompt execution fallback:");
     expect(String(fetchResult)).toContain("Summarize the page");
     expect(String(fetchResult)).toContain("Demo Page");
-
-    const searchResult = await tools.WebSearch.execute(
-      {
-        query: "example search",
-        allowed_domains: ["example.com"]
-      },
-      {}
-    );
-    expect(String(searchResult)).toContain("query: example search");
-    expect(String(searchResult)).toContain("results: 2");
-    expect(String(searchResult)).toContain("1. Example Docs");
-    expect(String(searchResult)).toContain("https://example.com/docs");
-    expect(String(searchResult)).toContain("2. Example Blog");
-    expect(String(searchResult)).toContain("https://example.com/blog");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

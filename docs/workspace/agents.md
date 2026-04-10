@@ -65,7 +65,6 @@ tools:
     - Glob
     - Grep
     - WebFetch
-    - WebSearch
     - TodoWrite
   actions:
     - code.review

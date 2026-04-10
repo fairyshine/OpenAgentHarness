@@ -30,6 +30,7 @@ export interface HistoryMirrorSyncerOptions {
   snapshotSource?: HistoryMirrorSnapshotSource | undefined;
   pollIntervalMs?: number | undefined;
   batchSize?: number | undefined;
+  maxConcurrentWorkspaces?: number | undefined;
   logger?: HistoryMirrorLogger | undefined;
 }
 
@@ -339,6 +340,7 @@ export class HistoryMirrorSyncer {
   readonly #snapshotSource: HistoryMirrorSnapshotSource | undefined;
   readonly #pollIntervalMs: number;
   readonly #batchSize: number;
+  readonly #maxConcurrentWorkspaces: number;
   readonly #logger: HistoryMirrorLogger;
   readonly #databases = new Map<string, MirrorDatabaseHandle>();
   readonly #unavailableWorkspaceRoots = new Map<string, string>();
@@ -351,6 +353,7 @@ export class HistoryMirrorSyncer {
     this.#snapshotSource = options.snapshotSource;
     this.#pollIntervalMs = options.pollIntervalMs ?? 1_000;
     this.#batchSize = options.batchSize ?? 250;
+    this.#maxConcurrentWorkspaces = Math.max(1, options.maxConcurrentWorkspaces ?? 4);
     this.#logger = options.logger ?? {};
   }
 
@@ -396,9 +399,7 @@ export class HistoryMirrorSyncer {
       let cursor: string | undefined;
       do {
         const workspaces = await this.#workspaceRepository.list(100, cursor);
-        for (const workspace of workspaces) {
-          await this.#syncWorkspace(workspace);
-        }
+        await this.#syncWorkspacePage(workspaces);
 
         cursor = workspaces.length === 100 ? String((cursor ? Number.parseInt(cursor, 10) : 0) + 100) : undefined;
       } while (cursor);
@@ -472,6 +473,7 @@ export class HistoryMirrorSyncer {
       this.#readMirrorState(handle.db, workspace.id)?.lastEventId ??
       previousState?.lastEventId ??
       (options?.reset ? 0 : 0);
+    let appliedEvents = false;
 
     try {
       while (true) {
@@ -487,13 +489,21 @@ export class HistoryMirrorSyncer {
               `History mirror sync made no forward progress for workspace ${workspace.id}; stopping this pass to avoid a tight loop.`
             );
           }
-          if (options?.reset || lastAppliedEventId > 0) {
+          const shouldWriteIdleState =
+            options?.reset === true ||
+            appliedEvents ||
+            previousState?.status !== "idle" ||
+            previousState?.lastEventId !== lastAppliedEventId ||
+            previousState?.errorMessage !== null;
+          if (shouldWriteIdleState) {
             this.#runInTransaction(handle.db, () => {
               this.#upsertWorkspace(handle.db, workspace);
               this.#writeMirrorState(handle.db, workspace.id, lastAppliedEventId, "idle", null);
             });
           }
-          await this.#refreshRuntimeMessagesIfSupported(handle.db, workspace.id);
+          if (options?.reset || appliedEvents || this.#hasActiveRuns(handle.db, workspace.id)) {
+            await this.#refreshRuntimeMessagesIfSupported(handle.db, workspace.id);
+          }
           return;
         }
 
@@ -507,6 +517,7 @@ export class HistoryMirrorSyncer {
           this.#writeMirrorState(handle.db, workspace.id, latestEventId, "idle", null);
           lastAppliedEventId = latestEventId;
         });
+        appliedEvents = true;
       }
     } catch (error) {
       this.#writeMirrorState(handle.db, workspace.id, lastAppliedEventId, "error", this.#errorMessage(error));
@@ -532,6 +543,27 @@ export class HistoryMirrorSyncer {
         this.#activeOperation = undefined;
       }
     }
+  }
+
+  async #syncWorkspacePage(workspaces: WorkspaceRecord[]): Promise<void> {
+    if (workspaces.length === 0) {
+      return;
+    }
+
+    let nextIndex = 0;
+    const workerCount = Math.min(this.#maxConcurrentWorkspaces, workspaces.length);
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        while (nextIndex < workspaces.length) {
+          const workspace = workspaces[nextIndex];
+          nextIndex += 1;
+          if (!workspace) {
+            return;
+          }
+          await this.#syncWorkspace(workspace);
+        }
+      })
+    );
   }
 
   async #openMirrorDatabase(workspace: WorkspaceRecord): Promise<MirrorDatabaseHandle> {
@@ -583,6 +615,18 @@ export class HistoryMirrorSyncer {
 
     cached.db.close();
     this.#databases.delete(workspaceId);
+  }
+
+  #hasActiveRuns(db: DatabaseSync, workspaceId: string): boolean {
+    const row = db
+      .prepare(
+        `select count(*) as count
+         from runs
+         where workspace_id = ?
+           and status in ('running', 'waiting_tool')`
+      )
+      .get(workspaceId) as { count?: number } | undefined;
+    return (row?.count ?? 0) > 0;
   }
 
   #readMirrorState(db: DatabaseSync, workspaceId: string): MirrorStateRow | undefined {

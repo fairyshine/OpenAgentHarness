@@ -51,6 +51,7 @@ export interface ServerConfig {
     model_dir: string;
     tool_dir: string;
     skill_dir: string;
+    archive_dir: string;
   };
   llm: {
     default_model: string;
@@ -306,18 +307,23 @@ function resolvePathInsideRoot(rootPath: string, relativePath: string, label: st
 
 function resolveConfigPaths(config: ServerConfig, configPath: string): ServerConfig {
   const configDir = path.dirname(configPath);
+  const workspaceDir = path.resolve(configDir, config.paths.workspace_dir);
   return {
     ...config,
     storage: {
       ...(config.storage ?? {})
     },
     paths: {
-      workspace_dir: path.resolve(configDir, config.paths.workspace_dir),
+      workspace_dir: workspaceDir,
       chat_dir: path.resolve(configDir, config.paths.chat_dir),
       template_dir: path.resolve(configDir, config.paths.template_dir),
       model_dir: path.resolve(configDir, config.paths.model_dir),
       tool_dir: path.resolve(configDir, config.paths.tool_dir),
-      skill_dir: path.resolve(configDir, config.paths.skill_dir)
+      skill_dir: path.resolve(configDir, config.paths.skill_dir),
+      archive_dir: path.resolve(
+        configDir,
+        config.paths.archive_dir ?? path.join(workspaceDir, ".openharness", "archives")
+      )
     }
   };
 }

@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 
 import type {
@@ -28,6 +30,7 @@ export interface WorkspaceArchiveExporterOptions {
   timeZone?: string | undefined;
   pollIntervalMs?: number | undefined;
   batchLimit?: number | undefined;
+  exportedRetentionDays?: number | undefined;
   logger?: WorkspaceArchiveExporterLogger | undefined;
 }
 
@@ -184,6 +187,22 @@ function archiveExportDbPath(exportRoot: string, archiveDate: string): string {
   return path.join(exportRoot, `${archiveDate}.sqlite`);
 }
 
+function archiveChecksumPath(exportPath: string): string {
+  return `${exportPath}.sha256`;
+}
+
+function isArchiveBundleName(fileName: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}\.sqlite$/u.test(fileName);
+}
+
+function isArchiveChecksumName(fileName: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}\.sqlite\.sha256$/u.test(fileName);
+}
+
+function shiftArchiveDate(baseTimestamp: string, timeZone: string, deltaDays: number): string {
+  return formatArchiveDate(new Date(new Date(baseTimestamp).getTime() + deltaDays * 24 * 60 * 60 * 1000).toISOString(), timeZone);
+}
+
 function jsonText(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
@@ -194,12 +213,165 @@ function applyArchiveSchema(db: DatabaseSync): void {
   }
 }
 
-function insertSessionRows(db: DatabaseSync, archiveId: string, sessions: Session[]): void {
-  const statement = db.prepare(
-    `insert or replace into sessions (
-      archive_id, id, workspace_id, subject_ref, model_ref, agent_name, active_agent_name, title, status, last_run_at, created_at, updated_at, payload
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+
+  await new Promise<void>((resolve, reject) => {
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk) => {
+      hash.update(chunk);
+    });
+    stream.on("end", () => {
+      resolve();
+    });
+    stream.on("error", (error) => {
+      reject(error);
+    });
+  });
+
+  return hash.digest("hex");
+}
+
+interface ArchiveDirectoryInspection {
+  unexpectedDirectories: string[];
+  leftoverTempFiles: string[];
+  unexpectedFiles: string[];
+  missingChecksums: string[];
+  orphanChecksums: string[];
+}
+
+async function inspectArchiveDirectory(exportRoot: string): Promise<ArchiveDirectoryInspection> {
+  const entries = await readdir(exportRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  });
+
+  const unexpectedDirectories: string[] = [];
+  const leftoverTempFiles: string[] = [];
+  const unexpectedFiles: string[] = [];
+  const missingChecksums: string[] = [];
+  const orphanChecksums: string[] = [];
+  const bundleNames = new Set<string>();
+  const checksumNames = new Set<string>();
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      unexpectedDirectories.push(entry.name);
+      continue;
+    }
+
+    if (entry.name.endsWith(".tmp")) {
+      leftoverTempFiles.push(entry.name);
+      continue;
+    }
+
+    if (isArchiveBundleName(entry.name)) {
+      bundleNames.add(entry.name);
+      continue;
+    }
+
+    if (isArchiveChecksumName(entry.name)) {
+      checksumNames.add(entry.name);
+      continue;
+    }
+
+    unexpectedFiles.push(entry.name);
+  }
+
+  for (const bundleName of bundleNames) {
+    const checksumName = `${bundleName}.sha256`;
+    if (!checksumNames.has(checksumName)) {
+      missingChecksums.push(bundleName);
+    }
+  }
+
+  for (const checksumName of checksumNames) {
+    const bundleName = checksumName.replace(/\.sha256$/u, "");
+    if (!bundleNames.has(bundleName)) {
+      orphanChecksums.push(checksumName);
+    }
+  }
+
+  return {
+    unexpectedDirectories,
+    leftoverTempFiles,
+    unexpectedFiles,
+    missingChecksums,
+    orphanChecksums
+  };
+}
+
+interface ArchiveInsertStatements {
+  manifest: ReturnType<DatabaseSync["prepare"]>;
+  archive: ReturnType<DatabaseSync["prepare"]>;
+  session: ReturnType<DatabaseSync["prepare"]>;
+  run: ReturnType<DatabaseSync["prepare"]>;
+  message: ReturnType<DatabaseSync["prepare"]>;
+  runtimeMessage: ReturnType<DatabaseSync["prepare"]>;
+  runStep: ReturnType<DatabaseSync["prepare"]>;
+  toolCall: ReturnType<DatabaseSync["prepare"]>;
+  hookRun: ReturnType<DatabaseSync["prepare"]>;
+  artifact: ReturnType<DatabaseSync["prepare"]>;
+}
+
+function createArchiveInsertStatements(db: DatabaseSync): ArchiveInsertStatements {
+  return {
+    manifest: db.prepare(
+      `insert or replace into archive_manifest (archive_date, timezone, exported_at, archive_count)
+       values (?, ?, ?, ?)`
+    ),
+    archive: db.prepare(
+      `insert or replace into archives (
+        archive_id, workspace_id, scope_type, scope_id, archive_date, archived_at, deleted_at, timezone, exported_at, export_path, workspace_name, root_path, workspace_snapshot
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+    session: db.prepare(
+      `insert or replace into sessions (
+        archive_id, id, workspace_id, subject_ref, model_ref, agent_name, active_agent_name, title, status, last_run_at, created_at, updated_at, payload
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+    run: db.prepare(
+      `insert or replace into runs (
+        archive_id, id, workspace_id, session_id, parent_run_id, trigger_type, trigger_ref, agent_name, effective_agent_name, status, created_at, started_at, heartbeat_at, ended_at, payload
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+    message: db.prepare(
+      `insert or replace into messages (
+        archive_id, id, session_id, run_id, role, created_at, content, metadata
+      ) values (?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+    runtimeMessage: db.prepare(
+      `insert or replace into runtime_messages (
+        archive_id, id, session_id, run_id, role, kind, created_at, content, metadata
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+    runStep: db.prepare(
+      `insert or replace into run_steps (
+        archive_id, id, run_id, seq, step_type, name, agent_name, status, started_at, ended_at, input, output
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+    toolCall: db.prepare(
+      `insert or replace into tool_calls (
+        archive_id, id, run_id, step_id, source_type, tool_name, status, duration_ms, started_at, ended_at, request, response
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+    hookRun: db.prepare(
+      `insert or replace into hook_runs (
+        archive_id, id, run_id, hook_name, event_name, status, started_at, ended_at, capabilities, patch, error_message
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+    artifact: db.prepare(
+      `insert or replace into artifacts (
+        archive_id, id, run_id, type, path, content_ref, created_at, metadata
+      ) values (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+  };
+}
+
+function insertSessionRows(statement: ArchiveInsertStatements["session"], archiveId: string, sessions: Session[]): void {
 
   for (const session of sessions) {
     statement.run(
@@ -220,13 +392,7 @@ function insertSessionRows(db: DatabaseSync, archiveId: string, sessions: Sessio
   }
 }
 
-function insertRunRows(db: DatabaseSync, archiveId: string, runs: Run[]): void {
-  const statement = db.prepare(
-    `insert or replace into runs (
-      archive_id, id, workspace_id, session_id, parent_run_id, trigger_type, trigger_ref, agent_name, effective_agent_name, status, created_at, started_at, heartbeat_at, ended_at, payload
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
+function insertRunRows(statement: ArchiveInsertStatements["run"], archiveId: string, runs: Run[]): void {
   for (const run of runs) {
     statement.run(
       archiveId,
@@ -248,13 +414,7 @@ function insertRunRows(db: DatabaseSync, archiveId: string, runs: Run[]): void {
   }
 }
 
-function insertMessageRows(db: DatabaseSync, archiveId: string, messages: Message[]): void {
-  const statement = db.prepare(
-    `insert or replace into messages (
-      archive_id, id, session_id, run_id, role, created_at, content, metadata
-    ) values (?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
+function insertMessageRows(statement: ArchiveInsertStatements["message"], archiveId: string, messages: Message[]): void {
   for (const message of messages) {
     statement.run(
       archiveId,
@@ -269,13 +429,11 @@ function insertMessageRows(db: DatabaseSync, archiveId: string, messages: Messag
   }
 }
 
-function insertRuntimeMessageRows(db: DatabaseSync, archiveId: string, runtimeMessages: RuntimeMessage[]): void {
-  const statement = db.prepare(
-    `insert or replace into runtime_messages (
-      archive_id, id, session_id, run_id, role, kind, created_at, content, metadata
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
+function insertRuntimeMessageRows(
+  statement: ArchiveInsertStatements["runtimeMessage"],
+  archiveId: string,
+  runtimeMessages: RuntimeMessage[]
+): void {
   for (const message of runtimeMessages) {
     statement.run(
       archiveId,
@@ -291,13 +449,7 @@ function insertRuntimeMessageRows(db: DatabaseSync, archiveId: string, runtimeMe
   }
 }
 
-function insertRunStepRows(db: DatabaseSync, archiveId: string, runSteps: RunStep[]): void {
-  const statement = db.prepare(
-    `insert or replace into run_steps (
-      archive_id, id, run_id, seq, step_type, name, agent_name, status, started_at, ended_at, input, output
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
+function insertRunStepRows(statement: ArchiveInsertStatements["runStep"], archiveId: string, runSteps: RunStep[]): void {
   for (const step of runSteps) {
     statement.run(
       archiveId,
@@ -316,13 +468,11 @@ function insertRunStepRows(db: DatabaseSync, archiveId: string, runSteps: RunSte
   }
 }
 
-function insertToolCallRows(db: DatabaseSync, archiveId: string, toolCalls: ToolCallAuditRecord[]): void {
-  const statement = db.prepare(
-    `insert or replace into tool_calls (
-      archive_id, id, run_id, step_id, source_type, tool_name, status, duration_ms, started_at, ended_at, request, response
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
+function insertToolCallRows(
+  statement: ArchiveInsertStatements["toolCall"],
+  archiveId: string,
+  toolCalls: ToolCallAuditRecord[]
+): void {
   for (const toolCall of toolCalls) {
     statement.run(
       archiveId,
@@ -341,13 +491,11 @@ function insertToolCallRows(db: DatabaseSync, archiveId: string, toolCalls: Tool
   }
 }
 
-function insertHookRunRows(db: DatabaseSync, archiveId: string, hookRuns: HookRunAuditRecord[]): void {
-  const statement = db.prepare(
-    `insert or replace into hook_runs (
-      archive_id, id, run_id, hook_name, event_name, status, started_at, ended_at, capabilities, patch, error_message
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
+function insertHookRunRows(
+  statement: ArchiveInsertStatements["hookRun"],
+  archiveId: string,
+  hookRuns: HookRunAuditRecord[]
+): void {
   for (const hookRun of hookRuns) {
     statement.run(
       archiveId,
@@ -365,13 +513,11 @@ function insertHookRunRows(db: DatabaseSync, archiveId: string, hookRuns: HookRu
   }
 }
 
-function insertArtifactRows(db: DatabaseSync, archiveId: string, artifacts: ArtifactRecord[]): void {
-  const statement = db.prepare(
-    `insert or replace into artifacts (
-      archive_id, id, run_id, type, path, content_ref, created_at, metadata
-    ) values (?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
+function insertArtifactRows(
+  statement: ArchiveInsertStatements["artifact"],
+  archiveId: string,
+  artifacts: ArtifactRecord[]
+): void {
   for (const artifact of artifacts) {
     statement.run(
       archiveId,
@@ -386,20 +532,17 @@ function insertArtifactRows(db: DatabaseSync, archiveId: string, artifacts: Arti
   }
 }
 
-function insertArchiveRows(db: DatabaseSync, archiveDate: string, exportPath: string, exportedAt: string, archives: WorkspaceArchiveRecord[]): void {
-  db.prepare(
-    `insert or replace into archive_manifest (archive_date, timezone, exported_at, archive_count)
-     values (?, ?, ?, ?)`
-  ).run(archiveDate, archives[0]?.timezone ?? "UTC", exportedAt, archives.length);
-
-  const archiveStatement = db.prepare(
-    `insert or replace into archives (
-      archive_id, workspace_id, scope_type, scope_id, archive_date, archived_at, deleted_at, timezone, exported_at, export_path, workspace_name, root_path, workspace_snapshot
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
+function insertArchiveRows(
+  statements: ArchiveInsertStatements,
+  archiveDate: string,
+  exportPath: string,
+  exportedAt: string,
+  archives: WorkspaceArchiveRecord[]
+): void {
+  statements.manifest.run(archiveDate, archives[0]?.timezone ?? "UTC", exportedAt, archives.length);
 
   for (const archive of archives) {
-    archiveStatement.run(
+    statements.archive.run(
       archive.id,
       archive.workspaceId,
       archive.scopeType,
@@ -415,14 +558,14 @@ function insertArchiveRows(db: DatabaseSync, archiveDate: string, exportPath: st
       jsonText(archive.workspace)
     );
 
-    insertSessionRows(db, archive.id, archive.sessions);
-    insertRunRows(db, archive.id, archive.runs);
-    insertMessageRows(db, archive.id, archive.messages);
-    insertRuntimeMessageRows(db, archive.id, archive.runtimeMessages);
-    insertRunStepRows(db, archive.id, archive.runSteps);
-    insertToolCallRows(db, archive.id, archive.toolCalls);
-    insertHookRunRows(db, archive.id, archive.hookRuns);
-    insertArtifactRows(db, archive.id, archive.artifacts);
+    insertSessionRows(statements.session, archive.id, archive.sessions);
+    insertRunRows(statements.run, archive.id, archive.runs);
+    insertMessageRows(statements.message, archive.id, archive.messages);
+    insertRuntimeMessageRows(statements.runtimeMessage, archive.id, archive.runtimeMessages);
+    insertRunStepRows(statements.runStep, archive.id, archive.runSteps);
+    insertToolCallRows(statements.toolCall, archive.id, archive.toolCalls);
+    insertHookRunRows(statements.hookRun, archive.id, archive.hookRuns);
+    insertArtifactRows(statements.artifact, archive.id, archive.artifacts);
   }
 }
 
@@ -432,8 +575,10 @@ export class WorkspaceArchiveExporter {
   readonly #timeZone: string;
   readonly #pollIntervalMs: number;
   readonly #batchLimit: number;
+  readonly #exportedRetentionDays: number;
   readonly #logger: WorkspaceArchiveExporterLogger;
   #activeExport: Promise<void> | undefined;
+  #hasInspectedExportRoot = false;
   #timer: NodeJS.Timeout | undefined;
 
   constructor(options: WorkspaceArchiveExporterOptions) {
@@ -442,6 +587,7 @@ export class WorkspaceArchiveExporter {
     this.#timeZone = resolveArchiveTimeZone(options.timeZone);
     this.#pollIntervalMs = Math.max(60_000, options.pollIntervalMs ?? 15 * 60_000);
     this.#batchLimit = Math.max(1, options.batchLimit ?? 32);
+    this.#exportedRetentionDays = Math.max(1, options.exportedRetentionDays ?? 30);
     this.#logger = options.logger ?? {};
   }
 
@@ -478,10 +624,20 @@ export class WorkspaceArchiveExporter {
     }
 
     const task = (async () => {
-      const today = formatArchiveDate(nowIso(), this.#timeZone);
+      await this.#inspectExportRootIfNeeded();
+      const now = nowIso();
+      const today = formatArchiveDate(now, this.#timeZone);
       const pendingArchiveDates = await this.#repository.listPendingArchiveDates(today, this.#batchLimit);
       for (const archiveDate of pendingArchiveDates) {
         await this.#exportArchiveDate(archiveDate);
+      }
+
+      const exportedPruneBefore = shiftArchiveDate(now, this.#timeZone, -(this.#exportedRetentionDays - 1));
+      const pruned = await this.#repository.pruneExportedBefore(exportedPruneBefore, this.#batchLimit);
+      if (pruned > 0) {
+        this.#logger.info?.(
+          `Pruned ${pruned} exported workspace archives older than ${exportedPruneBefore} from primary storage.`
+        );
       }
     })();
 
@@ -495,6 +651,46 @@ export class WorkspaceArchiveExporter {
     }
   }
 
+  async #inspectExportRootIfNeeded(): Promise<void> {
+    if (this.#hasInspectedExportRoot) {
+      return;
+    }
+
+    this.#hasInspectedExportRoot = true;
+
+    try {
+      const inspection = await inspectArchiveDirectory(this.#exportRoot);
+
+      if (inspection.unexpectedDirectories.length > 0) {
+        this.#logger.warn?.(
+          `Archive export directory ${this.#exportRoot} contains unexpected subdirectories: ${inspection.unexpectedDirectories.join(", ")}.`
+        );
+      }
+      if (inspection.leftoverTempFiles.length > 0) {
+        this.#logger.warn?.(
+          `Archive export directory ${this.#exportRoot} contains leftover temporary files: ${inspection.leftoverTempFiles.join(", ")}.`
+        );
+      }
+      if (inspection.unexpectedFiles.length > 0) {
+        this.#logger.warn?.(
+          `Archive export directory ${this.#exportRoot} contains files outside the YYYY-MM-DD.sqlite naming convention: ${inspection.unexpectedFiles.join(", ")}.`
+        );
+      }
+      if (inspection.missingChecksums.length > 0) {
+        this.#logger.warn?.(
+          `Archive export directory ${this.#exportRoot} contains archive bundles without checksum files: ${inspection.missingChecksums.join(", ")}.`
+        );
+      }
+      if (inspection.orphanChecksums.length > 0) {
+        this.#logger.warn?.(
+          `Archive export directory ${this.#exportRoot} contains checksum files without matching archive bundles: ${inspection.orphanChecksums.join(", ")}.`
+        );
+      }
+    } catch (error) {
+      this.#logger.warn?.(`Failed to inspect archive export directory ${this.#exportRoot}.`, error);
+    }
+  }
+
   async #exportArchiveDate(archiveDate: string): Promise<void> {
     const archives = await this.#repository.listByArchiveDate(archiveDate);
     if (archives.length === 0) {
@@ -503,6 +699,7 @@ export class WorkspaceArchiveExporter {
 
     const exportPath = archiveExportDbPath(this.#exportRoot, archiveDate);
     const tempPath = `${exportPath}.tmp`;
+    const checksumPath = archiveChecksumPath(exportPath);
     const exportedAt = nowIso();
 
     await mkdir(path.dirname(exportPath), { recursive: true });
@@ -511,9 +708,10 @@ export class WorkspaceArchiveExporter {
     const db = new DatabaseSync(tempPath);
     try {
       applyArchiveSchema(db);
+      const statements = createArchiveInsertStatements(db);
       db.exec("begin immediate");
       try {
-        insertArchiveRows(db, archiveDate, exportPath, exportedAt, archives);
+        insertArchiveRows(statements, archiveDate, exportPath, exportedAt, archives);
         db.exec("commit");
       } catch (error) {
         db.exec("rollback");
@@ -525,6 +723,8 @@ export class WorkspaceArchiveExporter {
 
     await rm(exportPath, { force: true });
     await rename(tempPath, exportPath);
+    const checksum = await sha256File(exportPath);
+    await writeFile(checksumPath, `${checksum}  ${path.basename(exportPath)}\n`, "utf8");
     await this.#repository.markExported(
       archives.map((archive) => archive.id),
       {
@@ -532,6 +732,8 @@ export class WorkspaceArchiveExporter {
         exportPath
       }
     );
-    this.#logger.info?.(`Exported ${archives.length} workspace archives for ${archiveDate} to ${exportPath}.`);
+    this.#logger.info?.(
+      `Exported ${archives.length} workspace archives for ${archiveDate} to ${exportPath} with checksum ${path.basename(checksumPath)}.`
+    );
   }
 }
