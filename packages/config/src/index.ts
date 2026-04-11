@@ -595,9 +595,19 @@ export function resolveWorkspaceCreationRoot(input: {
   rootPath?: string | undefined;
 }): string {
   if (input.rootPath) {
-    return path.isAbsolute(input.rootPath)
+    const resolved = path.isAbsolute(input.rootPath)
       ? input.rootPath
       : path.resolve(input.workspaceDir, input.rootPath);
+
+    const relative = path.relative(input.workspaceDir, resolved);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(
+        `rootPath "${input.rootPath}" resolves to "${resolved}" which is outside the workspace directory "${input.workspaceDir}". ` +
+          "Workspace root paths must be within the configured workspace directory."
+      );
+    }
+
+    return resolved;
   }
 
   const directoryName = input.workspaceId?.trim() || normalizeWorkspaceName(input.name) || "workspace";

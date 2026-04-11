@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -75,8 +76,42 @@ function resolveWorkspaceFsPath(
 ): ResolvedWorkspacePath {
   const normalizedTarget = targetPath.trim().length > 0 ? targetPath.trim() : (options?.defaultPath ?? ".");
   const absolutePath = path.resolve(workspaceRoot, normalizedTarget);
-  const relativePath = path.relative(workspaceRoot, absolutePath);
 
+  // Resolve symlinks to prevent symlink-based path traversal.
+  // If the target does not exist yet (e.g., a write path for a new file),
+  // resolve the nearest existing ancestor and validate that, then re-append the remainder.
+  let realWorkspaceRoot: string;
+  try {
+    realWorkspaceRoot = realpathSync(workspaceRoot);
+  } catch {
+    realWorkspaceRoot = workspaceRoot;
+  }
+
+  let realAbsolutePath: string;
+  try {
+    realAbsolutePath = realpathSync(absolutePath);
+  } catch {
+    // Target doesn't exist — resolve the deepest existing ancestor
+    let current = absolutePath;
+    const trailingParts: string[] = [];
+    while (true) {
+      try {
+        const resolved = realpathSync(current);
+        realAbsolutePath = trailingParts.length > 0 ? path.join(resolved, ...trailingParts) : resolved;
+        break;
+      } catch {
+        trailingParts.unshift(path.basename(current));
+        const parent = path.dirname(current);
+        if (parent === current) {
+          // Reached filesystem root without finding an existing ancestor — fail safe
+          throw new AppError(403, "workspace_path_not_allowed", `Path ${targetPath} is outside the workspace root.`);
+        }
+        current = parent;
+      }
+    }
+  }
+
+  const relativePath = path.relative(realWorkspaceRoot, realAbsolutePath);
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     throw new AppError(403, "workspace_path_not_allowed", `Path ${targetPath} is outside the workspace root.`);
   }

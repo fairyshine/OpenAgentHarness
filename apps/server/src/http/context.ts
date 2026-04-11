@@ -52,8 +52,23 @@ export function createStandaloneCallerContext(): CallerContext {
     subjectRef: "standalone:anonymous",
     authSource: "standalone_server",
     scopes: [],
-    workspaceAccess: []
+    // Standalone mode grants access to all workspaces.
+    // When an upstream gateway provides resolveCallerContext, it is responsible
+    // for populating workspaceAccess with the specific workspace IDs the caller
+    // may access; an empty array then means "no access" and assertWorkspaceAccess
+    // will enforce it.
+    workspaceAccess: ["*"]
   };
+}
+
+export function assertWorkspaceAccess(context: CallerContext, workspaceId: string): void {
+  if (context.workspaceAccess.includes("*")) {
+    return;
+  }
+
+  if (context.workspaceAccess.length > 0 && !context.workspaceAccess.includes(workspaceId)) {
+    throw new AppError(403, "workspace_access_denied", `Caller does not have access to workspace ${workspaceId}.`);
+  }
 }
 
 export function createParamsSchema<T extends string>(...keys: T[]) {

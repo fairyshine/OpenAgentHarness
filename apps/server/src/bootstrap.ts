@@ -1001,6 +1001,18 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       ? {
           listWorkspaceTemplates: () => listWorkspaceTemplates(config.paths.template_dir),
           async importWorkspace(input) {
+            const allowedDir = input.kind === "chat" ? config.paths.chat_dir : config.paths.workspace_dir;
+            const resolvedRoot = path.resolve(input.rootPath);
+            const relativeToAllowed = path.relative(allowedDir, resolvedRoot);
+            if (relativeToAllowed.startsWith("..") || path.isAbsolute(relativeToAllowed)) {
+              throw new AppError(
+                403,
+                "workspace_path_not_allowed",
+                `rootPath "${input.rootPath}" resolves outside the allowed directory. ` +
+                  `Workspace imports must target paths within the configured ${input.kind === "chat" ? "chat_dir" : "workspace_dir"}.`
+              );
+            }
+
             const discovered = await discoverWorkspace(input.rootPath, input.kind ?? "project", {
               platformModels: models,
               platformAgents,

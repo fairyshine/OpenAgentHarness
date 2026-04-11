@@ -248,6 +248,35 @@ openai-default:
     expect(resolved).toBe(path.join(tempDir, "workspaces", "demo-app"));
   });
 
+  it("rejects rootPath that escapes workspace directory via absolute path", () => {
+    expect(() =>
+      resolveWorkspaceCreationRoot({
+        workspaceDir: "/tmp/workspaces",
+        name: "test",
+        rootPath: "/etc"
+      })
+    ).toThrow(/outside the workspace directory/);
+  });
+
+  it("rejects rootPath that escapes workspace directory via traversal", () => {
+    expect(() =>
+      resolveWorkspaceCreationRoot({
+        workspaceDir: "/tmp/workspaces",
+        name: "test",
+        rootPath: "../../etc"
+      })
+    ).toThrow(/outside the workspace directory/);
+  });
+
+  it("allows rootPath within workspace directory", () => {
+    const resolved = resolveWorkspaceCreationRoot({
+      workspaceDir: "/tmp/workspaces",
+      name: "test",
+      rootPath: "my-project"
+    });
+    expect(resolved).toBe("/tmp/workspaces/my-project");
+  });
+
   it("lists workspace templates from template_dir direct subdirectories", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-templates-list-"));
     tempDirs.push(tempDir);

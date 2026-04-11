@@ -25,7 +25,7 @@ import {
 } from "@oah/api-contracts";
 import { AppError } from "@oah/runtime-core";
 
-import { createParamsSchema, toCallerContext } from "../context.js";
+import { assertWorkspaceAccess, createParamsSchema, toCallerContext } from "../context.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
 import { inspectHistoryMirrorStatus } from "../../history-mirror.js";
 
@@ -75,12 +75,14 @@ export function registerWorkspaceRoutes(
 
   app.get("/api/v1/workspaces/:workspaceId", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const workspace = await dependencies.runtimeService.getWorkspace(params.workspaceId);
     return reply.send(workspace);
   });
 
   app.get("/api/v1/workspaces/:workspaceId/history-mirror", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const workspace = await dependencies.runtimeService.getWorkspaceRecord(params.workspaceId);
     const status = dependencies.getWorkspaceHistoryMirrorStatus
       ? await dependencies.getWorkspaceHistoryMirrorStatus(workspace)
@@ -90,6 +92,7 @@ export function registerWorkspaceRoutes(
 
   app.post("/api/v1/workspaces/:workspaceId/history-mirror/rebuild", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const workspace = await dependencies.runtimeService.getWorkspaceRecord(params.workspaceId);
 
     if (workspace.kind !== "project") {
@@ -114,18 +117,21 @@ export function registerWorkspaceRoutes(
     }
 
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     await dependencies.runtimeService.deleteWorkspace(params.workspaceId);
     return reply.status(204).send();
   });
 
   app.get("/api/v1/workspaces/:workspaceId/catalog", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const catalog = await dependencies.runtimeService.getWorkspaceCatalog(params.workspaceId);
     return reply.send(catalog);
   });
 
   app.get("/api/v1/workspaces/:workspaceId/entries", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const query = workspaceEntriesQuerySchema.parse(request.query);
     const page = await dependencies.runtimeService.listWorkspaceEntries(params.workspaceId, query);
     return reply.send(workspaceEntryPageSchema.parse(page));
@@ -133,6 +139,7 @@ export function registerWorkspaceRoutes(
 
   app.get("/api/v1/workspaces/:workspaceId/files/content", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const query = workspaceFileContentQuerySchema.parse(request.query);
     const file = await dependencies.runtimeService.getWorkspaceFileContent(params.workspaceId, query);
     return reply.send(workspaceFileContentSchema.parse(file));
@@ -140,6 +147,7 @@ export function registerWorkspaceRoutes(
 
   app.put("/api/v1/workspaces/:workspaceId/files/content", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const input = putWorkspaceFileRequestSchema.parse(request.body);
     const entry = await dependencies.runtimeService.putWorkspaceFileContent(params.workspaceId, {
       path: input.path,
@@ -153,6 +161,7 @@ export function registerWorkspaceRoutes(
 
   app.put("/api/v1/workspaces/:workspaceId/files/upload", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const query = workspaceFileUploadQuerySchema.parse(request.query);
     if (!Buffer.isBuffer(request.body)) {
       throw new AppError(415, "invalid_upload_content_type", "File upload requires Content-Type: application/octet-stream.");
@@ -169,6 +178,7 @@ export function registerWorkspaceRoutes(
 
   app.get("/api/v1/workspaces/:workspaceId/files/download", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const query = workspaceEntryPathQuerySchema.parse(request.query);
     const file = await dependencies.runtimeService.getWorkspaceFileDownload(params.workspaceId, query.path);
 
@@ -182,6 +192,7 @@ export function registerWorkspaceRoutes(
 
   app.post("/api/v1/workspaces/:workspaceId/directories", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const input = createWorkspaceDirectoryRequestSchema.parse(request.body);
     const entry = await dependencies.runtimeService.createWorkspaceDirectory(params.workspaceId, input);
     return reply.status(201).send(workspaceEntrySchema.parse(entry));
@@ -189,6 +200,7 @@ export function registerWorkspaceRoutes(
 
   app.delete("/api/v1/workspaces/:workspaceId/entries", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const query = workspaceDeleteEntryQuerySchema.parse(request.query);
     const result = await dependencies.runtimeService.deleteWorkspaceEntry(params.workspaceId, query);
     return reply.send(workspaceDeleteResultSchema.parse(result));
@@ -196,6 +208,7 @@ export function registerWorkspaceRoutes(
 
   app.patch("/api/v1/workspaces/:workspaceId/entries/move", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const input = moveWorkspaceEntryRequestSchema.parse(request.body);
     const entry = await dependencies.runtimeService.moveWorkspaceEntry(params.workspaceId, input);
     return reply.send(workspaceEntrySchema.parse(entry));
@@ -203,10 +216,12 @@ export function registerWorkspaceRoutes(
 
   app.post("/api/v1/workspaces/:workspaceId/sessions", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    const caller = toCallerContext(request);
+    assertWorkspaceAccess(caller, params.workspaceId);
     const input = createSessionRequestSchema.parse(request.body);
     const session = await dependencies.runtimeService.createSession({
       workspaceId: params.workspaceId,
-      caller: toCallerContext(request),
+      caller,
       input
     });
 
@@ -215,6 +230,7 @@ export function registerWorkspaceRoutes(
 
   app.get("/api/v1/workspaces/:workspaceId/sessions", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
+    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const query = pageQuerySchema.parse(request.query);
     const page = await dependencies.runtimeService.listWorkspaceSessions(params.workspaceId, query.pageSize, query.cursor);
     return reply.send(sessionPageSchema.parse(page));
@@ -222,11 +238,13 @@ export function registerWorkspaceRoutes(
 
   app.post("/api/v1/workspaces/:workspaceId/actions/:actionName/runs", async (request, reply) => {
     const params = createParamsSchema("workspaceId", "actionName").parse(request.params);
+    const caller = toCallerContext(request);
+    assertWorkspaceAccess(caller, params.workspaceId);
     const input = createActionRunRequestSchema.parse(request.body);
     const accepted = await dependencies.runtimeService.triggerActionRun({
       workspaceId: params.workspaceId,
       actionName: params.actionName,
-      caller: toCallerContext(request),
+      caller,
       sessionId: input.sessionId,
       agentName: input.agentName,
       input: input.input
