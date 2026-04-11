@@ -281,6 +281,7 @@ export function useAppController() {
   });
   const navigationActions = useNavigationActions({
     request,
+    connection,
     setActivity,
     setErrorMessage,
     navigation: {
@@ -1602,6 +1603,8 @@ export function useAppController() {
       workspaceTemplates,
       createWorkspace: () => void navigationActions.createWorkspace(),
       refreshWorkspaceTemplates: () => void navigationActions.refreshWorkspaceTemplates(),
+      uploadWorkspaceTemplate: navigationActions.uploadWorkspaceTemplate,
+      deleteWorkspaceTemplate: navigationActions.deleteWorkspaceTemplate,
       refreshWorkspaceIndex: () => void navigationActions.refreshWorkspaceIndex(),
       createSession: () => void navigationActions.createSession(),
       sessionId,

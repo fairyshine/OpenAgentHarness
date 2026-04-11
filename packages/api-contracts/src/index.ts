@@ -426,6 +426,15 @@ export const workspaceTemplateListSchema = z.object({
   items: z.array(workspaceTemplateSchema)
 });
 
+export const uploadWorkspaceTemplateRequestSchema = z.object({
+  name: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/, "Template name must contain only alphanumeric characters, hyphens, and underscores"),
+  overwrite: z.boolean().default(false)
+});
+
+export const uploadWorkspaceTemplateResponseSchema = z.object({
+  name: z.string()
+});
+
 export const modelProviderSchema = z.object({
   id: z.enum(["openai", "openai-compatible"]),
   packageName: z.string(),
@@ -868,6 +877,8 @@ export type RunStep = z.infer<typeof runStepSchema>;
 export type RunStepPage = z.infer<typeof runStepPageSchema>;
 export type WorkspaceTemplate = z.infer<typeof workspaceTemplateSchema>;
 export type WorkspaceTemplateList = z.infer<typeof workspaceTemplateListSchema>;
+export type UploadWorkspaceTemplateRequest = z.infer<typeof uploadWorkspaceTemplateRequestSchema>;
+export type UploadWorkspaceTemplateResponse = z.infer<typeof uploadWorkspaceTemplateResponseSchema>;
 export type PlatformModel = z.infer<typeof platformModelSchema>;
 export type PlatformModelList = z.infer<typeof platformModelListSchema>;
 export type PlatformModelSnapshot = z.infer<typeof platformModelSnapshotSchema>;

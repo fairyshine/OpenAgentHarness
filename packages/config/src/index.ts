@@ -1,6 +1,7 @@
 import { access, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import yauzl from "yauzl";
 
 import type {
   ActionCatalogItem,
@@ -918,6 +919,137 @@ export async function listWorkspaceTemplates(templateDir: string): Promise<Works
       name: entry.name
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function isSkippableZipEntry(fileName: string): boolean {
+  const normalized = fileName.replace(/\\/g, "/");
+  const topEntry = normalized.split("/")[0];
+  return topEntry === "__MACOSX" || topEntry === ".DS_Store" || normalized.endsWith("/.DS_Store");
+}
+
+function openZip(buffer: Buffer): Promise<yauzl.ZipFile> {
+  return new Promise((resolve, reject) => {
+    yauzl.fromBuffer(buffer, { lazyEntries: true }, (err, zipfile) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(zipfile);
+      }
+    });
+  });
+}
+
+function readZipEntry(readable: NodeJS.ReadableStream): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    readable.on("data", (chunk: Buffer) => chunks.push(chunk));
+    readable.on("end", () => resolve(Buffer.concat(chunks)));
+    readable.on("error", reject);
+  });
+}
+
+export async function uploadWorkspaceTemplate(input: {
+  templateDir: string;
+  templateName: string;
+  zipBuffer: Buffer;
+  overwrite?: boolean;
+}): Promise<WorkspaceTemplateDescriptor> {
+  const targetDir = resolvePathInsideRoot(input.templateDir, input.templateName, "template name");
+  const templateExists = await pathExists(targetDir);
+
+  if (templateExists && !input.overwrite) {
+    const err = new Error(`Template "${input.templateName}" already exists`);
+    (err as Error & { statusCode?: number }).statusCode = 409;
+    (err as Error & { code?: string }).code = "template_already_exists";
+    throw err;
+  }
+
+  if (templateExists) {
+    await rm(targetDir, { recursive: true });
+  }
+
+  await mkdir(targetDir, { recursive: true });
+
+  const zipfile = await openZip(input.zipBuffer);
+
+  return new Promise<WorkspaceTemplateDescriptor>((resolve, reject) => {
+    let entryCount = 0;
+
+    zipfile.on("error", reject);
+
+    zipfile.on("entry", (entry: yauzl.Entry) => {
+      const fileName = entry.fileName;
+
+      if (fileName.endsWith("/")) {
+        zipfile.readEntry();
+        return;
+      }
+
+      if (isSkippableZipEntry(fileName)) {
+        zipfile.readEntry();
+        return;
+      }
+
+      const resolvedEntryPath = path.resolve(targetDir, fileName);
+      const relative = path.relative(targetDir, resolvedEntryPath);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        reject(new Error(`Zip entry "${fileName}" escapes the template directory`));
+        return;
+      }
+
+      entryCount++;
+
+      zipfile.openReadStream(entry, async (err, readable) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        try {
+          const parentDir = path.dirname(resolvedEntryPath);
+          await mkdir(parentDir, { recursive: true });
+
+          const data = await readZipEntry(readable);
+          await writeFile(resolvedEntryPath, data);
+
+          zipfile.readEntry();
+        } catch (writeErr) {
+          reject(writeErr);
+        }
+      });
+    });
+
+    zipfile.on("end", async () => {
+      if (entryCount === 0) {
+        await rm(targetDir, { recursive: true }).catch(() => {});
+        const err = new Error("Zip archive contains no files");
+        (err as Error & { statusCode?: number }).statusCode = 400;
+        (err as Error & { code?: string }).code = "empty_template_zip";
+        reject(err);
+        return;
+      }
+
+      resolve({ name: input.templateName });
+    });
+
+    zipfile.readEntry();
+  });
+}
+
+export async function deleteWorkspaceTemplate(input: {
+  templateDir: string;
+  templateName: string;
+}): Promise<void> {
+  const targetDir = resolvePathInsideRoot(input.templateDir, input.templateName, "template name");
+
+  if (!(await pathExists(targetDir))) {
+    const err = new Error(`Template "${input.templateName}" does not exist`);
+    (err as Error & { statusCode?: number }).statusCode = 404;
+    (err as Error & { code?: string }).code = "template_not_found";
+    throw err;
+  }
+
+  await rm(targetDir, { recursive: true });
 }
 
 export async function loadWorkspaceSettings(workspaceRoot: string): Promise<WorkspaceSettings> {

@@ -3,13 +3,15 @@ import type { FSWatcher } from "node:fs";
 import { access, rm } from "node:fs/promises";
 
 import {
+  deleteWorkspaceTemplate,
   discoverWorkspace,
   discoverWorkspaces,
   initializeWorkspaceFromTemplate,
   listWorkspaceTemplates,
   loadPlatformModels,
   loadServerConfig,
-  resolveWorkspaceCreationRoot
+  resolveWorkspaceCreationRoot,
+  uploadWorkspaceTemplate
 } from "@oah/config";
 import type { ServerConfig } from "@oah/config";
 import { AppError, RuntimeService, createId, parseCursor } from "@oah/runtime-core";
@@ -1000,6 +1002,16 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     ...(singleWorkspace === undefined
       ? {
           listWorkspaceTemplates: () => listWorkspaceTemplates(config.paths.template_dir),
+          uploadWorkspaceTemplate: (input) => uploadWorkspaceTemplate({
+            templateDir: config.paths.template_dir,
+            templateName: input.templateName,
+            zipBuffer: input.zipBuffer,
+            overwrite: input.overwrite
+          }),
+          deleteWorkspaceTemplate: (input) => deleteWorkspaceTemplate({
+            templateDir: config.paths.template_dir,
+            templateName: input.templateName
+          }),
           async importWorkspace(input) {
             const allowedDir = input.kind === "chat" ? config.paths.chat_dir : config.paths.workspace_dir;
             const resolvedRoot = path.resolve(input.rootPath);

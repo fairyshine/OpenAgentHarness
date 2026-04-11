@@ -14,9 +14,13 @@ import type {
 
 import {
   addRecentId,
+  buildAuthHeaders,
+  buildUrl,
+  createHttpRequestError,
   isNotFoundError,
   pathLeaf,
   toErrorMessage,
+  type ConnectionSettings,
   type LiveConversationMessageRecord,
   type SavedSessionRecord,
   type SavedWorkspaceRecord,
@@ -27,6 +31,7 @@ type AppRequest = <T>(path: string, init?: RequestInit, options?: { auth?: boole
 
 export function useNavigationActions(params: {
   request: AppRequest;
+  connection: ConnectionSettings;
   setActivity: (value: string) => void;
   setErrorMessage: (value: string) => void;
   navigation: {
@@ -446,6 +451,52 @@ export function useNavigationActions(params: {
     }
   }
 
+  async function uploadWorkspaceTemplate(file: File, name: string, overwrite: boolean): Promise<boolean> {
+    try {
+      const query = new URLSearchParams({ name, overwrite: String(overwrite) });
+      const response = await fetch(
+        buildUrl(params.connection.baseUrl, `/api/v1/workspace-templates/upload?${query.toString()}`),
+        {
+          method: "POST",
+          headers: buildAuthHeaders(params.connection, { "content-type": "application/octet-stream" }),
+          body: file
+        }
+      );
+      if (!response.ok) {
+        throw await createHttpRequestError(response);
+      }
+      await refreshWorkspaceTemplates(true);
+      params.setActivity(`模板 "${name}" 上传成功`);
+      params.setErrorMessage("");
+      return true;
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
+      return false;
+    }
+  }
+
+  async function deleteWorkspaceTemplate(templateName: string): Promise<boolean> {
+    try {
+      const response = await fetch(
+        buildUrl(params.connection.baseUrl, `/api/v1/workspace-templates/${encodeURIComponent(templateName)}`),
+        {
+          method: "DELETE",
+          headers: buildAuthHeaders(params.connection)
+        }
+      );
+      if (!response.ok) {
+        throw await createHttpRequestError(response);
+      }
+      await refreshWorkspaceTemplates(true);
+      params.setActivity(`模板 "${templateName}" 已删除`);
+      params.setErrorMessage("");
+      return true;
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
+      return false;
+    }
+  }
+
   async function refreshWorkspaceIndex(quiet = false) {
     try {
       const response = await params.request<{ items: Workspace[]; nextCursor?: string }>("/api/v1/workspaces?pageSize=200");
@@ -841,6 +892,8 @@ export function useNavigationActions(params: {
     clearWorkspaceSelection,
     openWorkspace,
     refreshWorkspaceTemplates,
+    uploadWorkspaceTemplate,
+    deleteWorkspaceTemplate,
     refreshWorkspaceIndex,
     refreshWorkspace,
     createWorkspace,

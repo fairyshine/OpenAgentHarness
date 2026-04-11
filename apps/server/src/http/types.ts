@@ -86,6 +86,14 @@ export interface AppDependencies {
   workspaceMode?: "multi" | "single";
   resolveCallerContext?: ((request: FastifyRequest) => Promise<CallerContext | undefined> | CallerContext | undefined) | undefined;
   listWorkspaceTemplates?: (() => Promise<import("@oah/config").WorkspaceTemplateDescriptor[]>) | undefined;
+  uploadWorkspaceTemplate?: ((input: {
+    templateName: string;
+    zipBuffer: Buffer;
+    overwrite: boolean;
+  }) => Promise<import("@oah/config").WorkspaceTemplateDescriptor>) | undefined;
+  deleteWorkspaceTemplate?: ((input: {
+    templateName: string;
+  }) => Promise<void>) | undefined;
   listPlatformModels?: (() => Promise<
     Array<{
       id: string;
