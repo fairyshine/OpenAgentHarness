@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Message, RunStep, SessionEventContract } from "@oah/api-contracts";
 
 import { buildRuntimeViewModel } from "../apps/web/src/app/runtime-view-model";
+import { hasDisplayableRunMessages } from "../apps/web/src/app/support";
 
 function createModelCallStep(input: Partial<RunStep> = {}): RunStep {
   return {
@@ -72,6 +73,37 @@ function createEvent(input: Partial<SessionEventContract> & Pick<SessionEventCon
 }
 
 describe("buildRuntimeViewModel", () => {
+  it("treats tool-only subagent output as a displayable completed result", () => {
+    const toolResultMessage: Message = {
+      id: "msg_tool_result",
+      sessionId: "ses_1",
+      runId: "run_1",
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "tool_1",
+          toolName: "Bash",
+          output: {
+            type: "text",
+            value: "subagent-tool-fallback"
+          }
+        }
+      ],
+      createdAt: "2026-04-07T00:00:02.000Z"
+    };
+
+    expect(hasDisplayableRunMessages([toolResultMessage], "run_1")).toBe(true);
+  });
+
+  it("does not wait forever for an empty completed run message", () => {
+    const emptyAssistantMessage = createAssistantMessage({
+      content: "   "
+    });
+
+    expect(hasDisplayableRunMessages([emptyAssistantMessage], "run_1")).toBe(false);
+  });
+
   it("prefers the persisted message system prompt snapshot for the selected message", () => {
     const message = createAssistantMessage({
       metadata: {

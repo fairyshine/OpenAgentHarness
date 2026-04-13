@@ -18,6 +18,7 @@ import {
   consumeSse,
   createHttpRequestError,
   downloadJsonFile,
+  hasDisplayableRunMessages,
   inferCompletedMessageRole,
   isNotFoundError,
   isRecord,
@@ -55,6 +56,8 @@ import { buildRuntimeViewModel } from "./runtime-view-model";
 import { useNavigationState } from "./use-navigation-state";
 import { useStorageController } from "./use-storage-controller";
 import { useWorkspaceFileManager } from "./use-workspace-file-manager";
+
+const COMPLETED_RUN_RESULT_POLL_LIMIT = 5;
 
 export function useAppController() {
   const [connection, setConnection] = usePersistentState<ConnectionSettings>(storageKeys.connection, {
@@ -148,6 +151,7 @@ export function useAppController() {
   } = navigation;
 
   const deferredEvents = useDeferredValue(events);
+  const completedRunResultPollsRef = useRef<Record<string, number>>({});
   const streamAbortRef = useRef<AbortController | null>(null);
   const platformModelStreamAbortRef = useRef<AbortController | null>(null);
   const lastCursorRef = useRef<string | undefined>(undefined);
@@ -1425,10 +1429,14 @@ export function useAppController() {
     window.clearTimeout(runPollingTimerRef.current);
 
     if (!sessionId.trim() || !selectedRunIdValue) {
+      if (selectedRunIdValue) {
+        delete completedRunResultPollsRef.current[selectedRunIdValue];
+      }
       return;
     }
 
     if (run?.id === selectedRunIdValue && isTerminalRunStatus(run.status)) {
+      delete completedRunResultPollsRef.current[selectedRunIdValue];
       return;
     }
 
@@ -1456,10 +1464,18 @@ export function useAppController() {
           setMessages(nextMessages.items);
         });
 
-        const hasPersistedAssistant = nextMessages.items.some(
-          (message) => message.runId === selectedRunIdValue && message.role === "assistant"
-        );
-        const shouldKeepPollingForCompletedMessage = nextRun.status === "completed" && !hasPersistedAssistant;
+        const hasPersistedRunOutput = hasDisplayableRunMessages(nextMessages.items, selectedRunIdValue);
+        const completedRunResultPolls = completedRunResultPollsRef.current[selectedRunIdValue] ?? 0;
+        const shouldKeepPollingForCompletedMessage =
+          nextRun.status === "completed" &&
+          !hasPersistedRunOutput &&
+          completedRunResultPolls < COMPLETED_RUN_RESULT_POLL_LIMIT;
+
+        if (nextRun.status === "completed" && !hasPersistedRunOutput) {
+          completedRunResultPollsRef.current[selectedRunIdValue] = completedRunResultPolls + 1;
+        } else {
+          delete completedRunResultPollsRef.current[selectedRunIdValue];
+        }
 
         if (!isTerminalRunStatus(nextRun.status) || shouldKeepPollingForCompletedMessage) {
           runPollingTimerRef.current = window.setTimeout(() => {
@@ -1495,6 +1511,7 @@ export function useAppController() {
     return () => {
       cancelled = true;
       window.clearTimeout(runPollingTimerRef.current);
+      delete completedRunResultPollsRef.current[selectedRunIdValue];
     };
   }, [connection.baseUrl, connection.token, run?.id, run?.status, selectedRunIdValue, sessionId, streamState]);
 
@@ -1639,6 +1656,12 @@ export function useAppController() {
       onStorageTableSessionIdChange: storageController.storageSurfaceProps.onStorageTableSessionIdChange,
       storageTableRunId: storageController.storageSurfaceProps.storageTableRunId,
       onStorageTableRunIdChange: storageController.storageSurfaceProps.onStorageTableRunIdChange,
+      storageTableStatus: storageController.storageSurfaceProps.storageTableStatus,
+      onStorageTableStatusChange: storageController.storageSurfaceProps.onStorageTableStatusChange,
+      storageTableErrorCode: storageController.storageSurfaceProps.storageTableErrorCode,
+      onStorageTableErrorCodeChange: storageController.storageSurfaceProps.onStorageTableErrorCodeChange,
+      storageTableRecoveryState: storageController.storageSurfaceProps.storageTableRecoveryState,
+      onStorageTableRecoveryStateChange: storageController.storageSurfaceProps.onStorageTableRecoveryStateChange,
       onRefreshStorageTable: storageController.storageSurfaceProps.onRefreshStorageTable,
       onClearStorageTableFilters: storageController.storageSurfaceProps.onClearStorageTableFilters,
       redisKeyPattern: storageController.storageSurfaceProps.redisKeyPattern,

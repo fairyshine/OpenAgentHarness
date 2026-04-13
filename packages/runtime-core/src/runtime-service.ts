@@ -77,6 +77,7 @@ import {
 import {
   type ActionRunAcceptedResult,
   type CancelRunResult,
+  type RequeueRunResult,
   type CreateSessionMessageParams,
   type CreateSessionParams,
   type UpdateSessionParams,
@@ -125,6 +126,10 @@ function isAbortError(error: unknown): boolean {
       error.message === "aborted" ||
       error.message === "This operation was aborted")
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function resolveArchiveTimeZone(): string {
@@ -946,6 +951,80 @@ export class RuntimeService {
     };
   }
 
+  async requeueRun(runId: string, requestedBy?: string): Promise<RequeueRunResult> {
+    const run = await this.getRun(runId);
+    if (run.status !== "failed" && run.status !== "timed_out") {
+      throw new AppError(409, "run_requeue_invalid_status", `Run ${runId} is not in a terminal recovery state.`);
+    }
+
+    if (!this.#isRecoveryManagedRun(run)) {
+      throw new AppError(409, "run_requeue_not_supported", `Run ${runId} is not eligible for manual requeue.`);
+    }
+
+    if (!this.#runQueue || !run.sessionId) {
+      throw new AppError(409, "run_requeue_unavailable", `Run ${runId} cannot be requeued on this deployment.`);
+    }
+
+    await this.getSession(run.sessionId);
+    const previousStatus = run.status;
+    const recoveredAt = nowIso();
+    const queuedRun = await this.#updateRun(run, {
+      status: "queued",
+      startedAt: undefined,
+      heartbeatAt: undefined,
+      endedAt: undefined,
+      cancelRequestedAt: undefined,
+      errorCode: undefined,
+      errorMessage: undefined,
+      metadata: this.#buildRecoveryMetadata(run, {
+        attempts: this.#readRecoveryAttempts(run.metadata),
+        outcome: "requeued",
+        recoveredBy: "manual_operator_requeue",
+        recoveredAt,
+        reason: "manual_operator_requeue",
+        quarantined: false,
+        strategy: "manual",
+        requestedBy
+      })
+    });
+
+    await this.#appendEvent({
+      sessionId: run.sessionId,
+      runId: queuedRun.id,
+      event: "run.queued",
+      data: {
+        runId: queuedRun.id,
+        sessionId: run.sessionId,
+        status: queuedRun.status,
+        recoveredBy: "manual_operator_requeue",
+        recoveryAttempt: this.#readRecoveryAttempts(queuedRun.metadata),
+        recoveryState: "requeued",
+        recoveryReason: "manual_operator_requeue",
+        recoveryStrategy: "manual",
+        previousStatus,
+        ...(requestedBy ? { requestedBy } : {})
+      }
+    });
+    await this.#recordSystemStep(queuedRun, "run.requeued", {
+      status: queuedRun.status,
+      recoveredBy: "manual_operator_requeue",
+      recoveryAttempt: this.#readRecoveryAttempts(queuedRun.metadata),
+      recoveryState: "requeued",
+      recoveryReason: "manual_operator_requeue",
+      recoveryStrategy: "manual",
+      previousStatus,
+      ...(requestedBy ? { requestedBy } : {})
+    });
+    await this.#enqueueRun(run.sessionId, queuedRun.id);
+
+    return {
+      runId: queuedRun.id,
+      status: "queued",
+      previousStatus,
+      source: "manual_requeue"
+    };
+  }
+
   async listSessionEvents(sessionId: string, cursor?: string, runId?: string): Promise<SessionEvent[]> {
     await this.getSession(sessionId);
     return this.#sessionEventStore.listSince(sessionId, cursor, runId);
@@ -980,11 +1059,21 @@ export class RuntimeService {
       }
 
       const endedAt = nowIso();
+      const failureContext = this.#resolveStaleRunFailureContext(currentRun);
       const failedRun = await this.#updateRun(currentRun, {
         status: "failed",
         endedAt,
         errorCode: "worker_recovery_failed",
-        errorMessage: "Run was recovered as failed after worker heartbeat expired."
+        errorMessage: "Run was recovered as failed after worker heartbeat expired.",
+        metadata: this.#buildRecoveryMetadata(currentRun, {
+          attempts: failureContext.recoveryAttempts,
+          outcome: "failed",
+          recoveredBy: "worker_startup",
+          recoveredAt: endedAt,
+          reason: failureContext.reason,
+          quarantined: failureContext.quarantined,
+          strategy: this.#staleRunRecoveryStrategy
+        })
       });
 
       if (failedRun.sessionId) {
@@ -998,7 +1087,10 @@ export class RuntimeService {
             status: failedRun.status,
             errorCode: failedRun.errorCode,
             errorMessage: failedRun.errorMessage,
-            recoveredBy: "worker_startup"
+            recoveredBy: "worker_startup",
+            recoveryAttempt: failureContext.recoveryAttempts,
+            recoveryState: failureContext.quarantined ? "quarantined" : "failed",
+            recoveryReason: failureContext.reason
           }
         });
       }
@@ -1007,7 +1099,10 @@ export class RuntimeService {
         status: failedRun.status,
         errorCode: failedRun.errorCode,
         errorMessage: failedRun.errorMessage,
-        recoveredBy: "worker_startup"
+        recoveredBy: "worker_startup",
+        recoveryAttempt: failureContext.recoveryAttempts,
+        recoveryState: failureContext.quarantined ? "quarantined" : "failed",
+        recoveryReason: failureContext.reason
       });
       recoveredRunIds.push(failedRun.id);
     }
@@ -1091,18 +1186,13 @@ export class RuntimeService {
       return false;
     }
 
-    const recoveryMetadata =
-      run.metadata && typeof run.metadata === "object" && !Array.isArray(run.metadata)
-        ? run.metadata
-        : {};
-    const attemptsValue = recoveryMetadata.recoveryAttempts;
-    const recoveryAttempts =
-      typeof attemptsValue === "number" && Number.isFinite(attemptsValue) && attemptsValue >= 0 ? Math.floor(attemptsValue) : 0;
+    const recoveryAttempts = this.#readRecoveryAttempts(run.metadata);
     if (recoveryAttempts >= this.#staleRunRecoveryMaxAttempts) {
       return false;
     }
 
     const nextRecoveryAttempt = recoveryAttempts + 1;
+    const recoveredAt = nowIso();
     const queuedRun = await this.#updateRun(run, {
       status: "queued",
       startedAt: undefined,
@@ -1111,12 +1201,15 @@ export class RuntimeService {
       cancelRequestedAt: undefined,
       errorCode: undefined,
       errorMessage: undefined,
-      metadata: {
-        ...recoveryMetadata,
-        recoveryAttempts: nextRecoveryAttempt,
+      metadata: this.#buildRecoveryMetadata(run, {
+        attempts: nextRecoveryAttempt,
+        outcome: "requeued",
         recoveredBy: "worker_startup_requeue",
-        recoveredAt: nowIso()
-      }
+        recoveredAt,
+        reason: "automatic_requeue",
+        quarantined: false,
+        strategy: this.#staleRunRecoveryStrategy
+      })
     });
 
     await this.#appendEvent({
@@ -1128,16 +1221,170 @@ export class RuntimeService {
         sessionId: run.sessionId,
         status: queuedRun.status,
         recoveredBy: "worker_startup_requeue",
-        recoveryAttempt: nextRecoveryAttempt
+        recoveryAttempt: nextRecoveryAttempt,
+        recoveryState: "requeued",
+        recoveryReason: "automatic_requeue",
+        recoveryStrategy: this.#staleRunRecoveryStrategy
       }
     });
     await this.#recordSystemStep(queuedRun, "run.requeued", {
       status: queuedRun.status,
       recoveredBy: "worker_startup_requeue",
-      recoveryAttempt: nextRecoveryAttempt
+      recoveryAttempt: nextRecoveryAttempt,
+      recoveryState: "requeued",
+      recoveryReason: "automatic_requeue",
+      recoveryStrategy: this.#staleRunRecoveryStrategy
     });
     await this.#enqueueRun(run.sessionId, queuedRun.id);
     return true;
+  }
+
+  #readRecoveryAttempts(metadata: Run["metadata"]): number {
+    const rootMetadata = isRecord(metadata) ? metadata : {};
+    const recoveryMetadata = isRecord(rootMetadata.recovery) ? rootMetadata.recovery : {};
+    const attemptsValue = rootMetadata.recoveryAttempts ?? recoveryMetadata.attempts;
+
+    return typeof attemptsValue === "number" && Number.isFinite(attemptsValue) && attemptsValue >= 0
+      ? Math.floor(attemptsValue)
+      : 0;
+  }
+
+  #resolveStaleRunFailureContext(run: Run): {
+    recoveryAttempts: number;
+    reason:
+      | "fail_closed"
+      | "requeue_unavailable"
+      | "session_missing"
+      | "waiting_tool_manual_resume_required"
+      | "max_attempts_exhausted"
+      | "requeue_not_possible";
+    quarantined: boolean;
+  } {
+    const recoveryAttempts = this.#readRecoveryAttempts(run.metadata);
+    if (this.#staleRunRecoveryStrategy === "fail") {
+      return {
+        recoveryAttempts,
+        reason: "fail_closed",
+        quarantined: false
+      };
+    }
+
+    if (!this.#runQueue) {
+      return {
+        recoveryAttempts,
+        reason: "requeue_unavailable",
+        quarantined: true
+      };
+    }
+
+    if (!run.sessionId) {
+      return {
+        recoveryAttempts,
+        reason: "session_missing",
+        quarantined: true
+      };
+    }
+
+    if (this.#staleRunRecoveryStrategy === "requeue_running" && run.status === "waiting_tool") {
+      return {
+        recoveryAttempts,
+        reason: "waiting_tool_manual_resume_required",
+        quarantined: true
+      };
+    }
+
+    if (recoveryAttempts >= this.#staleRunRecoveryMaxAttempts) {
+      return {
+        recoveryAttempts,
+        reason: "max_attempts_exhausted",
+        quarantined: true
+      };
+    }
+
+    return {
+      recoveryAttempts,
+      reason: "requeue_not_possible",
+      quarantined: true
+    };
+  }
+
+  #buildRecoveryMetadata(
+    run: Run,
+    input: {
+      attempts: number;
+      outcome: "failed" | "requeued";
+      recoveredBy: "worker_startup" | "worker_startup_requeue" | "manual_operator_requeue";
+      recoveredAt: string;
+      reason: string;
+      quarantined: boolean;
+      strategy: "fail" | "requeue_running" | "requeue_all" | "manual";
+      requestedBy?: string | undefined;
+    }
+  ): Record<string, unknown> {
+    const rootMetadata = isRecord(run.metadata) ? run.metadata : {};
+    const previousRecovery = isRecord(rootMetadata.recovery) ? rootMetadata.recovery : {};
+    const { deadLetter: _previousDeadLetter, ...previousRecoveryWithoutDeadLetter } = previousRecovery;
+    const manualRequeueCount =
+      input.recoveredBy === "manual_operator_requeue"
+        ? typeof previousRecovery.manualRequeueCount === "number" && Number.isFinite(previousRecovery.manualRequeueCount)
+          ? Math.max(0, Math.floor(previousRecovery.manualRequeueCount)) + 1
+          : 1
+        : typeof previousRecovery.manualRequeueCount === "number" && Number.isFinite(previousRecovery.manualRequeueCount)
+          ? Math.max(0, Math.floor(previousRecovery.manualRequeueCount))
+          : undefined;
+    const recoveryMetadata: Record<string, unknown> = {
+      ...previousRecoveryWithoutDeadLetter,
+      state: input.quarantined ? "quarantined" : input.outcome,
+      strategy: input.strategy,
+      attempts: input.attempts,
+      maxAttempts: this.#staleRunRecoveryMaxAttempts,
+      lastOutcome: input.outcome,
+      lastRecoveredBy: input.recoveredBy,
+      lastRecoveredAt: input.recoveredAt,
+      reason: input.reason,
+      ...(typeof manualRequeueCount === "number" ? { manualRequeueCount } : {}),
+      ...(input.recoveredBy === "manual_operator_requeue"
+        ? {
+            lastManualRequeueAt: input.recoveredAt,
+            ...(input.requestedBy ? { lastManualRequeueBy: input.requestedBy } : {})
+          }
+        : {}),
+      ...(input.quarantined
+        ? {
+            deadLetter: {
+              status: "quarantined",
+              reason: input.reason,
+              at: input.recoveredAt
+            }
+          }
+        : {})
+    };
+
+    return {
+      ...rootMetadata,
+      recoveryAttempts: input.attempts,
+      recoveredBy: input.recoveredBy,
+      recoveredAt: input.recoveredAt,
+      recovery: recoveryMetadata,
+      ...(input.requestedBy ? { recoveryRequestedBy: input.requestedBy } : {})
+    };
+  }
+
+  #isRecoveryManagedRun(run: Run): boolean {
+    if (run.errorCode === "worker_recovery_failed") {
+      return true;
+    }
+
+    const rootMetadata = isRecord(run.metadata) ? run.metadata : {};
+    const recoveryMetadata = isRecord(rootMetadata.recovery) ? rootMetadata.recovery : undefined;
+    const recoveryState = typeof recoveryMetadata?.state === "string" ? recoveryMetadata.state : undefined;
+
+    return (
+      recoveryState === "quarantined" ||
+      recoveryState === "failed" ||
+      recoveryState === "requeued" ||
+      typeof rootMetadata.recoveryAttempts === "number"
+    );
   }
 
   async #processRun(runId: string): Promise<void> {

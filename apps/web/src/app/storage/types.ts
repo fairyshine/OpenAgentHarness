@@ -27,6 +27,8 @@ export interface StorageWorkbenchProps {
   onNextTablePage: () => void;
   onClearTableFilters: () => void;
   onDownloadTableCsv: () => void;
+  onManualRequeueRun: (runId: string) => void;
+  onManualRequeueRuns: (runIds: string[]) => void;
   onRefreshRedisKeys: () => void;
   onLoadMoreRedisKeys: () => void;
   onRefreshRedisKey: () => void;

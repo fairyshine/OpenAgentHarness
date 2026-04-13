@@ -102,6 +102,76 @@ llm:
     expect(config.paths.archive_dir).toBe(path.join(tempDir, "archives"));
   });
 
+  it("loads optional object storage settings for S3-compatible backends", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-object-storage-"));
+    tempDirs.push(tempDir);
+
+    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills", "archives"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    process.env.OAH_OBJECT_ACCESS_KEY = "demo-key";
+    process.env.OAH_OBJECT_SECRET_KEY = "demo-secret";
+
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+object_storage:
+  provider: s3
+  bucket: open-agent-harness
+  region: us-east-1
+  endpoint: http://127.0.0.1:9000
+  access_key: \${env.OAH_OBJECT_ACCESS_KEY}
+  secret_key: \${env.OAH_OBJECT_SECRET_KEY}
+  force_path_style: true
+  sync_on_boot: true
+  sync_on_change: true
+  poll_interval_ms: 4000
+  managed_paths:
+    - workspace
+    - chat
+  key_prefixes:
+    workspace: workspace
+    chat: chat
+paths:
+  workspace_dir: ./workspaces
+  chat_dir: ./chat
+  template_dir: ./templates
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+  archive_dir: ./archives
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const config = await loadServerConfig(configPath);
+    expect(config.object_storage).toEqual({
+      provider: "s3",
+      bucket: "open-agent-harness",
+      region: "us-east-1",
+      endpoint: "http://127.0.0.1:9000",
+      access_key: "demo-key",
+      secret_key: "demo-secret",
+      force_path_style: true,
+      sync_on_boot: true,
+      sync_on_change: true,
+      poll_interval_ms: 4000,
+      managed_paths: ["workspace", "chat"],
+      key_prefixes: {
+        workspace: "workspace",
+        chat: "chat"
+      }
+    });
+  });
+
   it("requires model_dir and tool_dir in server config", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-missing-required-paths-"));
     tempDirs.push(tempDir);

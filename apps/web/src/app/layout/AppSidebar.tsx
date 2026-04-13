@@ -231,7 +231,7 @@ function RuntimeSidebar(props: SidebarProps) {
         (props.expandedSessionIds.includes(sessionEntry.id) ||
           (props.sessionId === sessionEntry.id ? true : hasActiveDescendant(sessionEntry.id, childSessionsByParentId ?? new Map(), props.sessionId)));
       return (
-        <div key={sessionEntry.id} className="space-y-0.5">
+        <div key={sessionEntry.id} className={depth === 0 ? "space-y-1" : "space-y-0.5"}>
           <SessionNavItem
             entry={sessionEntry}
             depth={depth}
@@ -249,7 +249,7 @@ function RuntimeSidebar(props: SidebarProps) {
             onRemove={() => props.removeSavedSession(sessionEntry.id)}
           />
           {childSessions.length > 0 && shouldExpand ? (
-            <div className="space-y-0.5">
+            <div className="mt-1 space-y-0.5">
               {renderSessionTree(childSessions, {
                 depth: depth + 1,
                 ...(childSessionsByParentId ? { childSessionsByParentId } : {}),
@@ -367,7 +367,7 @@ function RuntimeSidebar(props: SidebarProps) {
               }, undefined);
 
               return (
-                <div key={entry.id} className="space-y-1">
+                <div key={entry.id} className="runtime-workspace-group space-y-1.5">
                   <WorkspaceNavItem
                     entry={entry}
                     active={entry.id === props.activeWorkspaceId}
@@ -380,9 +380,9 @@ function RuntimeSidebar(props: SidebarProps) {
                     onRemove={() => props.deleteWorkspace(entry.id)}
                   />
                   {isExpanded ? (
-                    <div className="ml-4 space-y-1">
+                    <div className="runtime-session-tree ml-2 space-y-1.5 pl-1">
                       {topLevelSessions.length === 0 ? (
-                        <div className="rounded-md px-2 py-2 text-xs text-muted-foreground">No sessions yet.</div>
+                        <div className="rounded-lg px-3 py-2.5 text-xs text-muted-foreground">No sessions yet.</div>
                       ) : (
                         renderSessionTree(topLevelSessions, {
                           childSessionsByParentId,
@@ -413,11 +413,15 @@ function StorageSidebar(props: SidebarProps) {
   const redisAvailable = props.storageOverview?.redis.available ?? false;
   const postgresTableCount = props.storageOverview?.postgres.tables.length ?? 0;
   const redisLoadedCount = props.redisKeyPage?.items.length ?? 0;
+  const runsTableSelected = props.selectedStorageTable === "runs";
   const postgresFilterCount = compactFilterCount([
     props.storageTableSearch ?? "",
     props.storageTableWorkspaceId ?? "",
     props.storageTableSessionId ?? "",
-    props.storageTableRunId ?? ""
+    props.storageTableRunId ?? "",
+    ...(runsTableSelected
+      ? [props.storageTableStatus ?? "", props.storageTableErrorCode ?? "", props.storageTableRecoveryState ?? ""]
+      : [])
   ]);
   const redisHotCount =
     (props.storageOverview?.redis.sessionQueues.length ?? 0) +
@@ -487,6 +491,58 @@ function StorageSidebar(props: SidebarProps) {
                   onChange={props.onStorageTableRunIdChange}
                   placeholder="runId"
                 />
+                {runsTableSelected ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="space-y-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Status</span>
+                        <Select
+                          value={props.storageTableStatus || "__all_run_statuses__"}
+                          onValueChange={(value) => props.onStorageTableStatusChange(value === "__all_run_statuses__" ? "" : value)}
+                        >
+                          <SelectTrigger className="h-8 rounded-xl border-black/10 bg-white/68 text-xs shadow-none" aria-label="Run status filter">
+                            <SelectValue placeholder="All statuses" />
+                          </SelectTrigger>
+                          <SelectContent align="start">
+                            <SelectItem value="__all_run_statuses__">All statuses</SelectItem>
+                            <SelectItem value="failed">failed</SelectItem>
+                            <SelectItem value="timed_out">timed_out</SelectItem>
+                            <SelectItem value="queued">queued</SelectItem>
+                            <SelectItem value="running">running</SelectItem>
+                            <SelectItem value="waiting_tool">waiting_tool</SelectItem>
+                            <SelectItem value="completed">completed</SelectItem>
+                            <SelectItem value="cancelled">cancelled</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Recovery</span>
+                        <Select
+                          value={props.storageTableRecoveryState || "__all_recovery_states__"}
+                          onValueChange={(value) =>
+                            props.onStorageTableRecoveryStateChange(value === "__all_recovery_states__" ? "" : value)
+                          }
+                        >
+                          <SelectTrigger className="h-8 rounded-xl border-black/10 bg-white/68 text-xs shadow-none" aria-label="Run recovery state filter">
+                            <SelectValue placeholder="All recovery states" />
+                          </SelectTrigger>
+                          <SelectContent align="start">
+                            <SelectItem value="__all_recovery_states__">All recovery states</SelectItem>
+                            <SelectItem value="quarantined">quarantined</SelectItem>
+                            <SelectItem value="failed">failed</SelectItem>
+                            <SelectItem value="requeued">requeued</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </label>
+                    </div>
+                    <SidebarFilterField
+                      label="Error Code"
+                      value={props.storageTableErrorCode ?? ""}
+                      onChange={props.onStorageTableErrorCodeChange}
+                      placeholder="worker_recovery_failed"
+                    />
+                  </>
+                ) : null}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <Button variant="secondary" className="h-9 rounded-xl" onClick={props.onRefreshStorageTable} disabled={props.storageBusy}>

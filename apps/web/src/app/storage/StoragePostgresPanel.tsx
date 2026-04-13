@@ -1,11 +1,11 @@
 import type { StorageOverview, StoragePostgresTableName, StoragePostgresTablePage } from "@oah/api-contracts";
-import { Download, RefreshCw } from "lucide-react";
+import { Download, RefreshCw, RotateCcw } from "lucide-react";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../primitives";
 import { StorageDataGrid } from "./StorageDataGrid";
-import { StorageDetailFacts } from "./storage-detail-primitives";
+import { StorageDetailFacts, StorageDetailSection } from "./storage-detail-primitives";
 import { StoragePanelToolbar } from "./StoragePanelToolbar";
 import { StorageSurfaceLayout } from "./StorageSurfaceLayout";
 import { getStoragePostgresDetailTitle, renderStorageEmptyDetail, renderStoragePostgresRowDetail } from "./storage-detail-renderers";
@@ -41,6 +41,46 @@ function archiveIssueCount(archives: NonNullable<StorageOverview["postgres"]["ar
   );
 }
 
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function scalarValue(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return undefined;
+}
+
+function selectedRunRecoveryState(row: Record<string, unknown> | null) {
+  return scalarValue(recordValue(recordValue(row?.metadata)?.recovery)?.state);
+}
+
+function canManualRequeueRun(row: Record<string, unknown> | null) {
+  if (!row) {
+    return false;
+  }
+
+  const status = scalarValue(row.status);
+  if (status !== "failed" && status !== "timed_out") {
+    return false;
+  }
+
+  const recovery = recordValue(recordValue(row.metadata)?.recovery);
+  const recoveryState = scalarValue(recovery?.state);
+  return (
+    recoveryState === "quarantined" ||
+    recoveryState === "failed" ||
+    recoveryState === "requeued" ||
+    scalarValue(row.error_code) === "worker_recovery_failed"
+  );
+}
+
 function renderArchiveDirectoryDetail(archives: NonNullable<StorageOverview["postgres"]["archives"]>) {
   const issues = archiveIssueCount(archives);
 
@@ -70,6 +110,46 @@ function renderArchiveDirectoryDetail(archives: NonNullable<StorageOverview["pos
   );
 }
 
+function renderRecoveryOverviewDetail(recovery: NonNullable<StorageOverview["postgres"]["recovery"]>) {
+  return (
+    <section className="space-y-3 rounded-2xl border border-border/70 bg-muted/20 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="secondary">recovery</Badge>
+        <Badge variant="outline">{`${recovery.trackedRuns} tracked`}</Badge>
+        <Badge variant={recovery.quarantinedRuns > 0 ? "destructive" : "outline"}>{`${recovery.quarantinedRuns} quarantined`}</Badge>
+        <Badge variant="outline">{`${recovery.requeuedRuns} requeued`}</Badge>
+        <Badge variant="outline">{`${recovery.failedRecoveryRuns} failed`}</Badge>
+        <Badge variant="outline">{`${recovery.workerRecoveryFailures} worker_recovery_failed`}</Badge>
+      </div>
+
+      <StorageDetailFacts
+        items={[
+          { label: "Tracked Runs", value: String(recovery.trackedRuns) },
+          { label: "Quarantined", value: String(recovery.quarantinedRuns) },
+          { label: "Requeued", value: String(recovery.requeuedRuns) },
+          { label: "Failed Recovery", value: String(recovery.failedRecoveryRuns) },
+          { label: "Failure Code", value: String(recovery.workerRecoveryFailures) },
+          { label: "Oldest Quarantine", value: recovery.oldestQuarantinedAt ?? "n/a" },
+          { label: "Latest Quarantine", value: recovery.newestQuarantinedAt ?? "n/a" },
+          { label: "Latest Recovery", value: recovery.newestRecoveredAt ?? "n/a" }
+        ]}
+      />
+
+      {recovery.topQuarantineReasons.length > 0 ? (
+        <StorageDetailSection title="Top Quarantine Reasons">
+          <div className="flex flex-wrap gap-2">
+            {recovery.topQuarantineReasons.map((item) => (
+              <Badge key={`${item.reason}:${item.count}`} variant="outline">
+                {`${item.reason} · ${item.count}`}
+              </Badge>
+            ))}
+          </div>
+        </StorageDetailSection>
+      ) : null}
+    </section>
+  );
+}
+
 export function StoragePostgresPanel(props: {
   overview: StorageOverview | null;
   tablePage: StoragePostgresTablePage | null;
@@ -80,14 +160,32 @@ export function StoragePostgresPanel(props: {
   onPreviousPage: () => void;
   onNextPage: () => void;
   onDownloadCsv: () => void;
+  onManualRequeueRun: (runId: string) => void;
+  onManualRequeueRuns: (runIds: string[]) => void;
   busy: boolean;
 }) {
   const selectedMeta = STORAGE_TABLE_META[props.selectedTable];
   const archiveOverview = props.overview?.postgres.archives;
+  const recoveryOverview = props.overview?.postgres.recovery;
   const archiveIssues = archiveIssueCount(archiveOverview);
+  const selectedRunId =
+    props.selectedTable === "runs" && props.selectedRow ? scalarValue(props.selectedRow.id) : undefined;
+  const selectedRunCanRequeue =
+    props.selectedTable === "runs" && props.selectedRow ? canManualRequeueRun(props.selectedRow) : false;
+  const recoveryState =
+    props.selectedTable === "runs" && props.selectedRow ? selectedRunRecoveryState(props.selectedRow) : undefined;
+  const eligibleVisibleRunIds =
+    props.selectedTable === "runs"
+      ? (props.tablePage?.rows ?? [])
+          .filter((row) => canManualRequeueRun(row))
+          .map((row) => scalarValue(row.id))
+          .filter((runId): runId is string => Boolean(runId))
+      : [];
   const archiveDetailSummary =
     props.selectedTable === "archives" && archiveOverview?.exportRoot
       ? `export root ${archiveOverview.exportRoot}`
+      : props.selectedTable === "runs" && recoveryOverview
+        ? `tracked ${recoveryOverview.trackedRuns} · quarantined ${recoveryOverview.quarantinedRuns}`
       : undefined;
   const archiveDetailBody =
     props.selectedTable === "archives" && archiveOverview
@@ -99,9 +197,18 @@ export function StoragePostgresPanel(props: {
               : renderStorageEmptyDetail("No row selected", "Select an archive row to inspect the exported payload metadata.")}
           </div>
         )
-      : props.selectedRow
-        ? renderStoragePostgresRowDetail(props.tablePage?.table ?? props.selectedTable, props.selectedRow)
-        : renderStorageEmptyDetail("No row selected", "Select a row from the preview grid to inspect the stored record.");
+      : props.selectedTable === "runs" && recoveryOverview
+        ? (
+            <div className="space-y-4">
+              {renderRecoveryOverviewDetail(recoveryOverview)}
+              {props.selectedRow
+                ? renderStoragePostgresRowDetail(props.tablePage?.table ?? props.selectedTable, props.selectedRow)
+                : renderStorageEmptyDetail("No row selected", "Select a run row to inspect recovery metadata and operator actions.")}
+            </div>
+          )
+        : props.selectedRow
+          ? renderStoragePostgresRowDetail(props.tablePage?.table ?? props.selectedTable, props.selectedRow)
+          : renderStorageEmptyDetail("No row selected", "Select a row from the preview grid to inspect the stored record.");
 
   return (
     <section className="grid h-full min-h-0 min-w-0 flex-1 grid-rows-[5.25rem_minmax(0,1fr)] gap-4 overflow-hidden">
@@ -144,6 +251,12 @@ export function StoragePostgresPanel(props: {
                     <StorageToolbarMeta label="arch warn" value={archiveIssues} />
                   </>
                 ) : null}
+                {props.tablePage.table === "runs" && recoveryOverview ? (
+                  <>
+                    <StorageToolbarMeta label="recovery" value={recoveryOverview.trackedRuns} />
+                    <StorageToolbarMeta label="quarantine" value={recoveryOverview.quarantinedRuns} />
+                  </>
+                ) : null}
               </>
             }
             actions={
@@ -156,6 +269,17 @@ export function StoragePostgresPanel(props: {
                   <Download className="h-4 w-4" />
                   CSV
                 </Button>
+                {props.selectedTable === "runs" ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => props.onManualRequeueRuns(eligibleVisibleRunIds)}
+                    disabled={props.busy || eligibleVisibleRunIds.length === 0}
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                    {`Requeue Visible (${eligibleVisibleRunIds.length})`}
+                  </Button>
+                ) : null}
                 <Button variant="ghost" size="sm" onClick={props.onPreviousPage} disabled={props.busy || props.tablePage.offset === 0}>
                   Prev
                 </Button>
@@ -175,6 +299,14 @@ export function StoragePostgresPanel(props: {
                   <Badge variant="outline">{`${archiveOverview.bundleCount ?? 0} bundles`}</Badge>
                   <Badge variant={archiveIssues > 0 ? "destructive" : "outline"}>{archiveIssues > 0 ? `${archiveIssues} issues` : "healthy"}</Badge>
                 </div>
+              ) : selectedRunCanRequeue && selectedRunId ? (
+                <div className="flex gap-2">
+                  {recoveryState ? <Badge variant="outline">{recoveryState}</Badge> : null}
+                  <Button variant="secondary" size="sm" onClick={() => props.onManualRequeueRun(selectedRunId)} disabled={props.busy}>
+                    <RotateCcw className="h-4 w-4" />
+                    Manual Requeue
+                  </Button>
+                </div>
               ) : props.selectedRow ? (
                 <Badge variant="outline">selected</Badge>
               ) : null
@@ -192,6 +324,9 @@ export function StoragePostgresPanel(props: {
                 ) : null}
                 {props.tablePage.table === "archives" && props.overview?.postgres.archives?.latestArchiveDate ? (
                   <Badge variant="outline">{`latest bundle ${props.overview.postgres.archives.latestArchiveDate}`}</Badge>
+                ) : null}
+                {props.tablePage.table === "runs" && recoveryOverview?.newestQuarantinedAt ? (
+                  <Badge variant="outline">{`latest quarantine ${recoveryOverview.newestQuarantinedAt}`}</Badge>
                 ) : null}
               </>
             }

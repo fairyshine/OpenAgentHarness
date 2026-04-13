@@ -27,8 +27,8 @@ Open Agent Harness 是一个可部署的 Agent 后端运行时。它管理 Works
 
 ```bash
 pnpm install                                        # 安装依赖
-pnpm infra:up                                       # 启动 PostgreSQL + Redis
-pnpm dev:server -- --config ./server.example.yaml   # 启动后端
+export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
+pnpm local:up                                       # 启动 PostgreSQL + Redis + MinIO + OAH，并自动同步一次
 pnpm dev:web                                        # 启动调试控制台
 ```
 

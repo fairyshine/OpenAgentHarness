@@ -568,6 +568,7 @@ describe("http api", () => {
   });
 
   it("exposes storage admin endpoints", async () => {
+    const postgresTableOptions: Array<Record<string, unknown>> = [];
     const storageAdmin: StorageAdmin = {
       async overview() {
         return {
@@ -583,7 +584,23 @@ describe("http api", () => {
                 orderBy: "created_at desc, id asc",
                 description: "Run lifecycle records and status."
               }
-            ]
+            ],
+            recovery: {
+              trackedRuns: 4,
+              quarantinedRuns: 2,
+              requeuedRuns: 1,
+              failedRecoveryRuns: 1,
+              workerRecoveryFailures: 2,
+              oldestQuarantinedAt: "2026-04-08T01:00:00.000Z",
+              newestQuarantinedAt: "2026-04-09T02:00:00.000Z",
+              newestRecoveredAt: "2026-04-10T03:00:00.000Z",
+              topQuarantineReasons: [
+                {
+                  reason: "max_attempts_exhausted",
+                  count: 2
+                }
+              ]
+            }
           },
           redis: {
             configured: true,
@@ -603,6 +620,7 @@ describe("http api", () => {
         };
       },
       async postgresTable(_table, options) {
+        postgresTableOptions.push({ ...options });
         return {
           table: "runs",
           rowCount: 12,
@@ -610,13 +628,22 @@ describe("http api", () => {
           offset: options.offset ?? 0,
           limit: options.limit,
           columns: ["id", "status"],
-          ...(options.q || options.workspaceId || options.sessionId || options.runId
+          ...(options.q ||
+          options.workspaceId ||
+          options.sessionId ||
+          options.runId ||
+          options.status ||
+          options.errorCode ||
+          options.recoveryState
             ? {
                 appliedFilters: {
                   ...(options.q ? { q: options.q } : {}),
                   ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
                   ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-                  ...(options.runId ? { runId: options.runId } : {})
+                  ...(options.runId ? { runId: options.runId } : {}),
+                  ...(options.status ? { status: options.status } : {}),
+                  ...(options.errorCode ? { errorCode: options.errorCode } : {}),
+                  ...(options.recoveryState ? { recoveryState: options.recoveryState } : {})
                 }
               }
             : {}),
@@ -701,7 +728,9 @@ describe("http api", () => {
     ] = await Promise.all([
       fetch(`${activeApp.baseUrl}/api/v1/storage/overview`),
       fetch(`${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20&offset=40`),
-      fetch(`${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20&q=completed&runId=run_1`),
+      fetch(
+        `${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20&q=completed&runId=run_1&status=failed&errorCode=worker_recovery_failed&recoveryState=quarantined`
+      ),
       fetch(`${activeApp.baseUrl}/api/v1/storage/redis/keys?pattern=oah:*`),
       fetch(`${activeApp.baseUrl}/api/v1/storage/redis/key?key=oah:runs:ready`),
       fetch(`${activeApp.baseUrl}/api/v1/storage/redis/key?key=oah:runs:ready`, {
@@ -748,7 +777,16 @@ describe("http api", () => {
 
     await expect(overviewResponse.json()).resolves.toMatchObject({
       postgres: {
-        database: "oah_test"
+        database: "oah_test",
+        recovery: {
+          quarantinedRuns: 2,
+          topQuarantineReasons: [
+            {
+              reason: "max_attempts_exhausted",
+              count: 2
+            }
+          ]
+        }
       },
       redis: {
         dbSize: 8
@@ -763,8 +801,19 @@ describe("http api", () => {
     await expect(filteredTableResponse.json()).resolves.toMatchObject({
       appliedFilters: {
         q: "completed",
-        runId: "run_1"
+        runId: "run_1",
+        status: "failed",
+        errorCode: "worker_recovery_failed",
+        recoveryState: "quarantined"
       }
+    });
+    expect(postgresTableOptions.at(-1)).toMatchObject({
+      limit: 20,
+      q: "completed",
+      runId: "run_1",
+      status: "failed",
+      errorCode: "worker_recovery_failed",
+      recoveryState: "quarantined"
     });
     await expect(keysResponse.json()).resolves.toMatchObject({
       items: [{ key: "oah:runs:ready" }]
@@ -2125,6 +2174,308 @@ describe("http api", () => {
       const page = (await messagesResponse.json()) as { items: Array<{ role: string; content: unknown }> };
       return page.items.some((item) => item.role === "assistant" && extractMessageText(item.content).includes("reply:hello there"));
     });
+  });
+
+  it("manually requeues quarantined runs over HTTP", async () => {
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const enqueuedRuns: Array<{ sessionId: string; runId: string }> = [];
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      runQueue: {
+        async enqueue(sessionId, runId) {
+          enqueuedRuns.push({ sessionId, runId });
+        }
+      },
+      staleRunRecovery: {
+        strategy: "requeue_all",
+        maxAttempts: 2
+      }
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "ws_http_requeue",
+      name: "http-requeue",
+      rootPath: "/tmp/http-requeue",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Allow HTTP recovery requeue.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_http_requeue",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    await persistence.sessionRepository.create({
+      id: "ses_http_requeue",
+      workspaceId: "ws_http_requeue",
+      subjectRef: "dev:test",
+      activeAgentName: "builder",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+
+    await persistence.runRepository.create({
+      id: "run_http_requeue",
+      workspaceId: "ws_http_requeue",
+      sessionId: "ses_http_requeue",
+      initiatorRef: "dev:test",
+      triggerType: "message",
+      triggerRef: "msg_1",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "failed",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:10.000Z",
+      heartbeatAt: "2026-04-01T00:00:20.000Z",
+      endedAt: "2026-04-01T00:01:00.000Z",
+      errorCode: "worker_recovery_failed",
+      errorMessage: "Run was recovered as failed after worker heartbeat expired.",
+      metadata: {
+        recoveryAttempts: 2,
+        recovery: {
+          state: "quarantined",
+          strategy: "requeue_all",
+          attempts: 2,
+          maxAttempts: 2,
+          lastOutcome: "failed",
+          reason: "max_attempts_exhausted",
+          deadLetter: {
+            status: "quarantined",
+            reason: "max_attempts_exhausted",
+            at: "2026-04-01T00:01:00.000Z"
+          }
+        }
+      }
+    });
+
+    activeApp = await createStartedAppWithRuntimeService(runtimeService, gateway);
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/runs/run_http_requeue/requeue`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer token-1"
+      }
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      runId: "run_http_requeue",
+      status: "queued",
+      previousStatus: "failed",
+      source: "manual_requeue"
+    });
+    expect(enqueuedRuns).toEqual([{ sessionId: "ses_http_requeue", runId: "run_http_requeue" }]);
+
+    const requeuedRun = await runtimeService.getRun("run_http_requeue");
+    expect(requeuedRun.status).toBe("queued");
+    expect(requeuedRun.metadata).toMatchObject({
+      recoveredBy: "manual_operator_requeue",
+      recovery: {
+        state: "requeued",
+        strategy: "manual",
+        manualRequeueCount: 1
+      }
+    });
+  });
+
+  it("batch requeues recovery runs over HTTP with per-item results", async () => {
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const enqueuedRuns: Array<{ sessionId: string; runId: string }> = [];
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      runQueue: {
+        async enqueue(sessionId, runId) {
+          enqueuedRuns.push({ sessionId, runId });
+        }
+      },
+      staleRunRecovery: {
+        strategy: "requeue_all",
+        maxAttempts: 2
+      }
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "ws_http_batch_requeue",
+      name: "http-batch-requeue",
+      rootPath: "/tmp/http-batch-requeue",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Allow HTTP batch recovery requeue.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_http_batch_requeue",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    await persistence.sessionRepository.create({
+      id: "ses_http_batch_requeue",
+      workspaceId: "ws_http_batch_requeue",
+      subjectRef: "dev:test",
+      activeAgentName: "builder",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+
+    await persistence.runRepository.create({
+      id: "run_http_batch_requeue_ok",
+      workspaceId: "ws_http_batch_requeue",
+      sessionId: "ses_http_batch_requeue",
+      initiatorRef: "dev:test",
+      triggerType: "message",
+      triggerRef: "msg_ok",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "failed",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:10.000Z",
+      heartbeatAt: "2026-04-01T00:00:20.000Z",
+      endedAt: "2026-04-01T00:01:00.000Z",
+      errorCode: "worker_recovery_failed",
+      errorMessage: "Run was recovered as failed after worker heartbeat expired.",
+      metadata: {
+        recoveryAttempts: 2,
+        recovery: {
+          state: "quarantined",
+          strategy: "requeue_all",
+          attempts: 2,
+          maxAttempts: 2,
+          lastOutcome: "failed",
+          reason: "max_attempts_exhausted",
+          deadLetter: {
+            status: "quarantined",
+            reason: "max_attempts_exhausted",
+            at: "2026-04-01T00:01:00.000Z"
+          }
+        }
+      }
+    });
+
+    await persistence.runRepository.create({
+      id: "run_http_batch_requeue_bad",
+      workspaceId: "ws_http_batch_requeue",
+      sessionId: "ses_http_batch_requeue",
+      initiatorRef: "dev:test",
+      triggerType: "message",
+      triggerRef: "msg_bad",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "completed",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:10.000Z",
+      endedAt: "2026-04-01T00:00:50.000Z"
+    });
+
+    activeApp = await createStartedAppWithRuntimeService(runtimeService, gateway);
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/runs/requeue`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer token-1",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        runIds: ["run_http_batch_requeue_ok", "run_http_batch_requeue_bad"]
+      })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      items: [
+        {
+          runId: "run_http_batch_requeue_ok",
+          status: "queued",
+          previousStatus: "failed",
+          source: "manual_requeue"
+        },
+        {
+          runId: "run_http_batch_requeue_bad",
+          status: "error",
+          errorCode: "run_requeue_invalid_status"
+        }
+      ]
+    });
+    expect(enqueuedRuns).toEqual([{ sessionId: "ses_http_batch_requeue", runId: "run_http_batch_requeue_ok" }]);
   });
 
   it("executes action runs over HTTP for discovered workspaces", async () => {

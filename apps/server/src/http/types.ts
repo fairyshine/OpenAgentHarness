@@ -79,6 +79,7 @@ export interface AppDependencies {
     getRun: RuntimeService["getRun"];
     listRunSteps: RuntimeService["listRunSteps"];
     cancelRun: RuntimeService["cancelRun"];
+    requeueRun: RuntimeService["requeueRun"];
   };
   modelGateway: ModelGateway;
   defaultModel: string;

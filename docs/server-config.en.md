@@ -114,9 +114,9 @@ Platform-level skill definitions. Merged with workspace `.openharness/skills` to
 
 | Mode | Command | Description |
 | --- | --- | --- |
-| API + embedded worker | `pnpm dev:server -- --config server.yaml` | Default. One process runs both API and worker. |
-| API only | `pnpm dev:server -- --config server.yaml --api-only` | API only. Pair with standalone worker(s). |
-| Standalone worker | `pnpm dev:worker -- --config server.yaml` | Independent worker. Consumes Redis queue. |
+| API + embedded worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml` | Default. One process runs both API and worker. |
+| API only | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml --api-only` | API only. Pair with standalone worker(s). |
+| Standalone worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config server.yaml` | Independent worker. Consumes Redis queue. |
 
 ---
 

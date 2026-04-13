@@ -372,6 +372,93 @@ body {
   background: var(--app-list-item-branch-line-active);
 }
 
+.ob-workspace-item {
+  border-color: color-mix(in srgb, var(--foreground) 6%, transparent);
+  background: color-mix(in srgb, var(--background) 42%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36);
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.ob-workspace-item:hover {
+  border-color: color-mix(in srgb, var(--foreground) 9%, transparent);
+  background: color-mix(in srgb, var(--background) 62%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    0 14px 24px -24px rgba(17, 17, 17, 0.26);
+  transform: translateY(-1px);
+}
+
+.ob-workspace-item.ob-list-item-active {
+  border-color: var(--app-list-item-active-border);
+  background: var(--app-list-item-active-background);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.46),
+    var(--app-list-item-active-shadow);
+}
+
+.ob-workspace-item-icon {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34);
+}
+
+.ob-session-item {
+  border-color: color-mix(in srgb, var(--foreground) 4%, transparent);
+  background: color-mix(in srgb, var(--background) 24%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.ob-session-item:hover {
+  border-color: color-mix(in srgb, var(--foreground) 8%, transparent);
+  background: color-mix(in srgb, var(--background) 40%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 12px 20px -24px rgba(17, 17, 17, 0.22);
+  transform: translateY(-1px);
+}
+
+.ob-session-item.ob-list-item-active {
+  border-color: var(--app-list-item-active-border);
+  background: var(--app-list-item-active-background);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.36),
+    var(--app-list-item-active-shadow);
+}
+
+.ob-session-item-icon {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.ob-session-item-child {
+  border-color: transparent;
+}
+
+.runtime-workspace-group + .runtime-workspace-group {
+  margin-top: 4px;
+}
+
+.runtime-session-tree {
+  position: relative;
+}
+
+.runtime-session-tree::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-list-item-branch-line) 72%, transparent);
+}
+
 .segmented-shell {
   display: inline-flex;
   gap: 4px;

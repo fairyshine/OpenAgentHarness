@@ -1,11 +1,14 @@
 import type { FastifyInstance } from "fastify";
 
 import {
+  batchRequeueRunsRequestSchema,
+  batchRequeueRunsResponseSchema,
   cancelRunAcceptedSchema,
   createMessageRequestSchema,
   messageAcceptedSchema,
   messagePageSchema,
   pageQuerySchema,
+  requeueRunAcceptedSchema,
   runEventsQuerySchema,
   runPageSchema,
   runStepPageSchema,
@@ -13,7 +16,7 @@ import {
 } from "@oah/api-contracts";
 import type { SessionEvent } from "@oah/runtime-core";
 
-import { createParamsSchema, toCallerContext, writeSseEvent } from "../context.js";
+import { assertWorkspaceAccess, createParamsSchema, toCallerContext, writeSseEvent } from "../context.js";
 import type { AppDependencies } from "../types.js";
 
 function parseEventCursor(value: string | undefined): number {
@@ -177,5 +180,46 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: AppDep
     const params = createParamsSchema("runId").parse(request.params);
     const result = await dependencies.runtimeService.cancelRun(params.runId);
     return reply.status(202).send(cancelRunAcceptedSchema.parse(result));
+  });
+
+  app.post("/api/v1/runs/:runId/requeue", async (request, reply) => {
+    const params = createParamsSchema("runId").parse(request.params);
+    const caller = toCallerContext(request);
+    const run = await dependencies.runtimeService.getRun(params.runId);
+    assertWorkspaceAccess(caller, run.workspaceId);
+    const result = await dependencies.runtimeService.requeueRun(params.runId, caller.subjectRef);
+    return reply.status(202).send(requeueRunAcceptedSchema.parse(result));
+  });
+
+  app.post("/api/v1/runs/requeue", async (request, reply) => {
+    const caller = toCallerContext(request);
+    const input = batchRequeueRunsRequestSchema.parse(request.body);
+    const items = await Promise.all(
+      input.runIds.map(async (runId) => {
+        try {
+          const run = await dependencies.runtimeService.getRun(runId);
+          assertWorkspaceAccess(caller, run.workspaceId);
+          return await dependencies.runtimeService.requeueRun(runId, caller.subjectRef);
+        } catch (error) {
+          if (error instanceof Error && "code" in error && typeof (error as { code?: unknown }).code === "string") {
+            return {
+              runId,
+              status: "error" as const,
+              errorCode: (error as { code: string }).code,
+              errorMessage: error.message
+            };
+          }
+
+          return {
+            runId,
+            status: "error" as const,
+            errorCode: "run_requeue_failed",
+            errorMessage: error instanceof Error ? error.message : String(error)
+          };
+        }
+      })
+    );
+
+    return reply.status(200).send(batchRequeueRunsResponseSchema.parse({ items }));
   });
 }

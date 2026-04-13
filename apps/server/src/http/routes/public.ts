@@ -212,7 +212,14 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
     }
 
     const params = createParamsSchema("table").parse(request.params);
-    const query = storageTableQuerySchema.parse(request.query);
+    const rawQuery = request.query as Record<string, unknown>;
+    const parsedQuery = storageTableQuerySchema.parse(request.query);
+    const query = {
+      ...parsedQuery,
+      ...(typeof rawQuery.status === "string" ? { status: rawQuery.status } : {}),
+      ...(typeof rawQuery.errorCode === "string" ? { errorCode: rawQuery.errorCode } : {}),
+      ...(typeof rawQuery.recoveryState === "string" ? { recoveryState: rawQuery.recoveryState } : {})
+    };
     const table = storagePostgresTableNameSchema.parse(params.table);
     return reply.send(
       storagePostgresTablePageSchema.parse(
@@ -222,7 +229,10 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
           ...(query.q ? { q: query.q } : {}),
           ...(query.workspaceId ? { workspaceId: query.workspaceId } : {}),
           ...(query.sessionId ? { sessionId: query.sessionId } : {}),
-          ...(query.runId ? { runId: query.runId } : {})
+          ...(query.runId ? { runId: query.runId } : {}),
+          ...(query.status ? { status: query.status } : {}),
+          ...(query.errorCode ? { errorCode: query.errorCode } : {}),
+          ...(query.recoveryState ? { recoveryState: query.recoveryState } : {})
         })
       )
     );

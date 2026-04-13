@@ -89,15 +89,34 @@ Each capability layer stays separate so you can compose them differently per wor
 # Install dependencies
 pnpm install
 
-# Start infrastructure (PostgreSQL + Redis)
-pnpm infra:up
+# Point to your external test environment directory
+export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
 
-# Start the backend server
-pnpm dev:server -- --config ./server.example.yaml
+# Start the local stack (PostgreSQL + Redis + MinIO + OAH)
+# This also waits for MinIO and auto-runs one storage sync.
+pnpm local:up
 
 # Start the web console (in another terminal)
 pnpm dev:web
 ```
+
+### Start And Stop Flow
+
+```bash
+cd /Users/wumengsong/Code/OpenAgentHarness
+export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
+
+pnpm local:up
+```
+
+Stop everything:
+
+```bash
+cd /Users/wumengsong/Code/OpenAgentHarness
+pnpm local:down
+```
+
+This local stack is designed for a single OAH instance on host port `8787`. If you want multiple OAH replicas later, keep the same service split and put OAH behind a reverse proxy or a K8s Service instead of binding each replica directly to the host.
 
 **Local addresses:**
 
@@ -105,13 +124,14 @@ pnpm dev:web
 | --- | --- |
 | Web Console | `http://localhost:5174` |
 | Backend API | `http://127.0.0.1:8787` |
+| MinIO Console | `http://127.0.0.1:9001` |
 
 ### Single Workspace Mode
 
 Run a dedicated backend for one workspace:
 
 ```bash
-pnpm dev:server -- \
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- \
   --workspace /absolute/path/to/workspace \
   --model-dir /absolute/path/to/models \
   --default-model openai-default
@@ -122,7 +142,10 @@ pnpm dev:server -- \
 ```bash
 pnpm build          # Build all packages
 pnpm test           # Run tests
-pnpm dev:worker -- --config ./server.example.yaml  # Start worker
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync  # Push source to MinIO
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm local:up      # Start local Docker stack and auto-sync once
+pnpm local:down                                                    # Stop local Docker stack
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml  # Advanced: start standalone worker
 ```
 
 ## Who Is It For?

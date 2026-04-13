@@ -1,0 +1,153 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: open_agent_harness
+      POSTGRES_USER: oah
+      POSTGRES_PASSWORD: oah
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oah -d open_agent_harness"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: oahadmin
+      MINIO_ROOT_PASSWORD: oahadmin123
+      MINIO_REGION_NAME: us-east-1
+    command:
+      - server
+      - /data
+      - --address
+      - :9000
+      - --console-address
+      - :9001
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  oah:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8787:8787"
+    volumes:
+      - ${OAH_TEST_ROOT:?set OAH_TEST_ROOT}/server.docker.yaml:/config/server.docker.yaml:ro
+      - oah-workspaces:/data/workspaces
+      - oah-chat:/data/chat
+      - oah-templates:/data/templates:ro
+      - oah-models:/data/models:ro
+      - oah-tools:/data/tools:ro
+      - oah-skills:/data/skills:ro
+      - oah-archives:/data/archives:ro
+
+volumes:
+  pgdata:
+  redisdata:
+  minio-data:
+  oah-workspaces:
+  oah-chat:
+  oah-templates:
+    driver: rclone
+    driver_opts:
+      type: s3
+      path: test-oah-server/template
+      s3_provider: Minio
+      s3_access_key_id: oahadmin
+      s3_secret_access_key: oahadmin123
+      s3_region: us-east-1
+      s3_endpoint: http://host.docker.internal:9000
+      s3_force_path_style: "true"
+      vfs_cache_mode: off
+      poll_interval: 0
+  oah-models:
+    driver: rclone
+    driver_opts:
+      type: s3
+      path: test-oah-server/model
+      s3_provider: Minio
+      s3_access_key_id: oahadmin
+      s3_secret_access_key: oahadmin123
+      s3_region: us-east-1
+      s3_endpoint: http://host.docker.internal:9000
+      s3_force_path_style: "true"
+      vfs_cache_mode: off
+      poll_interval: 0
+  oah-tools:
+    driver: rclone
+    driver_opts:
+      type: s3
+      path: test-oah-server/tool
+      s3_provider: Minio
+      s3_access_key_id: oahadmin
+      s3_secret_access_key: oahadmin123
+      s3_region: us-east-1
+      s3_endpoint: http://host.docker.internal:9000
+      s3_force_path_style: "true"
+      vfs_cache_mode: off
+      poll_interval: 0
+  oah-skills:
+    driver: rclone
+    driver_opts:
+      type: s3
+      path: test-oah-server/skill
+      s3_provider: Minio
+      s3_access_key_id: oahadmin
+      s3_secret_access_key: oahadmin123
+      s3_region: us-east-1
+      s3_endpoint: http://host.docker.internal:9000
+      s3_force_path_style: "true"
+      vfs_cache_mode: off
+      poll_interval: 0
+  oah-archives:
+    driver: rclone
+    driver_opts:
+      type: s3
+      path: test-oah-server/archive
+      s3_provider: Minio
+      s3_access_key_id: oahadmin
+      s3_secret_access_key: oahadmin123
+      s3_region: us-east-1
+      s3_endpoint: http://host.docker.internal:9000
+      s3_force_path_style: "true"
+      vfs_cache_mode: off
+      poll_interval: 0
+

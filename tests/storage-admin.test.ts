@@ -79,6 +79,34 @@ describe("storage admin", () => {
           };
         }
 
+        if (sqlText.includes(`count(*) filter (where coalesce(metadata->'recovery'->>'state', '') <> '')`)) {
+          return {
+            rows: [
+              {
+                trackedRuns: "4",
+                quarantinedRuns: "2",
+                requeuedRuns: "1",
+                failedRecoveryRuns: "1",
+                workerRecoveryFailures: "2",
+                oldestQuarantinedAt: "2026-04-08T01:00:00.000Z",
+                newestQuarantinedAt: "2026-04-09T02:00:00.000Z",
+                newestRecoveredAt: "2026-04-10T03:00:00.000Z"
+              }
+            ],
+            fields: []
+          };
+        }
+
+        if (sqlText.includes("where coalesce(metadata->'recovery'->>'state', '') = 'quarantined'")) {
+          return {
+            rows: [
+              { reason: "max_attempts_exhausted", count: "2" },
+              { reason: "missing_session", count: "1" }
+            ],
+            fields: []
+          };
+        }
+
         throw new Error(`Unexpected query: ${sqlText}`);
       }
     } as unknown as Pool;
@@ -112,6 +140,85 @@ describe("storage admin", () => {
       oldestPendingArchiveDate: "2026-04-08",
       newestExportedAt: "2026-04-10T01:02:03.000Z"
     });
+    expect(overview.postgres.recovery).toEqual({
+      trackedRuns: 4,
+      quarantinedRuns: 2,
+      requeuedRuns: 1,
+      failedRecoveryRuns: 1,
+      workerRecoveryFailures: 2,
+      oldestQuarantinedAt: "2026-04-08T01:00:00.000Z",
+      newestQuarantinedAt: "2026-04-09T02:00:00.000Z",
+      newestRecoveredAt: "2026-04-10T03:00:00.000Z",
+      topQuarantineReasons: [
+        { reason: "max_attempts_exhausted", count: 2 },
+        { reason: "missing_session", count: 1 }
+      ]
+    });
+
+    await storageAdmin.close();
+  });
+
+  it("filters runs by status, error code and recovery state", async () => {
+    const queries: Array<{ sql: string; values: unknown[] | undefined }> = [];
+    const pool = {
+      async query<T extends Record<string, unknown>>(sqlText: string, values?: unknown[]) {
+        queries.push({ sql: sqlText, values });
+
+        if (sqlText.startsWith("select count(*)::text as count from runs")) {
+          return {
+            rows: [{ count: "1" }],
+            fields: []
+          };
+        }
+
+        if (sqlText.startsWith("select * from runs")) {
+          return {
+            rows: [
+              {
+                id: "run_1",
+                status: "failed",
+                error_code: "worker_recovery_failed",
+                metadata: {
+                  recovery: {
+                    state: "quarantined"
+                  }
+                }
+              }
+            ],
+            fields: [{ name: "id" }, { name: "status" }, { name: "error_code" }, { name: "metadata" }]
+          };
+        }
+
+        throw new Error(`Unexpected query: ${sqlText}`);
+      }
+    } as unknown as Pool;
+
+    const storageAdmin = createStorageAdmin({
+      postgresPool: pool,
+      redisAvailable: false,
+      redisEventBusEnabled: false,
+      redisRunQueueEnabled: false
+    });
+
+    const page = await storageAdmin.postgresTable("runs", {
+      limit: 25,
+      status: "failed",
+      errorCode: "worker_recovery_failed",
+      recoveryState: "quarantined"
+    });
+
+    expect(page.appliedFilters).toEqual({
+      status: "failed",
+      errorCode: "worker_recovery_failed",
+      recoveryState: "quarantined"
+    });
+    expect(page.rows).toHaveLength(1);
+    expect(queries).toHaveLength(2);
+    expect(queries[0]?.sql).toContain("status = $1");
+    expect(queries[0]?.sql).toContain("error_code = $2");
+    expect(queries[0]?.sql).toContain("coalesce(metadata->'recovery'->>'state', '') = $3");
+    expect(queries[0]?.values).toEqual(["failed", "worker_recovery_failed", "quarantined"]);
+    expect(queries[1]?.values).toEqual(["failed", "worker_recovery_failed", "quarantined"]);
 
     await storageAdmin.close();
   });

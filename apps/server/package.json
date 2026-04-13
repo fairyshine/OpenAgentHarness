@@ -12,14 +12,15 @@
     "start:worker": "node dist/worker.js"
   },
   "dependencies": {
-    "@oah/config": "workspace:*",
+    "@aws-sdk/client-s3": "3.916.0",
     "@oah/api-contracts": "workspace:*",
-    "@oah/runtime-core": "workspace:*",
+    "@oah/config": "workspace:*",
     "@oah/model-gateway": "workspace:*",
+    "@oah/runtime-core": "workspace:*",
     "@oah/storage-memory": "workspace:*",
-    "@oah/storage-sqlite": "workspace:*",
     "@oah/storage-postgres": "workspace:*",
     "@oah/storage-redis": "workspace:*",
+    "@oah/storage-sqlite": "workspace:*",
     "fastify": "5.8.4",
     "pg": "8.16.3",
     "redis": "4.7.1",

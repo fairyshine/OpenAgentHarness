@@ -16,6 +16,8 @@ export function StorageWorkbench(props: StorageWorkbenchProps) {
           onPreviousPage={props.onPreviousTablePage}
           onNextPage={props.onNextTablePage}
           onDownloadCsv={props.onDownloadTableCsv}
+          onManualRequeueRun={props.onManualRequeueRun}
+          onManualRequeueRuns={props.onManualRequeueRuns}
           busy={props.busy}
         />
       ) : (

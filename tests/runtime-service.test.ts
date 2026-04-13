@@ -4297,6 +4297,16 @@ describe("runtime service", () => {
     expect(staleRun.status).toBe("failed");
     expect(staleRun.errorCode).toBe("worker_recovery_failed");
     expect(staleRun.endedAt).toBeDefined();
+    expect(staleRun.metadata).toMatchObject({
+      recoveryAttempts: 0,
+      recoveredBy: "worker_startup",
+      recovery: {
+        state: "failed",
+        strategy: "fail",
+        lastOutcome: "failed",
+        reason: "fail_closed"
+      }
+    });
 
     const recentRun = await runtimeService.getRun("run_recent");
     expect(recentRun.status).toBe("waiting_tool");
@@ -4305,7 +4315,9 @@ describe("runtime service", () => {
     expect(events.find((event) => event.event === "run.failed")?.data).toMatchObject({
       status: "failed",
       errorCode: "worker_recovery_failed",
-      recoveredBy: "worker_startup"
+      recoveredBy: "worker_startup",
+      recoveryState: "failed",
+      recoveryReason: "fail_closed"
     });
 
     const runSteps = await runtimeService.listRunSteps("run_stale");
@@ -4418,18 +4430,322 @@ describe("runtime service", () => {
     expect(requeuedRun.heartbeatAt).toBeUndefined();
     expect(requeuedRun.metadata).toMatchObject({
       recoveryAttempts: 1,
-      recoveredBy: "worker_startup_requeue"
+      recoveredBy: "worker_startup_requeue",
+      recovery: {
+        state: "requeued",
+        strategy: "requeue_running",
+        attempts: 1,
+        lastOutcome: "requeued",
+        reason: "automatic_requeue"
+      }
     });
 
     const events = await runtimeService.listSessionEvents("ses_requeue", undefined, "run_stale_requeue");
     expect(events.find((event) => event.event === "run.queued")?.data).toMatchObject({
       status: "queued",
       recoveredBy: "worker_startup_requeue",
-      recoveryAttempt: 1
+      recoveryAttempt: 1,
+      recoveryState: "requeued",
+      recoveryReason: "automatic_requeue",
+      recoveryStrategy: "requeue_running"
     });
 
     const runSteps = await runtimeService.listRunSteps("run_stale_requeue");
     expect(runSteps.items.some((step) => step.stepType === "system" && step.name === "run.requeued")).toBe(true);
+  });
+
+  it("quarantines stale runs after recovery attempts are exhausted", async () => {
+    const persistence = createMemoryRuntimePersistence();
+    const enqueuedRuns: Array<{ sessionId: string; runId: string }> = [];
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(),
+      ...persistence,
+      runQueue: {
+        async enqueue(sessionId, runId) {
+          enqueuedRuns.push({ sessionId, runId });
+        }
+      },
+      staleRunRecovery: {
+        strategy: "requeue_all",
+        maxAttempts: 2
+      }
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_run_quarantine",
+      name: "run-quarantine",
+      rootPath: "/tmp/run-quarantine",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Quarantine stale runs after repeated recovery failures.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_run_quarantine",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    await persistence.sessionRepository.create({
+      id: "ses_quarantine",
+      workspaceId: "project_run_quarantine",
+      subjectRef: "dev:test",
+      activeAgentName: "builder",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+
+    await persistence.runRepository.create({
+      id: "run_stale_quarantine",
+      workspaceId: "project_run_quarantine",
+      sessionId: "ses_quarantine",
+      initiatorRef: "dev:test",
+      triggerType: "message",
+      triggerRef: "msg_1",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "running",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:10.000Z",
+      heartbeatAt: "2026-04-01T00:00:20.000Z",
+      metadata: {
+        recoveryAttempts: 2,
+        recovery: {
+          attempts: 2,
+          maxAttempts: 2,
+          state: "requeued",
+          lastOutcome: "requeued"
+        }
+      }
+    });
+
+    const recovered = await runtimeService.recoverStaleRuns({
+      staleBefore: "2026-04-01T00:00:40.000Z"
+    });
+
+    expect(recovered.recoveredRunIds).toEqual(["run_stale_quarantine"]);
+    expect(recovered.requeuedRunIds).toEqual([]);
+    expect(enqueuedRuns).toEqual([]);
+
+    const quarantinedRun = await runtimeService.getRun("run_stale_quarantine");
+    expect(quarantinedRun.status).toBe("failed");
+    expect(quarantinedRun.metadata).toMatchObject({
+      recoveryAttempts: 2,
+      recoveredBy: "worker_startup",
+      recovery: {
+        state: "quarantined",
+        strategy: "requeue_all",
+        attempts: 2,
+        maxAttempts: 2,
+        lastOutcome: "failed",
+        reason: "max_attempts_exhausted",
+        deadLetter: {
+          status: "quarantined",
+          reason: "max_attempts_exhausted"
+        }
+      }
+    });
+
+    const events = await runtimeService.listSessionEvents("ses_quarantine", undefined, "run_stale_quarantine");
+    expect(events.find((event) => event.event === "run.failed")?.data).toMatchObject({
+      status: "failed",
+      recoveredBy: "worker_startup",
+      recoveryAttempt: 2,
+      recoveryState: "quarantined",
+      recoveryReason: "max_attempts_exhausted"
+    });
+  });
+
+  it("manually requeues quarantined recovery runs", async () => {
+    const persistence = createMemoryRuntimePersistence();
+    const enqueuedRuns: Array<{ sessionId: string; runId: string }> = [];
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(),
+      ...persistence,
+      runQueue: {
+        async enqueue(sessionId, runId) {
+          enqueuedRuns.push({ sessionId, runId });
+        }
+      },
+      staleRunRecovery: {
+        strategy: "requeue_all",
+        maxAttempts: 2
+      }
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_run_manual_requeue",
+      name: "run-manual-requeue",
+      rootPath: "/tmp/run-manual-requeue",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Allow operators to requeue quarantined runs safely.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_run_manual_requeue",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    await persistence.sessionRepository.create({
+      id: "ses_manual_requeue",
+      workspaceId: "project_run_manual_requeue",
+      subjectRef: "dev:test",
+      activeAgentName: "builder",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+
+    await persistence.runRepository.create({
+      id: "run_manual_requeue",
+      workspaceId: "project_run_manual_requeue",
+      sessionId: "ses_manual_requeue",
+      initiatorRef: "dev:test",
+      triggerType: "message",
+      triggerRef: "msg_1",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "failed",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:10.000Z",
+      heartbeatAt: "2026-04-01T00:00:20.000Z",
+      endedAt: "2026-04-01T00:01:00.000Z",
+      errorCode: "worker_recovery_failed",
+      errorMessage: "Run was recovered as failed after worker heartbeat expired.",
+      metadata: {
+        recoveryAttempts: 2,
+        recovery: {
+          state: "quarantined",
+          strategy: "requeue_all",
+          attempts: 2,
+          maxAttempts: 2,
+          lastOutcome: "failed",
+          reason: "max_attempts_exhausted",
+          deadLetter: {
+            status: "quarantined",
+            reason: "max_attempts_exhausted",
+            at: "2026-04-01T00:01:00.000Z"
+          }
+        }
+      }
+    });
+
+    const result = await runtimeService.requeueRun("run_manual_requeue", "dev:operator");
+
+    expect(result).toMatchObject({
+      runId: "run_manual_requeue",
+      status: "queued",
+      previousStatus: "failed",
+      source: "manual_requeue"
+    });
+    expect(enqueuedRuns).toEqual([{ sessionId: "ses_manual_requeue", runId: "run_manual_requeue" }]);
+
+    const requeuedRun = await runtimeService.getRun("run_manual_requeue");
+    expect(requeuedRun.status).toBe("queued");
+    expect(requeuedRun.errorCode).toBeUndefined();
+    expect(requeuedRun.errorMessage).toBeUndefined();
+    expect(requeuedRun.startedAt).toBeUndefined();
+    expect(requeuedRun.endedAt).toBeUndefined();
+    expect(requeuedRun.metadata).toMatchObject({
+      recoveryAttempts: 2,
+      recoveredBy: "manual_operator_requeue",
+      recoveryRequestedBy: "dev:operator",
+      recovery: {
+        state: "requeued",
+        strategy: "manual",
+        attempts: 2,
+        maxAttempts: 2,
+        lastOutcome: "requeued",
+        reason: "manual_operator_requeue",
+        manualRequeueCount: 1,
+        lastManualRequeueBy: "dev:operator"
+      }
+    });
+    expect((requeuedRun.metadata as { recovery?: { deadLetter?: unknown } }).recovery?.deadLetter).toBeUndefined();
+
+    const events = await runtimeService.listSessionEvents("ses_manual_requeue", undefined, "run_manual_requeue");
+    expect(events.find((event) => event.event === "run.queued")?.data).toMatchObject({
+      status: "queued",
+      recoveredBy: "manual_operator_requeue",
+      recoveryState: "requeued",
+      recoveryReason: "manual_operator_requeue",
+      recoveryStrategy: "manual",
+      previousStatus: "failed",
+      requestedBy: "dev:operator"
+    });
   });
 
   it("keeps runs in waiting_tool until all parallel tool calls finish", async () => {

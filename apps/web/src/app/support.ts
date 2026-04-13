@@ -842,6 +842,16 @@ function contentPreview(content: Message["content"], limit = 120) {
   return prettyJson(content);
 }
 
+function hasDisplayableRunMessages(messages: Message[], runId: string) {
+  return messages.some((message) => {
+    if (message.runId !== runId) {
+      return false;
+    }
+
+    return contentText(message.content).trim().length > 0 || contentToolRefs(message.content).length > 0;
+  });
+}
+
 function storageMessageFromRow(row: Record<string, unknown>): Message | null {
   const role = row.role;
   const content = normalizeMessageContent(row.content);
@@ -1618,6 +1628,7 @@ export {
   contentText,
   contentToolRefs,
   contentPreview,
+  hasDisplayableRunMessages,
   storageMessageFromRow,
   storageRunStepFromRow,
   storageSessionEventFromRow,

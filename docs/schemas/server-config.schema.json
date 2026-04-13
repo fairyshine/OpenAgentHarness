@@ -35,6 +35,103 @@
         }
       }
     },
+    "object_storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "bucket",
+        "region"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "s3"
+          ]
+        },
+        "bucket": {
+          "type": "string",
+          "minLength": 1
+        },
+        "region": {
+          "type": "string",
+          "minLength": 1
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "access_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "secret_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "force_path_style": {
+          "type": "boolean"
+        },
+        "sync_on_boot": {
+          "type": "boolean"
+        },
+        "sync_on_change": {
+          "type": "boolean"
+        },
+        "poll_interval_ms": {
+          "type": "integer",
+          "minimum": 1000
+        },
+        "managed_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "workspace",
+              "chat",
+              "template",
+              "model",
+              "tool",
+              "skill",
+              "archive"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "key_prefixes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "workspace": {
+              "type": "string"
+            },
+            "chat": {
+              "type": "string"
+            },
+            "template": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "skill": {
+              "type": "string"
+            },
+            "archive": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
     "paths": {
       "type": "object",
       "required": [

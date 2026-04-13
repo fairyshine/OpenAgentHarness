@@ -89,15 +89,34 @@ Open Agent Harness 是一个**可部署的后端运行时**，负责承载 Agent
 # 安装依赖
 pnpm install
 
-# 启动基础设施（PostgreSQL + Redis）
-pnpm infra:up
+# 指向你自己的测试环境目录
+export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
 
-# 启动后端服务
-pnpm dev:server -- --config ./server.example.yaml
+# 启动本地整套服务（PostgreSQL + Redis + MinIO + OAH）
+# 这里会先等待 MinIO 就绪，再自动执行一次 storage sync。
+pnpm local:up
 
 # 启动 Web 控制台（另一个终端）
 pnpm dev:web
 ```
+
+### 启动与关闭流程
+
+```bash
+cd /Users/wumengsong/Code/OpenAgentHarness
+export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
+
+pnpm local:up
+```
+
+全部关闭：
+
+```bash
+cd /Users/wumengsong/Code/OpenAgentHarness
+pnpm local:down
+```
+
+这套本地 compose 默认是单实例 OAH 入口，直接占用宿主机 `8787` 端口。后续如果要多副本，服务拆分结构本身不用变，只需要把 OAH 放到反向代理或 K8s Service 后面，不要让每个副本都直接绑宿主机端口。
 
 **本地地址：**
 
@@ -105,13 +124,14 @@ pnpm dev:web
 | --- | --- |
 | Web 控制台 | `http://localhost:5174` |
 | 后端 API | `http://127.0.0.1:8787` |
+| MinIO Console | `http://127.0.0.1:9001` |
 
 ### 单 Workspace 模式
 
 围绕单个 workspace 启动专属后端：
 
 ```bash
-pnpm dev:server -- \
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- \
   --workspace /absolute/path/to/workspace \
   --model-dir /absolute/path/to/models \
   --default-model openai-default
@@ -122,7 +142,10 @@ pnpm dev:server -- \
 ```bash
 pnpm build          # 构建所有包
 pnpm test           # 运行测试
-pnpm dev:worker -- --config ./server.example.yaml  # 启动 worker
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync   # 把 source 发布到 MinIO
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm local:up       # 启动本地 Docker 整套服务，并自动同步一次
+pnpm local:down                                                     # 停止本地 Docker 整套服务
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml  # 进阶：单独启动 worker
 ```
 
 ## 适用场景

@@ -21,13 +21,14 @@ pnpm install
 启动 PostgreSQL 和 Redis（开发用 Docker Compose）：
 
 ```bash
-pnpm infra:up
+export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
+pnpm local:up
 ```
 
 ### 第 3 步：启动后端
 
 ```bash
-pnpm dev:server -- --config ./server.example.yaml
+pnpm local:up
 ```
 
 服务默认监听 `http://127.0.0.1:8787`，内嵌 Worker 自动启动。
@@ -59,7 +60,7 @@ pnpm dev:web
 只服务一个 Workspace 时，跳过配置文件，直接指定路径：
 
 ```bash
-pnpm dev:server -- \
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- \
   --workspace /absolute/path/to/workspace \
   --model-dir /absolute/path/to/models \
   --default-model openai-default
@@ -75,11 +76,11 @@ pnpm dev:server -- \
 | 命令 | 作用 |
 | --- | --- |
 | `pnpm install` | 安装依赖 |
-| `pnpm infra:up` | 启动 PostgreSQL + Redis |
-| `pnpm infra:down` | 停止基础设施 |
-| `pnpm dev:server -- --config ./server.example.yaml` | 启动后端（内嵌 Worker） |
-| `pnpm dev:server -- --api-only --config ./server.example.yaml` | 仅启动 API |
-| `pnpm dev:worker -- --config ./server.example.yaml` | 单独启动 Worker |
+| `OAH_TEST_ROOT=/absolute/path pnpm storage:sync` | 同步测试数据到 MinIO |
+| `OAH_TEST_ROOT=/absolute/path pnpm local:up` | 启动本地整套服务 |
+| `pnpm local:down` | 停止本地整套服务 |
+| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --api-only --config ./server.example.yaml` | 仅启动 API |
+| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml` | 单独启动 Worker |
 | `pnpm dev:web` | 启动调试控制台 |
 | `pnpm build` | 全量构建 |
 | `pnpm test` | 运行测试 |

@@ -49,7 +49,7 @@ export function WorkspaceNavItem(props: {
 
   return (
     <div
-      className={`ob-list-item group relative flex items-center gap-2 rounded-lg px-2 py-2.5 transition-colors cursor-pointer ${workspaceItemClass(props.active)}`}
+      className={`ob-list-item ob-workspace-item group relative flex items-center gap-1.5 rounded-xl px-2 py-2 transition-colors cursor-pointer ${workspaceItemClass(props.active)}`}
       onClick={() => {
         if (hasTextSelection()) return;
         props.onSelect();
@@ -59,20 +59,20 @@ export function WorkspaceNavItem(props: {
       <Button
         variant="ghost"
         size="icon"
-        className="ob-list-item-control h-6 w-6 shrink-0 rounded-md text-muted-foreground/78"
+        className="ob-list-item-control h-4 w-4 shrink-0 rounded-[8px] text-muted-foreground/72"
         onClick={(e) => { e.stopPropagation(); props.onToggleExpanded(); }}
       >
-        <ExpandIcon className="h-3.5 w-3.5" />
+        <ExpandIcon className="h-[11px] w-[11px]" />
       </Button>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <div className={`ob-list-item-icon mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] ${props.active ? "ob-list-item-icon-active" : ""}`}>
-              <Folder className="h-[13px] w-[13px]" />
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className={`ob-list-item-icon ob-workspace-item-icon flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[9px] ${props.active ? "ob-list-item-icon-active" : ""}`}>
+              <Folder className="h-[11px] w-[11px]" />
             </div>
-            <div className="min-w-0 select-text">
-              <p className="truncate text-sm font-medium text-foreground">{props.entry.name}</p>
-              <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="min-w-0 select-text leading-tight">
+              <p className="truncate text-[13px] font-semibold tracking-[-0.018em] text-foreground">{props.entry.name}</p>
+              <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/88">
                 {metaLine ? <span className="truncate">{metaLine}</span> : <span className="truncate text-muted-foreground/70">No recent runs</span>}
               </div>
             </div>
@@ -95,14 +95,14 @@ export function WorkspaceNavItem(props: {
         <Button
           variant="ghost"
           size="icon"
-          className="ob-list-item-control h-6 w-6 shrink-0 rounded-md text-muted-foreground/56 opacity-0 group-hover:opacity-100"
+          className="ob-list-item-control h-4 w-4 shrink-0 rounded-[8px] text-muted-foreground/56 opacity-0 group-hover:opacity-100"
           onClick={(e) => {
             e.stopPropagation();
             props.onRemove();
           }}
           title="Delete workspace"
         >
-          <Trash2 className="h-3.5 w-3.5" />
+          <Trash2 className="h-[11px] w-[11px]" />
         </Button>
       ) : null}
     </div>
@@ -129,25 +129,25 @@ export function SessionNavItem(props: {
       ? "ob-list-item-child-active"
       : ""
     : sessionItemClass(props.active);
-  const rowPaddingClass = isChild ? "py-1.5 pr-2.5 pl-2" : "px-2 py-2.5 pr-3";
-  const rowGapClass = isChild ? "gap-1.5" : "gap-2";
-  const controlSizeClass = isChild ? "h-5 w-5" : "h-6 w-6";
+  const rowPaddingClass = isChild ? "py-1.5 pr-2.5 pl-2" : "px-2 py-2 pr-2";
+  const rowGapClass = isChild ? "gap-1.5" : "gap-1.5";
+  const controlSizeClass = isChild ? "h-5 w-5" : "h-5 w-5";
   const iconToneClass = props.active ? "ob-list-item-icon-active" : "ob-list-item-icon";
   const titleToneClass = isChild
     ? props.active
       ? "text-[13px] font-medium text-foreground"
       : "text-[13px] font-medium text-foreground/82 group-hover:text-foreground/92"
-    : "text-sm font-medium text-foreground";
+    : "text-sm font-medium tracking-[-0.018em] text-foreground";
   const metaToneClass = isChild
     ? props.active
       ? "text-[11px] text-muted-foreground/82"
       : "text-[11px] text-muted-foreground/72 group-hover:text-muted-foreground/82"
-    : "text-xs text-muted-foreground";
+    : "text-[11px] text-muted-foreground";
 
   return (
     <div
-      className={`ob-list-item group relative flex items-center rounded-md transition-colors cursor-pointer ${rowGapClass} ${rowPaddingClass} ${rowSurfaceClass} ${
-        isChild ? "shadow-none" : ""
+      className={`ob-list-item group relative flex items-center transition-colors cursor-pointer ${rowGapClass} ${rowPaddingClass} ${rowSurfaceClass} ${
+        isChild ? "ob-session-item-child rounded-md shadow-none" : "ob-session-item rounded-xl"
       }`}
       onClick={() => {
         if (hasTextSelection()) return;
@@ -164,14 +164,14 @@ export function SessionNavItem(props: {
         <Button
           variant="ghost"
           size="icon"
-          className={`ob-list-item-control ${controlSizeClass} shrink-0 rounded-md text-muted-foreground/72`}
+          className={`ob-list-item-control ${controlSizeClass} shrink-0 rounded-[8px] text-muted-foreground/70`}
           onClick={(event) => {
             event.stopPropagation();
             props.onToggleExpanded?.();
           }}
           title={props.expanded ? "Collapse child sessions" : "Expand child sessions"}
         >
-          <ExpandIcon className={isChild ? "h-3 w-3" : "h-3.5 w-3.5"} />
+          <ExpandIcon className="h-[11px] w-[11px]" />
         </Button>
       ) : (
         <div className={`${controlSizeClass} shrink-0`} aria-hidden="true" />
@@ -179,14 +179,14 @@ export function SessionNavItem(props: {
       <Tooltip>
         <TooltipTrigger asChild>
           <div className={`flex min-w-0 flex-1 items-center text-left ${isChild ? "gap-1.5" : "gap-2"}`}>
-            <div className={`ob-list-item-icon mt-0.5 flex shrink-0 items-center justify-center rounded-[10px] ${isChild ? "h-6 w-6" : "h-8 w-8"} ${iconToneClass}`}>
-              <Bot className={isChild ? "h-3 w-3" : "h-3.5 w-3.5"} />
+            <div className={`ob-list-item-icon ${isChild ? "" : "ob-session-item-icon"} flex shrink-0 items-center justify-center rounded-[9px] ${isChild ? "h-6 w-6" : "h-[26px] w-[26px]"} ${iconToneClass}`}>
+              <Bot className={isChild ? "h-[11px] w-[11px]" : "h-[11px] w-[11px]"} />
             </div>
-            <div className="min-w-0 select-text">
+            <div className="min-w-0 select-text leading-tight">
               <p className={`truncate ${titleToneClass}`}>
                 {props.entry.title || "Untitled session"}
               </p>
-              <p className={`truncate ${metaToneClass}`}>{primaryTime}</p>
+              <p className={`mt-1 truncate ${metaToneClass}`}>{primaryTime}</p>
             </div>
           </div>
         </TooltipTrigger>
@@ -206,7 +206,7 @@ export function SessionNavItem(props: {
         </TooltipContent>
       </Tooltip>
       <div
-        className={`absolute right-1.5 top-1/2 flex -translate-y-1/2 translate-x-1 items-center gap-0.5 transition-all ${
+        className={`absolute right-1 top-1/2 flex -translate-y-1/2 translate-x-1 items-center gap-0.5 transition-all ${
           props.active
             ? "opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100"
             : "opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100"
@@ -215,7 +215,7 @@ export function SessionNavItem(props: {
         <Button
           variant="ghost"
           size="icon"
-          className="ob-list-item-control h-6 w-6 shrink-0 rounded-md text-muted-foreground/66"
+          className="ob-list-item-control h-4 w-4 shrink-0 rounded-[8px] text-muted-foreground/66"
           title="Rename session"
           onClick={(event) => {
             event.stopPropagation();
@@ -226,19 +226,19 @@ export function SessionNavItem(props: {
             void props.onRename(nextTitle);
           }}
         >
-          <PencilLine className="h-3.5 w-3.5" />
+          <PencilLine className="h-[11px] w-[11px]" />
         </Button>
         <Button
           variant="ghost"
           size="icon"
-          className="ob-list-item-control h-6 w-6 shrink-0 rounded-md text-muted-foreground/66"
+          className="ob-list-item-control h-4 w-4 shrink-0 rounded-[8px] text-muted-foreground/66"
           title="Delete session"
           onClick={(event) => {
             event.stopPropagation();
             props.onRemove();
           }}
         >
-          <Trash2 className="h-3.5 w-3.5" />
+          <Trash2 className="h-[11px] w-[11px]" />
         </Button>
       </div>
     </div>

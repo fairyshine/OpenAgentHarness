@@ -126,9 +126,44 @@ openai-default:
 
 | 模式 | 启动方式 | 说明 |
 | --- | --- | --- |
-| API + embedded worker | `pnpm dev:server -- --config server.yaml` | 默认模式，一个进程包含 API 和 Worker |
-| API only | `pnpm dev:server -- --config server.yaml --api-only` | 只启动 API，需配合独立 Worker |
-| Standalone worker | `pnpm dev:worker -- --config server.yaml` | 独立 Worker，消费 Redis 队列 |
+| API + embedded worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml` | 默认模式，一个进程包含 API 和 Worker |
+| API only | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml --api-only` | 只启动 API，需配合独立 Worker |
+| Standalone worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config server.yaml` | 独立 Worker，消费 Redis 队列 |
+
+---
+
+## 环境变量覆盖
+
+除 YAML 配置外，服务端还有一组运行期环境变量用于控制恢复、worker 池与调试行为。
+
+### Stale Run 恢复
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `OAH_STALE_RUN_RECOVERY_STRATEGY` | Redis 模式下为 `requeue_running`，否则为 `fail` | stale run 恢复策略，可选 `fail`、`requeue_running`、`requeue_all` |
+| `OAH_STALE_RUN_RECOVERY_MAX_ATTEMPTS` | `1` | 单个 run 最多允许自动重新排队的次数 |
+
+### Embedded Worker 池
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `OAH_EMBEDDED_WORKER_MIN` | Redis 模式下 `2`，否则 `1` | embedded worker 最小实例数；独立 worker 进程固定至少为 `1` |
+| `OAH_EMBEDDED_WORKER_MAX` | 等于 `OAH_EMBEDDED_WORKER_MIN` | embedded worker 最大实例数 |
+| `OAH_EMBEDDED_WORKER_SCALE_INTERVAL_MS` | `5000` | pool 周期性重平衡间隔 |
+| `OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_WORKER` | `1` | 每个 worker 目标承载的可调度 session 数 |
+| `OAH_EMBEDDED_WORKER_SCALE_UP_COOLDOWN_MS` | `1000` | 扩容冷却时间 |
+| `OAH_EMBEDDED_WORKER_SCALE_DOWN_COOLDOWN_MS` | `15000` | 缩容冷却时间 |
+| `OAH_EMBEDDED_WORKER_SCALE_UP_SAMPLE_SIZE` | `2` | 触发扩容前需要连续满足压力条件的采样次数 |
+| `OAH_EMBEDDED_WORKER_SCALE_DOWN_SAMPLE_SIZE` | `3` | 触发缩容前需要连续满足压力条件的采样次数 |
+| `OAH_EMBEDDED_WORKER_SCALE_UP_BUSY_RATIO_PERCENT` | `75` | 当 busy ratio 超过该阈值时，可联动老化压力触发额外扩容 |
+| `OAH_EMBEDDED_WORKER_SCALE_UP_MAX_READY_AGE_MS` | `2000` | 最老可调度 session 等待时长超过该阈值时，允许触发老化扩容 |
+
+### 其他运行期参数
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `OAH_HISTORY_EVENT_RETENTION_DAYS` | `7` | Postgres 模式下历史事件保留天数 |
+| `OAH_RUNTIME_DEBUG` | 未设置 | 设置后向标准输出镜像 runtime debug 日志 |
 
 ---
 

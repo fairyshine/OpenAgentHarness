@@ -6,6 +6,29 @@ storage: {}
   # postgres_url: ${env.DATABASE_URL}
   # redis_url: ${env.REDIS_URL}
 
+# object_storage:
+#   provider: s3
+#   bucket: open-agent-harness
+#   region: oss-cn-hangzhou
+#   endpoint: https://oss-cn-hangzhou.aliyuncs.com
+#   access_key: ${env.OSS_ACCESS_KEY_ID}
+#   secret_key: ${env.OSS_ACCESS_KEY_SECRET}
+#   force_path_style: false
+#   sync_on_boot: true
+#   sync_on_change: true
+#   poll_interval_ms: 5000
+#   managed_paths:
+#     - workspace
+#     - chat
+#   key_prefixes:
+#     workspace: workspace
+#     chat: chat
+#     template: template
+#     model: model
+#     tool: tool
+#     skill: skill
+#     archive: archive
+
 paths:
   workspace_dir: ./tmp/workspaces
   chat_dir: ./tmp/chat-workspaces

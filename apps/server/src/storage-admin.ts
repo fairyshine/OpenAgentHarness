@@ -273,6 +273,9 @@ export interface StorageAdmin {
       workspaceId?: string | undefined;
       sessionId?: string | undefined;
       runId?: string | undefined;
+      status?: string | undefined;
+      errorCode?: string | undefined;
+      recoveryState?: string | undefined;
     }
   ): Promise<StoragePostgresTablePage>;
   redisKeys(pattern: string, cursor: string | undefined, pageSize: number): Promise<StorageRedisKeyPage>;
@@ -373,6 +376,37 @@ export function createStorageAdmin(options: {
                  min(archive_date) filter (where exported_at is null) as "oldestPendingArchiveDate",
                  max(exported_at)::text as "newestExportedAt"
                from archives`
+            ),
+            postgresPool.query<{
+              trackedRuns: string;
+              quarantinedRuns: string;
+              requeuedRuns: string;
+              failedRecoveryRuns: string;
+              workerRecoveryFailures: string;
+              oldestQuarantinedAt: string | null;
+              newestQuarantinedAt: string | null;
+              newestRecoveredAt: string | null;
+            }>(
+              `select
+                 count(*) filter (where coalesce(metadata->'recovery'->>'state', '') <> '')::text as "trackedRuns",
+                 count(*) filter (where coalesce(metadata->'recovery'->>'state', '') = 'quarantined')::text as "quarantinedRuns",
+                 count(*) filter (where coalesce(metadata->'recovery'->>'state', '') = 'requeued')::text as "requeuedRuns",
+                 count(*) filter (where coalesce(metadata->'recovery'->>'state', '') = 'failed')::text as "failedRecoveryRuns",
+                 count(*) filter (where error_code = 'worker_recovery_failed')::text as "workerRecoveryFailures",
+                 min(metadata->'recovery'->'deadLetter'->>'at') filter (where coalesce(metadata->'recovery'->>'state', '') = 'quarantined') as "oldestQuarantinedAt",
+                 max(metadata->'recovery'->'deadLetter'->>'at') filter (where coalesce(metadata->'recovery'->>'state', '') = 'quarantined') as "newestQuarantinedAt",
+                 max(coalesce(ended_at, heartbeat_at, started_at, created_at)::text) filter (where coalesce(metadata->'recovery'->>'state', '') <> '') as "newestRecoveredAt"
+               from runs`
+            ),
+            postgresPool.query<{ reason: string | null; count: string }>(
+              `select
+                 coalesce(nullif(metadata->'recovery'->>'reason', ''), 'unknown') as reason,
+                 count(*)::text as count
+               from runs
+               where coalesce(metadata->'recovery'->>'state', '') = 'quarantined'
+               group by 1
+               order by count(*) desc, reason asc
+               limit 5`
             )
           ])
         : undefined;
@@ -392,7 +426,7 @@ export function createStorageAdmin(options: {
       const archiveExportDirectory =
         postgresSummary && options.archiveExportRoot ? await summarizeArchiveExportDirectory(options.archiveExportRoot) : undefined;
 
-      const [databaseResult, tableSummaries, historyEventStats, archiveStats] = postgresSummary ?? [];
+      const [databaseResult, tableSummaries, historyEventStats, archiveStats, recoveryStats, recoveryReasons] = postgresSummary ?? [];
       const [dbSize, readyQueueLength, sessionQueueKeys = [], sessionLockKeys = [], eventBufferKeys = []] = redisSummary ?? [];
       const readyQueue = redisSummary
         ? {
@@ -446,6 +480,31 @@ export function createStorageAdmin(options: {
                           : {})
                       }
                     : {})
+                }
+              }
+            : {})
+          ,
+          ...(recoveryStats?.rows[0]
+            ? {
+                recovery: {
+                  trackedRuns: Number.parseInt(recoveryStats.rows[0].trackedRuns ?? "0", 10),
+                  quarantinedRuns: Number.parseInt(recoveryStats.rows[0].quarantinedRuns ?? "0", 10),
+                  requeuedRuns: Number.parseInt(recoveryStats.rows[0].requeuedRuns ?? "0", 10),
+                  failedRecoveryRuns: Number.parseInt(recoveryStats.rows[0].failedRecoveryRuns ?? "0", 10),
+                  workerRecoveryFailures: Number.parseInt(recoveryStats.rows[0].workerRecoveryFailures ?? "0", 10),
+                  ...(recoveryStats.rows[0].oldestQuarantinedAt
+                    ? { oldestQuarantinedAt: recoveryStats.rows[0].oldestQuarantinedAt }
+                    : {}),
+                  ...(recoveryStats.rows[0].newestQuarantinedAt
+                    ? { newestQuarantinedAt: recoveryStats.rows[0].newestQuarantinedAt }
+                    : {}),
+                  ...(recoveryStats.rows[0].newestRecoveredAt
+                    ? { newestRecoveredAt: recoveryStats.rows[0].newestRecoveredAt }
+                    : {}),
+                  topQuarantineReasons: (recoveryReasons?.rows ?? []).map((row) => ({
+                    reason: row.reason?.trim() ? row.reason : "unknown",
+                    count: Number.parseInt(row.count ?? "0", 10)
+                  }))
                 }
               }
             : {})
@@ -510,6 +569,14 @@ export function createStorageAdmin(options: {
       pushFilter(filterColumns.workspaceId, options.workspaceId);
       pushFilter(filterColumns.sessionId, options.sessionId);
       pushFilter(filterColumns.runId, options.runId);
+      if (table === "runs") {
+        pushFilter("status", options.status);
+        pushFilter("error_code", options.errorCode);
+        if (options.recoveryState?.trim()) {
+          values.push(options.recoveryState.trim());
+          whereClauses.push(`coalesce(metadata->'recovery'->>'state', '') = $${values.length}`);
+        }
+      }
 
       if (options.q?.trim()) {
         values.push(`%${options.q.trim()}%`);
@@ -543,13 +610,22 @@ export function createStorageAdmin(options: {
             ])
           )
         ),
-        ...(options.q?.trim() || options.workspaceId?.trim() || options.sessionId?.trim() || options.runId?.trim()
+        ...(options.q?.trim() ||
+        options.workspaceId?.trim() ||
+        options.sessionId?.trim() ||
+        options.runId?.trim() ||
+        options.status?.trim() ||
+        options.errorCode?.trim() ||
+        options.recoveryState?.trim()
           ? {
               appliedFilters: {
                 ...(options.q?.trim() ? { q: options.q.trim() } : {}),
                 ...(options.workspaceId?.trim() ? { workspaceId: options.workspaceId.trim() } : {}),
                 ...(options.sessionId?.trim() ? { sessionId: options.sessionId.trim() } : {}),
-                ...(options.runId?.trim() ? { runId: options.runId.trim() } : {})
+                ...(options.runId?.trim() ? { runId: options.runId.trim() } : {}),
+                ...(options.status?.trim() ? { status: options.status.trim() } : {}),
+                ...(options.errorCode?.trim() ? { errorCode: options.errorCode.trim() } : {}),
+                ...(options.recoveryState?.trim() ? { recoveryState: options.recoveryState.trim() } : {})
               }
             }
           : {})

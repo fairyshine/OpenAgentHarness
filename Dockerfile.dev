@@ -1,0 +1,23 @@
+FROM node:22-bookworm
+
+LABEL org.opencontainers.image.title="Open Agent Harness" \
+      org.opencontainers.image.description="Dockerized local development image for Open Agent Harness." \
+      org.opencontainers.image.version="0.1.0" \
+      org.opencontainers.image.source="https://github.com/fairyshine/OpenAgentHarness" \
+      org.opencontainers.image.url="https://github.com/fairyshine/OpenAgentHarness" \
+      org.opencontainers.image.documentation="https://github.com/fairyshine/OpenAgentHarness#readme" \
+      org.opencontainers.image.licenses="UNLICENSED" \
+      org.opencontainers.image.vendor="fairyshine" \
+      io.openagentharness.logo-path="/app/assets/logo.png"
+
+RUN corepack enable
+
+WORKDIR /app
+
+COPY . .
+
+RUN pnpm install --frozen-lockfile
+
+EXPOSE 8787
+
+CMD ["pnpm", "exec", "tsx", "--tsconfig", "./apps/server/tsconfig.json", "./apps/server/src/index.ts", "--config", "/config/server.docker.yaml"]

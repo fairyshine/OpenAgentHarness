@@ -26,6 +26,7 @@ import {
   createRedisSessionEventBus,
   createRedisSessionRunQueue
 } from "@oah/storage-redis";
+import { ObjectStorageMirrorController } from "./object-storage.js";
 import { DualWriteSessionEventStore, appendRuntimeLogEvent, buildRuntimeConsoleLogger } from "./runtime-console.js";
 import {
   buildSingleWorkspaceConfig,
@@ -107,6 +108,19 @@ function parseStaleRunRecoveryStrategyEnv(
   }
 
   return raw === "fail" || raw === "requeue_running" || raw === "requeue_all" ? raw : fallback;
+}
+
+function withManagedWorkspaceExternalRef(
+  workspace: WorkspaceRecord,
+  config: Awaited<ReturnType<typeof loadServerConfig>>,
+  objectStorageMirror: ObjectStorageMirrorController | undefined
+): WorkspaceRecord {
+  if (!objectStorageMirror || workspace.externalRef) {
+    return workspace;
+  }
+
+  const externalRef = objectStorageMirror.managedWorkspaceExternalRef(workspace.rootPath, workspace.kind, config.paths);
+  return externalRef ? { ...workspace, externalRef } : workspace;
 }
 
 export interface BootstrappedRuntime {
@@ -335,6 +349,14 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               ? requestedConfig.path
               : path.resolve(process.cwd(), "server.example.yaml")
         );
+  const objectStorageMirror = config.object_storage
+    ? new ObjectStorageMirrorController(config.object_storage, config.paths, (message) => {
+        console.info(`[oah-object-storage] ${message}`);
+      })
+    : undefined;
+  if (objectStorageMirror) {
+    await objectStorageMirror.initialize();
+  }
   const modelDir = config.paths.model_dir;
   const toolDir = config.paths.tool_dir;
   const logModelLoadError = (filePath: string, error: unknown): void => {
@@ -355,21 +377,29 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   const discoveredWorkspaces =
     singleWorkspace !== undefined
       ? [
-          await discoverWorkspace(singleWorkspace.rootPath, singleWorkspace.kind, {
+          withManagedWorkspaceExternalRef(
+            await discoverWorkspace(singleWorkspace.rootPath, singleWorkspace.kind, {
+              platformModels: models,
+              platformAgents,
+              platformSkillDir: config.paths.skill_dir,
+              platformToolDir: toolDir
+            } as Parameters<typeof discoverWorkspace>[2]) as WorkspaceRecord,
+            config,
+            objectStorageMirror
+          )
+        ]
+      : (
+          await discoverWorkspaces({
+            paths: config.paths,
             platformModels: models,
             platformAgents,
-            platformSkillDir: config.paths.skill_dir,
-            platformToolDir: toolDir
-          } as Parameters<typeof discoverWorkspace>[2])
-        ]
-      : await discoverWorkspaces({
-          paths: config.paths,
-          platformModels: models,
-          platformAgents,
-          onError: ({ rootPath, kind, error }: { rootPath: string; kind: "project" | "chat"; error: unknown }) => {
-            logWorkspaceDiscoveryError(rootPath, kind, error);
-          }
-        } as Parameters<typeof discoverWorkspaces>[0]);
+            onError: ({ rootPath, kind, error }: { rootPath: string; kind: "project" | "chat"; error: unknown }) => {
+              logWorkspaceDiscoveryError(rootPath, kind, error);
+            }
+          } as Parameters<typeof discoverWorkspaces>[0])
+        ).map((workspace) =>
+          withManagedWorkspaceExternalRef(workspace as WorkspaceRecord, config, objectStorageMirror)
+        );
   const postgresConfigured = Boolean(config.storage.postgres_url && config.storage.postgres_url.trim().length > 0);
   const sqliteShadowRoot = path.join(config.paths.workspace_dir, ".openharness", "data", "workspace-state");
   const persistence = postgresConfigured
@@ -468,9 +498,8 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           ...persistedWorkspaceSnapshots.filter((workspace) => !isManagedWorkspace(workspace, config.paths))
         ]
       : discoveredWorkspaces;
-  const reconciledWorkspaces = reconcileDiscoveredWorkspaces(
-    bootWorkspaceCandidates,
-    persistedWorkspaceSnapshots
+  const reconciledWorkspaces = reconcileDiscoveredWorkspaces(bootWorkspaceCandidates, persistedWorkspaceSnapshots).map((workspace) =>
+    withManagedWorkspaceExternalRef(workspace, config, objectStorageMirror)
   );
   const visibleWorkspaceIds = new Set<string>();
   const workspaceRepository = new ScopedWorkspaceRepository(persistence.workspaceRepository, visibleWorkspaceIds);
@@ -548,16 +577,18 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           }
 
           workspaceRegistrySyncPromise = (async () => {
-            const latestProjectWorkspaces = await discoverProjectWorkspaces({
-              workspaceDir: config.paths.workspace_dir,
-              models,
-              platformAgents,
-              platformSkillDir: config.paths.skill_dir,
-              platformToolDir: toolDir,
-              onError: ({ rootPath, error }: { rootPath: string; kind: "project"; error: unknown }) => {
-                logWorkspaceDiscoveryError(rootPath, "project", error);
-              }
-            });
+            const latestProjectWorkspaces = (
+              await discoverProjectWorkspaces({
+                workspaceDir: config.paths.workspace_dir,
+                models,
+                platformAgents,
+                platformSkillDir: config.paths.skill_dir,
+                platformToolDir: toolDir,
+                onError: ({ rootPath, error }: { rootPath: string; kind: "project"; error: unknown }) => {
+                  logWorkspaceDiscoveryError(rootPath, "project", error);
+                }
+              })
+            ).map((workspace) => withManagedWorkspaceExternalRef(workspace as WorkspaceRecord, config, objectStorageMirror));
             const persistedWorkspaces = await listAllWorkspaces(persistence.workspaceRepository);
             const staticWorkspaces = persistedWorkspaces.filter(
               (workspace) => workspace.kind === "chat" || !isManagedWorkspace(workspace, config.paths)
@@ -585,7 +616,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
             const latestReconciledWorkspaces = reconcileDiscoveredWorkspaces(
               latestDiscoveredWorkspaces,
               latestPersistedWorkspaces
-            );
+            ).map((workspace) => withManagedWorkspaceExternalRef(workspace, config, objectStorageMirror));
 
             await Promise.all(latestReconciledWorkspaces.map(async (workspace) => persistence.workspaceRepository.upsert(workspace)));
 
@@ -675,13 +706,13 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
             updatedAt: workspace.updatedAt,
             historyMirrorEnabled: workspace.historyMirrorEnabled,
             ...(workspace.externalRef ? { externalRef: workspace.externalRef } : {})
-          };
+          } as WorkspaceRecord;
         } catch (error) {
           console.warn(`[oah-bootstrap] Failed to refresh workspace ${workspace.id} after platform model reload.`, error);
           return workspace;
         }
       })
-    );
+    ).then((workspaces) => workspaces.map((workspace) => withManagedWorkspaceExternalRef(workspace, config, objectStorageMirror)));
 
     await Promise.all(refreshedWorkspaces.map(async (workspace) => persistence.workspaceRepository.upsert(workspace)));
     visibleWorkspaceIds.clear();
@@ -836,7 +867,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               return {
                 ...discovered,
                 id: workspaceId
-              };
+              } as WorkspaceRecord;
             }
           }
         }
@@ -1096,16 +1127,18 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     ...(singleWorkspace === undefined
       ? {
           listWorkspaceTemplates: () => listWorkspaceTemplates(config.paths.template_dir),
-          uploadWorkspaceTemplate: (input) => uploadWorkspaceTemplate({
-            templateDir: config.paths.template_dir,
-            templateName: input.templateName,
-            zipBuffer: input.zipBuffer,
-            overwrite: input.overwrite
-          }),
-          deleteWorkspaceTemplate: (input) => deleteWorkspaceTemplate({
-            templateDir: config.paths.template_dir,
-            templateName: input.templateName
-          }),
+          uploadWorkspaceTemplate: (input: { templateName: string; zipBuffer: Buffer; overwrite?: boolean | undefined }) =>
+            uploadWorkspaceTemplate({
+              templateDir: config.paths.template_dir,
+              templateName: input.templateName,
+              zipBuffer: input.zipBuffer,
+              ...(input.overwrite !== undefined ? { overwrite: input.overwrite } : {})
+            }),
+          deleteWorkspaceTemplate: (input: { templateName: string }) =>
+            deleteWorkspaceTemplate({
+              templateDir: config.paths.template_dir,
+              templateName: input.templateName
+            }),
           async importWorkspace(input) {
             const allowedDir = input.kind === "chat" ? config.paths.chat_dir : config.paths.workspace_dir;
             const resolvedRoot = path.resolve(input.rootPath);
@@ -1126,11 +1159,13 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               platformToolDir: toolDir
             } as Parameters<typeof discoverWorkspace>[2]);
             const existing = await workspaceRepository.getById(discovered.id);
+            const inferredExternalRef =
+              objectStorageMirror?.managedWorkspaceExternalRef(input.rootPath, input.kind ?? "project", config.paths);
             const persisted = await workspaceRepository.upsert({
               ...discovered,
               name: input.name ?? existing?.name ?? discovered.name,
               createdAt: existing?.createdAt ?? discovered.createdAt,
-              externalRef: input.externalRef ?? existing?.externalRef
+              externalRef: input.externalRef ?? existing?.externalRef ?? inferredExternalRef
             });
             return runtimeService.getWorkspace(persisted.id);
           }
@@ -1211,11 +1246,12 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         workspaceArchiveExporter?.close() ?? Promise.resolve(),
         redisRunWorkerPool?.close() ?? Promise.resolve(),
         storageAdmin.close(),
-        closePersistence(),
         redisBus?.close() ?? Promise.resolve(),
         redisWorkerRegistry?.close() ?? Promise.resolve(),
         redisRunQueue?.close() ?? Promise.resolve()
       ]);
+      await closePersistence();
+      await objectStorageMirror?.close();
       if (workspaceSyncTimer) {
         clearTimeout(workspaceSyncTimer);
       }

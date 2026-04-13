@@ -18,11 +18,9 @@
 Three terminals, simplest path:
 
 ```bash
-# Terminal 1 — Infrastructure (PostgreSQL + Redis)
-pnpm infra:up
-
-# Terminal 2 — Backend (combined mode)
-pnpm dev:server -- --config ./server.example.yaml
+# Terminal 1 — Full local stack (PostgreSQL + Redis + MinIO + OAH)
+export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
+pnpm local:up
 
 # Terminal 3 — Frontend
 pnpm dev:web
@@ -40,14 +38,14 @@ Frontend default address: `http://localhost:5174`
 For production or production-like environments. Requires Redis.
 
 ```bash
-# Terminal 1 — Infrastructure
-pnpm infra:up
+# Terminal 1 — Local infrastructure
+docker compose -f docker-compose.local.yml up -d postgres redis minio
 
 # Terminal 2 — API only (no embedded worker)
-pnpm dev:server -- --config ./server.example.yaml --api-only
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config ./server.example.yaml --api-only
 
 # Terminal 3 — Worker (can run multiple instances)
-pnpm dev:worker -- --config ./server.example.yaml
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml
 
 # Terminal 4 — Frontend
 pnpm dev:web
@@ -62,7 +60,7 @@ The API process handles HTTP requests only. Worker processes consume the Redis q
 Skip the multi-workspace directory structure and point directly at one workspace:
 
 ```bash
-pnpm dev:server -- \
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- \
   --workspace /absolute/path/to/workspace \
   --model-dir /absolute/path/to/models \
   --default-model openai-default
@@ -115,7 +113,7 @@ Additional checks:
 
 Reference environment variables in `server.yaml` with `${env.DATABASE_URL}` syntax.
 
-When using containers started by `pnpm infra:up`, the default connection strings are:
+When using containers started by `docker-compose.local.yml`, the default connection strings are:
 
 ```yaml
 storage:

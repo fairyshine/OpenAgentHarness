@@ -566,6 +566,13 @@ export interface CancelRunResult {
   status: "cancellation_requested";
 }
 
+export interface RequeueRunResult {
+  runId: string;
+  status: "queued";
+  previousStatus: "failed" | "timed_out";
+  source: "manual_requeue";
+}
+
 export interface ActionRunAcceptedResult {
   runId: string;
   status: "queued";

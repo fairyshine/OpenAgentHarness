@@ -95,7 +95,9 @@ export function buildApiIndex(request: FastifyRequest) {
         "GET /api/v1/sessions/{sessionId}/events",
         "GET /api/v1/runs/{runId}",
         "GET /api/v1/runs/{runId}/steps",
-        "POST /api/v1/runs/{runId}/cancel"
+        "POST /api/v1/runs/{runId}/cancel",
+        "POST /api/v1/runs/{runId}/requeue",
+        "POST /api/v1/runs/requeue"
       ]
     },
     filesAndCatalog: {
@@ -871,6 +873,8 @@ export function buildDeveloperDocsHtml(request: FastifyRequest): string {
               <li><code>POST /api/v1/sessions/{sessionId}/messages</code> Queue a new user message</li>
               <li><code>GET /api/v1/sessions/{sessionId}/runs</code> Inspect runs</li>
               <li><code>GET /api/v1/runs/{runId}/steps</code> Inspect run steps</li>
+              <li><code>POST /api/v1/runs/{runId}/requeue</code> Manually requeue a quarantined recovery run</li>
+              <li><code>POST /api/v1/runs/requeue</code> Batch requeue recovery runs with per-item results</li>
             </ul>
           </article>
           <article class="subcard">

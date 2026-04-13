@@ -27,8 +27,8 @@ Open Agent Harness is a deployable backend runtime for agent products. It manage
 
 ```bash
 pnpm install                                        # Install dependencies
-pnpm infra:up                                       # Start PostgreSQL + Redis
-pnpm dev:server -- --config ./server.example.yaml   # Start backend
+export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
+pnpm local:up                                       # Start PostgreSQL + Redis + MinIO + OAH, then auto-sync once
 pnpm dev:web                                        # Start debug console
 ```
 

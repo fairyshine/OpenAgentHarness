@@ -27,6 +27,22 @@ import {
   storageString
 } from "./storage-detail-primitives";
 
+function storageRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function storageScalar(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return undefined;
+}
+
 function StorageMessageRowDetail(props: { row: Record<string, unknown> }) {
   const message = storageMessageFromRow(props.row);
 
@@ -283,6 +299,12 @@ function StorageSessionRowDetail(props: { row: Record<string, unknown> }) {
 }
 
 function StorageRunRowDetail(props: { row: Record<string, unknown> }) {
+  const metadata = storageRecord(props.row.metadata);
+  const recovery = storageRecord(metadata?.recovery);
+  const deadLetter = storageRecord(recovery?.deadLetter);
+  const recoveryAttempts = storageScalar(recovery?.attempts ?? metadata?.recoveryAttempts);
+  const recoveryMaxAttempts = storageScalar(recovery?.maxAttempts);
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -311,9 +333,41 @@ function StorageRunRowDetail(props: { row: Record<string, unknown> }) {
         />
       </StorageDetailSection>
 
-      {props.row.metadata ? (
+      {recovery ? (
+        <StorageDetailSection title="Recovery">
+          <StorageDetailFacts
+            items={[
+              { label: "State", value: storageScalar(recovery.state) ?? "n/a" },
+              { label: "Strategy", value: storageScalar(recovery.strategy) ?? "n/a" },
+              {
+                label: "Attempts",
+                value:
+                  recoveryAttempts && recoveryMaxAttempts
+                    ? `${recoveryAttempts}/${recoveryMaxAttempts}`
+                    : recoveryAttempts ?? "n/a"
+              },
+              { label: "Last Outcome", value: storageScalar(recovery.lastOutcome) ?? "n/a" },
+              { label: "Reason", value: storageScalar(recovery.reason) ?? "n/a" },
+              { label: "Recovered At", value: storageScalar(recovery.lastRecoveredAt ?? metadata?.recoveredAt) ?? "n/a" }
+            ]}
+          />
+          {deadLetter ? (
+            <div className="pt-1">
+              <StorageDetailFacts
+                items={[
+                  { label: "Quarantine", value: storageScalar(deadLetter.status) ?? "n/a" },
+                  { label: "Quarantine Reason", value: storageScalar(deadLetter.reason) ?? "n/a" },
+                  { label: "Quarantined At", value: storageScalar(deadLetter.at) ?? "n/a" }
+                ]}
+              />
+            </div>
+          ) : null}
+        </StorageDetailSection>
+      ) : null}
+
+      {metadata ? (
         <StorageDetailSection title="Metadata">
-          <StorageDetailJson value={props.row.metadata} prettyJson={prettyJson} maxHeightClassName="max-h-36" />
+          <StorageDetailJson value={metadata} prettyJson={prettyJson} maxHeightClassName="max-h-36" />
         </StorageDetailSection>
       ) : null}
 

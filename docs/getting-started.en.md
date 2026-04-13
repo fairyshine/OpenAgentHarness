@@ -21,13 +21,14 @@ pnpm install
 Start PostgreSQL and Redis (Docker Compose for development):
 
 ```bash
-pnpm infra:up
+export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
+pnpm local:up
 ```
 
 ### Step 3: Start the backend
 
 ```bash
-pnpm dev:server -- --config ./server.example.yaml
+pnpm local:up
 ```
 
 Listens on `http://127.0.0.1:8787` by default. The embedded worker starts automatically.
@@ -59,7 +60,7 @@ After startup, check:
 To serve a single workspace without a config file, point directly at a workspace path:
 
 ```bash
-pnpm dev:server -- \
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- \
   --workspace /absolute/path/to/workspace \
   --model-dir /absolute/path/to/models \
   --default-model openai-default
@@ -75,11 +76,11 @@ Optional flags: `--workspace-kind chat`, `--tool-dir`, `--skill-dir`, `--host`, 
 | Command | Purpose |
 | --- | --- |
 | `pnpm install` | Install dependencies |
-| `pnpm infra:up` | Start PostgreSQL + Redis |
-| `pnpm infra:down` | Stop infrastructure |
-| `pnpm dev:server -- --config ./server.example.yaml` | Start backend (embedded worker) |
-| `pnpm dev:server -- --api-only --config ./server.example.yaml` | Start API only |
-| `pnpm dev:worker -- --config ./server.example.yaml` | Start standalone worker |
+| `OAH_TEST_ROOT=/absolute/path pnpm storage:sync` | Sync test data to MinIO |
+| `OAH_TEST_ROOT=/absolute/path pnpm local:up` | Start the full local stack |
+| `pnpm local:down` | Stop the full local stack |
+| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --api-only --config ./server.example.yaml` | Start API only |
+| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml` | Start standalone worker |
 | `pnpm dev:web` | Start debug console |
 | `pnpm build` | Full build |
 | `pnpm test` | Run tests |

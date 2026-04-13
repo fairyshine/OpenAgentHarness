@@ -542,6 +542,24 @@ export const storageOverviewSchema = z.object({
         oldestPendingArchiveDate: z.string().optional(),
         newestExportedAt: z.string().optional()
       })
+      .optional(),
+    recovery: z
+      .object({
+        trackedRuns: z.number().int().min(0),
+        quarantinedRuns: z.number().int().min(0),
+        requeuedRuns: z.number().int().min(0),
+        failedRecoveryRuns: z.number().int().min(0),
+        workerRecoveryFailures: z.number().int().min(0),
+        oldestQuarantinedAt: z.string().optional(),
+        newestQuarantinedAt: z.string().optional(),
+        newestRecoveredAt: z.string().optional(),
+        topQuarantineReasons: z.array(
+          z.object({
+            reason: z.string(),
+            count: z.number().int().min(0)
+          })
+        )
+      })
       .optional()
   }),
   redis: z.object({
@@ -576,7 +594,10 @@ export const storagePostgresTablePageSchema = z.object({
       q: z.string().optional(),
       workspaceId: z.string().optional(),
       sessionId: z.string().optional(),
-      runId: z.string().optional()
+      runId: z.string().optional(),
+      status: z.string().optional(),
+      errorCode: z.string().optional(),
+      recoveryState: z.string().optional()
     })
     .optional(),
   nextOffset: z.number().int().min(0).optional()
@@ -683,6 +704,36 @@ export const messageAcceptedSchema = z.object({
 export const cancelRunAcceptedSchema = z.object({
   runId: z.string(),
   status: z.literal("cancellation_requested")
+});
+
+export const requeueRunAcceptedSchema = z.object({
+  runId: z.string(),
+  status: z.literal("queued"),
+  previousStatus: z.enum(["failed", "timed_out"]),
+  source: z.literal("manual_requeue")
+});
+
+export const batchRequeueRunsRequestSchema = z.object({
+  runIds: z.array(z.string().min(1)).min(1).max(200)
+});
+
+export const batchRequeueRunsItemSchema = z.union([
+  z.object({
+    runId: z.string(),
+    status: z.literal("queued"),
+    previousStatus: z.enum(["failed", "timed_out"]),
+    source: z.literal("manual_requeue")
+  }),
+  z.object({
+    runId: z.string(),
+    status: z.literal("error"),
+    errorCode: z.string(),
+    errorMessage: z.string()
+  })
+]);
+
+export const batchRequeueRunsResponseSchema = z.object({
+  items: z.array(batchRequeueRunsItemSchema)
 });
 
 export const createActionRunRequestSchema = z.object({
@@ -815,7 +866,10 @@ export const storageTableQuerySchema = z.object({
   q: z.string().optional(),
   workspaceId: z.string().optional(),
   sessionId: z.string().optional(),
-  runId: z.string().optional()
+  runId: z.string().optional(),
+  status: z.string().optional(),
+  errorCode: z.string().optional(),
+  recoveryState: z.string().optional()
 });
 
 export const storageRedisKeysQuerySchema = z.object({
@@ -885,6 +939,9 @@ export type Run = z.infer<typeof runSchema>;
 export type RunPage = z.infer<typeof runPageSchema>;
 export type RunStep = z.infer<typeof runStepSchema>;
 export type RunStepPage = z.infer<typeof runStepPageSchema>;
+export type RequeueRunAccepted = z.infer<typeof requeueRunAcceptedSchema>;
+export type BatchRequeueRunsRequest = z.infer<typeof batchRequeueRunsRequestSchema>;
+export type BatchRequeueRunsResponse = z.infer<typeof batchRequeueRunsResponseSchema>;
 export type WorkspaceTemplate = z.infer<typeof workspaceTemplateSchema>;
 export type WorkspaceTemplateList = z.infer<typeof workspaceTemplateListSchema>;
 export type UploadWorkspaceTemplateRequest = z.infer<typeof uploadWorkspaceTemplateRequestSchema>;

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 
 import type {
+  BatchRequeueRunsResponse,
+  RequeueRunAccepted,
   StorageOverview,
   StoragePostgresTableName,
   StoragePostgresTablePage,
@@ -36,6 +38,9 @@ export function useStorageController(params: {
   const [storageTableWorkspaceId, setStorageTableWorkspaceId] = useState("");
   const [storageTableSessionId, setStorageTableSessionId] = useState("");
   const [storageTableRunId, setStorageTableRunId] = useState("");
+  const [storageTableStatus, setStorageTableStatus] = useState("");
+  const [storageTableErrorCode, setStorageTableErrorCode] = useState("");
+  const [storageTableRecoveryState, setStorageTableRecoveryState] = useState("");
   const [redisKeyPattern, setRedisKeyPattern] = useState("oah:*");
   const [redisKeyPage, setRedisKeyPage] = useState<StorageRedisKeyPage | null>(null);
   const [selectedRedisKey, setSelectedRedisKey] = useState("");
@@ -71,11 +76,16 @@ export function useStorageController(params: {
       workspaceId?: string;
       sessionId?: string;
       runId?: string;
+      status?: string;
+      errorCode?: string;
+      recoveryState?: string;
+      selectedRowId?: string;
     }
-  ) {
+  ): Promise<StoragePostgresTablePage | null> {
     try {
       setStorageBusy(true);
       const pageSize = storageTablePreviewLimit(table);
+      const runsTableSelected = table === "runs";
       const paramsValue = new URLSearchParams({
         limit: String(pageSize)
       });
@@ -84,6 +94,9 @@ export function useStorageController(params: {
       const workspaceId = overrides?.workspaceId ?? storageTableWorkspaceId;
       const sessionId = overrides?.sessionId ?? storageTableSessionId;
       const runId = overrides?.runId ?? storageTableRunId;
+      const status = overrides?.status ?? storageTableStatus;
+      const errorCode = overrides?.errorCode ?? storageTableErrorCode;
+      const recoveryState = overrides?.recoveryState ?? storageTableRecoveryState;
       paramsValue.set("offset", String(offset));
       if (q.trim()) {
         paramsValue.set("q", q.trim());
@@ -97,21 +110,105 @@ export function useStorageController(params: {
       if (runId.trim()) {
         paramsValue.set("runId", runId.trim());
       }
+      if (runsTableSelected && status.trim()) {
+        paramsValue.set("status", status.trim());
+      }
+      if (runsTableSelected && errorCode.trim()) {
+        paramsValue.set("errorCode", errorCode.trim());
+      }
+      if (runsTableSelected && recoveryState.trim()) {
+        paramsValue.set("recoveryState", recoveryState.trim());
+      }
       const response = await params.request<StoragePostgresTablePage>(
         `/api/v1/storage/postgres/tables/${table}?${paramsValue.toString()}`
       );
       setSelectedStorageTable(table);
       setStorageTableOffset(offset);
       setStorageTablePage(response);
-      setSelectedStorageRow(response.rows[0] ?? null);
+      const selectedRowId = overrides?.selectedRowId?.trim();
+      setSelectedStorageRow(
+        (selectedRowId ? response.rows.find((row) => String(row.id ?? "") === selectedRowId) : undefined) ?? response.rows[0] ?? null
+      );
       if (!quiet) {
         params.setActivity(`已加载 ${table} 表预览`);
         params.setErrorMessage("");
       }
+      return response;
     } catch (error) {
       if (!quiet) {
         params.setErrorMessage(toErrorMessage(error));
       }
+      return null;
+    } finally {
+      setStorageBusy(false);
+    }
+  }
+
+  async function manualRequeueRun(runId: string) {
+    const targetRunId = runId.trim();
+    if (!targetRunId) {
+      return;
+    }
+
+    if (!window.confirm(`Manual requeue recovery run ${targetRunId}?`)) {
+      return;
+    }
+
+    try {
+      setStorageBusy(true);
+      const accepted = await params.request<RequeueRunAccepted>(`/api/v1/runs/${targetRunId}/requeue`, {
+        method: "POST"
+      });
+      await refreshStorageTable(selectedStorageTable, true, {
+        offset: storageTableOffset,
+        selectedRowId: accepted.runId
+      });
+      params.setActivity(`已重新入队 recovery run ${accepted.runId}`);
+      params.setErrorMessage("");
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
+    } finally {
+      setStorageBusy(false);
+    }
+  }
+
+  async function manualRequeueRuns(runIds: string[]) {
+    const uniqueRunIds = Array.from(new Set(runIds.map((runId) => runId.trim()).filter((runId) => runId.length > 0)));
+    if (uniqueRunIds.length === 0) {
+      return;
+    }
+
+    if (!window.confirm(`Manual requeue ${uniqueRunIds.length} recovery runs?`)) {
+      return;
+    }
+
+    try {
+      setStorageBusy(true);
+      const response = await params.request<BatchRequeueRunsResponse>("/api/v1/runs/requeue", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          runIds: uniqueRunIds
+        })
+      });
+      const queuedItems = response.items.filter((item) => item.status === "queued");
+      const errorItems = response.items.filter((item) => item.status === "error");
+      await refreshStorageTable(selectedStorageTable, true, {
+        offset: storageTableOffset,
+        selectedRowId: queuedItems[0]?.runId
+      });
+      params.setActivity(
+        errorItems.length === 0
+          ? `已批量重新入队 ${queuedItems.length} 个 recovery run`
+          : `批量处理完成：${queuedItems.length} 个成功，${errorItems.length} 个失败`
+      );
+      params.setErrorMessage(
+        errorItems.length > 0 ? errorItems.map((item) => `${item.runId}: ${item.errorCode}`).join(" | ") : ""
+      );
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
     } finally {
       setStorageBusy(false);
     }
@@ -312,6 +409,12 @@ export function useStorageController(params: {
       onStorageTableSessionIdChange: setStorageTableSessionId,
       storageTableRunId,
       onStorageTableRunIdChange: setStorageTableRunId,
+      storageTableStatus,
+      onStorageTableStatusChange: setStorageTableStatus,
+      storageTableErrorCode,
+      onStorageTableErrorCodeChange: setStorageTableErrorCode,
+      storageTableRecoveryState,
+      onStorageTableRecoveryStateChange: setStorageTableRecoveryState,
       onSelectStorageTable: (table: StoragePostgresTableName) => void refreshStorageTable(table, false, { offset: 0 }),
       redisKeyPattern,
       onRedisKeyPatternChange: setRedisKeyPattern,
@@ -338,13 +441,19 @@ export function useStorageController(params: {
         setStorageTableWorkspaceId("");
         setStorageTableSessionId("");
         setStorageTableRunId("");
+        setStorageTableStatus("");
+        setStorageTableErrorCode("");
+        setStorageTableRecoveryState("");
         setStorageTableOffset(0);
         void refreshStorageTable(selectedStorageTable, false, {
           offset: 0,
           q: "",
           workspaceId: "",
           sessionId: "",
-          runId: ""
+          runId: "",
+          status: "",
+          errorCode: "",
+          recoveryState: ""
         });
       },
       onDownloadStorageTableCsv: () => {
@@ -354,6 +463,8 @@ export function useStorageController(params: {
 
         downloadCsvFile(`${storageTablePage.table}.csv`, storageTablePage.columns, storageTablePage.rows);
       },
+      onManualRequeueRun: (runId: string) => void manualRequeueRun(runId),
+      onManualRequeueRuns: (runIds: string[]) => void manualRequeueRuns(runIds),
       onRefreshRedisKeys: () => void refreshRedisKeys(),
       onLoadMoreRedisKeys: () => void refreshRedisKeys(redisKeyPage?.nextCursor ? { cursor: redisKeyPage.nextCursor } : undefined),
       onRefreshRedisKeyDetail: () => void refreshRedisKeyDetail(),

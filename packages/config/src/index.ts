@@ -45,6 +45,33 @@ export interface ServerConfig {
     postgres_url?: string | undefined;
     redis_url?: string | undefined;
   };
+  object_storage?: {
+    provider: "s3";
+    bucket: string;
+    region: string;
+    endpoint?: string | undefined;
+    access_key?: string | undefined;
+    secret_key?: string | undefined;
+    session_token?: string | undefined;
+    force_path_style?: boolean | undefined;
+    sync_on_boot?: boolean | undefined;
+    sync_on_change?: boolean | undefined;
+    poll_interval_ms?: number | undefined;
+    managed_paths?:
+      | Array<"workspace" | "chat" | "template" | "model" | "tool" | "skill" | "archive">
+      | undefined;
+    key_prefixes?:
+      | {
+          workspace?: string | undefined;
+          chat?: string | undefined;
+          template?: string | undefined;
+          model?: string | undefined;
+          tool?: string | undefined;
+          skill?: string | undefined;
+          archive?: string | undefined;
+        }
+      | undefined;
+  };
   paths: {
     workspace_dir: string;
     chat_dir: string;
@@ -651,7 +678,11 @@ export async function loadServerConfig(configPath: string): Promise<ServerConfig
       storage:
         expanded.storage && typeof expanded.storage === "object" && !Array.isArray(expanded.storage)
           ? (expanded.storage as ServerConfig["storage"])
-          : {}
+          : {},
+      object_storage:
+        expanded.object_storage && typeof expanded.object_storage === "object" && !Array.isArray(expanded.object_storage)
+          ? (expanded.object_storage as ServerConfig["object_storage"])
+          : undefined
     } as ServerConfig,
     configPath
   );

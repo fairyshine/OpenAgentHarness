@@ -26,6 +26,8 @@ export function StorageWorkspace(props: StorageProps) {
           onNextTablePage={props.onNextStorageTablePage}
           onClearTableFilters={props.onClearStorageTableFilters}
           onDownloadTableCsv={props.onDownloadStorageTableCsv}
+          onManualRequeueRun={props.onManualRequeueRun}
+          onManualRequeueRuns={props.onManualRequeueRuns}
           onRefreshRedisKeys={props.onRefreshRedisKeys}
           onLoadMoreRedisKeys={props.onLoadMoreRedisKeys}
           onRefreshRedisKey={props.onRefreshRedisKeyDetail}
