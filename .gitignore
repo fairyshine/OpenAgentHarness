@@ -1,4 +1,6 @@
 references
+test_server
+tmp
 
 node_modules
 dist
@@ -7,4 +9,3 @@ dist
 coverage
 *.tsbuildinfo
 site/
-test_server
