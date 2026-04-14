@@ -7,7 +7,6 @@ import type {
   Session,
   SessionPage,
   Workspace,
-  WorkspaceHistoryMirrorStatus,
   WorkspaceCatalog,
   WorkspaceTemplateList
 } from "@oah/api-contracts";
@@ -55,11 +54,9 @@ export function useNavigationActions(params: {
     setWorkspace: Dispatch<SetStateAction<Workspace | null>>;
     setWorkspaceTemplates: Dispatch<SetStateAction<string[]>>;
     setCatalog: Dispatch<SetStateAction<WorkspaceCatalog | null>>;
-    setMirrorStatus: Dispatch<SetStateAction<WorkspaceHistoryMirrorStatus | null>>;
     session: Session | null;
     setSession: Dispatch<SetStateAction<Session | null>>;
     setShowWorkspaceCreator: Dispatch<SetStateAction<boolean>>;
-    setMirrorRebuildBusy: Dispatch<SetStateAction<boolean>>;
     setWorkspaceManagementEnabled: Dispatch<SetStateAction<boolean>>;
   };
   runtime: {
@@ -221,7 +218,6 @@ export function useNavigationActions(params: {
     params.navigation.setWorkspaceId("");
     params.navigation.setWorkspace(null);
     params.navigation.setCatalog(null);
-    params.navigation.setMirrorStatus(null);
 
     if (targetId) {
       params.navigation.setSavedWorkspaces((current) => current.filter((entry) => entry.id !== targetId));
@@ -650,18 +646,16 @@ export function useNavigationActions(params: {
 
     try {
       const workspaceResponse = await params.request<Workspace>(`/api/v1/workspaces/${targetId}`);
-      const [catalogResponse, mirrorStatusResponse] = await Promise.allSettled([
-        params.request<WorkspaceCatalog>(`/api/v1/workspaces/${targetId}/catalog`),
-        params.request<WorkspaceHistoryMirrorStatus>(`/api/v1/workspaces/${targetId}/history-mirror`)
+      const [catalogResponse] = await Promise.allSettled([
+        params.request<WorkspaceCatalog>(`/api/v1/workspaces/${targetId}/catalog`)
       ]);
-      const refreshWarnings = [catalogResponse, mirrorStatusResponse]
+      const refreshWarnings = [catalogResponse]
         .filter((result): result is PromiseRejectedResult => result.status === "rejected")
         .map((result) => toErrorMessage(result.reason));
 
       startTransition(() => {
         params.navigation.setWorkspace(workspaceResponse);
         params.navigation.setCatalog(catalogResponse.status === "fulfilled" ? catalogResponse.value : null);
-        params.navigation.setMirrorStatus(mirrorStatusResponse.status === "fulfilled" ? mirrorStatusResponse.value : null);
         params.navigation.setWorkspaceId(targetId);
         params.navigation.setRecentWorkspaces((current) => addRecentId(current, targetId));
       });
@@ -676,7 +670,6 @@ export function useNavigationActions(params: {
     } catch (error) {
       params.navigation.setWorkspace(null);
       params.navigation.setCatalog(null);
-      params.navigation.setMirrorStatus(null);
       if (isNotFoundError(error)) {
         clearWorkspaceSelection(targetId);
       }
@@ -737,32 +730,6 @@ export function useNavigationActions(params: {
     }
   }
 
-  async function rebuildWorkspaceHistoryMirror() {
-    if (!params.navigation.workspaceId.trim() || !params.navigation.workspace) {
-      params.setErrorMessage("请先加载 workspace。");
-      return;
-    }
-
-    try {
-      params.navigation.setMirrorRebuildBusy(true);
-      const nextMirrorStatus = await params.request<WorkspaceHistoryMirrorStatus>(
-        `/api/v1/workspaces/${params.navigation.workspaceId}/history-mirror/rebuild`,
-        {
-          method: "POST"
-        }
-      );
-      startTransition(() => {
-        params.navigation.setMirrorStatus(nextMirrorStatus);
-      });
-      params.setActivity("Mirror sync 已重建");
-      params.setErrorMessage("");
-    } catch (error) {
-      params.setErrorMessage(toErrorMessage(error));
-    } finally {
-      params.navigation.setMirrorRebuildBusy(false);
-    }
-  }
-
   async function refreshSession(targetId = params.navigation.sessionId, quiet = false) {
     const nextSessionId = targetId.trim();
     if (!nextSessionId) {
@@ -805,7 +772,6 @@ export function useNavigationActions(params: {
         if (workspaceChanged) {
           params.navigation.setWorkspace(null);
           params.navigation.setCatalog(null);
-          params.navigation.setMirrorStatus(null);
         }
       });
       expandWorkspaceInSidebar(nextWorkspaceId);
@@ -897,7 +863,6 @@ export function useNavigationActions(params: {
     refreshWorkspaceIndex,
     refreshWorkspace,
     createWorkspace,
-    rebuildWorkspaceHistoryMirror,
     refreshSession,
     createSession
   };

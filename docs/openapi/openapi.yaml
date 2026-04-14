@@ -134,38 +134,6 @@ paths:
           description: Workspace deleted
         default:
           $ref: '#/components/responses/ErrorResponse'
-  /workspaces/{workspaceId}/history-mirror:
-    get:
-      tags: [Workspaces]
-      summary: Get workspace history mirror status
-      operationId: getWorkspaceHistoryMirrorStatus
-      parameters:
-        - $ref: '#/components/parameters/WorkspaceId'
-      responses:
-        '200':
-          description: Workspace history mirror status
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WorkspaceHistoryMirrorStatus'
-        default:
-          $ref: '#/components/responses/ErrorResponse'
-  /workspaces/{workspaceId}/history-mirror/rebuild:
-    post:
-      tags: [Workspaces]
-      summary: Rebuild workspace history mirror
-      operationId: rebuildWorkspaceHistoryMirror
-      parameters:
-        - $ref: '#/components/parameters/WorkspaceId'
-      responses:
-        '200':
-          description: Rebuilt workspace history mirror status
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WorkspaceHistoryMirrorStatus'
-        default:
-          $ref: '#/components/responses/ErrorResponse'
   /workspaces/{workspaceId}/catalog:
     get:
       tags: [Catalog]
@@ -782,7 +750,6 @@ components:
         - status
         - kind
         - readOnly
-        - historyMirrorEnabled
         - createdAt
         - updatedAt
       properties:
@@ -804,8 +771,6 @@ components:
           type: string
           enum: [project, chat]
         readOnly:
-          type: boolean
-        historyMirrorEnabled:
           type: boolean
         createdAt:
           $ref: '#/components/schemas/Timestamp'
@@ -918,32 +883,6 @@ components:
           enum: [file, directory]
         deleted:
           type: boolean
-      additionalProperties: false
-    WorkspaceHistoryMirrorStatus:
-      type: object
-      required:
-        - workspaceId
-        - supported
-        - enabled
-        - state
-      properties:
-        workspaceId:
-          type: string
-        supported:
-          type: boolean
-        enabled:
-          type: boolean
-        dbPath:
-          type: string
-        state:
-          type: string
-          enum: [unsupported, disabled, missing, idle, error]
-        lastEventId:
-          type: integer
-        lastSyncedAt:
-          $ref: '#/components/schemas/Timestamp'
-        errorMessage:
-          type: string
       additionalProperties: false
     AgentCatalogItem:
       type: object

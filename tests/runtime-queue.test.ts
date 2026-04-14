@@ -22,14 +22,14 @@ describe("runtime queue integration", () => {
   it("uses the configured external run queue instead of local auto-processing", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();
-    const enqueues: Array<{ sessionId: string; runId: string }> = [];
+    const enqueues: Array<{ sessionId: string; runId: string; priority?: string }> = [];
     const runtimeService = new RuntimeService({
       defaultModel: "openai-default",
       modelGateway: gateway,
       ...persistence,
       runQueue: {
-        async enqueue(sessionId, runId) {
-          enqueues.push({ sessionId, runId });
+        async enqueue(sessionId, runId, options) {
+          enqueues.push({ sessionId, runId, priority: options?.priority });
         }
       },
       workspaceInitializer: {
@@ -94,7 +94,7 @@ describe("runtime queue integration", () => {
       }
     });
 
-    expect(enqueues).toEqual([{ sessionId: session.id, runId: accepted.runId }]);
+    expect(enqueues).toEqual([{ sessionId: session.id, runId: accepted.runId, priority: undefined }]);
     expect((await runtimeService.getRun(accepted.runId)).status).toBe("queued");
 
     await new Promise((resolve) => setTimeout(resolve, 50));

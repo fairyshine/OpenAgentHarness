@@ -473,8 +473,10 @@ export interface RuntimeServiceOptions {
   workspaceInitializer?: WorkspaceInitializer | undefined;
 }
 
+export type RunQueuePriority = "normal" | "subagent";
+
 export interface RunQueue {
-  enqueue(sessionId: string, runId: string): Promise<void>;
+  enqueue(sessionId: string, runId: string, options?: { priority?: RunQueuePriority | undefined }): Promise<void>;
 }
 
 export interface WorkspaceRepository {
@@ -637,7 +639,6 @@ export function toPublicWorkspace(workspace: WorkspaceRecord): Workspace {
     status: workspace.status,
     kind: workspace.kind,
     readOnly: workspace.readOnly,
-    historyMirrorEnabled: workspace.historyMirrorEnabled,
     createdAt: workspace.createdAt,
     updatedAt: workspace.updatedAt
   };

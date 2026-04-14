@@ -3,7 +3,7 @@ import { Loader2, Network, Orbit, Palette, SquareTerminal } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { probeTone, streamTone, toneBadgeClass, toneSolidClass, toneTextClass } from "../support";
+import { probeTone, streamTone, toneBadgeClass, toneSolidClass, toneTextClass, type StatusSemanticTone } from "../support";
 import { appThemeOptions, isAppThemeName } from "../theme";
 import type { AppThemeName } from "../theme";
 import type { useAppController } from "../use-app-controller";
@@ -14,7 +14,7 @@ type AppHeaderProps = HeaderProps & {
   onThemeChange: (theme: AppThemeName) => void;
 };
 
-function StatusPill(props: { label: string; value: string; tone: "sky" | "emerald" | "rose" | "amber"; icon: typeof Network }) {
+function StatusPill(props: { label: string; value: string; tone: StatusSemanticTone; icon: typeof Network }) {
   const Icon = props.icon;
   return (
     <div className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[11px] ${toneBadgeClass(props.tone)}`}>

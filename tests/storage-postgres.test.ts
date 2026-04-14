@@ -134,64 +134,6 @@ describe("storage postgres", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("reads workspace runtime messages without building a full workspace snapshot", async () => {
-    const fakePool = {
-      query: vi.fn(async () => ({ rows: [] })),
-      end: vi.fn(async () => undefined)
-    } as unknown as import("pg").Pool;
-
-    const persistence = await createPostgresRuntimePersistence({
-      pool: fakePool,
-      ensureSchema: false
-    });
-
-    const orderBy = vi.fn(async () => [
-      {
-        id: "rtm_1",
-        sessionId: "ses_1",
-        runId: "run_1",
-        role: "assistant",
-        kind: "assistant_text",
-        content: "hello",
-        metadata: null,
-        createdAt: "2026-04-01T00:00:00.000Z"
-      }
-    ]);
-    const where = vi.fn(() => ({
-      orderBy
-    }));
-    const from = vi.fn(() => ({
-      where
-    }));
-    const select = vi.fn(() => ({
-      from
-    }));
-    (persistence.db.select as unknown as typeof select) = select;
-    const snapshotSpy = vi
-      .spyOn(persistence.historyMirrorSnapshotSource, "readWorkspaceSnapshot")
-      .mockRejectedValue(new Error("snapshot should not be read"));
-
-    await expect(persistence.historyMirrorSnapshotSource.readWorkspaceRuntimeMessages("ws_1")).resolves.toEqual([
-      {
-        id: "rtm_1",
-        sessionId: "ses_1",
-        runId: "run_1",
-        role: "assistant",
-        kind: "assistant_text",
-        content: "hello",
-        createdAt: "2026-04-01T00:00:00.000Z"
-      }
-    ]);
-
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(from).toHaveBeenCalledTimes(1);
-    expect(where).toHaveBeenCalledTimes(1);
-    expect(orderBy).toHaveBeenCalledTimes(1);
-    expect(snapshotSpy).not.toHaveBeenCalled();
-
-    await persistence.close();
-  });
-
   it("prunes exported archive metadata in bounded batches", async () => {
     const fakePool = {
       query: vi.fn(async () => ({ rows: [] })),

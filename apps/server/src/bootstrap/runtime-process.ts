@@ -175,19 +175,3 @@ export function describeRuntimeProcess(options: {
     execution: options.hasRedisRunQueue ? "redis_queue" : "local_inline"
   };
 }
-
-export function shouldRunHistoryMirrorSync(options: {
-  processKind: "api" | "worker";
-  startWorker: boolean;
-  hasRedisRunQueue: boolean;
-}): boolean {
-  if (options.processKind === "worker") {
-    return true;
-  }
-
-  if (options.startWorker) {
-    return true;
-  }
-
-  return !options.hasRedisRunQueue;
-}

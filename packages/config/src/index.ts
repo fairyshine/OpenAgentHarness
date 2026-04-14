@@ -81,6 +81,18 @@ export interface ServerConfig {
     skill_dir: string;
     archive_dir: string;
   };
+  workers?: {
+    embedded?: {
+      min_count?: number | undefined;
+      max_count?: number | undefined;
+      scale_interval_ms?: number | undefined;
+      idle_ttl_ms?: number | undefined;
+      scale_up_window?: number | undefined;
+      scale_down_window?: number | undefined;
+      cooldown_ms?: number | undefined;
+      reserved_capacity_for_subagent?: number | undefined;
+    } | undefined;
+  } | undefined;
   llm: {
     default_model: string;
   };
@@ -373,6 +385,29 @@ async function readDirectoryEntriesIfExists(directoryPath: string) {
   return readdir(directoryPath, { withFileTypes: true });
 }
 
+async function listYamlFilesRecursively(rootPath: string): Promise<string[]> {
+  const results: string[] = [];
+
+  async function visit(directoryPath: string): Promise<void> {
+    const entries = (await readDirectoryEntriesIfExists(directoryPath)).sort((left, right) => left.name.localeCompare(right.name));
+
+    for (const entry of entries) {
+      const entryPath = path.join(directoryPath, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+        continue;
+      }
+
+      if (entry.isFile() && entry.name.endsWith(".yaml")) {
+        results.push(entryPath);
+      }
+    }
+  }
+
+  await visit(rootPath);
+  return results;
+}
+
 interface ModelRegistryLoadOptions {
   onError?: ((input: { filePath: string; error: unknown }) => void) | undefined;
 }
@@ -382,16 +417,11 @@ async function loadModelRegistryFromDirectory(
   options?: ModelRegistryLoadOptions
 ): Promise<PlatformModelRegistry> {
   const schema = await loadSchema<object>("../../../docs/schemas/models.schema.json");
-  const directoryEntries = await readDirectoryEntriesIfExists(modelsDir);
+  const modelFiles = await listYamlFilesRecursively(modelsDir);
   const validate = createAjv().compile<PlatformModelRegistry>(schema);
   const registry: PlatformModelRegistry = {};
 
-  for (const entry of directoryEntries) {
-    if (!entry.isFile() || !entry.name.endsWith(".yaml")) {
-      continue;
-    }
-
-    const filePath = path.join(modelsDir, entry.name);
+  for (const filePath of modelFiles) {
     try {
       const fileContent = await readFile(filePath, "utf8");
       const parsed = expandEnv(YAML.parse(fileContent) ?? {});

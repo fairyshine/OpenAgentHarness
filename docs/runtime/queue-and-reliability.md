@@ -29,7 +29,7 @@
 - Redis list / stream 保存 session 队列
 - Redis lock 控制 session 执行权
 - PostgreSQL 记录 run 最终状态
-- `history.db` 异步 mirror sync，不进入主调度链路
+- `history.db` 只作为本地 SQLite 数据文件，不参与主调度链路
 
 为什么不用单纯数据库锁：高频调度效率低、分布式扩展不自然、实时队列可观测性差。
 
@@ -140,23 +140,13 @@
 
 这意味着默认生产 Redis 部署会自动恢复 stale `running` run，但不会无条件续跑 stale `waiting_tool` 场景。
 
-## 本地历史镜像
+## 本地 SQLite 数据
 
-### 同步原则
+### 原则
 
-- PostgreSQL 是唯一事实源
-- `.openharness/data/history.db` 是单向异步镜像
-- 镜像同步失败不影响 run 执行
-
-### 做法
-
-中心库写入时追加 history event → 独立 syncer 按 `workspace_id + event_id` 拉增量 → 本地 SQLite 幂等 upsert → 推进同步游标。
-
-### 恢复
-
-- syncer 从 `last_event_id` 继续
-- 镜像缺失可从头回放
-- 镜像损坏可删除重建
+- PostgreSQL 仍是中心事实源
+- `.openharness/data/history.db` 仅承载本地运行时数据与工作区级持久化
+- 本地 SQLite 不负责跨进程、跨 Pod 的 history mirror sync
 
 ### 故障边界
 
@@ -164,7 +154,7 @@
 | --- | --- |
 | 中心库 | 在线请求 |
 | Redis | 调度 |
-| 本地镜像 | 仅备份和离线检视 |
+| 本地 SQLite | 仅影响当前 worker 上的本地状态与排障信息 |
 
 ## 当前边界
 
@@ -173,3 +163,9 @@
 - worker 崩溃后 run 自动续跑：部分支持，仅限符合恢复策略且未超过最大尝试次数的 run
 - `waiting_tool` 自动续跑仍是高风险路径，默认保持保守
 - 当前已有 quarantine 元数据和单条/批量 `manual requeue` 入口，但还没有独立 DLQ 队列与完整批量治理面
+
+## 后续成熟化
+
+worker 执行层的持续演进路线图单独维护在：
+
+- [Worker 执行层成熟化路线图](./worker-scaling-roadmap.md)

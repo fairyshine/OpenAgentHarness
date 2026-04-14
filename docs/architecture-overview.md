@@ -13,7 +13,7 @@ Open Agent Harness 是一个 headless Agent Runtime。不提供 UI，通过 Open
 
 | Kind | 说明 |
 |------|------|
-| `project` | 完整项目 workspace，可启用工具、执行和本地历史镜像 |
+| `project` | 完整项目 workspace，可启用工具、执行和本地运行时数据 |
 | `chat` | 只读对话 workspace，只加载 prompt / agent / model，不允许执行 |
 
 ## 2. 设计原则
@@ -24,7 +24,7 @@ Open Agent Harness 是一个 headless Agent Runtime。不提供 UI，通过 Open
 - **Local First, Sandbox Ready** -- 默认本地执行；执行层从第一天起可替换；后续可接容器 / VM / 远程执行器。
 - **Identity Externalized** -- 不维护用户系统，只消费外部身份与访问上下文。
 - **Auditable by Default** -- 所有 run、tool call、action run、hook run 均有结构化记录。
-- **Central Truth, Local Mirror** -- PostgreSQL 是事实源；workspace 下 `history.db` 仅做异步镜像，不参与在线调度。
+- **Central Truth, Local Runtime State** -- PostgreSQL 是中心事实源；workspace 下 `history.db` 仅保存本地运行时数据，不参与跨进程同步。
 - **Embedded by Default, Split in Production** -- 默认 API + embedded worker 单进程运行；生产环境支持 API only + standalone worker 拆分。
 
 ## 3. 分层架构
@@ -43,7 +43,6 @@ flowchart TD
     D --> K[Hook Runtime]
     D --> L[Event Bus]
     D --> M[Storage Layer]
-    D -. async sync .-> S[History Syncer]
     G --> N[Execution Backend]
     H --> N
     I --> N
@@ -52,8 +51,7 @@ flowchart TD
     N -. future .-> P[Sandbox Backend]
     M --> Q[(PostgreSQL)]
     L --> R[(Redis)]
-    S --> Q
-    S --> T[(Workspace .openharness/data/history.db)]
+    N --> T[(Workspace .openharness/data/history.db)]
 ```
 
 ## 4. 核心模块
@@ -97,21 +95,13 @@ flowchart TD
 - 执行 lifecycle hook（run 事件）和 interceptor hook（tool / model 事件）
 - 在安全边界内允许改写请求和执行逻辑
 
-### History Syncer
-
-- 消费 PostgreSQL 中的历史增量事件
-- 异步写入 workspace 下的 `history.db`
-- 维护同步游标、重试和重建逻辑
-- 镜像失败不阻塞主请求
-- 仅对 `kind=project` 且启用镜像的 workspace 生效
-
 ## 5. 进程模式
 
 | 模式 | 说明 |
 |------|------|
 | API + embedded worker | 默认。单进程完整执行。配置 Redis 时消费 Redis queue，否则 in-process 执行。 |
 | API only | 仅承担接口接入，需配合独立 worker。 |
-| Standalone worker | 独立消费 Redis queue，负责 run 执行和 history mirror sync。 |
+| Standalone worker | 独立消费 Redis queue，负责 run 执行。 |
 
 ## 6. 请求链路
 
@@ -126,8 +116,7 @@ sequenceDiagram
     participant Runtime as Action/Skill/Tool/Native Runtime
     participant DB as PostgreSQL
     participant Redis
-    participant Syncer as History Syncer
-    participant Mirror as Workspace history.db
+    participant LocalDb as Workspace history.db
 
     Client->>API: POST /sessions/:id/messages
     API->>DB: persist message
@@ -150,8 +139,7 @@ sequenceDiagram
     Orchestrator->>DB: persist result and run status
     Orchestrator->>Redis: publish events
     Orchestrator-->>Client: SSE events
-    DB-->>Syncer: history events
-    Syncer->>Mirror: async upsert mirror rows
+    Orchestrator->>LocalDb: write local runtime state when needed
 ```
 
 ## 7. 关键决策
@@ -167,7 +155,7 @@ sequenceDiagram
 - Action 采用 `actions/*/ACTION.yaml`，Skill 采用 `skills/*/SKILL.md`
 - 所有能力对 LLM 统一投影为 tool calling，但在领域层和治理层保持分离
 - 默认可信内网环境，不做强隔离容器执行
-- PostgreSQL 是事实源；`history.db` 仅做异步镜像
+- PostgreSQL 是中心事实源；`history.db` 仅作为本地运行时状态文件
 
 ## 8. 技术栈
 
@@ -177,5 +165,5 @@ sequenceDiagram
 | API | OpenAPI 3.1 + HTTP + SSE |
 | 数据库 | PostgreSQL |
 | 队列与协调 | Redis |
-| 本地历史镜像 | SQLite |
+| 本地运行时数据 | SQLite |
 | 模型层 | Vercel AI SDK + 双层 model registry |

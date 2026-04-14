@@ -876,7 +876,7 @@ llm:
     const modelsDir = path.join(tempDir, "models");
     const toolsDir = path.join(tempDir, "tools");
     const skillsDir = path.join(tempDir, "skills");
-    const externalRoot = path.join(tempDir, "external-repo");
+    const externalRoot = path.join(workspaceDir, "external-repo");
     const configPath = path.join(tempDir, "server.yaml");
     const caller = {
       subjectRef: "dev:test",
@@ -891,11 +891,8 @@ llm:
       mkdir(templatesDir, { recursive: true }),
       mkdir(modelsDir, { recursive: true }),
       mkdir(toolsDir, { recursive: true }),
-      mkdir(skillsDir, { recursive: true }),
-      mkdir(path.join(externalRoot, ".openharness"), { recursive: true })
+      mkdir(skillsDir, { recursive: true })
     ]);
-
-    await writeFile(path.join(externalRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
     await writeFile(
       path.join(modelsDir, "openai.yaml"),
       `
@@ -934,6 +931,9 @@ llm:
     let importedWorkspaceId = "";
     let sessionId = "";
     try {
+      await mkdir(path.join(externalRoot, ".openharness"), { recursive: true });
+      await writeFile(path.join(externalRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+
       const imported = await runtimeA.importWorkspace?.({
         rootPath: externalRoot,
         kind: "project",

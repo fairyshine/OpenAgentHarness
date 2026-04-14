@@ -15,11 +15,10 @@
 | 路径 | 说明 |
 | --- | --- |
 | `.openharness/data/` | 运行时数据目录 |
-| `.openharness/data/history.db` | 本地历史镜像，异步同步自中心库 |
+| `.openharness/data/history.db` | 本地 SQLite 运行时数据文件 |
 
-- 首次同步时由 runtime 自动创建
-- 缺失或损坏时可从中心库重建
-- 同步失败不影响 workspace 配置加载
+- 首次需要时由 runtime 自动创建
+- 缺失或损坏不影响 workspace 配置加载
 
 ### 失败策略
 
@@ -28,7 +27,7 @@
 | YAML 语法错误 | 标记该定义加载失败 |
 | 单个定义失败 | 不影响整个 workspace |
 | Agent 引用不存在的能力 | 该 run 失败并返回明确错误 |
-| `history.db` 同步失败 | 不影响配置加载 |
+| `history.db` 不可用 | 不影响配置加载 |
 
 ## 配置校验
 

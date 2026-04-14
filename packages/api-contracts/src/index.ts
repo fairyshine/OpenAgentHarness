@@ -16,7 +16,6 @@ export const workspaceSchema = z.object({
   status: z.enum(["active", "archived", "disabled"]),
   kind: z.enum(["project", "chat"]),
   readOnly: z.boolean(),
-  historyMirrorEnabled: z.boolean(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema
 });
@@ -68,17 +67,6 @@ export const workspaceDeleteResultSchema = z.object({
   path: z.string(),
   type: workspaceEntryTypeSchema,
   deleted: z.boolean()
-});
-
-export const workspaceHistoryMirrorStatusSchema = z.object({
-  workspaceId: z.string(),
-  supported: z.boolean(),
-  enabled: z.boolean(),
-  dbPath: z.string().optional(),
-  state: z.enum(["unsupported", "disabled", "missing", "idle", "error"]),
-  lastEventId: z.number().int().optional(),
-  lastSyncedAt: timestampSchema.optional(),
-  errorMessage: z.string().optional()
 });
 
 export const agentCatalogItemSchema = z.object({
@@ -920,7 +908,6 @@ export type WorkspaceEntry = z.infer<typeof workspaceEntrySchema>;
 export type WorkspaceEntryPage = z.infer<typeof workspaceEntryPageSchema>;
 export type WorkspaceFileContent = z.infer<typeof workspaceFileContentSchema>;
 export type WorkspaceDeleteResult = z.infer<typeof workspaceDeleteResultSchema>;
-export type WorkspaceHistoryMirrorStatus = z.infer<typeof workspaceHistoryMirrorStatusSchema>;
 export type WorkspaceCatalog = z.infer<typeof workspaceCatalogSchema>;
 export type AgentCatalogItem = z.infer<typeof agentCatalogItemSchema>;
 export type ModelCatalogItem = z.infer<typeof modelCatalogItemSchema>;

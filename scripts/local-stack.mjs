@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const composeFile = path.join(repoRoot, "docker-compose.local.yml");
 const mode = process.argv[2];
+const composeProjectName =
+  process.env.COMPOSE_PROJECT_NAME || path.basename(repoRoot).toLowerCase().replace(/[^a-z0-9]/g, "");
+const readonlyObjectStorageVolumeKeys = ["oah-templates", "oah-models", "oah-tools", "oah-skills", "oah-archives"];
 
 if (mode !== "up" && mode !== "down") {
   console.error("Usage: node ./scripts/local-stack.mjs <up|down>");
@@ -141,6 +144,42 @@ function ensureRcloneVolumeDriverResponsive() {
   }
 }
 
+function composeVolumeName(volumeKey) {
+  return `${composeProjectName}_${volumeKey}`;
+}
+
+function recreateReadonlyObjectStorageVolumes() {
+  console.log(
+    "Recreating readonly object-storage volumes to avoid rclone plugin path restore drift after docker/plugin restarts."
+  );
+
+  runMaybe("docker", ["compose", "-f", composeFile, "rm", "-sf", "oah"]);
+
+  for (const volumeKey of readonlyObjectStorageVolumeKeys) {
+    const volumeName = composeVolumeName(volumeKey);
+    const removal = runMaybe("docker", ["volume", "rm", volumeName], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    if (removal.status === 0) {
+      console.log(`Removed volume ${volumeName}`);
+      continue;
+    }
+
+    const stderr = (removal.stderr || "").toString().trim();
+    if (
+      stderr.includes("No such volume") ||
+      stderr.includes("no such volume")
+    ) {
+      console.log(`Volume ${volumeName} does not exist yet; skipping removal.`);
+      continue;
+    }
+
+    console.error(stderr || `Failed to remove volume ${volumeName}.`);
+    process.exit(removal.status ?? 1);
+  }
+}
+
 function hasLocalOahImage() {
   const result = spawnSync("docker", ["image", "inspect", "openagentharness-oah:latest"], {
     cwd: repoRoot,
@@ -158,6 +197,7 @@ async function up() {
   run("docker", ["compose", "-f", composeFile, "up", "-d", "postgres", "redis", "minio"]);
   await waitForMinioHealthy();
   run("pnpm", ["storage:sync"]);
+  recreateReadonlyObjectStorageVolumes();
 
   if (["1", "true", "yes"].includes((process.env.OAH_SKIP_BUILD || "").toLowerCase())) {
     console.warn("OAH_SKIP_BUILD is set. Starting OAH with --no-build.");

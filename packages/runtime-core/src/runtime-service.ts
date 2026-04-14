@@ -97,6 +97,7 @@ import {
   type RunStepType,
   type RuntimeToolExecutionContext,
   type RuntimeWorkspaceCatalog,
+  type RunQueuePriority,
   type WorkspaceListResult,
   type RunListResult,
   toPublicWorkspace,
@@ -370,7 +371,7 @@ export class RuntimeService {
       completeRunStep: (step, status, output) => this.#runSteps.completeRunStep(step, status, output),
       updateRun: (run, patch) => this.#runState.updateRun(run, patch),
       appendEvent: (input) => this.#appendEvent(input),
-      enqueueRun: (sessionId, runId) => this.#enqueueRun(sessionId, runId),
+      enqueueRun: (sessionId, runId, options) => this.#enqueueRun(sessionId, runId, options),
       resolveModelForRun: (workspace, modelRef) => this.#modelInputs.resolveModelForRun(workspace, modelRef),
       extractMessageDisplayText: (message) => this.#extractMessageDisplayText(message),
       hasMeaningfulText: (value) => this.#hasMeaningfulText(value),
@@ -1152,9 +1153,13 @@ export class RuntimeService {
     await next;
   }
 
-  async #enqueueRun(sessionId: string, runId: string): Promise<void> {
+  async #enqueueRun(
+    sessionId: string,
+    runId: string,
+    options?: { priority?: RunQueuePriority | undefined }
+  ): Promise<void> {
     if (this.#runQueue) {
-      await this.#runQueue.enqueue(sessionId, runId);
+      await this.#runQueue.enqueue(sessionId, runId, options);
       return;
     }
 

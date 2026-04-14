@@ -85,7 +85,7 @@ workspace/
 
 !!! info
 
-    `.openharness/data/` 是运行时托管目录，不参与能力定义解析。`history.db` 是异步镜像，不是事实源。`kind=chat` workspace 不创建此数据库。
+    `.openharness/data/` 是运行时托管目录，不参与能力定义解析。`history.db` 只承载本地运行时数据，不是跨进程同步机制。`kind=chat` workspace 不创建此数据库。
 
 **合并规则：**
 
@@ -104,4 +104,4 @@ workspace/
 
 **为什么 `.openharness/data/` 不参与配置解析？**
 
-它是运行时托管目录。`history.db` 只是异步镜像，不是事实源。
+它是运行时托管目录。`history.db` 只是本地运行时数据文件，不是对外真值接口。

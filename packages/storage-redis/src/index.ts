@@ -1,6 +1,15 @@
 import { createClient, type RedisClientType } from "redis";
 
-import { createId, type RunQueue, type SessionEvent, type SessionEventStore } from "@oah/runtime-core";
+import { createId, type RunQueue, type RunQueuePriority, type SessionEvent, type SessionEventStore } from "@oah/runtime-core";
+import { calculateRedisWorkerPoolSuggestion, summarizeRedisWorkerLoad } from "./worker-pool-policy.js";
+
+export {
+  calculateRedisWorkerPoolSuggestion,
+  summarizeRedisWorkerLoad,
+  type RedisRunWorkerPoolSizingInput,
+  type RedisRunWorkerPoolSizingResult,
+  type RedisWorkerLoadSummary
+} from "./worker-pool-policy.js";
 
 export interface SessionEventBus {
   publish(event: SessionEvent): Promise<void>;
@@ -11,6 +20,13 @@ export interface SessionEventBus {
 
 export interface SessionRunQueue extends RunQueue {
   claimNextSession(timeoutMs?: number): Promise<string | undefined>;
+  readyQueueLength(): Promise<number>;
+  inspectReadyQueue(nowMs?: number): Promise<{
+    length: number;
+    subagentLength: number;
+    oldestReadyAgeMs: number;
+    averageReadyAgeMs: number;
+  }>;
   tryAcquireSessionLock(sessionId: string, token: string, ttlMs: number): Promise<boolean>;
   renewSessionLock(sessionId: string, token: string, ttlMs: number): Promise<boolean>;
   releaseSessionLock(sessionId: string, token: string): Promise<boolean>;
@@ -94,6 +110,7 @@ export interface RedisRunWorkerOptions {
   pollTimeoutMs?: number | undefined;
   recoveryGraceMs?: number | undefined;
   registry?: WorkerRegistry | undefined;
+  recoverOnStart?: boolean | undefined;
   logger?: RedisRunWorkerLogger | undefined;
   onStateChange?:
     | ((entry: {
@@ -139,15 +156,28 @@ export interface RedisRunWorkerPoolDecision {
   oldestSchedulableReadyAgeMs?: number | undefined;
 }
 
+export interface RedisRunWorkerPoolSlotSnapshot {
+  slotId: string;
+  workerId: string;
+  processKind: "embedded" | "standalone";
+  state: "starting" | "idle" | "busy" | "stopping";
+  currentSessionId?: string | undefined;
+}
+
 export interface RedisRunWorkerPoolSnapshot {
   running: boolean;
   processKind: "embedded" | "standalone";
+  sessionSerialBoundary: "session";
   minWorkers: number;
   maxWorkers: number;
   suggestedWorkers: number;
   globalSuggestedWorkers?: number | undefined;
   desiredWorkers: number;
+  slotCapacity: number;
+  slots: RedisRunWorkerPoolSlotSnapshot[];
   activeWorkers: number;
+  busySlots: number;
+  idleSlots: number;
   busyWorkers: number;
   idleWorkers: number;
   globalActiveWorkers?: number | undefined;
@@ -195,6 +225,7 @@ const enqueueSessionRunScript = `
 local queueLength = redis.call("rpush", KEYS[1], ARGV[1])
 if queueLength == 1 then
   redis.call("set", KEYS[3], ARGV[3], "NX")
+  redis.call("set", KEYS[4], ARGV[4])
   local alreadyReady = false
   local readyEntries = redis.call("lrange", KEYS[2], 0, -1)
   for _, readySessionId in ipairs(readyEntries) do
@@ -204,7 +235,11 @@ if queueLength == 1 then
     end
   end
   if not alreadyReady then
-    redis.call("rpush", KEYS[2], ARGV[2])
+    if ARGV[4] == "subagent" then
+      redis.call("lpush", KEYS[2], ARGV[2])
+    else
+      redis.call("rpush", KEYS[2], ARGV[2])
+    end
   end
 end
 return queueLength
@@ -436,7 +471,7 @@ if not runId then
   return false
 end
 if redis.call("llen", KEYS[1]) == 0 then
-  redis.call("del", KEYS[2])
+  redis.call("del", KEYS[2], KEYS[3])
 end
 return runId
 `;
@@ -548,11 +583,17 @@ export class RedisSessionRunQueue implements SessionRunQueue {
     }
   }
 
-  async enqueue(sessionId: string, runId: string): Promise<void> {
+  async enqueue(sessionId: string, runId: string, options?: { priority?: RunQueuePriority | undefined }): Promise<void> {
+    const priority = options?.priority ?? "normal";
     const queueLength = Number(
       await this.#commands.eval(enqueueSessionRunScript, {
-        keys: [this.#sessionQueueKey(sessionId), this.#readyQueueKey(), this.#readyAtKey(sessionId)],
-        arguments: [runId, sessionId, String(Date.now())]
+        keys: [
+          this.#sessionQueueKey(sessionId),
+          this.#readyQueueKey(),
+          this.#readyAtKey(sessionId),
+          this.#readyPriorityKey(sessionId)
+        ],
+        arguments: [runId, sessionId, String(Date.now()), priority]
       })
     );
     if (queueLength === 1) {
@@ -564,6 +605,59 @@ export class RedisSessionRunQueue implements SessionRunQueue {
     const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1_000));
     const entry = await this.#blocking.blPop(this.#readyQueueKey(), timeoutSeconds);
     return entry?.element;
+  }
+
+  async readyQueueLength(): Promise<number> {
+    return this.#commands.lLen(this.#readyQueueKey());
+  }
+
+  async inspectReadyQueue(nowMs = Date.now()): Promise<{
+    length: number;
+    subagentLength: number;
+    oldestReadyAgeMs: number;
+    averageReadyAgeMs: number;
+  }> {
+    const sessionIds = await this.#commands.lRange(this.#readyQueueKey(), 0, -1);
+    if (sessionIds.length === 0) {
+      return {
+        length: 0,
+        subagentLength: 0,
+        oldestReadyAgeMs: 0,
+        averageReadyAgeMs: 0
+      };
+    }
+
+    const [readySinceValues, readyPriorityValues] = await Promise.all([
+      this.#commands.mGet(sessionIds.map((sessionId) => this.#readyAtKey(sessionId))),
+      this.#commands.mGet(sessionIds.map((sessionId) => this.#readyPriorityKey(sessionId)))
+    ]);
+    const ages = readySinceValues
+      .map((value) => {
+        if (!value) {
+          return undefined;
+        }
+
+        const readySinceMs = Number.parseInt(value, 10);
+        return Number.isFinite(readySinceMs) ? Math.max(0, nowMs - readySinceMs) : undefined;
+      })
+      .filter((value): value is number => value !== undefined);
+
+    if (ages.length === 0) {
+      return {
+        length: sessionIds.length,
+        subagentLength: readyPriorityValues.filter((value) => value === "subagent").length,
+        oldestReadyAgeMs: 0,
+        averageReadyAgeMs: 0
+      };
+    }
+
+    const totalAgeMs = ages.reduce((sum, ageMs) => sum + ageMs, 0);
+    return {
+      length: sessionIds.length,
+      subagentLength: readyPriorityValues.filter((value) => value === "subagent").length,
+      oldestReadyAgeMs: Math.max(...ages),
+      averageReadyAgeMs: Math.round(totalAgeMs / ages.length)
+    };
   }
 
   async tryAcquireSessionLock(sessionId: string, token: string, ttlMs: number): Promise<boolean> {
@@ -595,7 +689,7 @@ export class RedisSessionRunQueue implements SessionRunQueue {
 
   async dequeueRun(sessionId: string): Promise<string | undefined> {
     const runId = await this.#commands.eval(dequeueSessionRunScript, {
-      keys: [this.#sessionQueueKey(sessionId), this.#readyAtKey(sessionId)]
+      keys: [this.#sessionQueueKey(sessionId), this.#readyAtKey(sessionId), this.#readyPriorityKey(sessionId)]
     });
 
     return typeof runId === "string" ? runId : undefined;
@@ -670,6 +764,10 @@ export class RedisSessionRunQueue implements SessionRunQueue {
     return `${this.#keyPrefix}:session:${sessionId}:lock`;
   }
 
+  #readyPriorityKey(sessionId: string): string {
+    return `${this.#keyPrefix}:session:${sessionId}:ready-priority`;
+  }
+
   #readyAtKey(sessionId: string): string {
     return `${this.#keyPrefix}:session:${sessionId}:ready_at`;
   }
@@ -685,6 +783,7 @@ export class RedisRunWorker {
   readonly #recoveryGraceMs: number;
   readonly #leaseTtlMs: number;
   readonly #registry?: WorkerRegistry | undefined;
+  readonly #recoverOnStart: boolean;
   readonly #logger?: RedisRunWorkerLogger | undefined;
   readonly #onStateChange:
     | ((entry: {
@@ -708,6 +807,7 @@ export class RedisRunWorker {
     this.#recoveryGraceMs = Math.max(this.#lockTtlMs, options.recoveryGraceMs ?? this.#lockTtlMs * 2);
     this.#leaseTtlMs = calculateWorkerLeaseTtlMs(this.#lockTtlMs, this.#pollTimeoutMs);
     this.#registry = options.registry;
+    this.#recoverOnStart = options.recoverOnStart ?? true;
     this.#logger = options.logger;
     this.#onStateChange = options.onStateChange;
   }
@@ -736,7 +836,7 @@ export class RedisRunWorker {
     }, Math.max(1_000, Math.floor(this.#leaseTtlMs / 3)));
     leaseHeartbeat.unref?.();
 
-    if (this.#runtimeService.recoverStaleRuns) {
+    if (this.#recoverOnStart && this.#runtimeService.recoverStaleRuns) {
       try {
         await this.#runtimeService.recoverStaleRuns({
           staleBefore: new Date(Date.now() - this.#recoveryGraceMs).toISOString()
@@ -904,7 +1004,7 @@ export class RedisRunWorkerPool {
     queue: SessionRunQueue;
     ownsQueue: boolean;
   }> = [];
-  readonly #workerStates = new Map<string, "starting" | "idle" | "busy" | "stopping">();
+  readonly #workerSlots = new Map<string, RedisRunWorkerPoolSlotSnapshot>();
   #active = false;
   #scaleTimer: NodeJS.Timeout | undefined;
   #rebalancePromise: Promise<void> | undefined;
@@ -988,7 +1088,7 @@ export class RedisRunWorkerPool {
         }
       })
     );
-    this.#workerStates.clear();
+    this.#workerSlots.clear();
 
     this.#desiredWorkers = 0;
     this.#lastRebalanceAtMs = Date.now();
@@ -999,17 +1099,25 @@ export class RedisRunWorkerPool {
 
   snapshot(nowMs = Date.now()): RedisRunWorkerPoolSnapshot {
     const scaleDownCooldownReferenceMs = this.#lastCapacityChangeAtMs();
+    const slots = this.#slotSnapshots();
+    const busySlots = slots.filter((slot) => slot.state === "busy").length;
+    const idleSlots = slots.filter((slot) => slot.state === "idle").length;
     return {
       running: this.#active,
       processKind: this.#processKind,
+      sessionSerialBoundary: "session",
       minWorkers: this.#minWorkers,
       maxWorkers: this.#maxWorkers,
       suggestedWorkers: this.#suggestedWorkers,
       ...(typeof this.#lastGlobalSuggestedWorkers === "number" ? { globalSuggestedWorkers: this.#lastGlobalSuggestedWorkers } : {}),
       desiredWorkers: this.#desiredWorkers,
+      slotCapacity: this.#workers.length,
+      slots,
       activeWorkers: this.#workers.length,
-      busyWorkers: this.#busyWorkerCount(),
-      idleWorkers: this.#idleWorkerCount(),
+      busySlots,
+      idleSlots,
+      busyWorkers: busySlots,
+      idleWorkers: idleSlots,
       ...(typeof this.#lastGlobalActiveWorkers === "number" ? { globalActiveWorkers: this.#lastGlobalActiveWorkers } : {}),
       ...(typeof this.#lastGlobalBusyWorkers === "number" ? { globalBusyWorkers: this.#lastGlobalBusyWorkers } : {}),
       ...(typeof this.#lastRemoteActiveWorkers === "number" ? { remoteActiveWorkers: this.#lastRemoteActiveWorkers } : {}),
@@ -1094,10 +1202,16 @@ export class RedisRunWorkerPool {
         pollTimeoutMs: this.#pollTimeoutMs,
         recoveryGraceMs: this.#recoveryGraceMs,
         registry: this.#registry,
-        logger: this.#logger
-        ,
-        onStateChange: ({ workerId: stateWorkerId, state }) => {
-          this.#workerStates.set(stateWorkerId, state);
+        recoverOnStart: this.#workers.length === 0,
+        logger: this.#logger,
+        onStateChange: ({ workerId: stateWorkerId, state, currentSessionId }) => {
+          this.#workerSlots.set(stateWorkerId, {
+            slotId: stateWorkerId,
+            workerId: stateWorkerId,
+            processKind: this.#processKind,
+            state,
+            ...(currentSessionId ? { currentSessionId } : {})
+          });
         }
       });
       this.#workers.push({
@@ -1120,7 +1234,7 @@ export class RedisRunWorkerPool {
       if (removed.ownsQueue) {
         await removed.queue.close();
       }
-      this.#workerStates.delete(removed.workerId);
+      this.#workerSlots.delete(removed.workerId);
       scaledDown = true;
     }
 
@@ -1191,23 +1305,13 @@ export class RedisRunWorkerPool {
     }
 
     try {
-      const localWorkerIds = new Set(this.#workers.map((entry) => entry.workerId));
       const activeWorkers = await this.#registry.listActive(Date.now());
-      const remoteHealthyWorkers = activeWorkers.filter(
-        (entry) => !localWorkerIds.has(entry.workerId) && entry.health === "healthy"
-      );
-      const remoteActiveWorkers = remoteHealthyWorkers.length;
-      const remoteBusyWorkers = remoteHealthyWorkers.filter((entry) => entry.state === "busy").length;
-      const globalActiveWorkers = remoteActiveWorkers + this.#workers.length;
-      const globalBusyWorkers = remoteBusyWorkers + this.#busyWorkerCount();
-
-      return {
-        globalSuggestedWorkers: 0,
-        globalActiveWorkers,
-        globalBusyWorkers,
-        remoteActiveWorkers,
-        remoteBusyWorkers
-      };
+      return summarizeRedisWorkerLoad({
+        activeWorkers,
+        localWorkerIds: this.#workers.map((entry) => entry.workerId),
+        localActiveWorkers: this.#workers.length,
+        localBusyWorkers: this.#busyWorkerCount()
+      });
     } catch (error) {
       this.#logger?.warn("Failed to read global Redis worker load for worker pool rebalance.", error);
       return undefined;
@@ -1267,28 +1371,22 @@ export class RedisRunWorkerPool {
         }
       | undefined
   ): number {
-    const readySessionCount = schedulingPressure?.readySessionCount;
-    const busyWorkers = globalWorkerLoad?.globalBusyWorkers ?? this.#busyWorkerCount();
-    const activeWorkers = globalWorkerLoad?.globalActiveWorkers ?? this.#workers.length;
-    const pressureWorkers =
-      typeof readySessionCount === "number" ? Math.ceil(readySessionCount / this.#readySessionsPerWorker) : this.#minWorkers;
-    const saturatedWorkers =
-      typeof readySessionCount === "number" ? Math.ceil((readySessionCount + busyWorkers) / this.#readySessionsPerWorker) : busyWorkers;
-    const ageBoostWorkers =
-      typeof readySessionCount === "number" &&
-      readySessionCount > 0 &&
-      this.#busyRatio(activeWorkers, busyWorkers) >= this.#scaleUpBusyRatioThreshold &&
-      (schedulingPressure?.oldestSchedulableReadyAgeMs ?? 0) >= this.#scaleUpMaxReadyAgeMs
-        ? activeWorkers + 1
-        : 0;
-    const globalSuggestedWorkers = Math.max(pressureWorkers, saturatedWorkers, ageBoostWorkers);
+    const sizing = calculateRedisWorkerPoolSuggestion({
+      minWorkers: this.#minWorkers,
+      maxWorkers: this.#maxWorkers,
+      readySessionsPerWorker: this.#readySessionsPerWorker,
+      localActiveWorkers: this.#workers.length,
+      localBusyWorkers: this.#busyWorkerCount(),
+      scaleUpBusyRatioThreshold: this.#scaleUpBusyRatioThreshold,
+      scaleUpMaxReadyAgeMs: this.#scaleUpMaxReadyAgeMs,
+      schedulingPressure,
+      globalWorkerLoad
+    });
     if (globalWorkerLoad) {
-      globalWorkerLoad.globalSuggestedWorkers = globalSuggestedWorkers;
-      const localSuggestedWorkers = Math.max(this.#minWorkers, globalSuggestedWorkers - globalWorkerLoad.remoteActiveWorkers);
-      return Math.min(this.#maxWorkers, localSuggestedWorkers);
+      globalWorkerLoad.globalSuggestedWorkers = sizing.globalSuggestedWorkers;
     }
 
-    return Math.max(this.#minWorkers, Math.min(this.#maxWorkers, globalSuggestedWorkers));
+    return sizing.localSuggestedWorkers;
   }
 
   #cooldownRemainingMs(lastChangeAtMs: number | undefined, cooldownMs: number, nowMs: number): number {
@@ -1399,19 +1497,15 @@ export class RedisRunWorkerPool {
   }
 
   #busyWorkerCount(): number {
-    return [...this.#workerStates.values()].filter((state) => state === "busy").length;
+    return this.#slotSnapshots().filter((slot) => slot.state === "busy").length;
   }
 
   #idleWorkerCount(): number {
-    return [...this.#workerStates.values()].filter((state) => state === "idle").length;
+    return this.#slotSnapshots().filter((slot) => slot.state === "idle").length;
   }
 
-  #busyRatio(activeWorkers = this.#workers.length, busyWorkers = this.#busyWorkerCount()): number {
-    if (activeWorkers <= 0) {
-      return 0;
-    }
-
-    return busyWorkers / activeWorkers;
+  #slotSnapshots(): RedisRunWorkerPoolSlotSnapshot[] {
+    return [...this.#workerSlots.values()].sort((left, right) => left.slotId.localeCompare(right.slotId));
   }
 
 }

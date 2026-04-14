@@ -109,10 +109,7 @@ export function InspectorWorkspace(props: RuntimeProps) {
                 runtimeToolNames={props.allRuntimeToolNames}
                 activeToolNames={props.allAdvertisedToolNames}
                 toolServers={props.allToolServers}
-                mirrorStatus={props.mirrorStatus}
-                mirrorRebuildBusy={props.mirrorRebuildBusy}
                 refreshWorkspace={props.refreshWorkspace}
-                rebuildWorkspaceHistoryMirror={props.rebuildWorkspaceHistoryMirror}
               />
             </TabsContent>
         </div>

@@ -26,8 +26,6 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | GET | `/workspaces/{id}` | 获取详情 |
 | DELETE | `/workspaces/{id}` | 删除 |
 | GET | `/workspaces/{id}/catalog` | 获取能力目录 |
-| GET | `/workspaces/{id}/history-mirror` | 镜像状态 |
-| POST | `/workspaces/{id}/history-mirror/rebuild` | 重建镜像 |
 
 ### Files
 

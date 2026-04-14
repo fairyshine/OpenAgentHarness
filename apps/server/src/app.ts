@@ -2,7 +2,7 @@ import Fastify, { type FastifyRequest } from "fastify";
 
 import { isAppError } from "@oah/runtime-core";
 
-import { createStandaloneCallerContext, isLoopbackAddress, sendError } from "./http/context.js";
+import { createStandaloneCallerContext, isLoopbackAddress, isPrivateNetworkAddress, sendError } from "./http/context.js";
 import { registerPublicRoutes } from "./http/routes/public.js";
 import { registerWorkspaceRoutes } from "./http/routes/workspaces.js";
 import { registerSessionRoutes } from "./http/routes/sessions.js";
@@ -27,6 +27,9 @@ export function createApp(dependencies: AppDependencies) {
   });
   const hostOwnsCallerContext = Boolean(dependencies.resolveCallerContext);
   const workspaceMode = dependencies.workspaceMode ?? "multi";
+  const allowPrivateInternalModelRoutes =
+    process.env.OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES !== undefined &&
+    /^(1|true|yes|on)$/iu.test(process.env.OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES.trim());
 
   app.addContentTypeParser(/^application\/octet-stream(?:\s*;.*)?$/i, { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
@@ -80,7 +83,7 @@ export function createApp(dependencies: AppDependencies) {
 
     if (request.url.startsWith("/internal/v1/models/")) {
       const remoteAddress = request.ip || request.raw.socket.remoteAddress;
-      if (!isLoopbackAddress(remoteAddress)) {
+      if (!isLoopbackAddress(remoteAddress) && !(allowPrivateInternalModelRoutes && isPrivateNetworkAddress(remoteAddress))) {
         await sendError(reply, 403, "forbidden", "Internal model routes are only available from loopback addresses.");
         return reply;
       }

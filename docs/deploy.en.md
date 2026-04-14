@@ -51,7 +51,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts
 pnpm dev:web
 ```
 
-The API process handles HTTP requests only. Worker processes consume the Redis queue, execute runs, and sync the history mirror.
+The API process handles HTTP requests only. Worker processes consume the Redis queue and execute runs.
 
 ---
 

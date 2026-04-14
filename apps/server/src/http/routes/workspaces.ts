@@ -20,14 +20,12 @@ import {
   workspaceFileContentQuerySchema,
   workspaceFileContentSchema,
   workspaceFileUploadQuerySchema,
-  workspaceHistoryMirrorStatusSchema,
   workspacePageSchema
 } from "@oah/api-contracts";
 import { AppError } from "@oah/runtime-core";
 
 import { assertWorkspaceAccess, createParamsSchema, toCallerContext } from "../context.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
-import { inspectHistoryMirrorStatus } from "../../history-mirror.js";
 
 export function registerWorkspaceRoutes(
   app: FastifyInstance,
@@ -78,37 +76,6 @@ export function registerWorkspaceRoutes(
     assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
     const workspace = await dependencies.runtimeService.getWorkspace(params.workspaceId);
     return reply.send(workspace);
-  });
-
-  app.get("/api/v1/workspaces/:workspaceId/history-mirror", async (request, reply) => {
-    const params = createParamsSchema("workspaceId").parse(request.params);
-    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
-    const workspace = await dependencies.runtimeService.getWorkspaceRecord(params.workspaceId);
-    const status = dependencies.getWorkspaceHistoryMirrorStatus
-      ? await dependencies.getWorkspaceHistoryMirrorStatus(workspace)
-      : await inspectHistoryMirrorStatus(workspace);
-    return reply.send(workspaceHistoryMirrorStatusSchema.parse(status));
-  });
-
-  app.post("/api/v1/workspaces/:workspaceId/history-mirror/rebuild", async (request, reply) => {
-    const params = createParamsSchema("workspaceId").parse(request.params);
-    assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
-    const workspace = await dependencies.runtimeService.getWorkspaceRecord(params.workspaceId);
-
-    if (workspace.kind !== "project") {
-      throw new AppError(
-        400,
-        "history_mirror_not_supported",
-        `Workspace ${params.workspaceId} does not support local history mirror sync.`
-      );
-    }
-
-    if (!dependencies.rebuildWorkspaceHistoryMirror) {
-      throw new AppError(501, "history_mirror_rebuild_unavailable", "History mirror rebuild is not available on this server.");
-    }
-
-    const status = await dependencies.rebuildWorkspaceHistoryMirror(workspace);
-    return reply.send(workspaceHistoryMirrorStatusSchema.parse(status));
   });
 
   app.delete("/api/v1/workspaces/:workspaceId", async (request, reply) => {

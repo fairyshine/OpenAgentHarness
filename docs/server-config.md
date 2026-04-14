@@ -24,6 +24,17 @@ paths:
   skill_dir: /srv/openharness/skills               # 公共 skill 目录
   archive_dir: /srv/openharness/archives           # 导出的归档 SQLite 存储目录（可选）
 
+workers:
+  embedded:
+    min_count: 2                # API + embedded worker 模式下的最小 worker 数
+    max_count: 4                # backlog 增长时允许自动扩到的上限
+    scale_interval_ms: 1000     # 扩缩容检查周期
+    idle_ttl_ms: 30000          # 多余 worker 空闲多久后回收
+    scale_up_window: 2          # 连续多少个周期都高压后才扩容
+    scale_down_window: 2        # 连续多少个周期都空闲后才缩容
+    cooldown_ms: 1000           # 两次扩缩容动作之间的最短冷却时间
+    reserved_capacity_for_subagent: 1  # 为子代理任务保留的最小空闲容量
+
 llm:
   default_model: openai-default   # 默认模型名（须存在于 model_dir）
 ```
@@ -70,6 +81,19 @@ llm:
 | --- | --- | --- |
 | `default_model` | string | 默认模型名，须存在于 `model_dir` 中，运行时解析为 `platform/<name>` |
 
+### `workers`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `embedded.min_count` | number | `API + embedded worker` 模式下常驻的最小 worker 数。配置 Redis 队列时默认至少为 `2` |
+| `embedded.max_count` | number | 队列压力高于当前空闲容量时，embedded worker 自动扩到的上限；默认 `4` |
+| `embedded.scale_interval_ms` | number | 检查 ready queue / idle worker 并调整 worker 数的周期；默认 `1000` |
+| `embedded.idle_ttl_ms` | number | 超出 `min_count` 的 worker 空闲多久后被回收；默认 `30000` |
+| `embedded.scale_up_window` | number | 连续多少个检查周期都确认有压力后才扩容；默认 `2` |
+| `embedded.scale_down_window` | number | 连续多少个检查周期都确认可回收后才缩容；默认 `2` |
+| `embedded.cooldown_ms` | number | 两次扩缩容动作之间的冷却时间；默认等于 `scale_interval_ms` |
+| `embedded.reserved_capacity_for_subagent` | number | 当 `subagent` backlog 出现时，希望额外保留的最小空闲 worker 容量；默认 `1` |
+
 ---
 
 ## 目录说明
@@ -88,7 +112,7 @@ llm:
 
 ### `model_dir`
 
-扫描目录下的 `*.yaml` 文件。文件格式与 workspace 内 `.openharness/models/*.yaml` 一致。加载后以 `platform/<name>` 进入模型目录。
+递归扫描目录下的 `*.yaml` 文件。文件格式与 workspace 内 `.openharness/models/*.yaml` 一致。加载后以 `platform/<name>` 进入模型目录。
 
 示例（`model_dir/openai-default.yaml`）：
 
@@ -164,6 +188,9 @@ openai-default:
 | --- | --- | --- |
 | `OAH_HISTORY_EVENT_RETENTION_DAYS` | `7` | Postgres 模式下历史事件保留天数 |
 | `OAH_RUNTIME_DEBUG` | 未设置 | 设置后向标准输出镜像 runtime debug 日志 |
+
+> **tip**
+> 当配置了 Redis 队列且使用 `API + embedded worker` 模式时，服务默认会至少启动 `2` 个 embedded worker，并根据 `ready queue` 相对当前空闲 worker 的缺口做轻量扩容；扩缩容还会经过 `scale_up_window` / `scale_down_window` 连续判定和 `cooldown_ms` 冷却控制。若出现 `subagent` backlog，则会优先补足 `reserved_capacity_for_subagent`，减少父 run 等待 child run 时被普通 backlog 挤压的风险。
 
 ---
 

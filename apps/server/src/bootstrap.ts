@@ -21,20 +21,19 @@ import { createPostgresRuntimePersistence } from "@oah/storage-postgres";
 import { createSQLiteRuntimePersistence, sqliteWorkspaceHistoryDbPath } from "@oah/storage-sqlite";
 import {
   FanoutSessionEventStore,
-  RedisRunWorkerPool,
   createRedisWorkerRegistry,
   createRedisSessionEventBus,
   createRedisSessionRunQueue
 } from "@oah/storage-redis";
+import { createWorkerRuntimeControl } from "./bootstrap/worker-runtime.js";
 import { ObjectStorageMirrorController } from "./object-storage.js";
-import { DualWriteSessionEventStore, appendRuntimeLogEvent, buildRuntimeConsoleLogger } from "./runtime-console.js";
+import { appendRuntimeLogEvent, buildRuntimeConsoleLogger } from "./runtime-console.js";
 import {
   buildSingleWorkspaceConfig,
   describeRuntimeProcess,
   type RuntimeProcessDescriptor,
   parseConfigPath,
   parseSingleWorkspaceOptions,
-  shouldRunHistoryMirrorSync,
   shouldStartEmbeddedWorker
 } from "./bootstrap/runtime-process.js";
 import {
@@ -54,7 +53,6 @@ import {
   reconcileDiscoveredWorkspaces,
   type PlatformAgentRegistry
 } from "./bootstrap/workspace-registry.js";
-import { HistoryEventCleaner, HistoryMirrorSyncer, inspectHistoryMirrorStatus } from "./history-mirror.js";
 import { createBuiltInPlatformAgents } from "./platform-agents.js";
 import { createStorageAdmin, type StorageAdmin } from "./storage-admin.js";
 
@@ -63,10 +61,10 @@ export {
   describeRuntimeProcess,
   parseConfigPath,
   parseSingleWorkspaceOptions,
-  shouldRunHistoryMirrorSync,
   shouldStartEmbeddedWorker,
   shouldStartInlineWorker
 } from "./bootstrap/runtime-process.js";
+export { resolveEmbeddedWorkerPoolConfig, resolveWorkerMode } from "./bootstrap/worker-host.js";
 export { findManagedWorkspaceIdsToDelete, reconcileDiscoveredWorkspaces } from "./bootstrap/workspace-registry.js";
 
 export interface BootstrapOptions {
@@ -74,17 +72,6 @@ export interface BootstrapOptions {
   startWorker?: boolean | undefined;
   processKind?: "api" | "worker" | undefined;
   platformAgents?: PlatformAgentRegistry | undefined;
-}
-
-function summarizeActiveWorkers(activeWorkers: Array<import("@oah/storage-redis").RedisWorkerRegistryEntry>) {
-  return {
-    active: activeWorkers.length,
-    healthy: activeWorkers.filter((worker) => worker.health === "healthy").length,
-    late: activeWorkers.filter((worker) => worker.health === "late").length,
-    busy: activeWorkers.filter((worker) => worker.state === "busy").length,
-    embedded: activeWorkers.filter((worker) => worker.processKind === "embedded").length,
-    standalone: activeWorkers.filter((worker) => worker.processKind === "standalone").length
-  };
 }
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
@@ -159,12 +146,6 @@ export interface BootstrappedRuntime {
     name?: string;
     externalRef?: string;
   }) => Promise<import("@oah/api-contracts").Workspace>;
-  getWorkspaceHistoryMirrorStatus(workspace: import("@oah/runtime-core").WorkspaceRecord): Promise<
-    import("./history-mirror.js").HistoryMirrorStatus
-  >;
-  rebuildWorkspaceHistoryMirror(workspace: import("@oah/runtime-core").WorkspaceRecord): Promise<
-    import("./history-mirror.js").HistoryMirrorStatus
-  >;
   storageAdmin: StorageAdmin;
   appendRuntimeLog(input: {
     sessionId: string;
@@ -187,7 +168,6 @@ export interface BootstrappedRuntime {
       postgres: "up" | "down" | "not_configured";
       redisEvents: "up" | "down" | "not_configured";
       redisRunQueue: "up" | "down" | "not_configured";
-      historyMirror: "up" | "degraded" | "not_configured";
     };
     worker: {
       mode: "embedded" | "external" | "disabled";
@@ -201,13 +181,6 @@ export interface BootstrappedRuntime {
         standalone: number;
       };
       pool: import("@oah/storage-redis").RedisRunWorkerPoolSnapshot | null;
-    };
-    mirror: {
-      worker: "running" | "disabled";
-      enabledWorkspaces: number;
-      idleWorkspaces: number;
-      missingWorkspaces: number;
-      errorWorkspaces: number;
     };
   }>;
   readinessReport(): Promise<{
@@ -453,21 +426,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     redisAvailable: redisConfigured,
     redisEventBusEnabled: Boolean(redisBus),
     redisRunQueueEnabled: Boolean(redisRunQueue),
-    historyEventCleanupEnabled:
-      primaryStorageMode === "postgres" &&
-      shouldRunHistoryMirrorSync({
-        processKind,
-        startWorker,
-        hasRedisRunQueue: Boolean(redisRunQueue)
-      }) &&
-      "historyEventRepository" in persistence &&
-      persistence.historyEventRepository &&
-      "pruneByWorkspace" in persistence.historyEventRepository &&
-      typeof persistence.historyEventRepository.pruneByWorkspace === "function",
-    historyEventRetentionDays: (() => {
-      const retentionDays = Number.parseInt(process.env.OAH_HISTORY_EVENT_RETENTION_DAYS ?? "7", 10);
-      return Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 7;
-    })(),
     archiveExportEnabled: false,
     archiveExportRoot: config.paths.archive_dir
   });
@@ -476,7 +434,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     startWorker,
     hasRedisRunQueue: Boolean(redisRunQueue)
   });
-  const workerMode = startWorker ? (processKind === "worker" ? "external" : "embedded") : redisRunQueue ? "external" : "disabled";
   const persistedWorkspaceSnapshots = hasPersistedWorkspaceListing(persistence)
     ? await persistence.listPersistedWorkspaces()
     : hasWorkspaceSnapshotListing(persistence)
@@ -496,19 +453,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   const workspaceRepository = new ScopedWorkspaceRepository(persistence.workspaceRepository, visibleWorkspaceIds);
   const sessionRepository = new ScopedSessionRepository(persistence.sessionRepository, visibleWorkspaceIds);
   const runRepository = new ScopedRunRepository(persistence.runRepository, visibleWorkspaceIds);
-  const primarySessionEventStore =
-    primaryStorageMode === "postgres"
-      ? new DualWriteSessionEventStore({
-          primary: persistence.sessionEventStore,
-          sessionRepository,
-          workspaceRepository,
-          logger: {
-            warn(message, error) {
-              console.warn(message, error);
-            }
-          }
-        })
-      : persistence.sessionEventStore;
+  const primarySessionEventStore = persistence.sessionEventStore;
   const sessionEventStore = redisBus
     ? new FanoutSessionEventStore(primarySessionEventStore, redisBus)
     : primarySessionEventStore;
@@ -864,114 +809,26 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         }
       : {})
   });
-  const embeddedWorkerMin =
-    processKind === "worker" ? 1 : parsePositiveIntEnv("OAH_EMBEDDED_WORKER_MIN", config.storage.redis_url ? 2 : 1);
-  const embeddedWorkerMax = Math.max(embeddedWorkerMin, parsePositiveIntEnv("OAH_EMBEDDED_WORKER_MAX", embeddedWorkerMin));
-  const embeddedWorkerScaleIntervalMs = parsePositiveIntEnv("OAH_EMBEDDED_WORKER_SCALE_INTERVAL_MS", 5_000);
-  const embeddedWorkerReadySessionsPerWorker = parsePositiveIntEnv("OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_WORKER", 1);
-  const embeddedWorkerScaleUpCooldownMs = parsePositiveIntEnv("OAH_EMBEDDED_WORKER_SCALE_UP_COOLDOWN_MS", 1_000);
-  const embeddedWorkerScaleDownCooldownMs = parsePositiveIntEnv("OAH_EMBEDDED_WORKER_SCALE_DOWN_COOLDOWN_MS", 15_000);
-  const embeddedWorkerScaleUpSampleSize = parsePositiveIntEnv("OAH_EMBEDDED_WORKER_SCALE_UP_SAMPLE_SIZE", 2);
-  const embeddedWorkerScaleDownSampleSize = parsePositiveIntEnv("OAH_EMBEDDED_WORKER_SCALE_DOWN_SAMPLE_SIZE", 3);
-  const embeddedWorkerScaleUpBusyRatioPercent = parsePositiveIntEnv("OAH_EMBEDDED_WORKER_SCALE_UP_BUSY_RATIO_PERCENT", 75);
-  const embeddedWorkerScaleUpBusyRatioThreshold = Math.min(1, Math.max(0, embeddedWorkerScaleUpBusyRatioPercent / 100));
-  const embeddedWorkerScaleUpMaxReadyAgeMs = parsePositiveIntEnv("OAH_EMBEDDED_WORKER_SCALE_UP_MAX_READY_AGE_MS", 2_000);
-  const redisRunWorkerPool =
-    startWorker && redisRunQueue && config.storage.redis_url
-      ? new RedisRunWorkerPool({
-          queue: redisRunQueue,
-          queueFactory: () =>
-            createRedisSessionRunQueue({
-              url: config.storage.redis_url as string
-            }),
-          runtimeService,
-          processKind: processKind === "worker" ? "standalone" : "embedded",
-          registry: redisWorkerRegistry,
-          minWorkers: embeddedWorkerMin,
-          maxWorkers: embeddedWorkerMax,
-          scaleIntervalMs: embeddedWorkerScaleIntervalMs,
-          readySessionsPerWorker: embeddedWorkerReadySessionsPerWorker,
-          scaleUpCooldownMs: embeddedWorkerScaleUpCooldownMs,
-          scaleDownCooldownMs: embeddedWorkerScaleDownCooldownMs,
-          scaleUpSampleSize: embeddedWorkerScaleUpSampleSize,
-          scaleDownSampleSize: embeddedWorkerScaleDownSampleSize,
-          scaleUpBusyRatioThreshold: embeddedWorkerScaleUpBusyRatioThreshold,
-          scaleUpMaxReadyAgeMs: embeddedWorkerScaleUpMaxReadyAgeMs,
-          logger: {
-            info(message) {
-              console.info(message);
-            },
-            warn(message, error) {
-              console.warn(message, error);
-            },
-            error(message, error) {
-              console.error(message, error);
-            }
-          }
-        })
-      : undefined;
-  redisRunWorkerPool?.start();
-  const historyMirrorSyncer =
-    primaryStorageMode === "postgres" &&
-    shouldRunHistoryMirrorSync({
-      processKind,
-      startWorker,
-      hasRedisRunQueue: Boolean(redisRunQueue)
-    }) &&
-    "historyEventRepository" in persistence &&
-    persistence.historyEventRepository
-      ? new HistoryMirrorSyncer({
-          workspaceRepository,
-          historyEventRepository: persistence.historyEventRepository,
-          ...("historyMirrorSnapshotSource" in persistence && persistence.historyMirrorSnapshotSource
-            ? { snapshotSource: persistence.historyMirrorSnapshotSource }
-            : {}),
-          logger: {
-            warn(message, error) {
-              console.warn(message, error);
-            },
-            error(message, error) {
-              console.error(message, error);
-            }
-          }
-        })
-      : undefined;
-  historyMirrorSyncer?.start();
-  const historyEventCleaner =
-    primaryStorageMode === "postgres" &&
-    shouldRunHistoryMirrorSync({
-      processKind,
-      startWorker,
-      hasRedisRunQueue: Boolean(redisRunQueue)
-    }) &&
-    "historyEventRepository" in persistence &&
-    persistence.historyEventRepository &&
-    "pruneByWorkspace" in persistence.historyEventRepository &&
-    typeof persistence.historyEventRepository.pruneByWorkspace === "function"
-      ? (() => {
-          const retentionDays = Number.parseInt(process.env.OAH_HISTORY_EVENT_RETENTION_DAYS ?? "7", 10);
-          const retentionMs =
-            Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-
-          return new HistoryEventCleaner({
-            workspaceRepository,
-            historyEventRepository: persistence.historyEventRepository,
-            retentionMs,
-            logger: {
-              info(message) {
-                console.info(message);
-              },
-              warn(message, error) {
-                console.warn(message, error);
-              },
-              error(message, error) {
-                console.error(message, error);
-              }
-            }
-          });
-        })()
-      : undefined;
-  historyEventCleaner?.start();
+  const workerRuntime = createWorkerRuntimeControl({
+    startWorker,
+    processKind,
+    config,
+    redisRunQueue,
+    redisWorkerRegistry,
+    runtimeService,
+    logger: {
+      info(message) {
+        console.info(message);
+      },
+      warn(message, error) {
+        console.warn(message, error);
+      },
+      error(message, error) {
+        console.error(message, error);
+      }
+    }
+  });
+  workerRuntime.start();
   const closePersistence =
     "close" in persistence && typeof persistence.close === "function" ? () => persistence.close() : async () => undefined;
 
@@ -1014,64 +871,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     }
 
     return (await redisRunQueue.ping()) ? "up" : "down";
-  }
-
-  async function historyMirrorSummary(): Promise<{
-    check: "up" | "degraded" | "not_configured";
-    worker: "running" | "disabled";
-    enabledWorkspaces: number;
-    idleWorkspaces: number;
-    missingWorkspaces: number;
-    errorWorkspaces: number;
-  }> {
-    if (primaryStorageMode !== "postgres") {
-      return {
-        check: "not_configured",
-        worker: "disabled",
-        enabledWorkspaces: 0,
-        idleWorkspaces: 0,
-        missingWorkspaces: 0,
-        errorWorkspaces: 0
-      };
-    }
-
-    const workspaces: import("@oah/runtime-core").WorkspaceRecord[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await workspaceRepository.list(100, cursor);
-      workspaces.push(...page);
-      cursor = page.length === 100 ? String((cursor ? Number.parseInt(cursor, 10) : 0) + 100) : undefined;
-    } while (cursor);
-
-    const enabledWorkspaces = workspaces.filter(
-      (workspace) => workspace.kind === "project" && workspace.historyMirrorEnabled !== false
-    );
-
-    if (enabledWorkspaces.length === 0) {
-      return {
-        check: "not_configured",
-        worker: historyMirrorSyncer ? "running" : "disabled",
-        enabledWorkspaces: 0,
-        idleWorkspaces: 0,
-        missingWorkspaces: 0,
-        errorWorkspaces: 0
-      };
-    }
-
-    const statuses = await Promise.all(enabledWorkspaces.map((workspace) => inspectHistoryMirrorStatus(workspace)));
-    const idleWorkspaces = statuses.filter((status) => status.state === "idle").length;
-    const missingWorkspaces = statuses.filter((status) => status.state === "missing").length;
-    const errorWorkspaces = statuses.filter((status) => status.state === "error").length;
-    const degraded = !historyMirrorSyncer || missingWorkspaces > 0 || errorWorkspaces > 0;
-
-    return {
-      check: degraded ? "degraded" : "up",
-      worker: historyMirrorSyncer ? "running" : "disabled",
-      enabledWorkspaces: enabledWorkspaces.length,
-      idleWorkspaces,
-      missingWorkspaces,
-      errorWorkspaces
-    };
   }
 
   return {
@@ -1135,25 +934,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           }
         }
       : {}),
-    async getWorkspaceHistoryMirrorStatus(workspace) {
-      if (primaryStorageMode !== "postgres") {
-        return {
-          workspaceId: workspace.id,
-          supported: false,
-          enabled: false,
-          state: "unsupported"
-        };
-      }
-
-      return inspectHistoryMirrorStatus(workspace);
-    },
-    rebuildWorkspaceHistoryMirror(workspace) {
-      if (!historyMirrorSyncer) {
-        throw new Error("History mirror rebuild is unavailable because the mirror sync worker is not running.");
-      }
-
-      return historyMirrorSyncer.rebuildWorkspace(workspace);
-    },
     storageAdmin,
     appendRuntimeLog(input) {
       return appendRuntimeLogEvent(primarySessionEventStore, {
@@ -1162,19 +942,15 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       });
     },
     async healthReport() {
-      const activeWorkers = redisWorkerRegistry ? await redisWorkerRegistry.listActive() : [];
-      const workerSummary = summarizeActiveWorkers(activeWorkers);
-      const workerPool = redisRunWorkerPool?.snapshot() ?? null;
-      const mirror = await historyMirrorSummary();
+      const workerStatus = await workerRuntime.getStatus();
       const checks = {
         postgres: await postgresCheck(),
         redisEvents: await redisEventsCheck(),
-        redisRunQueue: await redisRunQueueCheck(),
-        historyMirror: mirror.check
+        redisRunQueue: await redisRunQueueCheck()
       };
 
       return {
-        status: Object.values(checks).some((value) => value === "down" || value === "degraded") ? "degraded" : "ok",
+        status: Object.values(checks).some((value) => value === "down") ? "degraded" : "ok",
         storage: {
           primary: primaryStorageMode,
           events: redisBus ? "redis" : "memory",
@@ -1182,13 +958,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         },
         process: runtimeProcess,
         checks,
-        worker: {
-          mode: workerMode,
-          activeWorkers,
-          summary: workerSummary,
-          pool: workerPool
-        },
-        mirror
+        worker: workerStatus
       };
     },
     async readinessReport() {
@@ -1205,9 +975,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     },
     async close() {
       await Promise.all([
-        historyMirrorSyncer?.close() ?? Promise.resolve(),
-        historyEventCleaner?.close() ?? Promise.resolve(),
-        redisRunWorkerPool?.close() ?? Promise.resolve(),
+        workerRuntime.close(),
         storageAdmin.close(),
         redisBus?.close() ?? Promise.resolve(),
         redisWorkerRegistry?.close() ?? Promise.resolve(),

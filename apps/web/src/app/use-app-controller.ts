@@ -132,14 +132,10 @@ export function useAppController() {
     setWorkspaceTemplates,
     catalog,
     setCatalog,
-    mirrorStatus,
-    setMirrorStatus,
     session,
     setSession,
     showWorkspaceCreator,
     setShowWorkspaceCreator,
-    mirrorRebuildBusy,
-    setMirrorRebuildBusy,
     workspaceManagementEnabled,
     setWorkspaceManagementEnabled,
     orderedSavedWorkspaces,
@@ -309,11 +305,9 @@ export function useAppController() {
       setWorkspace,
       setWorkspaceTemplates,
       setCatalog,
-      setMirrorStatus,
       session,
       setSession,
       setShowWorkspaceCreator,
-      setMirrorRebuildBusy,
       setWorkspaceManagementEnabled
     },
     runtime: {
@@ -1572,9 +1566,6 @@ export function useAppController() {
       selectedRunId,
       latestEvent,
       storageHealthLabel: `${storageController.storageSurfaceProps.healthReport?.storage.primary ?? "unknown"} / ${storageController.storageSurfaceProps.healthReport?.storage.runQueue ?? "unknown"}`,
-      mirrorHealthLabel: storageController.storageSurfaceProps.healthReport?.mirror
-        ? `mirror ${storageController.storageSurfaceProps.healthReport.mirror.enabledWorkspaces}/${storageController.storageSurfaceProps.healthReport.mirror.errorWorkspaces}`
-        : null,
       healthStatus,
       streamState,
       onSurfaceModeChange: setSurfaceMode,
@@ -1753,10 +1744,7 @@ export function useAppController() {
       pendingSessionModelRef,
       isSwitchingSessionModel: switchingSessionModelId === session?.id,
       updateSessionModel: (targetId: string, modelRef: string | null) => void updateSessionModel(targetId, modelRef),
-      mirrorStatus,
-      mirrorRebuildBusy,
       refreshWorkspace: (targetId: string) => void navigationActions.refreshWorkspace(targetId, true),
-      rebuildWorkspaceHistoryMirror: () => void navigationActions.rebuildWorkspaceHistoryMirror(),
       streamState,
       isRunning: !isTerminalRunStatus(run?.status) && run?.status != null,
       fileManager: workspaceFileManager.fileManagerSurfaceProps

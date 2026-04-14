@@ -210,7 +210,6 @@ describe("runtime service", () => {
     expect(stored.settings.defaultAgent).toBe("builder");
     expect(workspace.kind).toBe("project");
     expect(workspace.readOnly).toBe(false);
-    expect(workspace.historyMirrorEnabled).toBe(true);
   });
 
   it("preserves the initializer workspace id when creating a workspace", async () => {

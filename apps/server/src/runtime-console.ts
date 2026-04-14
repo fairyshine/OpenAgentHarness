@@ -1,8 +1,3 @@
-import path from "node:path";
-import { stat } from "node:fs/promises";
-import { mkdir } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
-
 import type {
   RuntimeLogCategory,
   RuntimeLogEventContext,
@@ -12,26 +7,9 @@ import type {
 import { runtimeLogEventDataSchema } from "@oah/api-contracts";
 import type {
   RuntimeLogger,
-  Session,
-  SessionEvent,
   SessionEventStore,
-  SessionRepository,
-  WorkspaceRecord,
-  WorkspaceRepository
+  Session
 } from "@oah/runtime-core";
-
-const localSessionEventSchemaStatements = [
-  `create table if not exists session_events (
-    id text primary key,
-    session_id text not null,
-    run_id text,
-    cursor integer not null,
-    created_at text not null,
-    payload text not null
-  )`,
-  `create unique index if not exists session_events_session_cursor_idx on session_events (session_id, cursor)`,
-  `create index if not exists session_events_session_run_cursor_idx on session_events (session_id, run_id, cursor)`
-] as const;
 
 const sensitiveKeyPattern = /(^|_)(authorization|token|api_?key|secret|password)$/iu;
 
@@ -224,127 +202,6 @@ export function buildRuntimeConsoleLogger(options: {
       emit("error", message, details);
     }
   };
-}
-
-async function ensureLocalSessionEventSchema(dbPath: string): Promise<void> {
-  await mkdir(path.dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
-  try {
-    for (const statement of localSessionEventSchemaStatements) {
-      db.exec(statement);
-    }
-  } finally {
-    db.close();
-  }
-}
-
-async function appendPersistedSessionEventToHistoryDb(workspace: WorkspaceRecord, event: SessionEvent): Promise<void> {
-  const dbPath = path.join(workspace.rootPath, ".openharness", "data", "history.db");
-  await ensureLocalSessionEventSchema(dbPath);
-
-  const db = new DatabaseSync(dbPath);
-  try {
-    const cursor = Number.parseInt(event.cursor, 10);
-    if (!Number.isFinite(cursor) || cursor < 0) {
-      throw new Error(`Invalid session event cursor "${event.cursor}" for event ${event.id}.`);
-    }
-
-    db.prepare(
-      `insert or replace into session_events (id, session_id, run_id, cursor, created_at, payload)
-       values (?, ?, ?, ?, ?, ?)`
-    ).run(event.id, event.sessionId, event.runId ?? null, cursor, event.createdAt, JSON.stringify(event));
-  } finally {
-    db.close();
-  }
-}
-
-async function isLocalWorkspaceHistoryWritable(workspace: WorkspaceRecord): Promise<boolean> {
-  try {
-    return (await stat(workspace.rootPath)).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-async function resolveLocalWorkspaceForEvent(
-  sessionRepository: SessionRepository,
-  workspaceRepository: WorkspaceRepository,
-  sessionId: string
-): Promise<WorkspaceRecord | null> {
-  const session = await sessionRepository.getById(sessionId);
-  if (!session) {
-    return null;
-  }
-
-  const workspace = await workspaceRepository.getById(session.workspaceId);
-  if (!workspace || workspace.kind !== "project") {
-    return null;
-  }
-
-  return workspace;
-}
-
-export class DualWriteSessionEventStore implements SessionEventStore {
-  readonly #primary: SessionEventStore;
-  readonly #sessionRepository: SessionRepository;
-  readonly #workspaceRepository: WorkspaceRepository;
-  readonly #logger:
-    | {
-        warn?(message: string, error?: unknown): void;
-      }
-    | undefined;
-
-  constructor(options: {
-    primary: SessionEventStore;
-    sessionRepository: SessionRepository;
-    workspaceRepository: WorkspaceRepository;
-    logger?:
-      | {
-          warn?(message: string, error?: unknown): void;
-        }
-      | undefined;
-  }) {
-    this.#primary = options.primary;
-    this.#sessionRepository = options.sessionRepository;
-    this.#workspaceRepository = options.workspaceRepository;
-    this.#logger = options.logger;
-  }
-
-  async append(input: Omit<SessionEvent, "id" | "cursor" | "createdAt">): Promise<SessionEvent> {
-    const event = await this.#primary.append(input);
-    const workspace = await resolveLocalWorkspaceForEvent(this.#sessionRepository, this.#workspaceRepository, input.sessionId);
-
-    if (!workspace) {
-      return event;
-    }
-
-    if (!(await isLocalWorkspaceHistoryWritable(workspace))) {
-      return event;
-    }
-
-    try {
-      await appendPersistedSessionEventToHistoryDb(workspace, event);
-    } catch (error) {
-      this.#logger?.warn?.(
-        `Failed to mirror session event ${event.id} to ${workspace.id} history.db; continuing with central event only.`,
-        error
-      );
-    }
-
-    return event;
-  }
-
-  async deleteById(eventId: string): Promise<void> {
-    await this.#primary.deleteById(eventId);
-  }
-
-  async listSince(sessionId: string, cursor?: string, runId?: string): Promise<SessionEvent[]> {
-    return this.#primary.listSince(sessionId, cursor, runId);
-  }
-
-  subscribe(sessionId: string, listener: (event: SessionEvent) => void): () => void {
-    return this.#primary.subscribe(sessionId, listener);
-  }
 }
 
 export function normalizeRuntimeLogDetails(details: unknown): unknown {

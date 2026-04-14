@@ -20,7 +20,6 @@
 | `tool.started` | tool 开始 | `runId`, `toolName`, `toolCallId` |
 | `tool.completed` | tool 成功 | `runId`, `toolName`, `toolCallId` |
 | `tool.failed` | tool 失败 | `runId`, `toolName`, `error` |
-| `history.mirror.*` | 镜像同步状态 | `workspaceId` |
 | `run.completed` | 正常完成 | `runId` |
 | `run.failed` | 执行失败 | `runId`, `errorCode` |
 | `run.cancelled` | 被取消 | `runId` |
@@ -62,7 +61,7 @@
 | action run | action 名、输入、结果 |
 | hook run | hook 名、事件、决策 |
 | backend shell | 命令、exit code、耗时 |
-| history mirror | 同步进度、最后事件 ID |
+| workspace local state | 当前 worker 上的本地状态与诊断信息 |
 
 ### 日志字段
 
@@ -74,7 +73,6 @@
 | `tool_name` | tool 名称 |
 | `duration_ms` | 耗时 |
 | `status` | 结果状态 |
-| `history_event_id` / `mirror_last_event_id` | 事件序号 |
 
 ### 存储
 

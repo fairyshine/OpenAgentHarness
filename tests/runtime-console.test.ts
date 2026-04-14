@@ -1,15 +1,9 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
-
 import { describe, expect, it } from "vitest";
 
 import type { SessionEventContract } from "@oah/api-contracts";
 import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
 import {
-  DualWriteSessionEventStore,
   appendRuntimeLogEvent,
   buildRuntimeConsoleLogger
 } from "../apps/server/src/runtime-console.ts";
@@ -95,106 +89,6 @@ describe("runtime console", () => {
       }
     });
     expect((events[0]?.data as { details?: Record<string, unknown> }).details?.token).toBe("[redacted]");
-  });
-
-  it("writes project session events to local history.db and falls back to central-only events when local mirroring is unavailable", async () => {
-    const persistence = createMemoryRuntimePersistence();
-    const rootPath = await mkdtemp(path.join(tmpdir(), "oah-console-project-"));
-    const workspace = await persistence.workspaceRepository.upsert({
-      id: "ws_project",
-      name: "project",
-      rootPath,
-      executionPolicy: "local",
-      status: "active",
-      kind: "project",
-      readOnly: false,
-      historyMirrorEnabled: true,
-      defaultAgent: "builder",
-      settings: { defaultAgent: "builder", skillDirs: [] },
-      workspaceModels: {},
-      agents: {},
-      actions: {},
-      skills: {},
-      toolServers: {},
-      hooks: {},
-      catalog: {
-        workspaceId: "ws_project",
-        agents: [],
-        models: [],
-        actions: [],
-        skills: [],
-        tools: [],
-        hooks: [],
-        nativeTools: []
-      },
-      createdAt: "2026-04-09T00:00:00.000Z",
-      updatedAt: "2026-04-09T00:00:00.000Z"
-    });
-    const session = await persistence.sessionRepository.create({
-      id: "ses_project",
-      workspaceId: workspace.id,
-      subjectRef: "dev:test",
-      activeAgentName: "builder",
-      status: "active",
-      createdAt: "2026-04-09T00:00:00.000Z",
-      updatedAt: "2026-04-09T00:00:00.000Z"
-    });
-
-    const store = new DualWriteSessionEventStore({
-      primary: persistence.sessionEventStore,
-      sessionRepository: persistence.sessionRepository,
-      workspaceRepository: persistence.workspaceRepository
-    });
-
-    const event = await store.append({
-      sessionId: session.id,
-      runId: "run_project",
-      event: "run.started",
-      data: { status: "running" }
-    });
-
-    const db = new DatabaseSync(path.join(rootPath, ".openharness", "data", "history.db"));
-    try {
-      const row = db
-        .prepare("select payload from session_events where id = ?")
-        .get(event.id) as { payload: string } | undefined;
-      expect(row).toBeDefined();
-      expect(JSON.parse(row?.payload ?? "{}")).toMatchObject({
-        id: event.id,
-        cursor: event.cursor,
-        event: "run.started"
-      });
-    } finally {
-      db.close();
-    }
-
-    const failingRoot = await mkdtemp(path.join(tmpdir(), "oah-console-failure-"));
-    const brokenRootPath = path.join(failingRoot, "workspace-file");
-    await writeFile(brokenRootPath, "not a directory");
-    const failingWorkspace = await persistence.workspaceRepository.upsert({
-      ...workspace,
-      id: "ws_broken",
-      rootPath: brokenRootPath
-    });
-    const failingSession = await persistence.sessionRepository.create({
-      ...session,
-      id: "ses_broken",
-      workspaceId: failingWorkspace.id
-    });
-
-    const brokenEvent = await store.append({
-      sessionId: failingSession.id,
-      runId: "run_broken",
-      event: "run.failed",
-      data: { errorMessage: "boom" }
-    });
-
-    await expect(persistence.sessionEventStore.listSince(failingSession.id)).resolves.toEqual([
-      expect.objectContaining({
-        id: brokenEvent.id,
-        event: "run.failed"
-      })
-    ]);
   });
 
   it("bridges runtime logger entries into runtime.log session events", async () => {

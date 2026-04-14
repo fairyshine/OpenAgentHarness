@@ -39,6 +39,56 @@ export function isLoopbackAddress(address: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
+function normalizeIpAddress(address: string): string {
+  const trimmed = address.trim().toLowerCase();
+  const zoneIndex = trimmed.indexOf("%");
+  return zoneIndex >= 0 ? trimmed.slice(0, zoneIndex) : trimmed;
+}
+
+export function isPrivateNetworkAddress(address: string | undefined): boolean {
+  if (!address) {
+    return false;
+  }
+
+  const normalized = normalizeIpAddress(address);
+  if (isLoopbackAddress(normalized)) {
+    return true;
+  }
+
+  if (normalized.startsWith("::ffff:")) {
+    return isPrivateNetworkAddress(normalized.slice("::ffff:".length));
+  }
+
+  if (normalized.includes(":")) {
+    return normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:");
+  }
+
+  const octets = normalized.split(".").map((segment) => Number.parseInt(segment, 10));
+  if (octets.length !== 4 || octets.some((segment) => !Number.isInteger(segment) || segment < 0 || segment > 255)) {
+    return false;
+  }
+
+  const [firstOctet, secondOctet] = octets as [number, number, number, number];
+
+  if (firstOctet === 10) {
+    return true;
+  }
+
+  if (firstOctet === 172 && secondOctet >= 16 && secondOctet <= 31) {
+    return true;
+  }
+
+  if (firstOctet === 192 && secondOctet === 168) {
+    return true;
+  }
+
+  if (firstOctet === 169 && secondOctet === 254) {
+    return true;
+  }
+
+  return false;
+}
+
 export function toCallerContext(request: FastifyRequest): CallerContext {
   if (!request.callerContext) {
     throw new AppError(401, "unauthorized", "Missing caller context.");

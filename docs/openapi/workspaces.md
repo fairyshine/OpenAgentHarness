@@ -26,19 +26,11 @@
 
 ### `GET /workspaces/{workspaceId}`
 
-读取元数据，包含 `kind`、`readOnly`、`historyMirrorEnabled`。
+读取元数据，包含 `kind`、`readOnly`、`executionPolicy`、`status`。
 
 ### `DELETE /workspaces/{workspaceId}`
 
 删除中心记录。受管目录（`paths.workspace_dir` 下）可额外清理文件夹。
-
-### `GET /workspaces/{workspaceId}/history-mirror`
-
-读取本地 history mirror 状态：`supported`、`enabled`、`state`、`lastEventId`、`lastSyncedAt`、`dbPath`、`errorMessage`。
-
-### `POST /workspaces/{workspaceId}/history-mirror/rebuild`
-
-删除并重建 `history.db` 镜像。仅 `kind=project`。不影响 PostgreSQL 事实源。
 
 ### `GET /workspaces/{workspaceId}/catalog`
 

@@ -30,7 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-import { probeTone, streamTone, toneBadgeClass, type SavedSessionRecord } from "../support";
+import { probeTone, streamTone, toneBadgeClass, type SavedSessionRecord, type StatusSemanticTone } from "../support";
 import type { useAppController } from "../use-app-controller";
 import { SessionNavItem, WorkspaceNavItem } from "./sidebar-items";
 
@@ -90,7 +90,7 @@ function SidebarHero(props: {
   );
 }
 
-function SidebarMetric(props: { label: string; value: string; tone?: "sky" | "emerald" | "rose" | "amber" }) {
+function SidebarMetric(props: { label: string; value: string; tone?: StatusSemanticTone }) {
   return (
     <div className={`rounded-2xl border px-3 py-2 ${toneBadgeClass(props.tone ?? "sky")}`}>
       <p className="text-[10px] uppercase tracking-[0.14em]">{props.label}</p>

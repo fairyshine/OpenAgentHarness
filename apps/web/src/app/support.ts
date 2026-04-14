@@ -92,7 +92,6 @@ interface HealthReportResponse {
     postgres: "up" | "down" | "not_configured";
     redisEvents: "up" | "down" | "not_configured";
     redisRunQueue: "up" | "down" | "not_configured";
-    historyMirror: "up" | "degraded" | "not_configured";
   };
   worker: {
     mode: "embedded" | "external" | "disabled";
@@ -170,13 +169,6 @@ interface HealthReportResponse {
         oldestSchedulableReadyAgeMs?: number | undefined;
       }>;
     } | null;
-  };
-  mirror: {
-    worker: "running" | "disabled";
-    enabledWorkspaces: number;
-    idleWorkspaces: number;
-    missingWorkspaces: number;
-    errorWorkspaces: number;
   };
 }
 

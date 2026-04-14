@@ -49,18 +49,6 @@ interface SqlQueryable {
   query(text: string, values?: unknown[]): Promise<{ rows: Array<Record<string, unknown>> }>;
 }
 
-export interface PostgresHistoryMirrorSnapshot {
-  watermarkEventId: number;
-  sessions: Session[];
-  messages: Message[];
-  runtimeMessages: RuntimeMessage[];
-  runs: Run[];
-  runSteps: RunStep[];
-  toolCalls: ToolCallAuditRecord[];
-  hookRuns: HookRunAuditRecord[];
-  artifacts: ArtifactRecord[];
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1313,116 +1301,6 @@ class PostgresHistoryEventRepository implements HistoryEventRepository {
   }
 }
 
-class PostgresHistoryMirrorSnapshotSource {
-  constructor(private readonly db: OahDatabase) {}
-
-  async readWorkspaceSnapshot(workspaceId: string): Promise<PostgresHistoryMirrorSnapshot> {
-    return this.db.transaction(async (tx) => {
-      const watermarkRows = await tx
-        .select({
-          maxId: sql<number>`coalesce(max(${historyEvents.id}), 0)`
-        })
-        .from(historyEvents)
-        .where(eq(historyEvents.workspaceId, workspaceId));
-      const watermarkEventId = nonNull(watermarkRows[0]?.maxId, 0);
-
-      const snapshotSessions = (
-        await tx.select().from(sessions).where(eq(sessions.workspaceId, workspaceId)).orderBy(desc(sessions.updatedAt), desc(sessions.createdAt), asc(sessions.id))
-      ).map(toSession);
-      const sessionIds = snapshotSessions.map((session) => session.id);
-
-      const snapshotMessages =
-        sessionIds.length > 0
-          ? (
-              await tx
-                .select()
-                .from(messages)
-                .where(inArray(messages.sessionId, sessionIds))
-                .orderBy(asc(messages.createdAt), asc(messages.id))
-            ).map(toMessage)
-          : [];
-
-      const snapshotRuntimeMessages =
-        sessionIds.length > 0
-          ? (
-              await tx
-                .select()
-                .from(runtimeMessages)
-                .where(inArray(runtimeMessages.sessionId, sessionIds))
-                .orderBy(asc(runtimeMessages.createdAt), asc(runtimeMessages.id))
-            ).map(toRuntimeMessageRecord)
-          : [];
-
-      const snapshotRuns = (
-        await tx.select().from(runs).where(eq(runs.workspaceId, workspaceId)).orderBy(desc(runs.createdAt), desc(runs.id))
-      ).map(toRun);
-      const runIds = snapshotRuns.map((run) => run.id);
-
-      const snapshotRunSteps =
-        runIds.length > 0
-          ? (await tx.select().from(runSteps).where(inArray(runSteps.runId, runIds)).orderBy(asc(runSteps.runId), asc(runSteps.seq))).map(toRunStep)
-          : [];
-
-      const snapshotToolCalls =
-        runIds.length > 0
-          ? (
-              await tx
-                .select()
-                .from(toolCalls)
-                .where(inArray(toolCalls.runId, runIds))
-                .orderBy(asc(toolCalls.runId), asc(toolCalls.startedAt), asc(toolCalls.id))
-            ).map(toToolCallAuditRecord)
-          : [];
-
-      const snapshotHookRuns =
-        runIds.length > 0
-          ? (
-              await tx
-                .select()
-                .from(hookRuns)
-                .where(inArray(hookRuns.runId, runIds))
-                .orderBy(asc(hookRuns.runId), asc(hookRuns.startedAt), asc(hookRuns.id))
-            ).map(toHookRunAuditRecord)
-          : [];
-
-      const snapshotArtifacts =
-        runIds.length > 0
-          ? (
-              await tx
-                .select()
-                .from(artifacts)
-                .where(inArray(artifacts.runId, runIds))
-                .orderBy(asc(artifacts.runId), asc(artifacts.createdAt), asc(artifacts.id))
-            ).map(toArtifactRecord)
-          : [];
-
-      return {
-        watermarkEventId,
-        sessions: snapshotSessions,
-        messages: snapshotMessages,
-        runtimeMessages: snapshotRuntimeMessages,
-        runs: snapshotRuns,
-        runSteps: snapshotRunSteps,
-        toolCalls: snapshotToolCalls,
-        hookRuns: snapshotHookRuns,
-        artifacts: snapshotArtifacts
-      };
-    });
-  }
-
-  async readWorkspaceRuntimeMessages(workspaceId: string): Promise<RuntimeMessage[]> {
-    const rows = await this.db
-      .select()
-      .from(runtimeMessages)
-      .where(
-        sql`${runtimeMessages.sessionId} in (select ${sessions.id} from ${sessions} where ${sessions.workspaceId} = ${workspaceId})`
-      )
-      .orderBy(asc(runtimeMessages.createdAt), asc(runtimeMessages.id));
-
-    return rows.map(toRuntimeMessageRecord);
-  }
-}
-
 class PostgresWorkspaceArchiveRepository implements WorkspaceArchiveRepository {
   constructor(private readonly db: OahDatabase) {}
 
@@ -1656,7 +1534,6 @@ export interface PostgresRuntimePersistence {
   db: OahDatabase;
   workspaceRepository: PostgresWorkspaceRepository;
   workspaceArchiveRepository: PostgresWorkspaceArchiveRepository;
-  historyMirrorSnapshotSource: PostgresHistoryMirrorSnapshotSource;
   sessionRepository: PostgresSessionRepository;
   messageRepository: PostgresMessageRepository;
   runtimeMessageRepository: PostgresRuntimeMessageRepository;
@@ -2101,7 +1978,6 @@ export async function createPostgresRuntimePersistence(
     db,
     workspaceRepository: new PostgresWorkspaceRepository(db),
     workspaceArchiveRepository: new PostgresWorkspaceArchiveRepository(db),
-    historyMirrorSnapshotSource: new PostgresHistoryMirrorSnapshotSource(db),
     sessionRepository: new PostgresSessionRepository(db),
     messageRepository: new PostgresMessageRepository(db),
     runtimeMessageRepository: new PostgresRuntimeMessageRepository(db),
@@ -2121,7 +1997,6 @@ export async function createPostgresRuntimePersistence(
 }
 
 export type {
-  PostgresHistoryMirrorSnapshotSource,
   PostgresWorkspaceRepository,
   PostgresWorkspaceArchiveRepository,
   PostgresSessionRepository,

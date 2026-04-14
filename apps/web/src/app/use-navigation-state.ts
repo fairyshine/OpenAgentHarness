@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { Session, Workspace, WorkspaceCatalog, WorkspaceHistoryMirrorStatus } from "@oah/api-contracts";
+import type { Session, Workspace, WorkspaceCatalog } from "@oah/api-contracts";
 
 import {
   storageKeys,
@@ -27,10 +27,8 @@ export function useNavigationState() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [workspaceTemplates, setWorkspaceTemplates] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<WorkspaceCatalog | null>(null);
-  const [mirrorStatus, setMirrorStatus] = useState<WorkspaceHistoryMirrorStatus | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [showWorkspaceCreator, setShowWorkspaceCreator] = useState(false);
-  const [mirrorRebuildBusy, setMirrorRebuildBusy] = useState(false);
   const [workspaceManagementEnabled, setWorkspaceManagementEnabled] = useState(true);
 
   useEffect(() => {
@@ -77,14 +75,10 @@ export function useNavigationState() {
     setWorkspaceTemplates,
     catalog,
     setCatalog,
-    mirrorStatus,
-    setMirrorStatus,
     session,
     setSession,
     showWorkspaceCreator,
     setShowWorkspaceCreator,
-    mirrorRebuildBusy,
-    setMirrorRebuildBusy,
     workspaceManagementEnabled,
     setWorkspaceManagementEnabled,
     orderedSavedWorkspaces,

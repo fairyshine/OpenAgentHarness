@@ -85,6 +85,7 @@ plugins:
             Projection 与 Executors: Projection and Executors
             Queue 与可靠性: Queue and Reliability
             事件与审计: Events and Audit
+            Worker 成熟化路线图: Worker Maturity Roadmap
             API 参考: API Reference
   - search
 
@@ -149,6 +150,7 @@ nav:
       - 执行后端: runtime/execution-backend.md
       - Hook Runtime: runtime/hook-runtime.md
       - Queue 与可靠性: runtime/queue-and-reliability.md
+      - Worker 成熟化路线图: runtime/worker-scaling-roadmap.md
       - 事件与审计: runtime/events-and-audit.md
   - API 参考:
       - 导航: openapi/README.md

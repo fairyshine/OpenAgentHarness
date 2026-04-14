@@ -36,7 +36,7 @@
 
 - `project` -- 完整能力，可按 agent allowlist 暴露工具与执行
 - `chat` -- 只加载 prompt / agent / model，不允许执行、文件写入或 hook
-- `chat` workspace 不创建本地历史镜像
+- `chat` workspace 不创建本地 `history.db`
 
 ## 2. 对话与执行域
 

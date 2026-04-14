@@ -74,9 +74,6 @@ export function ProviderWorkspace(props: ProviderProps) {
                   <Badge variant="outline" className={toneBadgeClass(probeTone(props.healthStatus))}>{`health ${props.healthStatus}`}</Badge>
                   <Badge variant="outline" className={toneBadgeClass(streamTone(props.streamState))}>{`stream ${props.streamState}`}</Badge>
                   <Badge variant="outline" className={toneBadgeClass(probeTone(readinessLabel))}>{`ready ${readinessLabel}`}</Badge>
-                  <Badge variant="outline" className={toneBadgeClass(probeTone(props.healthReport?.checks.historyMirror ?? "unknown"))}>
-                    {`mirror ${props.healthReport?.checks.historyMirror ?? "unknown"}`}
-                  </Badge>
                 </div>
               </Section>
 

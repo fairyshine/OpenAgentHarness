@@ -197,7 +197,7 @@ export function useStorageController(params: {
       const errorItems = response.items.filter((item) => item.status === "error");
       await refreshStorageTable(selectedStorageTable, true, {
         offset: storageTableOffset,
-        selectedRowId: queuedItems[0]?.runId
+        ...(queuedItems[0]?.runId ? { selectedRowId: queuedItems[0].runId } : {})
       });
       params.setActivity(
         errorItems.length === 0

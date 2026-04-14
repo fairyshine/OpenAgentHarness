@@ -13,7 +13,7 @@ Two workspace kinds:
 
 | Kind | Description |
 |------|-------------|
-| `project` | Full workspace with tools, execution, and local history mirror |
+| `project` | Full workspace with tools, execution, and local runtime state |
 | `chat` | Read-only conversation workspace; loads only prompts / agents / models; no execution |
 
 ## 2. Design Principles
@@ -24,7 +24,7 @@ Two workspace kinds:
 - **Local First, Sandbox Ready** -- Default local execution; execution layer is replaceable from day one; future support for containers / VMs / remote runners.
 - **Identity Externalized** -- No built-in user system; consumes external identity and access context.
 - **Auditable by Default** -- All runs, tool calls, action runs, and hook runs produce structured records.
-- **Central Truth, Local Mirror** -- PostgreSQL is the source of truth; workspace `history.db` is async-only mirror, never in the online path.
+- **Central Truth, Local Runtime State** -- PostgreSQL is the central source of truth; workspace `history.db` only stores local runtime data and is not a cross-process sync path.
 - **Embedded by Default, Split in Production** -- Default single-process API + embedded worker; production supports API-only + standalone worker split.
 
 ## 3. Layered Architecture
@@ -43,7 +43,6 @@ flowchart TD
     D --> K[Hook Runtime]
     D --> L[Event Bus]
     D --> M[Storage Layer]
-    D -. async sync .-> S[History Syncer]
     G --> N[Execution Backend]
     H --> N
     I --> N
@@ -52,8 +51,7 @@ flowchart TD
     N -. future .-> P[Sandbox Backend]
     M --> Q[(PostgreSQL)]
     L --> R[(Redis)]
-    S --> Q
-    S --> T[(Workspace .openharness/data/history.db)]
+    N --> T[(Workspace .openharness/data/history.db)]
 ```
 
 ## 4. Core Modules
@@ -97,21 +95,13 @@ flowchart TD
 - Executes lifecycle hooks (run events) and interceptor hooks (tool / model events)
 - Allows controlled modification of requests and execution logic within safety bounds
 
-### History Syncer
-
-- Consumes history events from PostgreSQL
-- Async writes to workspace `history.db`
-- Maintains sync cursor, retry, and rebuild logic
-- Mirror failures never block the main request path
-- Only active for `project` workspaces with mirror enabled
-
 ## 5. Process Modes
 
 | Mode | Description |
 |------|-------------|
 | API + embedded worker | Default. Single-process, full execution. Uses Redis queue when configured, otherwise in-process. |
 | API only | Interface-only; requires separate worker deployment. |
-| Standalone worker | Consumes Redis queue independently. Handles run execution and history mirror sync. |
+| Standalone worker | Consumes Redis queue independently and executes runs. |
 
 ## 6. Request Flow
 
@@ -126,8 +116,7 @@ sequenceDiagram
     participant Runtime as Action/Skill/Tool/Native Runtime
     participant DB as PostgreSQL
     participant Redis
-    participant Syncer as History Syncer
-    participant Mirror as Workspace history.db
+    participant LocalDb as Workspace history.db
 
     Client->>API: POST /sessions/:id/messages
     API->>DB: persist message
@@ -150,8 +139,7 @@ sequenceDiagram
     Orchestrator->>DB: persist result and run status
     Orchestrator->>Redis: publish events
     Orchestrator-->>Client: SSE events
-    DB-->>Syncer: history events
-    Syncer->>Mirror: async upsert mirror rows
+    Orchestrator->>LocalDb: write local runtime state when needed
 ```
 
 ## 7. Key Architecture Decisions
@@ -167,7 +155,7 @@ sequenceDiagram
 - Actions use `actions/*/ACTION.yaml`; Skills use `skills/*/SKILL.md`
 - All capabilities are unified as tool calling for the LLM, but stay separate in domain and governance
 - Default trusted intranet environment -- no container isolation yet
-- PostgreSQL is the source of truth; `history.db` is an async mirror only
+- PostgreSQL is the central source of truth; `history.db` is only a local runtime state file
 
 ## 8. Technology
 
@@ -177,5 +165,5 @@ sequenceDiagram
 | API | OpenAPI 3.1 + HTTP + SSE |
 | Database | PostgreSQL |
 | Queue & coordination | Redis |
-| Local history mirror | SQLite |
+| Local runtime data | SQLite |
 | Model layer | Vercel AI SDK + dual-layer model registry |

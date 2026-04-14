@@ -51,7 +51,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts
 pnpm dev:web
 ```
 
-API 进程只负责 HTTP 请求。Worker 进程消费 Redis 队列、执行 Run、同步 history mirror。
+API 进程只负责 HTTP 请求。Worker 进程消费 Redis 队列并执行 Run。
 
 ---
 

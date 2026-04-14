@@ -170,6 +170,50 @@
         }
       }
     },
+    "workers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "embedded": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scale_interval_ms": {
+              "type": "integer",
+              "minimum": 250
+            },
+            "idle_ttl_ms": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "scale_up_window": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scale_down_window": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cooldown_ms": {
+              "type": "integer",
+              "minimum": 250
+            },
+            "reserved_capacity_for_subagent": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
     "llm": {
       "type": "object",
       "required": [

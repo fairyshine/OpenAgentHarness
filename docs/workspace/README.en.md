@@ -85,7 +85,7 @@ The runtime scans these paths at run startup:
 
 !!! info
 
-    `.openharness/data/` is a runtime-managed directory and is not part of capability discovery. `history.db` is an async mirror, not a source of truth. `kind=chat` workspaces do not create this database.
+    `.openharness/data/` is a runtime-managed directory and is not part of capability discovery. `history.db` only stores local runtime data and is not a cross-process sync mechanism. `kind=chat` workspaces do not create this database.
 
 **Merge rules:**
 
@@ -104,4 +104,4 @@ Execution strategy. `project` can assemble and execute tool capabilities. `chat`
 
 **Why is `.openharness/data/` excluded from config parsing?**
 
-It is a runtime-managed directory. `history.db` is an async mirror, not a source of truth.
+It is a runtime-managed directory. `history.db` is only a local runtime data file, not an external source-of-truth interface.

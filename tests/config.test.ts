@@ -112,7 +112,6 @@ llm:
 
     process.env.OAH_OBJECT_ACCESS_KEY = "demo-key";
     process.env.OAH_OBJECT_SECRET_KEY = "demo-secret";
-
     const configPath = path.join(tempDir, "server.yaml");
     await writeFile(
       configPath,
@@ -169,6 +168,59 @@ llm:
         workspace: "workspace",
         chat: "chat"
       }
+    });
+  });
+
+  it("loads embedded worker pool settings from server config", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-workers-"));
+    tempDirs.push(tempDir);
+
+    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage:
+  redis_url: redis://local/0
+paths:
+  workspace_dir: ./workspaces
+  chat_dir: ./chat
+  template_dir: ./templates
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+workers:
+  embedded:
+    min_count: 2
+    max_count: 6
+    scale_interval_ms: 1500
+    idle_ttl_ms: 45000
+    scale_up_window: 3
+    scale_down_window: 4
+    cooldown_ms: 2500
+    reserved_capacity_for_subagent: 2
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const config = await loadServerConfig(configPath);
+    expect(config.workers?.embedded).toEqual({
+      min_count: 2,
+      max_count: 6,
+      scale_interval_ms: 1500,
+      idle_ttl_ms: 45000,
+      scale_up_window: 3,
+      scale_down_window: 4,
+      cooldown_ms: 2500,
+      reserved_capacity_for_subagent: 2
     });
   });
 
@@ -325,6 +377,46 @@ openai-default:
       provider: "openai",
       key: "test-key",
       name: "gpt-4o-mini"
+    });
+  });
+
+  it("loads model files from nested directories under model_dir", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-models-nested-"));
+    tempDirs.push(tempDir);
+
+    await mkdir(path.join(tempDir, "openai"), { recursive: true });
+    await mkdir(path.join(tempDir, "compatible", "vendor-a"), { recursive: true });
+    await writeFile(
+      path.join(tempDir, "openai", "default.yaml"),
+      `
+openai-default:
+  provider: openai
+  name: gpt-4o-mini
+`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(tempDir, "compatible", "vendor-a", "qwen.yaml"),
+      `
+compat-qwen-max:
+  provider: openai-compatible
+  name: qwen-max
+  url: https://example.test/v1
+`,
+      "utf8"
+    );
+
+    const models = await loadPlatformModels(tempDir);
+    expect(models).toMatchObject({
+      "openai-default": {
+        provider: "openai",
+        name: "gpt-4o-mini"
+      },
+      "compat-qwen-max": {
+        provider: "openai-compatible",
+        name: "qwen-max",
+        url: "https://example.test/v1"
+      }
     });
   });
 

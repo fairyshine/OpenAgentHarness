@@ -60,6 +60,8 @@ services:
       context: .
       dockerfile: Dockerfile.dev
     restart: unless-stopped
+    environment:
+      OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -150,4 +152,3 @@ volumes:
       s3_force_path_style: "true"
       vfs_cache_mode: off
       poll_interval: 0
-

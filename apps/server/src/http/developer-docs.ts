@@ -114,11 +114,9 @@ export function buildApiIndex(request: FastifyRequest) {
         "PATCH /api/v1/workspaces/{workspaceId}/entries/move"
       ]
     },
-    mirrorAndModels: {
-      description: "Inspect local history mirror health and discover model/provider configuration.",
+    modelsAndDiagnostics: {
+      description: "Discover model/provider configuration and inspect service diagnostics.",
       routes: [
-        "GET /api/v1/workspaces/{workspaceId}/history-mirror",
-        "POST /api/v1/workspaces/{workspaceId}/history-mirror/rebuild",
         "GET /api/v1/model-providers",
         "GET /api/v1/platform-models"
       ]

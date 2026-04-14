@@ -86,7 +86,7 @@ Stores workspace templates. When creating a new workspace via `POST /workspaces`
 
 ### `model_dir`
 
-Scans `*.yaml` files in the directory. File format matches workspace `.openharness/models/*.yaml`. Loaded models appear as `platform/<name>` in the model catalog.
+Recursively scans `*.yaml` files in the directory. File format matches workspace `.openharness/models/*.yaml`. Loaded models appear as `platform/<name>` in the model catalog.
 
 Example (`model_dir/openai-default.yaml`):
 

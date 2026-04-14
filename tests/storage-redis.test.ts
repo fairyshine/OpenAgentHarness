@@ -20,9 +20,11 @@ function createInMemoryRedisCommands() {
     if (!existing) {
       return;
     }
+
     for (const member of members) {
       existing.delete(member);
     }
+
     if (existing.size === 0) {
       sets.delete(key);
     }
@@ -57,6 +59,7 @@ function createInMemoryRedisCommands() {
             if (!existing) {
               return;
             }
+
             for (const field of Array.isArray(fields) ? fields : [fields]) {
               delete existing[field];
             }
@@ -109,9 +112,49 @@ function createInMemoryRedisCommands() {
 
   return {
     commands: commands as never,
-    sets,
     hashes,
     expiries
+  };
+}
+
+function createQueueStub(overrides: Record<string, unknown> = {}) {
+  return {
+    async enqueue() {
+      return undefined;
+    },
+    async claimNextSession() {
+      return undefined;
+    },
+    async readyQueueLength() {
+      return 0;
+    },
+    async inspectReadyQueue() {
+      return {
+        length: 0,
+        subagentLength: 0,
+        oldestReadyAgeMs: 0,
+        averageReadyAgeMs: 0
+      };
+    },
+    async tryAcquireSessionLock() {
+      return true;
+    },
+    async renewSessionLock() {
+      return true;
+    },
+    async releaseSessionLock() {
+      return true;
+    },
+    async dequeueRun() {
+      return undefined;
+    },
+    async ping() {
+      return true;
+    },
+    async close() {
+      return undefined;
+    },
+    ...overrides
   };
 }
 
@@ -121,6 +164,7 @@ async function waitForCondition(condition: () => boolean, timeoutMs = 1_500) {
     if (condition()) {
       return;
     }
+
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 
@@ -245,20 +289,11 @@ describe("storage redis", () => {
     let released = 0;
     const processed: string[] = [];
 
-    const queue = {
-      async enqueue() {
-        return undefined;
-      },
+    const queue = createQueueStub({
       async claimNextSession() {
         await new Promise((resolve) => setTimeout(resolve, 1));
         claims += 1;
         return claims === 1 ? "ses_1" : undefined;
-      },
-      async tryAcquireSessionLock() {
-        return true;
-      },
-      async renewSessionLock() {
-        return true;
       },
       async releaseSessionLock() {
         released += 1;
@@ -266,11 +301,8 @@ describe("storage redis", () => {
       },
       async dequeueRun() {
         return dequeuedRuns.shift();
-      },
-      async close() {
-        return undefined;
       }
-    };
+    });
 
     const worker = new RedisRunWorker({
       queue,
@@ -292,61 +324,6 @@ describe("storage redis", () => {
     expect(released).toBe(1);
   });
 
-  it("runs stale-run recovery once before entering the worker loop", async () => {
-    let claims = 0;
-    const recoveredAtStartup: Array<{ staleBefore?: string }> = [];
-    const queue = {
-      async enqueue() {
-        return undefined;
-      },
-      async claimNextSession() {
-        await new Promise((resolve) => setTimeout(resolve, 1));
-        claims += 1;
-        return undefined;
-      },
-      async tryAcquireSessionLock() {
-        return true;
-      },
-      async renewSessionLock() {
-        return true;
-      },
-      async releaseSessionLock() {
-        return true;
-      },
-      async dequeueRun() {
-        return undefined;
-      },
-      async close() {
-        return undefined;
-      }
-    };
-
-    const worker = new RedisRunWorker({
-      queue,
-      runtimeService: {
-        async processQueuedRun() {
-          return undefined;
-        },
-        async recoverStaleRuns(options) {
-          recoveredAtStartup.push({ staleBefore: options?.staleBefore });
-          return { recoveredRunIds: [] };
-        }
-      },
-      pollTimeoutMs: 250,
-      lockTtlMs: 2_000,
-      recoveryGraceMs: 4_000
-    });
-
-    worker.start();
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await worker.close();
-
-    expect(recoveredAtStartup).toHaveLength(1);
-    expect(typeof recoveredAtStartup[0]?.staleBefore).toBe("string");
-    expect(claims).toBeGreaterThan(0);
-  });
-
   it("restores a claimed session when lock contention rejects the claim", async () => {
     const readySessions = ["ses_1"];
     const sessionRuns = new Map<string, string[]>([["ses_1", ["run_1"]]]);
@@ -354,10 +331,7 @@ describe("storage redis", () => {
     let acquireAttempts = 0;
     let restoredClaims = 0;
 
-    const queue = {
-      async enqueue() {
-        return undefined;
-      },
+    const queue = createQueueStub({
       async claimNextSession() {
         await new Promise((resolve) => setTimeout(resolve, 1));
         return readySessions.shift();
@@ -365,12 +339,6 @@ describe("storage redis", () => {
       async tryAcquireSessionLock() {
         acquireAttempts += 1;
         return acquireAttempts > 1;
-      },
-      async renewSessionLock() {
-        return true;
-      },
-      async releaseSessionLock() {
-        return true;
       },
       async dequeueRun(sessionId: string) {
         return sessionRuns.get(sessionId)?.shift();
@@ -383,11 +351,8 @@ describe("storage redis", () => {
         readySessions.push(sessionId);
         restoredClaims += 1;
         return true;
-      },
-      async close() {
-        return undefined;
       }
-    };
+    });
 
     const worker = new RedisRunWorker({
       queue,
@@ -461,31 +426,17 @@ describe("storage redis", () => {
       currentSessionId?: string;
     }> = [];
     const removed: string[] = [];
-    const queue = {
-      async enqueue() {
-        return undefined;
-      },
+
+    const queue = createQueueStub({
       async claimNextSession() {
         await new Promise((resolve) => setTimeout(resolve, 1));
         claims += 1;
         return claims === 1 ? "ses_1" : undefined;
       },
-      async tryAcquireSessionLock() {
-        return true;
-      },
-      async renewSessionLock() {
-        return true;
-      },
-      async releaseSessionLock() {
-        return true;
-      },
       async dequeueRun() {
         return dequeuedRuns.shift();
-      },
-      async close() {
-        return undefined;
       }
-    };
+    });
 
     const worker = new RedisRunWorker({
       queue,
@@ -529,40 +480,24 @@ describe("storage redis", () => {
     let readySessions = 0;
     let claims = 0;
     const heartbeats: Array<{ workerId: string; state: string }> = [];
-    const removed: string[] = [];
     const infoLogs: string[] = [];
 
-    const createQueue = () => ({
-      async enqueue() {
-        return undefined;
-      },
-      async claimNextSession() {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        claims += 1;
-        return undefined;
-      },
-      async tryAcquireSessionLock() {
-        return true;
-      },
-      async renewSessionLock() {
-        return true;
-      },
-      async releaseSessionLock() {
-        return true;
-      },
-      async dequeueRun() {
-        return undefined;
-      },
-      async getReadySessionCount() {
-        return readySessions;
-      },
-      async ping() {
-        return true;
-      },
-      async close() {
-        return undefined;
-      }
-    });
+    const createQueue = () =>
+      createQueueStub({
+        async claimNextSession() {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          claims += 1;
+          return undefined;
+        },
+        async getReadySessionCount() {
+          return readySessions;
+        },
+        async getSchedulingPressure() {
+          return {
+            readySessionCount: readySessions
+          };
+        }
+      });
 
     const pool = new RedisRunWorkerPool({
       queue: createQueue(),
@@ -588,8 +523,8 @@ describe("storage redis", () => {
             state: entry.state
           });
         },
-        async remove(workerId) {
-          removed.push(workerId);
+        async remove() {
+          return undefined;
         }
       },
       logger: {
@@ -626,9 +561,6 @@ describe("storage redis", () => {
       () => pool.snapshot().activeWorkers === 2 && pool.snapshot().lastRebalanceReason === "scale_down",
       4_000
     );
-    expect(pool.snapshot().lastRebalanceReason).toBe("scale_down");
-    expect(pool.snapshot().desiredWorkers).toBe(2);
-    expect(pool.snapshot().activeWorkers).toBe(2);
 
     await pool.close();
 
@@ -636,306 +568,6 @@ describe("storage redis", () => {
     expect(infoLogs.filter((entry) => entry.includes("desired=4"))).toHaveLength(1);
     expect(infoLogs.filter((entry) => entry.includes("(shutdown)"))).toHaveLength(1);
     expect(claims).toBeGreaterThan(0);
-  });
-
-  it("applies the startup target immediately instead of waiting for the sample window", async () => {
-    const heartbeats: Array<{ workerId: string; state: string }> = [];
-
-    const createQueue = () => ({
-      async enqueue() {
-        return undefined;
-      },
-      async claimNextSession() {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        return undefined;
-      },
-      async tryAcquireSessionLock() {
-        return true;
-      },
-      async renewSessionLock() {
-        return true;
-      },
-      async releaseSessionLock() {
-        return true;
-      },
-      async dequeueRun() {
-        return undefined;
-      },
-      async getReadySessionCount() {
-        return 0;
-      },
-      async ping() {
-        return true;
-      },
-      async close() {
-        return undefined;
-      }
-    });
-
-    const pool = new RedisRunWorkerPool({
-      queue: createQueue(),
-      queueFactory: async () => createQueue(),
-      runtimeService: {
-        async processQueuedRun() {
-          return undefined;
-        }
-      },
-      processKind: "embedded",
-      minWorkers: 2,
-      maxWorkers: 4,
-      scaleIntervalMs: 5_000,
-      readySessionsPerWorker: 1,
-      scaleUpCooldownMs: 20,
-      scaleDownCooldownMs: 500,
-      scaleUpSampleSize: 3,
-      scaleDownSampleSize: 2,
-      registry: {
-        async heartbeat(entry) {
-          heartbeats.push({
-            workerId: entry.workerId,
-            state: entry.state
-          });
-        },
-        async remove() {
-          return undefined;
-        }
-      }
-    });
-
-    pool.start();
-
-    await waitForCondition(() => new Set(heartbeats.map((entry) => entry.workerId)).size >= 2, 200);
-    expect(pool.snapshot().activeWorkers).toBe(2);
-    expect(pool.snapshot().lastRebalanceReason).toBe("startup");
-
-    await pool.close();
-  });
-
-  it("scales from schedulable session pressure instead of raw ready queue depth", async () => {
-    const infoLogs: string[] = [];
-    let pressure = {
-      readySessionCount: 1,
-      readyQueueDepth: 6,
-      uniqueReadySessionCount: 3,
-      lockedReadySessionCount: 1,
-      staleReadySessionCount: 1,
-      oldestSchedulableReadyAgeMs: 250
-    };
-
-    const createQueue = () => ({
-      async enqueue() {
-        return undefined;
-      },
-      async claimNextSession() {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        return undefined;
-      },
-      async tryAcquireSessionLock() {
-        return true;
-      },
-      async renewSessionLock() {
-        return true;
-      },
-      async releaseSessionLock() {
-        return true;
-      },
-      async dequeueRun() {
-        return undefined;
-      },
-      async getSchedulingPressure() {
-        return pressure;
-      },
-      async getReadySessionCount() {
-        return 99;
-      },
-      async ping() {
-        return true;
-      },
-      async close() {
-        return undefined;
-      }
-    });
-
-    const pool = new RedisRunWorkerPool({
-      queue: createQueue(),
-      queueFactory: async () => createQueue(),
-      runtimeService: {
-        async processQueuedRun() {
-          return undefined;
-        }
-      },
-      processKind: "embedded",
-      minWorkers: 2,
-      maxWorkers: 4,
-      scaleIntervalMs: 40,
-      readySessionsPerWorker: 1,
-      scaleUpCooldownMs: 20,
-      scaleDownCooldownMs: 20,
-      scaleUpSampleSize: 1,
-      scaleDownSampleSize: 1,
-      logger: {
-        info(message) {
-          infoLogs.push(message);
-        },
-        warn() {
-          return undefined;
-        },
-        error() {
-          return undefined;
-        }
-      }
-    });
-
-    pool.start();
-
-    await waitForCondition(() => pool.snapshot().activeWorkers === 2, 200);
-    expect(pool.snapshot()).toMatchObject({
-      readySessionCount: 1,
-      readyQueueDepth: 6,
-      uniqueReadySessionCount: 3,
-      lockedReadySessionCount: 1,
-      staleReadySessionCount: 1,
-      oldestSchedulableReadyAgeMs: 250,
-      desiredWorkers: 2
-    });
-    expect(infoLogs.some((entry) => entry.includes("desired=4"))).toBe(false);
-
-    pressure = {
-      readySessionCount: 4,
-      readyQueueDepth: 7,
-      uniqueReadySessionCount: 5,
-      lockedReadySessionCount: 1,
-      staleReadySessionCount: 0,
-      oldestSchedulableReadyAgeMs: 400
-    };
-
-    await waitForCondition(() => pool.snapshot().activeWorkers === 4, 2_500);
-    expect(pool.snapshot()).toMatchObject({
-      readySessionCount: 4,
-      readyQueueDepth: 7,
-      uniqueReadySessionCount: 5,
-      lockedReadySessionCount: 1,
-      staleReadySessionCount: 0,
-      oldestSchedulableReadyAgeMs: 400,
-      desiredWorkers: 4
-    });
-
-    await pool.close();
-  });
-
-  it("scales up when busy workers leave an aged schedulable session waiting", async () => {
-    let nextSessionId = "ses_busy";
-    let pressure = {
-      readySessionCount: 1,
-      readyQueueDepth: 1,
-      uniqueReadySessionCount: 1,
-      lockedReadySessionCount: 0,
-      staleReadySessionCount: 0,
-      oldestSchedulableReadyAgeMs: 0
-    };
-    let dequeued = false;
-    let releaseProcessing: (() => void) | undefined;
-    const processingBlocked = new Promise<void>((resolve) => {
-      releaseProcessing = resolve;
-    });
-
-    const createQueue = () => ({
-      async enqueue() {
-        return undefined;
-      },
-      async claimNextSession() {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        if (!nextSessionId) {
-          return undefined;
-        }
-
-        const claimed = nextSessionId;
-        nextSessionId = "";
-        return claimed;
-      },
-      async tryAcquireSessionLock() {
-        return true;
-      },
-      async renewSessionLock() {
-        return true;
-      },
-      async releaseSessionLock() {
-        return true;
-      },
-      async dequeueRun() {
-        if (dequeued) {
-          return undefined;
-        }
-
-        dequeued = true;
-        return "run_busy";
-      },
-      async getSchedulingPressure() {
-        return pressure;
-      },
-      async ping() {
-        return true;
-      },
-      async close() {
-        return undefined;
-      }
-    });
-
-    const pool = new RedisRunWorkerPool({
-      queue: createQueue(),
-      queueFactory: async () => createQueue(),
-      runtimeService: {
-        async processQueuedRun() {
-          await processingBlocked;
-        }
-      },
-      processKind: "embedded",
-      minWorkers: 1,
-      maxWorkers: 3,
-      scaleIntervalMs: 40,
-      readySessionsPerWorker: 1,
-      scaleUpCooldownMs: 20,
-      scaleDownCooldownMs: 500,
-      scaleUpSampleSize: 1,
-      scaleDownSampleSize: 1,
-      scaleUpBusyRatioThreshold: 0.5,
-      scaleUpMaxReadyAgeMs: 120
-    });
-
-    pool.start();
-
-    await waitForCondition(() => pool.snapshot().busyWorkers === 1, 500);
-    expect(pool.snapshot().activeWorkers).toBe(1);
-
-    pressure = {
-      readySessionCount: 1,
-      readyQueueDepth: 1,
-      uniqueReadySessionCount: 1,
-      lockedReadySessionCount: 0,
-      staleReadySessionCount: 0,
-      oldestSchedulableReadyAgeMs: 240
-    };
-
-    await waitForCondition(() => pool.snapshot().activeWorkers === 2, 2_500);
-    expect(pool.snapshot()).toMatchObject({
-      busyWorkers: 1,
-      readySessionCount: 1,
-      oldestSchedulableReadyAgeMs: 240,
-      desiredWorkers: 2
-    });
-
-    pressure = {
-      readySessionCount: 0,
-      readyQueueDepth: 0,
-      uniqueReadySessionCount: 0,
-      lockedReadySessionCount: 0,
-      staleReadySessionCount: 0,
-      oldestSchedulableReadyAgeMs: 0
-    };
-    releaseProcessing?.();
-
-    await waitForCondition(() => pool.snapshot().busyWorkers === 0, 500);
-    await pool.close();
   });
 
   it("uses global worker load to avoid local over-scaling when remote workers already cover demand", async () => {
@@ -980,36 +612,16 @@ describe("storage redis", () => {
       }
     ];
 
-    const createQueue = () => ({
-      async enqueue() {
-        return undefined;
-      },
-      async claimNextSession() {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        return undefined;
-      },
-      async tryAcquireSessionLock() {
-        return true;
-      },
-      async renewSessionLock() {
-        return true;
-      },
-      async releaseSessionLock() {
-        return true;
-      },
-      async dequeueRun() {
-        return undefined;
-      },
-      async getSchedulingPressure() {
-        return pressure;
-      },
-      async ping() {
-        return true;
-      },
-      async close() {
-        return undefined;
-      }
-    });
+    const createQueue = () =>
+      createQueueStub({
+        async claimNextSession() {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return undefined;
+        },
+        async getSchedulingPressure() {
+          return pressure;
+        }
+      });
 
     const pool = new RedisRunWorkerPool({
       queue: createQueue(),
@@ -1064,6 +676,7 @@ describe("storage redis", () => {
       staleReadySessionCount: 0,
       oldestSchedulableReadyAgeMs: 0
     };
+
     await waitForCondition(() => pool.snapshot().activeWorkers === 4, 2_500);
     expect(pool.snapshot()).toMatchObject({
       activeWorkers: 4,

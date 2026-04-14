@@ -6,6 +6,7 @@ import { canDelegateFromAgent } from "../runtime-tooling.js";
 import { formatToolOutput } from "../tool-output.js";
 import type {
   MessageRepository,
+  RunQueuePriority,
   RunRepository,
   SessionEvent,
   SessionRepository,
@@ -43,7 +44,7 @@ export interface AgentCoordinationServiceDependencies {
   ) => Promise<RunStep>;
   updateRun: (run: Run, patch: Partial<Run>) => Promise<Run>;
   appendEvent: (input: Omit<SessionEvent, "id" | "cursor" | "createdAt">) => Promise<SessionEvent>;
-  enqueueRun: (sessionId: string, runId: string) => Promise<void>;
+  enqueueRun: (sessionId: string, runId: string, options?: { priority?: RunQueuePriority | undefined }) => Promise<void>;
   resolveModelForRun: (
     workspace: WorkspaceRecord,
     modelRef?: string | undefined
@@ -377,7 +378,9 @@ export class AgentCoordinationService {
       ...(input.taskId ? { taskId: input.taskId, resumed: true } : {})
     });
 
-    await this.#enqueueRun(childSessionId, childRunId);
+    await this.#enqueueRun(childSessionId, childRunId, {
+      priority: "subagent"
+    });
     void this.#monitorDelegatedRun({
       parentSessionId: input.parentSession.id,
       parentRunId: input.parentRun.id,

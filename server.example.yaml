@@ -38,5 +38,16 @@ paths:
   skill_dir: ./tmp/skills
   archive_dir: ./tmp/archives
 
+workers:
+  embedded:
+    min_count: 2
+    max_count: 4
+    scale_interval_ms: 1000
+    idle_ttl_ms: 30000
+    scale_up_window: 2
+    scale_down_window: 2
+    cooldown_ms: 1000
+    reserved_capacity_for_subagent: 1
+
 llm:
   default_model: openai-default

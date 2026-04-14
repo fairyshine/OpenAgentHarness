@@ -8,8 +8,7 @@ import type {
   Session,
   SessionEventContract,
   Workspace,
-  WorkspaceCatalog,
-  WorkspaceHistoryMirrorStatus
+  WorkspaceCatalog
 } from "@oah/api-contracts";
 
 import { Badge } from "../components/ui/badge";
@@ -1332,13 +1331,9 @@ function WorkspaceWorkbench(props: {
   runtimeToolNames: string[];
   activeToolNames: string[];
   toolServers: ModelCallTraceToolServer[];
-  mirrorStatus: WorkspaceHistoryMirrorStatus | null;
-  mirrorRebuildBusy: boolean;
   refreshWorkspace: (targetId: string) => void;
-  rebuildWorkspaceHistoryMirror: () => void;
 }) {
   const [panel, setPanel] = useState<"snapshot" | "catalog" | "records">("snapshot");
-  const mirrorSupported = props.workspace?.kind === "project";
   const workspaceKind = props.workspace?.kind ?? "n/a";
   const workspaceId = props.workspace?.id ?? "n/a";
   const selectedRunId = props.run?.id ?? "n/a";
@@ -1365,9 +1360,6 @@ function WorkspaceWorkbench(props: {
         <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.18fr)_minmax(320px,0.82fr)]">
           <div className="rounded-[18px] border border-border/70 bg-muted/15 p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge className={mirrorSupported ? "bg-foreground text-background" : ""}>
-                {mirrorSupported ? "History Mirror Ready" : "History Mirror Unsupported"}
-              </Badge>
               <Badge variant="outline">{workspaceKind}</Badge>
               <Badge variant="outline">{props.catalog ? "catalog loaded" : "catalog missing"}</Badge>
             </div>
@@ -1375,12 +1367,7 @@ function WorkspaceWorkbench(props: {
               <TraceSummaryStat label="Workspace" value={workspaceId} />
               <TraceSummaryStat label="Status" value={props.workspace?.status ?? "n/a"} />
               <TraceSummaryStat label="Selected Run" value={selectedRunId} />
-              <TraceSummaryStat label="Mirror State" value={props.mirrorStatus?.state ?? "n/a"} />
-              <TraceSummaryStat
-                label="Last Synced"
-                value={props.mirrorStatus?.lastSyncedAt ? formatTimestamp(props.mirrorStatus.lastSyncedAt) : "n/a"}
-              />
-              <TraceSummaryStat label="Last Event ID" value={props.mirrorStatus?.lastEventId ? String(props.mirrorStatus.lastEventId) : "n/a"} />
+              <TraceSummaryStat label="Catalog" value={props.catalog ? "loaded" : "n/a"} />
             </div>
           </div>
 
@@ -1389,21 +1376,8 @@ function WorkspaceWorkbench(props: {
             {props.workspace ? (
               <>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={props.mirrorRebuildBusy}
-                    onClick={() => props.refreshWorkspace(props.workspace!.id)}
-                  >
+                  <Button variant="ghost" size="sm" onClick={() => props.refreshWorkspace(props.workspace!.id)}>
                     Refresh
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={props.mirrorRebuildBusy || props.workspace.kind !== "project"}
-                    onClick={props.rebuildWorkspaceHistoryMirror}
-                  >
-                    Rebuild
                   </Button>
                 </div>
                 <p className="mt-3 text-xs leading-6 text-muted-foreground">
@@ -1435,28 +1409,20 @@ function WorkspaceWorkbench(props: {
             <div className="grid gap-4 2xl:grid-cols-[minmax(320px,0.72fr)_minmax(0,1.28fr)]">
               <div className="space-y-4">
                 <DetailSection
-                  title="Mirror Sync"
-                  description="把 mirror 状态和同步控制收成一块，避免把页面拆成太多层。"
+                  title="Workspace Snapshot"
+                  description="先看 workspace 的基础状态，再决定是否深入 catalog 或 records。"
                 >
                   {props.workspace ? (
                     <>
                       <div className="grid gap-2 sm:grid-cols-2">
                         <InsightRow label="Workspace Kind" value={props.workspace.kind} />
-                        <InsightRow label="Mirror" value={mirrorSupported ? "always on" : "unsupported"} />
-                        <InsightRow label="Mirror State" value={props.mirrorStatus?.state ?? "n/a"} />
-                        <InsightRow
-                          label="Last Synced"
-                          value={props.mirrorStatus?.lastSyncedAt ? formatTimestamp(props.mirrorStatus.lastSyncedAt) : "n/a"}
-                        />
+                        <InsightRow label="Workspace Status" value={props.workspace.status} />
+                        <InsightRow label="Catalog" value={props.catalog ? "loaded" : "n/a"} />
+                        <InsightRow label="Selected Run" value={props.run?.id ?? "n/a"} />
                       </div>
-                      {props.mirrorStatus?.dbPath ? (
-                        <div className="rounded-[16px] border border-border/70 bg-muted/10 px-4 py-3 text-xs leading-6 text-muted-foreground">
-                          {props.mirrorStatus.dbPath}
-                        </div>
-                      ) : null}
                     </>
                   ) : (
-                    <EmptyState title="No workspace selected" description="Open a workspace to inspect mirror state and sync controls." />
+                    <EmptyState title="No workspace selected" description="Open a workspace to inspect environment state." />
                   )}
                 </DetailSection>
 

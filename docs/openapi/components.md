@@ -4,7 +4,7 @@
 
 ### Workspace
 
-`id`、`externalRef`、`name`、`rootPath`、`executionPolicy`、`status`、`kind`、`readOnly`、`historyMirrorEnabled`、`createdAt`、`updatedAt`
+`id`、`externalRef`、`name`、`rootPath`、`executionPolicy`、`status`、`kind`、`readOnly`、`createdAt`、`updatedAt`
 
 ### WorkspaceImportRequest
 
@@ -33,10 +33,6 @@
 ### MoveWorkspaceEntryRequest
 
 `sourcePath`、`targetPath`、`overwrite`
-
-### WorkspaceHistoryMirrorStatus
-
-`workspaceId`、`supported`、`enabled`、`state`、`lastEventId`、`lastSyncedAt`、`dbPath`、`errorMessage`
 
 ### Run
 

@@ -50,7 +50,7 @@ The runtime is organized into clear layers:
 | **Context Engine** | Assembles prompts, history, agent config, and capability catalog at run start |
 | **LLM Loop + Dispatcher** | Model inference, tool calling, routing, and result backfill |
 | **Execution Backend** | Local directory-level execution (swappable to container/VM/remote sandbox) |
-| **Storage** | PostgreSQL (source of truth) + Redis (queues, locks, SSE) + local history mirror |
+| **Storage** | PostgreSQL (source of truth) + Redis (queues, locks, SSE) + local workspace runtime data |
 
 ## Workspace-First Design
 
