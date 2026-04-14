@@ -130,6 +130,8 @@ describe("server runtime process modes", () => {
       })
     ).toMatchObject({
       mode: "embedded",
+      sessionSerialBoundary: "session",
+      localSlots: [],
       summary: {
         active: 2,
         healthy: 1,
@@ -147,11 +149,17 @@ describe("server runtime process modes", () => {
       start: vi.fn(),
       snapshot: vi.fn(() => ({
         running: true,
+        sessionSerialBoundary: "session",
         processKind: "embedded",
         minWorkers: 1,
         maxWorkers: 2,
         suggestedWorkers: 1,
+        reservedSubagentCapacity: 1,
         desiredWorkers: 1,
+        slotCapacity: 1,
+        slots: [],
+        busySlots: 0,
+        idleSlots: 1,
         activeWorkers: 1,
         busyWorkers: 0,
         idleWorkers: 1,
@@ -211,6 +219,8 @@ describe("server runtime process modes", () => {
     expect(host.start).toHaveBeenCalledTimes(1);
     await expect(workerRuntime.getStatus()).resolves.toMatchObject({
       mode: "embedded",
+      sessionSerialBoundary: "session",
+      localSlots: [],
       summary: {
         active: 1,
         healthy: 1,
@@ -221,7 +231,9 @@ describe("server runtime process modes", () => {
       },
       pool: {
         running: true,
-        activeWorkers: 1
+        activeWorkers: 1,
+        sessionSerialBoundary: "session",
+        slotCapacity: 1
       }
     });
     await workerRuntime.close();
@@ -243,7 +255,8 @@ describe("server runtime process modes", () => {
               scale_interval_ms: 1_500,
               scale_up_window: 3,
               scale_down_window: 4,
-              cooldown_ms: 2_500
+              cooldown_ms: 2_500,
+              reserved_capacity_for_subagent: 2
             }
           }
         }
@@ -253,6 +266,7 @@ describe("server runtime process modes", () => {
       maxWorkers: 6,
       scaleIntervalMs: 1_500,
       readySessionsPerWorker: 1,
+      reservedSubagentCapacity: 2,
       scaleUpCooldownMs: 2_500,
       scaleDownCooldownMs: 2_500,
       scaleUpSampleSize: 3,
@@ -271,6 +285,7 @@ describe("server runtime process modes", () => {
     vi.stubEnv("OAH_EMBEDDED_WORKER_SCALE_UP_SAMPLE_SIZE", "5");
     vi.stubEnv("OAH_EMBEDDED_WORKER_SCALE_DOWN_SAMPLE_SIZE", "6");
     vi.stubEnv("OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_WORKER", "2");
+    vi.stubEnv("OAH_EMBEDDED_WORKER_RESERVED_CAPACITY_FOR_SUBAGENT", "3");
     vi.stubEnv("OAH_EMBEDDED_WORKER_SCALE_UP_BUSY_RATIO_PERCENT", "90");
     vi.stubEnv("OAH_EMBEDDED_WORKER_SCALE_UP_MAX_READY_AGE_MS", "3200");
 
@@ -288,7 +303,8 @@ describe("server runtime process modes", () => {
               scale_interval_ms: 1_500,
               scale_up_window: 3,
               scale_down_window: 4,
-              cooldown_ms: 2_500
+              cooldown_ms: 2_500,
+              reserved_capacity_for_subagent: 1
             }
           }
         }
@@ -298,6 +314,7 @@ describe("server runtime process modes", () => {
       maxWorkers: 8,
       scaleIntervalMs: 900,
       readySessionsPerWorker: 2,
+      reservedSubagentCapacity: 3,
       scaleUpCooldownMs: 700,
       scaleDownCooldownMs: 1_900,
       scaleUpSampleSize: 5,

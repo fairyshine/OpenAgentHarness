@@ -1,7 +1,7 @@
 import type { FastifyRequest } from "fastify";
 
 import type { CallerContext, ModelGateway, RuntimeService, WorkspaceRecord } from "@oah/runtime-core";
-import type { RuntimeLogEventContext } from "@oah/api-contracts";
+import type { HealthReport, ReadinessReport, RuntimeLogEventContext } from "@oah/api-contracts";
 import type { StorageAdmin } from "../storage-admin.js";
 
 declare module "fastify" {
@@ -135,8 +135,8 @@ export interface AppDependencies {
     name?: string;
     externalRef?: string;
   }) => Promise<import("@oah/api-contracts").Workspace>;
-  healthCheck?: () => Promise<Record<string, unknown>> | Record<string, unknown>;
-  readinessCheck?: () => Promise<Record<string, unknown>> | Record<string, unknown>;
+  healthCheck?: () => Promise<HealthReport> | HealthReport;
+  readinessCheck?: () => Promise<ReadinessReport> | ReadinessReport;
   storageAdmin?: StorageAdmin;
   appendRuntimeLog?: (input: {
     sessionId: string;

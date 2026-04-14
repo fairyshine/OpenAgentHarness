@@ -2,6 +2,7 @@ import path from "node:path";
 import type { FSWatcher } from "node:fs";
 import { access, rm } from "node:fs/promises";
 
+import type { HealthReport, ReadinessReport } from "@oah/api-contracts";
 import {
   deleteWorkspaceTemplate,
   discoverWorkspace,
@@ -25,8 +26,9 @@ import {
   createRedisSessionEventBus,
   createRedisSessionRunQueue
 } from "@oah/storage-redis";
-import { createWorkerRuntimeControl } from "./bootstrap/worker-runtime.js";
-import { ObjectStorageMirrorController } from "./object-storage.js";
+import { WorkspaceMaterializationManager } from "./bootstrap/workspace-materialization.js";
+import { createWorkerRuntimeControl, type WorkerRuntimeStatus } from "./bootstrap/worker-runtime.js";
+import { createDirectoryObjectStore, ObjectStorageMirrorController } from "./object-storage.js";
 import { appendRuntimeLogEvent, buildRuntimeConsoleLogger } from "./runtime-console.js";
 import {
   buildSingleWorkspaceConfig,
@@ -156,41 +158,8 @@ export interface BootstrappedRuntime {
     details?: unknown;
     context?: import("@oah/api-contracts").RuntimeLogEventContext | undefined;
   }): Promise<void>;
-  healthReport(): Promise<{
-    status: "ok" | "degraded";
-    storage: {
-      primary: "postgres" | "sqlite";
-      events: "redis" | "memory";
-      runQueue: "redis" | "in_process";
-    };
-    process: RuntimeProcessDescriptor;
-    checks: {
-      postgres: "up" | "down" | "not_configured";
-      redisEvents: "up" | "down" | "not_configured";
-      redisRunQueue: "up" | "down" | "not_configured";
-    };
-    worker: {
-      mode: "embedded" | "external" | "disabled";
-      activeWorkers: Array<import("@oah/storage-redis").RedisWorkerRegistryEntry>;
-      summary: {
-        active: number;
-        healthy: number;
-        late: number;
-        busy: number;
-        embedded: number;
-        standalone: number;
-      };
-      pool: import("@oah/storage-redis").RedisRunWorkerPoolSnapshot | null;
-    };
-  }>;
-  readinessReport(): Promise<{
-    status: "ready" | "not_ready";
-    checks: {
-      postgres: "up" | "down" | "not_configured";
-      redisEvents: "up" | "down" | "not_configured";
-      redisRunQueue: "up" | "down" | "not_configured";
-    };
-  }>;
+  healthReport(): Promise<HealthReport>;
+  readinessReport(): Promise<ReadinessReport>;
   close(): Promise<void>;
 }
 
@@ -329,6 +298,16 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   if (objectStorageMirror) {
     await objectStorageMirror.initialize();
   }
+  const workspaceMaterializationManager = config.object_storage
+    ? new WorkspaceMaterializationManager({
+        cacheRoot: path.join(config.paths.workspace_dir, ".openharness", "__materialized__"),
+        workerId: `${process.pid}`,
+        store: createDirectoryObjectStore(config.object_storage),
+        logger: (message) => {
+          console.info(message);
+        }
+      })
+    : undefined;
   const modelDir = config.paths.model_dir;
   const toolDir = config.paths.tool_dir;
   const logModelLoadError = (filePath: string, error: unknown): void => {
@@ -495,6 +474,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   let lastPlatformModelsReloadAt = 0;
   let platformModelsPollTimer: NodeJS.Timeout | undefined;
   let platformModelsReloadTimer: NodeJS.Timeout | undefined;
+  let workspaceMaterializationMaintenanceTimer: NodeJS.Timeout | undefined;
 
   reconciledWorkspaces.forEach((workspace) => {
     visibleWorkspaceIds.add(workspace.id);
@@ -734,6 +714,20 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     void reloadPlatformModels();
   }, 2_000);
   platformModelsPollTimer.unref?.();
+  if (workspaceMaterializationManager) {
+    workspaceMaterializationMaintenanceTimer = setInterval(() => {
+      const idleBefore = new Date(
+        Date.now() - parsePositiveIntEnv("OAH_WORKSPACE_MATERIALIZATION_IDLE_TTL_MS", 60_000)
+      ).toISOString();
+      void workspaceMaterializationManager
+        .flushIdleCopies({ idleBefore })
+        .then(() => workspaceMaterializationManager.evictIdleCopies({ idleBefore }))
+        .catch((error) => {
+          console.warn("Workspace materialization maintenance failed.", error);
+        });
+    }, parsePositiveIntEnv("OAH_WORKSPACE_MATERIALIZATION_MAINTENANCE_INTERVAL_MS", 5_000));
+    workspaceMaterializationMaintenanceTimer.unref?.();
+  }
   const runtimeService = new RuntimeService({
     defaultModel: config.llm.default_model,
     modelGateway,
@@ -752,6 +746,27 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     runRepository,
     sessionEventStore,
     runQueue: redisRunQueue,
+    ...(workspaceMaterializationManager
+      ? {
+          workspaceExecutionProvider: {
+            async acquire({ workspace }: { workspace: WorkspaceRecord }) {
+              const lease = await workspaceMaterializationManager.acquireWorkspace({
+                workspace
+              });
+
+              return {
+                workspace: {
+                  ...workspace,
+                  rootPath: lease.localPath
+                },
+                async release(options?: { dirty?: boolean | undefined }) {
+                  await lease.release(options);
+                }
+              };
+            }
+          }
+        }
+      : {}),
     ...(singleWorkspace === undefined
       ? {
           workspaceDeletionHandler: {
@@ -981,6 +996,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         redisWorkerRegistry?.close() ?? Promise.resolve(),
         redisRunQueue?.close() ?? Promise.resolve()
       ]);
+      await workspaceMaterializationManager?.close();
       await closePersistence();
       await objectStorageMirror?.close();
       if (workspaceSyncTimer) {
@@ -994,6 +1010,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       }
       if (platformModelsPollTimer) {
         clearInterval(platformModelsPollTimer);
+      }
+      if (workspaceMaterializationMaintenanceTimer) {
+        clearInterval(workspaceMaterializationMaintenanceTimer);
       }
       rootWorkspaceWatcher?.close();
       platformModelsWatcher?.close();

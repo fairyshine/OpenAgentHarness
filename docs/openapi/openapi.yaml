@@ -23,6 +23,36 @@ tags:
   - name: Actions
   - name: Events
 paths:
+  /healthz:
+    get:
+      tags: [Events]
+      summary: Health report
+      operationId: getHealthReport
+      responses:
+        '200':
+          description: Process health and worker execution status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthReport'
+  /readyz:
+    get:
+      tags: [Events]
+      summary: Readiness report
+      operationId: getReadinessReport
+      responses:
+        '200':
+          description: Process is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessReport'
+        '503':
+          description: Process is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessReport'
   /workspace-templates:
     get:
       tags: [Workspaces]
@@ -694,6 +724,449 @@ components:
     JsonObject:
       type: object
       additionalProperties: true
+    WorkerMode:
+      type: string
+      enum: [embedded, external, disabled]
+    WorkerProcessKind:
+      type: string
+      enum: [embedded, standalone]
+    WorkerState:
+      type: string
+      enum: [starting, idle, busy, stopping]
+    WorkerHealth:
+      type: string
+      enum: [healthy, late]
+    HealthCheckStatus:
+      type: string
+      enum: [up, down, not_configured]
+    RuntimeProcess:
+      type: object
+      required: [mode, label, execution]
+      properties:
+        mode:
+          type: string
+          enum: [api_embedded_worker, api_only, standalone_worker]
+        label:
+          type: string
+          enum: ["API + embedded worker", "API only", "standalone worker"]
+        execution:
+          type: string
+          enum: [redis_queue, local_inline, none]
+      additionalProperties: false
+    HealthStorage:
+      type: object
+      required: [primary, events, runQueue]
+      properties:
+        primary:
+          type: string
+          enum: [postgres, sqlite]
+        events:
+          type: string
+          enum: [redis, memory]
+        runQueue:
+          type: string
+          enum: [redis, in_process]
+      additionalProperties: false
+    WorkerLease:
+      type: object
+      required:
+        - workerId
+        - processKind
+        - state
+        - lastSeenAt
+        - leaseTtlMs
+        - expiresAt
+        - lastSeenAgeMs
+        - health
+      properties:
+        workerId:
+          type: string
+        processKind:
+          $ref: '#/components/schemas/WorkerProcessKind'
+        state:
+          $ref: '#/components/schemas/WorkerState'
+        lastSeenAt:
+          $ref: '#/components/schemas/Timestamp'
+        leaseTtlMs:
+          type: integer
+          minimum: 0
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        lastSeenAgeMs:
+          type: integer
+          minimum: 0
+        health:
+          $ref: '#/components/schemas/WorkerHealth'
+        currentSessionId:
+          type: string
+        currentRunId:
+          type: string
+        currentWorkspaceId:
+          type: string
+      additionalProperties: false
+    WorkerSlot:
+      type: object
+      required: [slotId, workerId, processKind, state]
+      properties:
+        slotId:
+          type: string
+        workerId:
+          type: string
+        processKind:
+          $ref: '#/components/schemas/WorkerProcessKind'
+        state:
+          $ref: '#/components/schemas/WorkerState'
+        currentSessionId:
+          type: string
+        currentRunId:
+          type: string
+        currentWorkspaceId:
+          type: string
+      additionalProperties: false
+    WorkerSummary:
+      type: object
+      required: [active, healthy, late, busy, embedded, standalone]
+      properties:
+        active:
+          type: integer
+          minimum: 0
+        healthy:
+          type: integer
+          minimum: 0
+        late:
+          type: integer
+          minimum: 0
+        busy:
+          type: integer
+          minimum: 0
+        embedded:
+          type: integer
+          minimum: 0
+        standalone:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    WorkerPoolDecisionReason:
+      type: string
+      enum: [startup, steady, scale_up, scale_down, cooldown_hold, shutdown]
+    WorkerPoolDecision:
+      type: object
+      required: [timestamp, reason, suggestedWorkers, desiredWorkers, activeWorkers]
+      properties:
+        timestamp:
+          $ref: '#/components/schemas/Timestamp'
+        reason:
+          $ref: '#/components/schemas/WorkerPoolDecisionReason'
+        suggestedWorkers:
+          type: integer
+          minimum: 0
+        globalSuggestedWorkers:
+          type: integer
+          minimum: 0
+        reservedSubagentCapacity:
+          type: integer
+          minimum: 0
+        reservedWorkers:
+          type: integer
+          minimum: 0
+        availableIdleCapacity:
+          type: integer
+          minimum: 0
+        readySessionsPerActiveWorker:
+          type: number
+          minimum: 0
+        subagentReserveTarget:
+          type: integer
+          minimum: 0
+        subagentReserveDeficit:
+          type: integer
+          minimum: 0
+        desiredWorkers:
+          type: integer
+          minimum: 0
+        activeWorkers:
+          type: integer
+          minimum: 0
+        busyWorkers:
+          type: integer
+          minimum: 0
+        globalActiveWorkers:
+          type: integer
+          minimum: 0
+        globalBusyWorkers:
+          type: integer
+          minimum: 0
+        remoteActiveWorkers:
+          type: integer
+          minimum: 0
+        remoteBusyWorkers:
+          type: integer
+          minimum: 0
+        readySessionCount:
+          type: integer
+          minimum: 0
+        readyQueueDepth:
+          type: integer
+          minimum: 0
+        uniqueReadySessionCount:
+          type: integer
+          minimum: 0
+        subagentReadySessionCount:
+          type: integer
+          minimum: 0
+        subagentReadyQueueDepth:
+          type: integer
+          minimum: 0
+        lockedReadySessionCount:
+          type: integer
+          minimum: 0
+        staleReadySessionCount:
+          type: integer
+          minimum: 0
+        oldestSchedulableReadyAgeMs:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    WorkerPool:
+      type: object
+      required:
+        - running
+        - processKind
+        - sessionSerialBoundary
+        - minWorkers
+        - maxWorkers
+        - suggestedWorkers
+        - reservedSubagentCapacity
+        - availableIdleCapacity
+        - subagentReserveTarget
+        - subagentReserveDeficit
+        - desiredWorkers
+        - slotCapacity
+        - slots
+        - activeWorkers
+        - busySlots
+        - idleSlots
+        - busyWorkers
+        - idleWorkers
+        - readySessionsPerWorker
+        - scaleIntervalMs
+        - scaleUpCooldownMs
+        - scaleDownCooldownMs
+        - scaleUpSampleSize
+        - scaleDownSampleSize
+        - scaleUpBusyRatioThreshold
+        - scaleUpMaxReadyAgeMs
+        - scaleUpPressureStreak
+        - scaleDownPressureStreak
+        - scaleUpCooldownRemainingMs
+        - scaleDownCooldownRemainingMs
+        - recentDecisions
+      properties:
+        running:
+          type: boolean
+        processKind:
+          $ref: '#/components/schemas/WorkerProcessKind'
+        sessionSerialBoundary:
+          type: string
+          enum: [session]
+        minWorkers:
+          type: integer
+          minimum: 0
+        maxWorkers:
+          type: integer
+          minimum: 0
+        suggestedWorkers:
+          type: integer
+          minimum: 0
+        globalSuggestedWorkers:
+          type: integer
+          minimum: 0
+        reservedSubagentCapacity:
+          type: integer
+          minimum: 0
+        reservedWorkers:
+          type: integer
+          minimum: 0
+        availableIdleCapacity:
+          type: integer
+          minimum: 0
+        readySessionsPerActiveWorker:
+          type: number
+          minimum: 0
+        subagentReserveTarget:
+          type: integer
+          minimum: 0
+        subagentReserveDeficit:
+          type: integer
+          minimum: 0
+        desiredWorkers:
+          type: integer
+          minimum: 0
+        slotCapacity:
+          type: integer
+          minimum: 0
+        slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerSlot'
+        activeWorkers:
+          type: integer
+          minimum: 0
+        busySlots:
+          type: integer
+          minimum: 0
+        idleSlots:
+          type: integer
+          minimum: 0
+        busyWorkers:
+          type: integer
+          minimum: 0
+        idleWorkers:
+          type: integer
+          minimum: 0
+        globalActiveWorkers:
+          type: integer
+          minimum: 0
+        globalBusyWorkers:
+          type: integer
+          minimum: 0
+        remoteActiveWorkers:
+          type: integer
+          minimum: 0
+        remoteBusyWorkers:
+          type: integer
+          minimum: 0
+        readySessionsPerWorker:
+          type: integer
+          minimum: 1
+        scaleIntervalMs:
+          type: integer
+          minimum: 0
+        scaleUpCooldownMs:
+          type: integer
+          minimum: 0
+        scaleDownCooldownMs:
+          type: integer
+          minimum: 0
+        scaleUpSampleSize:
+          type: integer
+          minimum: 1
+        scaleDownSampleSize:
+          type: integer
+          minimum: 1
+        scaleUpBusyRatioThreshold:
+          type: number
+          minimum: 0
+          maximum: 1
+        scaleUpMaxReadyAgeMs:
+          type: integer
+          minimum: 0
+        readySessionCount:
+          type: integer
+          minimum: 0
+        readyQueueDepth:
+          type: integer
+          minimum: 0
+        uniqueReadySessionCount:
+          type: integer
+          minimum: 0
+        subagentReadySessionCount:
+          type: integer
+          minimum: 0
+        subagentReadyQueueDepth:
+          type: integer
+          minimum: 0
+        lockedReadySessionCount:
+          type: integer
+          minimum: 0
+        staleReadySessionCount:
+          type: integer
+          minimum: 0
+        oldestSchedulableReadyAgeMs:
+          type: integer
+          minimum: 0
+        lastRebalanceAt:
+          $ref: '#/components/schemas/Timestamp'
+        lastRebalanceReason:
+          $ref: '#/components/schemas/WorkerPoolDecisionReason'
+        scaleUpPressureStreak:
+          type: integer
+          minimum: 0
+        scaleDownPressureStreak:
+          type: integer
+          minimum: 0
+        scaleUpCooldownRemainingMs:
+          type: integer
+          minimum: 0
+        scaleDownCooldownRemainingMs:
+          type: integer
+          minimum: 0
+        recentDecisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerPoolDecision'
+      additionalProperties: false
+    HealthChecks:
+      type: object
+      required: [postgres, redisEvents, redisRunQueue]
+      properties:
+        postgres:
+          $ref: '#/components/schemas/HealthCheckStatus'
+        redisEvents:
+          $ref: '#/components/schemas/HealthCheckStatus'
+        redisRunQueue:
+          $ref: '#/components/schemas/HealthCheckStatus'
+      additionalProperties: false
+    HealthWorker:
+      type: object
+      required: [mode, sessionSerialBoundary, localSlots, activeWorkers, summary, pool]
+      properties:
+        mode:
+          $ref: '#/components/schemas/WorkerMode'
+        sessionSerialBoundary:
+          type: string
+          enum: [session]
+        localSlots:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerSlot'
+        activeWorkers:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerLease'
+        summary:
+          $ref: '#/components/schemas/WorkerSummary'
+        pool:
+          oneOf:
+            - $ref: '#/components/schemas/WorkerPool'
+            - type: 'null'
+      additionalProperties: false
+    HealthReport:
+      type: object
+      required: [status, storage, process, checks, worker]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        storage:
+          $ref: '#/components/schemas/HealthStorage'
+        process:
+          $ref: '#/components/schemas/RuntimeProcess'
+        checks:
+          $ref: '#/components/schemas/HealthChecks'
+        worker:
+          $ref: '#/components/schemas/HealthWorker'
+      additionalProperties: false
+    ReadinessReport:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        checks:
+          $ref: '#/components/schemas/HealthChecks'
+      additionalProperties: false
     WorkspaceTemplate:
       type: object
       required: [name]

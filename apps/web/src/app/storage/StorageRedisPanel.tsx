@@ -45,6 +45,7 @@ function formatPoolReason(reason: NonNullable<NonNullable<HealthReportResponse["
 
 function renderWorkerLeaseSummary(healthReport: HealthReportResponse | null) {
   const activeWorkers = healthReport?.worker.activeWorkers ?? [];
+  const localSlots = healthReport?.worker.localSlots ?? healthReport?.worker.pool?.slots ?? [];
   const summary = healthReport?.worker.summary;
   const pool = healthReport?.worker.pool;
   const lateWorkerCount = summary?.late ?? activeWorkers.filter((entry) => entry.health === "late").length;
@@ -55,6 +56,7 @@ function renderWorkerLeaseSummary(healthReport: HealthReportResponse | null) {
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="secondary">worker leases</Badge>
         <Badge variant="outline">{`mode ${healthReport?.worker.mode ?? "unknown"}`}</Badge>
+        <Badge variant="outline">{`serial ${healthReport?.worker.sessionSerialBoundary ?? "unknown"}`}</Badge>
         <Badge variant="outline">{`${summary?.active ?? activeWorkers.length} active`}</Badge>
         <Badge className={healthyWorkerCount > 0 ? toneBadgeClass("emerald") : undefined} variant="outline">
           {`${healthyWorkerCount} healthy`}
@@ -67,6 +69,7 @@ function renderWorkerLeaseSummary(healthReport: HealthReportResponse | null) {
       <StorageDetailFacts
         items={[
           { label: "Worker Mode", value: healthReport?.worker.mode ?? "unknown" },
+          { label: "Session Boundary", value: healthReport?.worker.sessionSerialBoundary ?? "unknown" },
           { label: "Storage Queue", value: healthReport?.storage.runQueue ?? "unknown" },
           { label: "Redis Check", value: healthReport?.checks.redisRunQueue ?? "unknown" },
           { label: "Process Mode", value: healthReport?.process.label ?? "unknown" }
@@ -77,20 +80,32 @@ function renderWorkerLeaseSummary(healthReport: HealthReportResponse | null) {
         <div className="space-y-3">
           <StorageDetailFacts
             items={[
-              { label: "Pool Target", value: `${pool.desiredWorkers} / ${pool.activeWorkers}` },
+              { label: "Pool Target", value: `${pool.desiredWorkers} / ${pool.slotCapacity}` },
               {
                 label: "Suggested",
-                value: `local ${pool.suggestedWorkers} · global ${pool.globalSuggestedWorkers ?? pool.suggestedWorkers}`
+                value: `local ${pool.suggestedWorkers} · global ${pool.globalSuggestedWorkers ?? pool.suggestedWorkers} · reserve ${pool.reservedWorkers ?? 0}`
               },
-              { label: "Busy / Idle", value: `${pool.busyWorkers} busy · ${pool.idleWorkers} idle` },
+              {
+                label: "Busy / Idle",
+                value: `${pool.busySlots ?? pool.busyWorkers} busy · ${pool.idleSlots ?? pool.idleWorkers} idle · headroom ${pool.availableIdleCapacity}`
+              },
               {
                 label: "Global / Remote",
                 value: `global ${pool.globalActiveWorkers ?? pool.activeWorkers}/${pool.globalBusyWorkers ?? pool.busyWorkers} · remote ${pool.remoteActiveWorkers ?? 0}/${pool.remoteBusyWorkers ?? 0}`
               },
+              { label: "Local Slots", value: `${localSlots.length} observed` },
               { label: "Schedulable Sessions", value: String(pool.readySessionCount ?? 0) },
               {
                 label: "Ready Queue",
                 value: `depth ${pool.readyQueueDepth ?? 0} · unique ${pool.uniqueReadySessionCount ?? 0}`
+              },
+              {
+                label: "Subagent Pressure",
+                value: `schedulable ${pool.subagentReadySessionCount ?? 0} · depth ${pool.subagentReadyQueueDepth ?? 0} · target ${pool.subagentReserveTarget} · deficit ${pool.subagentReserveDeficit}`
+              },
+              {
+                label: "Ready Density",
+                value: `per worker ${pool.readySessionsPerActiveWorker?.toFixed(2) ?? "n/a"}`
               },
               {
                 label: "Held / Stale",
@@ -128,7 +143,42 @@ function renderWorkerLeaseSummary(healthReport: HealthReportResponse | null) {
                       {typeof decision.busyWorkers === "number" ? <Badge variant="outline">{`busy ${decision.busyWorkers}`}</Badge> : null}
                       <span className="text-muted-foreground">{decision.timestamp}</span>
                     </div>
-                    <div className="mt-2 text-muted-foreground">{`schedulable ${decision.readySessionCount ?? 0} · depth ${decision.readyQueueDepth ?? 0} · unique ${decision.uniqueReadySessionCount ?? 0} · locked ${decision.lockedReadySessionCount ?? 0} · stale ${decision.staleReadySessionCount ?? 0} · oldest ${formatWorkerLeaseAge(decision.oldestSchedulableReadyAgeMs ?? 0)} · global ${decision.globalActiveWorkers ?? decision.activeWorkers}/${decision.globalBusyWorkers ?? decision.busyWorkers ?? 0} · remote ${decision.remoteActiveWorkers ?? 0}/${decision.remoteBusyWorkers ?? 0}`}</div>
+                    <div className="mt-2 text-muted-foreground">{`schedulable ${decision.readySessionCount ?? 0} · depth ${decision.readyQueueDepth ?? 0} · unique ${decision.uniqueReadySessionCount ?? 0} · subagent ${decision.subagentReadySessionCount ?? 0}/${decision.subagentReadyQueueDepth ?? 0} · reserve ${decision.reservedWorkers ?? 0}/${decision.reservedSubagentCapacity ?? 0} · headroom ${decision.availableIdleCapacity ?? 0} · deficit ${decision.subagentReserveDeficit ?? 0} · ready/worker ${typeof decision.readySessionsPerActiveWorker === "number" ? decision.readySessionsPerActiveWorker.toFixed(2) : "n/a"} · locked ${decision.lockedReadySessionCount ?? 0} · stale ${decision.staleReadySessionCount ?? 0} · oldest ${formatWorkerLeaseAge(decision.oldestSchedulableReadyAgeMs ?? 0)} · global ${decision.globalActiveWorkers ?? decision.activeWorkers}/${decision.globalBusyWorkers ?? decision.busyWorkers ?? 0} · remote ${decision.remoteActiveWorkers ?? 0}/${decision.remoteBusyWorkers ?? 0}`}</div>
+                  </div>
+                ))}
+              </div>
+            </StorageDetailSection>
+          ) : null}
+
+          {localSlots.length > 0 ? (
+            <StorageDetailSection title="Local Execution Slots">
+              <div className="grid gap-2 xl:grid-cols-2">
+                {localSlots.map((slot) => (
+                  <div key={slot.slotId} className="info-panel rounded-xl px-3 py-2 text-xs text-foreground/80">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="max-w-full truncate font-mono">
+                        {slot.slotId}
+                      </Badge>
+                      <Badge variant="outline" className={toneBadgeClass(workerStateTone(slot.state))}>
+                        {slot.state}
+                      </Badge>
+                      <Badge variant="outline">{slot.processKind}</Badge>
+                      {slot.currentSessionId ? (
+                        <Badge variant="outline" className="max-w-full truncate font-mono">
+                          {`session ${slot.currentSessionId}`}
+                        </Badge>
+                      ) : null}
+                      {slot.currentRunId ? (
+                        <Badge variant="outline" className="max-w-full truncate font-mono">
+                          {`run ${slot.currentRunId}`}
+                        </Badge>
+                      ) : null}
+                      {slot.currentWorkspaceId ? (
+                        <Badge variant="outline" className="max-w-full truncate font-mono">
+                          {`workspace ${slot.currentWorkspaceId}`}
+                        </Badge>
+                      ) : null}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -159,6 +209,16 @@ function renderWorkerLeaseSummary(healthReport: HealthReportResponse | null) {
                 {worker.currentSessionId ? (
                   <Badge variant="outline" className="max-w-full truncate font-mono">
                     {`session ${worker.currentSessionId}`}
+                  </Badge>
+                ) : null}
+                {worker.currentRunId ? (
+                  <Badge variant="outline" className="max-w-full truncate font-mono">
+                    {`run ${worker.currentRunId}`}
+                  </Badge>
+                ) : null}
+                {worker.currentWorkspaceId ? (
+                  <Badge variant="outline" className="max-w-full truncate font-mono">
+                    {`workspace ${worker.currentWorkspaceId}`}
                   </Badge>
                 ) : null}
               </div>

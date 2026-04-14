@@ -5,6 +5,10 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+function workspacePath(relativePath: string): string {
+  return path.resolve(__dirname, relativePath);
+}
+
 function normalizeProxyHost(host: string | undefined): string {
   if (!host || host === "0.0.0.0" || host === "::") {
     return "127.0.0.1";
@@ -89,7 +93,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src")
+      "@": workspacePath("./src"),
+      "@oah/api-contracts": workspacePath("../../packages/api-contracts/src/index.ts")
     }
   },
   server: {

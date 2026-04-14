@@ -20,6 +20,7 @@ interface WorkerHostConfig {
       scale_up_window?: number | undefined;
       scale_down_window?: number | undefined;
       cooldown_ms?: number | undefined;
+      reserved_capacity_for_subagent?: number | undefined;
     } | undefined;
   } | undefined;
 }
@@ -35,6 +36,7 @@ export interface EmbeddedWorkerPoolConfig {
   maxWorkers: number;
   scaleIntervalMs: number;
   readySessionsPerWorker: number;
+  reservedSubagentCapacity: number;
   scaleUpCooldownMs: number;
   scaleDownCooldownMs: number;
   scaleUpSampleSize: number;
@@ -51,6 +53,16 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readNonNegativeIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw || raw.trim().length === 0) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 export function summarizeActiveWorkers(activeWorkers: RedisWorkerRegistryEntry[]) {
@@ -121,6 +133,10 @@ export function resolveEmbeddedWorkerPoolConfig(options: {
     maxWorkers,
     scaleIntervalMs,
     readySessionsPerWorker: readPositiveIntEnv("OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_WORKER", 1),
+    reservedSubagentCapacity: readNonNegativeIntEnv(
+      "OAH_EMBEDDED_WORKER_RESERVED_CAPACITY_FOR_SUBAGENT",
+      embedded?.reserved_capacity_for_subagent ?? 1
+    ),
     scaleUpCooldownMs,
     scaleDownCooldownMs,
     scaleUpSampleSize,
@@ -138,6 +154,7 @@ export function createWorkerHost(options: {
   redisWorkerRegistry?: WorkerRegistry | undefined;
   runtimeService: {
     processQueuedRun(runId: string): Promise<void>;
+    getRun?(runId: string): Promise<{ workspaceId: string }>;
     recoverStaleRuns?(options?: {
       staleBefore?: string | undefined;
       limit?: number | undefined;
@@ -163,19 +180,38 @@ export function createWorkerHost(options: {
     config: options.config,
     processKind: options.processKind
   });
+  const getRun = options.runtimeService.getRun;
+  const recoverStaleRuns = options.runtimeService.recoverStaleRuns;
   const pool = new RedisRunWorkerPool({
     queue: options.redisRunQueue,
     queueFactory: () =>
       createRedisSessionRunQueue({
         url: options.config.storage.redis_url as string
       }),
-    runtimeService: options.runtimeService,
+    runtimeService: {
+      processQueuedRun: (runId) => options.runtimeService.processQueuedRun(runId),
+      ...(getRun
+        ? {
+            describeQueuedRun: async (runId: string) => {
+              const run = await getRun(runId);
+              return run ? { workspaceId: run.workspaceId } : undefined;
+            }
+          }
+        : {}),
+      ...(recoverStaleRuns
+        ? {
+            recoverStaleRuns: (input?: { staleBefore?: string | undefined; limit?: number | undefined }) =>
+              recoverStaleRuns(input)
+          }
+        : {})
+    },
     processKind: options.processKind === "worker" ? "standalone" : "embedded",
     registry: options.redisWorkerRegistry,
     minWorkers: poolConfig.minWorkers,
     maxWorkers: poolConfig.maxWorkers,
     scaleIntervalMs: poolConfig.scaleIntervalMs,
     readySessionsPerWorker: poolConfig.readySessionsPerWorker,
+    reservedSubagentCapacity: poolConfig.reservedSubagentCapacity,
     scaleUpCooldownMs: poolConfig.scaleUpCooldownMs,
     scaleDownCooldownMs: poolConfig.scaleDownCooldownMs,
     scaleUpSampleSize: poolConfig.scaleUpSampleSize,

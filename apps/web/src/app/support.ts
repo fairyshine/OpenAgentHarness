@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 
 import type {
   ErrorResponse,
+  HealthReport,
   Message,
   MessageContent,
+  ReadinessReport,
   RuntimeLogCategory,
   RuntimeLogEventData,
   RuntimeLogLevel,
@@ -76,110 +78,8 @@ interface SseFrame {
   data: Record<string, unknown>;
 }
 
-interface HealthReportResponse {
-  status: "ok" | "degraded";
-  storage: {
-    primary: "postgres" | "sqlite";
-    events: "redis" | "memory";
-    runQueue: "redis" | "in_process";
-  };
-  process: {
-    mode: "api_embedded_worker" | "api_only" | "standalone_worker";
-    label: "API + embedded worker" | "API only" | "standalone worker";
-    execution: "redis_queue" | "local_inline" | "none";
-  };
-  checks: {
-    postgres: "up" | "down" | "not_configured";
-    redisEvents: "up" | "down" | "not_configured";
-    redisRunQueue: "up" | "down" | "not_configured";
-  };
-  worker: {
-    mode: "embedded" | "external" | "disabled";
-    activeWorkers: Array<{
-      workerId: string;
-      processKind: "embedded" | "standalone";
-      state: "starting" | "idle" | "busy" | "stopping";
-      lastSeenAt: string;
-      leaseTtlMs: number;
-      expiresAt: string;
-      lastSeenAgeMs: number;
-      health: "healthy" | "late";
-      currentSessionId?: string | undefined;
-    }>;
-    summary: {
-      active: number;
-      healthy: number;
-      late: number;
-      busy: number;
-      embedded: number;
-      standalone: number;
-    };
-    pool: {
-      running: boolean;
-      processKind: "embedded" | "standalone";
-      minWorkers: number;
-      maxWorkers: number;
-      suggestedWorkers: number;
-      globalSuggestedWorkers?: number | undefined;
-      desiredWorkers: number;
-      activeWorkers: number;
-      busyWorkers: number;
-      idleWorkers: number;
-      globalActiveWorkers?: number | undefined;
-      globalBusyWorkers?: number | undefined;
-      remoteActiveWorkers?: number | undefined;
-      remoteBusyWorkers?: number | undefined;
-      readySessionsPerWorker: number;
-      scaleIntervalMs: number;
-      scaleUpCooldownMs: number;
-      scaleDownCooldownMs: number;
-      scaleUpSampleSize: number;
-      scaleDownSampleSize: number;
-      scaleUpBusyRatioThreshold: number;
-      scaleUpMaxReadyAgeMs: number;
-      readySessionCount?: number | undefined;
-      readyQueueDepth?: number | undefined;
-      uniqueReadySessionCount?: number | undefined;
-      lockedReadySessionCount?: number | undefined;
-      staleReadySessionCount?: number | undefined;
-      oldestSchedulableReadyAgeMs?: number | undefined;
-      lastRebalanceAt?: string | undefined;
-      lastRebalanceReason?: "startup" | "steady" | "scale_up" | "scale_down" | "cooldown_hold" | "shutdown" | undefined;
-      scaleUpPressureStreak: number;
-      scaleDownPressureStreak: number;
-      scaleUpCooldownRemainingMs: number;
-      scaleDownCooldownRemainingMs: number;
-      recentDecisions: Array<{
-        timestamp: string;
-        reason: "startup" | "steady" | "scale_up" | "scale_down" | "cooldown_hold" | "shutdown";
-        suggestedWorkers: number;
-        globalSuggestedWorkers?: number | undefined;
-        desiredWorkers: number;
-        activeWorkers: number;
-        busyWorkers?: number | undefined;
-        globalActiveWorkers?: number | undefined;
-        globalBusyWorkers?: number | undefined;
-        remoteActiveWorkers?: number | undefined;
-        remoteBusyWorkers?: number | undefined;
-        readySessionCount?: number | undefined;
-        readyQueueDepth?: number | undefined;
-        uniqueReadySessionCount?: number | undefined;
-        lockedReadySessionCount?: number | undefined;
-        staleReadySessionCount?: number | undefined;
-        oldestSchedulableReadyAgeMs?: number | undefined;
-      }>;
-    } | null;
-  };
-}
-
-interface ReadinessReportResponse {
-  status: "ready" | "not_ready";
-  checks: {
-    postgres: "up" | "down" | "not_configured";
-    redisEvents: "up" | "down" | "not_configured";
-    redisRunQueue: "up" | "down" | "not_configured";
-  };
-}
+type HealthReportResponse = HealthReport;
+type ReadinessReportResponse = ReadinessReport;
 
 interface ModelProviderListResponse {
   items: ModelProviderRecord[];

@@ -322,6 +322,10 @@ class S3DirectoryStore implements DirectoryObjectStore {
   }
 }
 
+export function createDirectoryObjectStore(config: ObjectStorageConfig): DirectoryObjectStore {
+  return new S3DirectoryStore(config);
+}
+
 export class ObjectStorageMirrorController {
   readonly #store: S3DirectoryStore;
   readonly #mappings: ManagedPathMapping[];

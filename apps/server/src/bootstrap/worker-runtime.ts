@@ -26,8 +26,20 @@ interface WorkerHostConfig {
 
 export type WorkerRuntimeMode = "embedded" | "external" | "disabled";
 
+export interface WorkerRuntimeSlot {
+  slotId: string;
+  workerId: string;
+  processKind: "embedded" | "standalone";
+  state: "starting" | "idle" | "busy" | "stopping";
+  currentSessionId?: string | undefined;
+  currentRunId?: string | undefined;
+  currentWorkspaceId?: string | undefined;
+}
+
 export interface WorkerRuntimeStatus {
   mode: WorkerRuntimeMode;
+  sessionSerialBoundary: "session";
+  localSlots: WorkerRuntimeSlot[];
   activeWorkers: RedisWorkerRegistryEntry[];
   summary: ReturnType<typeof summarizeActiveWorkers>;
   pool: RedisRunWorkerPoolSnapshot | null;
@@ -42,6 +54,11 @@ export interface WorkerRuntimeControl {
 
 type WorkerHostFactory = (options: Parameters<typeof createWorkerHost>[0]) => WorkerHost;
 
+function localSlotsFromPool(pool: RedisRunWorkerPoolSnapshot | null): WorkerRuntimeSlot[] {
+  const slots = (pool as (RedisRunWorkerPoolSnapshot & { slots?: WorkerRuntimeSlot[] }) | null)?.slots;
+  return Array.isArray(slots) ? slots : [];
+}
+
 export function summarizeWorkerRuntimeStatus(input: {
   mode: WorkerRuntimeMode;
   activeWorkers: RedisWorkerRegistryEntry[];
@@ -49,6 +66,8 @@ export function summarizeWorkerRuntimeStatus(input: {
 }): WorkerRuntimeStatus {
   return {
     mode: input.mode,
+    sessionSerialBoundary: "session",
+    localSlots: localSlotsFromPool(input.pool),
     activeWorkers: input.activeWorkers,
     summary: summarizeActiveWorkers(input.activeWorkers),
     pool: input.pool
@@ -63,6 +82,7 @@ export function createWorkerRuntimeControl(options: {
   redisWorkerRegistry?: WorkerRegistry | undefined;
   runtimeService: {
     processQueuedRun(runId: string): Promise<void>;
+    getRun?(runId: string): Promise<{ workspaceId: string }>;
     recoverStaleRuns?(options?: {
       staleBefore?: string | undefined;
       limit?: number | undefined;

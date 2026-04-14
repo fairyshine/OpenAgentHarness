@@ -322,6 +322,13 @@ OAH 当前只负责：
 - slot 级并发模型和 session 级串行边界清晰
 - `bootstrap` 不再继续增长 worker 内部策略复杂度
 
+当前落点：
+
+- `done` 统一 worker runtime control 已接入 `apps/server` 装配层
+- `done` `embedded worker` / `standalone worker` 已共用一套 slot / session 串行语义
+- `done` Redis pool snapshot 已显式暴露 local slots、busy/idle slots 与 session 串行边界
+- `partial` `bootstrap` 已开始回退到装配层，但 standalone worker 独立入口仍在 Phase 4 完成
+
 ### Phase 2: 统一 Redis 执行层能力
 
 - 合并 queue、registry、pool stats、diagnostics、priority、reserved capacity、wait-time signals 等现有分支能力
@@ -333,6 +340,14 @@ OAH 当前只负责：
 
 - Redis 执行层的对外结构稳定
 - health report 能同时解释局部 worker 状态和全局执行压力
+
+当前落点：
+
+- `done` subagent priority、reserved capacity、ready wait time、worker registry 已合并到同一套 Redis 执行层
+- `done` queue pressure、global worker load、recent decisions、health/readiness contract 已统一
+- `done` slot / lease 现已暴露当前 `session`、`run`、`workspace` 上下文
+- `done` 已补出纯读模型的 worker affinity summary，为后续 sticky dispatch / owner worker 路由准备输入
+- `next` 下一步进入 Phase 3 前，优先把这套 affinity 读模型接到 workspace lease / materialization 设计上，而不是直接引入中心化调度器
 
 ### Phase 3: 引入 Workspace Materialization
 
@@ -349,6 +364,16 @@ OAH 当前只负责：
 - 不会因为并发 run / child session 重复拉取同一 workspace 版本
 - workspace 空闲后可以安全 flush 回 OSS 并回收本地副本
 - API 文件写不会绕过本地活动副本造成状态分叉
+
+当前落点：
+
+- `started` 已新增 workspace materialization manager 基础组件
+- `done` 对象存储来源的 workspace 副本现在具备进程内并发复用能力
+- `done` 本地副本已具备 `dirty` 标记、idle flush、idle eviction 和 close flush 语义
+- `done` queued run 执行现在已经通过 execution workspace lease 切换到 materialized 本地副本目录
+- `done` 无 `externalRef` 的 workspace 当前可先走本地目录直通，便于保持开发模式兼容
+- `partial` 当前 dirty 判定先走保守策略：可写 project run 结束时默认把 lease 作为 `dirty` 释放
+- `next` 下一步优先把 API 文件写与 owner worker / execution lease 对齐，并继续细化 dirty 判定，避免长期依赖保守 flush
 
 ### Phase 4: 固化生产部署骨架
 

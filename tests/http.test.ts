@@ -381,8 +381,30 @@ describe("http api", () => {
     const response = await fetch(`${activeApp.baseUrl}/healthz`);
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      status: "ok"
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      storage: {
+        primary: "sqlite",
+        events: "memory",
+        runQueue: "in_process"
+      },
+      process: {
+        mode: "api_only",
+        label: "API only",
+        execution: "none"
+      },
+      checks: {
+        postgres: "not_configured",
+        redisEvents: "not_configured",
+        redisRunQueue: "not_configured"
+      },
+      worker: {
+        mode: "disabled",
+        sessionSerialBoundary: "session",
+        localSlots: [],
+        activeWorkers: [],
+        pool: null
+      }
     });
   }, 30_000);
 
@@ -393,7 +415,12 @@ describe("http api", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      status: "ready"
+      status: "ready",
+      checks: {
+        postgres: "not_configured",
+        redisEvents: "not_configured",
+        redisRunQueue: "not_configured"
+      }
     });
   });
 

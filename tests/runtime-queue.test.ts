@@ -103,4 +103,103 @@ describe("runtime queue integration", () => {
     await runtimeService.processQueuedRun(accepted.runId);
     await waitFor(async () => (await runtimeService.getRun(accepted.runId)).status === "completed");
   });
+
+  it("acquires an execution workspace lease for queued runs", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const acquisitions: string[] = [];
+    const releases: Array<{ dirty?: boolean | undefined }> = [];
+    const enqueues: Array<{ sessionId: string; runId: string }> = [];
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      runQueue: {
+        async enqueue(sessionId, runId) {
+          enqueues.push({ sessionId, runId });
+        }
+      },
+      workspaceExecutionProvider: {
+        async acquire({ workspace }) {
+          acquisitions.push(workspace.rootPath);
+          return {
+            workspace: {
+              ...workspace,
+              rootPath: "/tmp/materialized/demo"
+            },
+            async release(options) {
+              releases.push(options ?? {});
+            }
+          };
+        }
+      },
+      workspaceInitializer: {
+        async initialize(input) {
+          return {
+            rootPath: input.rootPath,
+            settings: {
+              defaultAgent: "default",
+              skillDirs: []
+            },
+            defaultAgent: "default",
+            workspaceModels: {},
+            agents: {},
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "template",
+              agents: [],
+              models: [],
+              actions: [],
+              skills: [],
+              tools: [],
+              hooks: [],
+              nativeTools: []
+            }
+          };
+        }
+      }
+    });
+
+    const workspace = await runtimeService.createWorkspace({
+      input: {
+        name: "demo",
+        template: "workspace",
+        rootPath: "/tmp/source-demo",
+        executionPolicy: "local"
+      }
+    });
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller: {
+        subjectRef: "user_1",
+        authSource: "test",
+        scopes: [],
+        workspaceAccess: [workspace.id]
+      },
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller: {
+        subjectRef: "user_1",
+        authSource: "test",
+        scopes: [],
+        workspaceAccess: [workspace.id]
+      },
+      input: {
+        content: "hello"
+      }
+    });
+
+    await runtimeService.processQueuedRun(accepted.runId);
+    await waitFor(async () => (await runtimeService.getRun(accepted.runId)).status === "completed");
+
+    expect(enqueues).toEqual([{ sessionId: session.id, runId: accepted.runId }]);
+    expect(acquisitions).toEqual(["/tmp/source-demo"]);
+    expect(releases).toEqual([{ dirty: true }]);
+  });
 });

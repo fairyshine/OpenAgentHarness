@@ -1,13 +1,15 @@
 import { startTransition, useDeferredValue, useEffect, useEffectEvent, useRef, useState } from "react";
 
-import type {
-  Message,
-  MessageAccepted,
-  ModelGenerateResponse,
-  Run,
-  RunPage,
-  RunStep,
-  SessionEventContract
+import {
+  healthReportSchema,
+  readinessReportSchema,
+  type Message,
+  type MessageAccepted,
+  type ModelGenerateResponse,
+  type Run,
+  type RunPage,
+  type RunStep,
+  type SessionEventContract
 } from "@oah/api-contracts";
 
 import {
@@ -431,8 +433,10 @@ export function useAppController() {
         throw new Error(`${healthResponse.status} ${healthResponse.statusText}`);
       }
 
-      const healthPayload = (await readJsonResponse<HealthReportResponse>(healthResponse)) ?? null;
-      const readinessPayload = await readJsonResponse<ReadinessReportResponse>(readinessResponse).catch(() => null);
+      const healthPayload = healthReportSchema.parse((await readJsonResponse<HealthReportResponse>(healthResponse)) ?? null);
+      const readinessPayload = await readJsonResponse<ReadinessReportResponse>(readinessResponse)
+        .then((payload) => (payload ? readinessReportSchema.parse(payload) : null))
+        .catch(() => null);
 
       setHealthReport(healthPayload);
       setReadinessReport(readinessPayload);

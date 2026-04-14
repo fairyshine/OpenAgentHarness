@@ -10,6 +10,15 @@
 - 多实例可扩展：接入 Redis 后，多个 API / worker 进程可以共享同一套 session run queue
 - 故障可恢复：worker 异常退出后，stale run 能自动回收或重新排队，而不是永久卡住
 
+随着路线图进入 Phase 3，当前代码基线还新增了一层 workspace materialization 基础能力：
+
+- 可把 `s3://bucket/prefix` 类型的 workspace 外部引用 materialize 到 worker 本地缓存目录
+- 同一 worker 进程内对同一 `workspace + version` 的并发请求会复用同一份本地副本
+- 本地副本具备 `dirty`、idle flush、idle eviction 和 close flush 语义
+- queued run 当前已经会通过 execution workspace lease 使用 materialized 本地副本执行
+- 当前 dirty 判定先采用保守策略：可写 project run 结束时默认把 lease 按 `dirty` 释放
+- 这层目前仍未完全接入所有 API 文件读写路径
+
 ## 2. 组件关系
 
 ```mermaid
@@ -48,6 +57,8 @@ flowchart LR
 - lease TTL 基于 lock TTL 和 poll timeout 计算
 - worker 周期性刷新 lease，registry 用它判断 worker 是否健康
 - worker 是“执行循环”的概念，不等同于 OS 线程；一个 Node 进程可以运行多个 embedded worker
+- 当 worker 正在处理 run 时，slot / lease 还会额外暴露当前 `session`、`run`、`workspace` 上下文，便于后续接 workspace affinity 与 sticky dispatch
+- 当前还额外提供了一个纯读模型的 worker affinity summary，用来按 `owner worker / same session / same workspace / idle capacity / health` 排序候选 worker；它先服务于观测和后续路由，不直接改写当前 queue claim 语义
 
 ## 4. 队列语义
 
@@ -71,7 +82,16 @@ flowchart LR
 - `minWorkers`
 - `maxWorkers`
 - `suggestedWorkers`
+- `reservedSubagentCapacity`
+- `reservedWorkers`
+- `availableIdleCapacity`
+- `readySessionsPerActiveWorker`
+- `subagentReserveTarget`
+- `subagentReserveDeficit`
 - `desiredWorkers`
+- `slotCapacity`
+- `busySlots`
+- `idleSlots`
 - `activeWorkers`
 - `busyWorkers`
 - `idleWorkers`
@@ -81,6 +101,8 @@ flowchart LR
 - `readySessionCount`
 - `readyQueueDepth`
 - `uniqueReadySessionCount`
+- `subagentReadySessionCount`
+- `subagentReadyQueueDepth`
 - `lockedReadySessionCount`
 - `staleReadySessionCount`
 - `oldestSchedulableReadyAgeMs`
@@ -104,6 +126,11 @@ flowchart LR
 
 这些指标已经接入 Storage 页面的 Redis 面板，便于直接观察本地与全局 worker 负载。
 
+补充说明：
+
+- 当前实现里本地 `execution slot` 与 pool 内 worker 实例一一对应
+- 因此 `activeWorkers` 仍可视作当前本地 slot 数，但后续路线图会优先以 slot 语义继续推进
+
 ## 6. 扩缩容策略
 
 当前扩缩容不是简单按 ready queue 长度线性放大，而是结合以下三种压力：
@@ -120,7 +147,15 @@ flowchart LR
 
 `ceil((readySessionCount + busyWorkers) / readySessionsPerWorker)`
 
-### 6.3 老化压力
+### 6.3 SubAgent 保底容量
+
+当出现 subagent backlog 时，pool 会额外保证最小空闲容量：
+
+`busyWorkers + reservedSubagentCapacity`
+
+这让父 run 同步等待 child run 时，不会被普通 backlog 完全挤占。
+
+### 6.4 老化压力
 
 当下面两个条件同时满足时，额外建议增加一个 worker：
 
@@ -129,7 +164,7 @@ flowchart LR
 
 这用于处理“ready session 不多，但已经有人排队太久”的情况。
 
-### 6.4 去抖与日志
+### 6.5 去抖与日志
 
 为避免频繁抖动，pool 还带有：
 

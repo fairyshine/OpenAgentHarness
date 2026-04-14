@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 
 import {
+  healthReportSchema,
   modelProviderListSchema,
   platformModelListSchema,
+  readinessReportSchema,
   storageOverviewSchema,
   storagePostgresTableNameSchema,
   storagePostgresTablePageSchema,
@@ -53,19 +55,58 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
   app.get("/openapi.json", async (request, reply) => reply.send(await loadOpenApiDocument(getRequestOrigin(request))));
 
   app.get("/healthz", async () =>
-    dependencies.healthCheck
-      ? dependencies.healthCheck()
-      : {
-          status: "ok"
-        }
+    healthReportSchema.parse(
+      dependencies.healthCheck
+        ? await dependencies.healthCheck()
+        : {
+            status: "ok",
+            storage: {
+              primary: "sqlite",
+              events: "memory",
+              runQueue: "in_process"
+            },
+            process: {
+              mode: "api_only",
+              label: "API only",
+              execution: "none"
+            },
+            checks: {
+              postgres: "not_configured",
+              redisEvents: "not_configured",
+              redisRunQueue: "not_configured"
+            },
+            worker: {
+              mode: "disabled",
+              sessionSerialBoundary: "session",
+              localSlots: [],
+              activeWorkers: [],
+              summary: {
+                active: 0,
+                healthy: 0,
+                late: 0,
+                busy: 0,
+                embedded: 0,
+                standalone: 0
+              },
+              pool: null
+            }
+          }
+    )
   );
 
   app.get("/readyz", async (_request, reply) => {
-    const payload = dependencies.readinessCheck
-      ? await dependencies.readinessCheck()
-      : {
-          status: "ready"
-        };
+    const payload = readinessReportSchema.parse(
+      dependencies.readinessCheck
+        ? await dependencies.readinessCheck()
+        : {
+            status: "ready",
+            checks: {
+              postgres: "not_configured",
+              redisEvents: "not_configured",
+              redisRunQueue: "not_configured"
+            }
+          }
+    );
 
     if (payload.status === "not_ready") {
       return reply.status(503).send(payload);

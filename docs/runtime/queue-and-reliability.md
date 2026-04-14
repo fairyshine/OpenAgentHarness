@@ -9,6 +9,7 @@
 - 一个 session 一条逻辑队列
 - 一个 session 同时只有一个 worker 持锁执行
 - 不同 session 可并发
+- 一个 worker pool 内的每个 `execution slot` 在任意时刻也只会持有一个 session；当前实现里 slot 与本地 worker 实例一一对应
 
 ### 当前实现
 
@@ -60,17 +61,29 @@
 - `readySessionCount`：当前真正可调度的 session 数
 - `readyQueueDepth`：ready queue 原始深度
 - `uniqueReadySessionCount`：ready queue 去重后的 session 数
+- `subagentReadySessionCount` / `subagentReadyQueueDepth`：subagent 优先级的可调度 session 数与原始 ready 深度
 - `lockedReadySessionCount`：ready queue 中仍被锁住、暂时不可调度的 session 数
 - `staleReadySessionCount`：ready queue 中已无待执行 run 的脏 session 数
 - `oldestSchedulableReadyAgeMs`：最老可调度 session 在 ready queue 中等待的时长
 - `busyWorkers` / `idleWorkers`：本地 worker 状态
+- `slotCapacity` / `busySlots` / `idleSlots`：本地 execution slot 容量与占用
 - `globalActiveWorkers` / `globalBusyWorkers`：从 worker registry 观察到的全局健康 worker 负载
 - `remoteActiveWorkers` / `remoteBusyWorkers`：远端实例负载，用于避免本机在多实例场景下过度扩容
+
+这些指标现在会统一进入 worker pool health snapshot / recent decisions，方便后续继续接 reserved capacity、workspace affinity 和 controller 决策。
+
+为了让后续 sticky dispatch / controller 直接复用，当前 health snapshot 还会额外给出一组派生解释字段：
+
+- `availableIdleCapacity`
+- `readySessionsPerActiveWorker`
+- `subagentReserveTarget`
+- `subagentReserveDeficit`
 
 扩容触发主要依赖三类压力：
 
 - 队列压力：`ceil(readySessionCount / readySessionsPerWorker)`
 - 饱和压力：`ceil((readySessionCount + busyWorkers) / readySessionsPerWorker)`
+- subagent 保底容量：当存在 `subagentReadySessionCount > 0` 时，至少满足 `busyWorkers + reservedSubagentCapacity`
 - 老化压力：当 busy ratio 超过阈值，且最老可调度 session 等待时间超过阈值时，额外建议增加一个 worker
 
 为了避免抖动，pool 还带有：

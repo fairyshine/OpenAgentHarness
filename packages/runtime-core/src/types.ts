@@ -321,6 +321,19 @@ export interface WorkspaceDeletionHandler {
   deleteWorkspace(workspace: WorkspaceRecord): Promise<void>;
 }
 
+export interface WorkspaceExecutionLease {
+  workspace: WorkspaceRecord;
+  release(options?: { dirty?: boolean | undefined }): Promise<void> | void;
+}
+
+export interface WorkspaceExecutionProvider {
+  acquire(input: {
+    workspace: WorkspaceRecord;
+    run: Run;
+    session?: Session | undefined;
+  }): Promise<WorkspaceExecutionLease>;
+}
+
 export type ToolCallSourceType = "action" | "skill" | "agent" | "tool" | "native";
 
 export interface ToolCallAuditRecord {
@@ -471,6 +484,7 @@ export interface RuntimeServiceOptions {
   workspaceArchiveRepository?: WorkspaceArchiveRepository | undefined;
   workspaceDeletionHandler?: WorkspaceDeletionHandler | undefined;
   workspaceInitializer?: WorkspaceInitializer | undefined;
+  workspaceExecutionProvider?: WorkspaceExecutionProvider | undefined;
 }
 
 export type RunQueuePriority = "normal" | "subagent";

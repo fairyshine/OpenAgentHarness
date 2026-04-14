@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { FanoutSessionEventStore, RedisRunWorker, RedisRunWorkerPool, RedisWorkerRegistry } from "@oah/storage-redis";
+import {
+  FanoutSessionEventStore,
+  RedisRunWorker,
+  RedisRunWorkerPool,
+  RedisWorkerRegistry,
+  appendRedisRunWorkerPoolDecision,
+  buildRedisWorkerAffinitySummary,
+  buildRedisRunWorkerPoolDecision,
+  buildRedisRunWorkerPoolSnapshot,
+  calculateRedisWorkerPoolSuggestion,
+  formatRedisRunWorkerPoolRebalanceLog,
+  summarizeRedisRunWorkerPoolPressure,
+  shouldLogRedisRunWorkerPoolRebalance,
+  summarizeRedisWorkerLoad
+} from "@oah/storage-redis";
 
 function createInMemoryRedisCommands() {
   const sets = new Map<string, Set<string>>();
@@ -388,7 +402,9 @@ describe("storage redis", () => {
         processKind: "embedded",
         state: "busy",
         lastSeenAt: "2026-04-01T00:00:00.000Z",
-        currentSessionId: "ses_1"
+        currentSessionId: "ses_1",
+        currentRunId: "run_1",
+        currentWorkspaceId: "ws_1"
       },
       6_000
     );
@@ -400,6 +416,8 @@ describe("storage redis", () => {
       processKind: "embedded",
       state: "busy",
       currentSessionId: "ses_1",
+      currentRunId: "run_1",
+      currentWorkspaceId: "ws_1",
       leaseTtlMs: 6_000,
       expiresAt: "2026-04-01T00:00:06.000Z",
       lastSeenAgeMs: 4_500,
@@ -410,6 +428,77 @@ describe("storage redis", () => {
       expiresAt: "2026-04-01T00:00:06.000Z"
     });
     expect(redis.expiries.get("test:worker:worker_1")).toBe(6_000);
+  });
+
+  it("prefers a workspace-affine worker when it still has idle slot capacity", () => {
+    const affinity = buildRedisWorkerAffinitySummary({
+      workspaceId: "ws_1",
+      activeWorkers: [
+        {
+          workerId: "worker_1",
+          processKind: "standalone",
+          state: "busy",
+          health: "healthy",
+          currentWorkspaceId: "ws_1"
+        },
+        {
+          workerId: "worker_2",
+          processKind: "standalone",
+          state: "idle",
+          health: "healthy"
+        }
+      ],
+      slots: [
+        {
+          workerId: "worker_1",
+          state: "busy",
+          currentWorkspaceId: "ws_1"
+        },
+        {
+          workerId: "worker_1",
+          state: "idle"
+        },
+        {
+          workerId: "worker_2",
+          state: "idle"
+        }
+      ]
+    });
+
+    expect(affinity.workspaceAffinityWorkerId).toBe("worker_1");
+    expect(affinity.preferredWorkerId).toBe("worker_1");
+    expect(affinity.candidates[0]).toMatchObject({
+      workerId: "worker_1",
+      matchingWorkspaceSlots: 1,
+      idleSlots: 1
+    });
+    expect(affinity.candidates[0]?.reasons).toContain("same_workspace");
+    expect(affinity.candidates[0]?.reasons).toContain("idle_slot_capacity");
+  });
+
+  it("prefers a healthy idle worker over a late workspace match", () => {
+    const affinity = buildRedisWorkerAffinitySummary({
+      workspaceId: "ws_1",
+      activeWorkers: [
+        {
+          workerId: "worker_1",
+          processKind: "standalone",
+          state: "busy",
+          health: "late",
+          currentWorkspaceId: "ws_1"
+        },
+        {
+          workerId: "worker_2",
+          processKind: "embedded",
+          state: "idle",
+          health: "healthy"
+        }
+      ]
+    });
+
+    expect(affinity.workspaceAffinityWorkerId).toBe("worker_1");
+    expect(affinity.preferredWorkerId).toBe("worker_2");
+    expect(affinity.candidates.map((candidate) => candidate.workerId)).toEqual(["worker_2", "worker_1"]);
   });
 
   it("publishes worker leases and removes them on shutdown", async () => {
@@ -424,6 +513,8 @@ describe("storage redis", () => {
       processKind: "embedded" | "standalone";
       state: "starting" | "idle" | "busy" | "stopping";
       currentSessionId?: string;
+      currentRunId?: string;
+      currentWorkspaceId?: string;
     }> = [];
     const removed: string[] = [];
 
@@ -447,7 +538,9 @@ describe("storage redis", () => {
             workerId: entry.workerId,
             processKind: entry.processKind,
             state: entry.state,
-            ...(entry.currentSessionId ? { currentSessionId: entry.currentSessionId } : {})
+            ...(entry.currentSessionId ? { currentSessionId: entry.currentSessionId } : {}),
+            ...(entry.currentRunId ? { currentRunId: entry.currentRunId } : {}),
+            ...(entry.currentWorkspaceId ? { currentWorkspaceId: entry.currentWorkspaceId } : {})
           });
         },
         async remove(workerId) {
@@ -455,6 +548,11 @@ describe("storage redis", () => {
         }
       },
       runtimeService: {
+        async describeQueuedRun() {
+          return {
+            workspaceId: "ws_1"
+          };
+        },
         async processQueuedRun() {
           await processingBlocked;
         }
@@ -467,13 +565,377 @@ describe("storage redis", () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(heartbeats.some((entry) => entry.state === "starting")).toBe(true);
     expect(heartbeats.some((entry) => entry.state === "idle")).toBe(true);
-    expect(heartbeats.some((entry) => entry.state === "busy" && entry.currentSessionId === "ses_1")).toBe(true);
+    expect(
+      heartbeats.some(
+        (entry) =>
+          entry.state === "busy" &&
+          entry.currentSessionId === "ses_1" &&
+          entry.currentRunId === "run_1" &&
+          entry.currentWorkspaceId === "ws_1"
+      )
+    ).toBe(true);
 
     releaseProcessing?.();
     await worker.close();
 
     expect(heartbeats.some((entry) => entry.state === "stopping")).toBe(true);
     expect(removed).toHaveLength(1);
+  });
+
+  it("exposes local execution slots and session ownership in pool snapshots", async () => {
+    let claimed = false;
+    let returnedRun = false;
+    let releaseProcessing: (() => void) | undefined;
+    const processingBlocked = new Promise<void>((resolve) => {
+      releaseProcessing = resolve;
+    });
+
+    const queue = createQueueStub({
+      async claimNextSession() {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (claimed) {
+          return undefined;
+        }
+
+        claimed = true;
+        return "ses_1";
+      },
+      async dequeueRun() {
+        if (returnedRun) {
+          return undefined;
+        }
+
+        returnedRun = true;
+        return "run_1";
+      }
+    });
+
+    const pool = new RedisRunWorkerPool({
+      queue,
+      runtimeService: {
+        async describeQueuedRun() {
+          return {
+            workspaceId: "ws_1"
+          };
+        },
+        async processQueuedRun() {
+          await processingBlocked;
+        }
+      },
+      processKind: "embedded",
+      minWorkers: 1,
+      maxWorkers: 1,
+      scaleIntervalMs: 40
+    });
+
+    pool.start();
+
+    await waitForCondition(() => pool.snapshot().slots.some((slot) => slot.state === "busy" && slot.currentSessionId === "ses_1"));
+    expect(pool.snapshot()).toMatchObject({
+      sessionSerialBoundary: "session",
+      slotCapacity: 1,
+      activeWorkers: 1,
+      busySlots: 1,
+      idleSlots: 0,
+      slots: [
+        {
+          processKind: "embedded",
+          state: "busy",
+          currentSessionId: "ses_1",
+          currentRunId: "run_1",
+          currentWorkspaceId: "ws_1"
+        }
+      ]
+    });
+
+    releaseProcessing?.();
+    await pool.close();
+  });
+
+  it("derives worker load and sizing from extracted policy helpers", () => {
+    const workerLoad = summarizeRedisWorkerLoad({
+      activeWorkers: [
+        {
+          workerId: "local_1",
+          state: "busy",
+          health: "healthy"
+        },
+        {
+          workerId: "remote_1",
+          state: "busy",
+          health: "healthy"
+        },
+        {
+          workerId: "remote_2",
+          state: "idle",
+          health: "late"
+        }
+      ],
+      localWorkerIds: ["local_1"],
+      localActiveWorkers: 1,
+      localBusyWorkers: 1
+    });
+
+    expect(workerLoad).toEqual({
+      globalSuggestedWorkers: 0,
+      globalActiveWorkers: 2,
+      globalBusyWorkers: 2,
+      remoteActiveWorkers: 1,
+      remoteBusyWorkers: 1
+    });
+
+    expect(
+      calculateRedisWorkerPoolSuggestion({
+        minWorkers: 1,
+        maxWorkers: 4,
+        readySessionsPerWorker: 1,
+        reservedSubagentCapacity: 1,
+        localActiveWorkers: 1,
+        localBusyWorkers: 1,
+        scaleUpBusyRatioThreshold: 0.75,
+        scaleUpMaxReadyAgeMs: 2_000,
+        schedulingPressure: {
+          readySessionCount: 3,
+          oldestSchedulableReadyAgeMs: 3_500
+        },
+        globalWorkerLoad: workerLoad
+      })
+    ).toEqual({
+      pressureWorkers: 3,
+      saturatedWorkers: 5,
+      reservedWorkers: 0,
+      ageBoostWorkers: 3,
+      globalSuggestedWorkers: 5,
+      localSuggestedWorkers: 4
+    });
+  });
+
+  it("deduplicates recent pool decisions with extracted observability helpers", () => {
+    const repeated = buildRedisRunWorkerPoolDecision({
+      timestamp: "2026-04-14T10:00:00.000Z",
+      reason: "steady",
+      suggestedWorkers: 2,
+      reservedSubagentCapacity: 1,
+      reservedWorkers: 2,
+      availableIdleCapacity: 1,
+      readySessionsPerActiveWorker: 0.5,
+      subagentReserveTarget: 1,
+      subagentReserveDeficit: 0,
+      desiredWorkers: 2,
+      activeWorkers: 2,
+      busyWorkers: 1,
+      readySessionCount: 1,
+      readyQueueDepth: 1,
+      subagentReadySessionCount: 1,
+      subagentReadyQueueDepth: 1
+    });
+
+    expect(appendRedisRunWorkerPoolDecision([], repeated)).toEqual([repeated]);
+    expect(appendRedisRunWorkerPoolDecision([repeated], { ...repeated, timestamp: "2026-04-14T10:00:01.000Z" })).toEqual([
+      repeated
+    ]);
+  });
+
+  it("formats rebalance logging and snapshot shaping through extracted observability helpers", () => {
+    expect(
+      summarizeRedisRunWorkerPoolPressure({
+        activeWorkers: 3,
+        busyWorkers: 2,
+        reservedSubagentCapacity: 2,
+        schedulingPressure: {
+          readySessionCount: 4,
+          subagentReadySessionCount: 1,
+          subagentReadyQueueDepth: 1
+        }
+      })
+    ).toEqual({
+      availableIdleCapacity: 1,
+      readySessionsPerActiveWorker: 1.33,
+      subagentReserveTarget: 2,
+      subagentReserveDeficit: 1
+    });
+
+    expect(
+      shouldLogRedisRunWorkerPoolRebalance(
+        {
+          desiredWorkers: 2,
+          activeWorkers: 2
+        },
+        {
+          desiredWorkers: 2,
+          activeWorkers: 2,
+          reason: "steady"
+        }
+      )
+    ).toBe(false);
+
+    expect(
+      formatRedisRunWorkerPoolRebalanceLog({
+        reason: "scale_up",
+        activeWorkers: 2,
+        desiredWorkers: 4,
+        suggestedWorkers: 4,
+        globalSuggestedWorkers: 5,
+        reservedSubagentCapacity: 1,
+        reservedWorkers: 3,
+        availableIdleCapacity: 0,
+        readySessionsPerActiveWorker: 2,
+        subagentReserveTarget: 1,
+        subagentReserveDeficit: 1,
+        globalActiveWorkers: 3,
+        globalBusyWorkers: 2,
+        remoteActiveWorkers: 1,
+        remoteBusyWorkers: 1,
+        busyWorkers: 2,
+        minWorkers: 1,
+        maxWorkers: 4,
+        scaleUpPressureStreak: 2,
+        scaleUpSampleSize: 2,
+        scaleDownPressureStreak: 0,
+        scaleDownSampleSize: 3,
+        schedulingPressure: {
+          readySessionCount: 4,
+          readyQueueDepth: 4,
+          uniqueReadySessionCount: 4,
+          subagentReadySessionCount: 2,
+          subagentReadyQueueDepth: 2,
+          lockedReadySessionCount: 0,
+          staleReadySessionCount: 0,
+          oldestSchedulableReadyAgeMs: 3_000
+        }
+      })
+    ).toContain("Redis worker pool rebalance (scale_up): active=2, desired=4");
+    expect(
+      formatRedisRunWorkerPoolRebalanceLog({
+        reason: "scale_up",
+        activeWorkers: 2,
+        desiredWorkers: 4,
+        suggestedWorkers: 4,
+        reservedSubagentCapacity: 1,
+        reservedWorkers: 3,
+        availableIdleCapacity: 0,
+        readySessionsPerActiveWorker: 2,
+        subagentReserveTarget: 1,
+        subagentReserveDeficit: 1,
+        busyWorkers: 2,
+        minWorkers: 1,
+        maxWorkers: 4,
+        scaleUpPressureStreak: 2,
+        scaleUpSampleSize: 2,
+        scaleDownPressureStreak: 0,
+        scaleDownSampleSize: 3,
+        schedulingPressure: {
+          readySessionCount: 4,
+          readyQueueDepth: 4,
+          uniqueReadySessionCount: 4,
+          subagentReadySessionCount: 2,
+          subagentReadyQueueDepth: 2,
+          lockedReadySessionCount: 0,
+          staleReadySessionCount: 0,
+          oldestSchedulableReadyAgeMs: 3_000
+        }
+      })
+    ).toContain("subagentReserveDeficit=1");
+    expect(
+      formatRedisRunWorkerPoolRebalanceLog({
+        reason: "scale_up",
+        activeWorkers: 2,
+        desiredWorkers: 4,
+        suggestedWorkers: 4,
+        reservedSubagentCapacity: 1,
+        reservedWorkers: 3,
+        availableIdleCapacity: 0,
+        readySessionsPerActiveWorker: 2,
+        subagentReserveTarget: 1,
+        subagentReserveDeficit: 1,
+        busyWorkers: 2,
+        minWorkers: 1,
+        maxWorkers: 4,
+        scaleUpPressureStreak: 2,
+        scaleUpSampleSize: 2,
+        scaleDownPressureStreak: 0,
+        scaleDownSampleSize: 3,
+        schedulingPressure: {
+          readySessionCount: 4,
+          readyQueueDepth: 4,
+          uniqueReadySessionCount: 4,
+          subagentReadySessionCount: 2,
+          subagentReadyQueueDepth: 2,
+          lockedReadySessionCount: 0,
+          staleReadySessionCount: 0,
+          oldestSchedulableReadyAgeMs: 3_000
+        }
+      })
+    ).toContain("subagentSchedulable=2, subagentDepth=2");
+
+    expect(
+      buildRedisRunWorkerPoolSnapshot({
+        running: true,
+        processKind: "embedded",
+        minWorkers: 1,
+        maxWorkers: 4,
+        suggestedWorkers: 2,
+        reservedSubagentCapacity: 1,
+        reservedWorkers: 1,
+        availableIdleCapacity: 1,
+        readySessionsPerActiveWorker: 1,
+        subagentReserveTarget: 1,
+        subagentReserveDeficit: 0,
+        desiredWorkers: 2,
+        slots: [
+          {
+            slotId: "slot-1",
+            workerId: "worker-1",
+            processKind: "embedded",
+            state: "busy",
+            currentSessionId: "ses_1"
+          },
+          {
+            slotId: "slot-2",
+            workerId: "worker-2",
+            processKind: "embedded",
+            state: "idle"
+          }
+        ],
+        readySessionsPerWorker: 1,
+        scaleIntervalMs: 5_000,
+        scaleUpCooldownMs: 1_000,
+        scaleDownCooldownMs: 15_000,
+        scaleUpSampleSize: 2,
+        scaleDownSampleSize: 3,
+        scaleUpBusyRatioThreshold: 0.75,
+        scaleUpMaxReadyAgeMs: 2_000,
+        subagentReadySessionCount: 1,
+        subagentReadyQueueDepth: 1,
+        scaleUpPressureStreak: 0,
+        scaleDownPressureStreak: 0,
+        scaleUpCooldownRemainingMs: 0,
+        scaleDownCooldownRemainingMs: 0,
+        recentDecisions: []
+      })
+    ).toMatchObject({
+      sessionSerialBoundary: "session",
+      slotCapacity: 2,
+      reservedSubagentCapacity: 1,
+      reservedWorkers: 1,
+      availableIdleCapacity: 1,
+      readySessionsPerActiveWorker: 1,
+      subagentReserveTarget: 1,
+      subagentReserveDeficit: 0,
+      activeWorkers: 2,
+      busySlots: 1,
+      idleSlots: 1,
+      subagentReadySessionCount: 1,
+      subagentReadyQueueDepth: 1,
+      slots: [
+        {
+          currentSessionId: "ses_1"
+        },
+        {
+          state: "idle"
+        }
+      ]
+    });
   });
 
   it("rebalances the worker pool from ready-session pressure and only logs changes", async () => {
@@ -512,6 +974,7 @@ describe("storage redis", () => {
       maxWorkers: 4,
       scaleIntervalMs: 40,
       readySessionsPerWorker: 1,
+      reservedSubagentCapacity: 1,
       scaleUpCooldownMs: 20,
       scaleDownCooldownMs: 500,
       scaleUpSampleSize: 2,
@@ -575,6 +1038,8 @@ describe("storage redis", () => {
       readySessionCount: 1,
       readyQueueDepth: 1,
       uniqueReadySessionCount: 1,
+      subagentReadySessionCount: 0,
+      subagentReadyQueueDepth: 0,
       lockedReadySessionCount: 0,
       staleReadySessionCount: 0,
       oldestSchedulableReadyAgeMs: 0
@@ -636,6 +1101,7 @@ describe("storage redis", () => {
       maxWorkers: 4,
       scaleIntervalMs: 40,
       readySessionsPerWorker: 1,
+      reservedSubagentCapacity: 1,
       scaleUpCooldownMs: 20,
       scaleDownCooldownMs: 20,
       scaleUpSampleSize: 1,
@@ -672,6 +1138,8 @@ describe("storage redis", () => {
       readySessionCount: 4,
       readyQueueDepth: 4,
       uniqueReadySessionCount: 4,
+      subagentReadySessionCount: 2,
+      subagentReadyQueueDepth: 2,
       lockedReadySessionCount: 0,
       staleReadySessionCount: 0,
       oldestSchedulableReadyAgeMs: 0
@@ -683,8 +1151,96 @@ describe("storage redis", () => {
       desiredWorkers: 4,
       suggestedWorkers: 4,
       globalSuggestedWorkers: 4,
+      reservedSubagentCapacity: 1,
+      reservedWorkers: 1,
+      availableIdleCapacity: 4,
+      readySessionsPerActiveWorker: 1,
+      subagentReserveTarget: 1,
+      subagentReserveDeficit: 0,
+      subagentReadySessionCount: 2,
+      subagentReadyQueueDepth: 2,
       remoteActiveWorkers: 0,
       remoteBusyWorkers: 0
+    });
+
+    await pool.close();
+  });
+
+  it("reserves idle capacity when subagent backlog appears", async () => {
+    let pressure = {
+      readySessionCount: 1,
+      readyQueueDepth: 1,
+      uniqueReadySessionCount: 1,
+      subagentReadySessionCount: 1,
+      subagentReadyQueueDepth: 1,
+      lockedReadySessionCount: 0,
+      staleReadySessionCount: 0,
+      oldestSchedulableReadyAgeMs: 0
+    };
+
+    const createQueue = () =>
+      createQueueStub({
+        async claimNextSession() {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return undefined;
+        },
+        async getSchedulingPressure() {
+          return pressure;
+        }
+      });
+
+    const pool = new RedisRunWorkerPool({
+      queue: createQueue(),
+      queueFactory: async () => createQueue(),
+      runtimeService: {
+        async processQueuedRun() {
+          return undefined;
+        }
+      },
+      processKind: "embedded",
+      minWorkers: 1,
+      maxWorkers: 4,
+      scaleIntervalMs: 40,
+      readySessionsPerWorker: 4,
+      reservedSubagentCapacity: 2,
+      scaleUpCooldownMs: 20,
+      scaleDownCooldownMs: 20,
+      scaleUpSampleSize: 1,
+      scaleDownSampleSize: 1
+    });
+
+    pool.start();
+
+    await waitForCondition(() => pool.snapshot().activeWorkers === 2, 1_500);
+    expect(pool.snapshot()).toMatchObject({
+      desiredWorkers: 2,
+      suggestedWorkers: 2,
+      reservedSubagentCapacity: 2,
+      reservedWorkers: 2,
+      availableIdleCapacity: 2,
+      readySessionsPerActiveWorker: 0.5,
+      subagentReserveTarget: 2,
+      subagentReserveDeficit: 0,
+      readySessionCount: 1,
+      subagentReadySessionCount: 1
+    });
+
+    pressure = {
+      ...pressure,
+      subagentReadySessionCount: 0,
+      subagentReadyQueueDepth: 0
+    };
+
+    await waitForCondition(() => pool.snapshot().activeWorkers === 1, 1_500);
+    expect(pool.snapshot()).toMatchObject({
+      desiredWorkers: 1,
+      suggestedWorkers: 1,
+      reservedSubagentCapacity: 2,
+      reservedWorkers: 0,
+      availableIdleCapacity: 1,
+      readySessionsPerActiveWorker: 1,
+      subagentReserveTarget: 0,
+      subagentReserveDeficit: 0
     });
 
     await pool.close();

@@ -181,6 +181,7 @@ openai-default:
 | `OAH_EMBEDDED_WORKER_SCALE_DOWN_SAMPLE_SIZE` | `3` | 触发缩容前需要连续满足压力条件的采样次数 |
 | `OAH_EMBEDDED_WORKER_SCALE_UP_BUSY_RATIO_PERCENT` | `75` | 当 busy ratio 超过该阈值时，可联动老化压力触发额外扩容 |
 | `OAH_EMBEDDED_WORKER_SCALE_UP_MAX_READY_AGE_MS` | `2000` | 最老可调度 session 等待时长超过该阈值时，允许触发老化扩容 |
+| `OAH_EMBEDDED_WORKER_RESERVED_CAPACITY_FOR_SUBAGENT` | `1` | 出现 `subagent` backlog 时，希望额外保留的最小空闲 worker 容量；允许设为 `0` |
 
 ### 其他运行期参数
 

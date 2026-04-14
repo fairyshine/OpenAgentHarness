@@ -216,6 +216,7 @@ export class RuntimeService {
   readonly #workspaceArchiveRepository: RuntimeServiceOptions["workspaceArchiveRepository"];
   readonly #workspaceDeletionHandler: RuntimeServiceOptions["workspaceDeletionHandler"];
   readonly #workspaceInitializer: RuntimeServiceOptions["workspaceInitializer"];
+  readonly #workspaceExecutionProvider: RuntimeServiceOptions["workspaceExecutionProvider"];
   readonly #workspaceFiles: WorkspaceFileService;
   readonly #sessionHistory: SessionHistoryService;
   readonly #runSteps: RunStepService;
@@ -254,6 +255,7 @@ export class RuntimeService {
     this.#workspaceArchiveRepository = options.workspaceArchiveRepository;
     this.#workspaceDeletionHandler = options.workspaceDeletionHandler;
     this.#workspaceInitializer = options.workspaceInitializer;
+    this.#workspaceExecutionProvider = options.workspaceExecutionProvider;
     this.#workspaceFiles = new WorkspaceFileService();
     this.#sessionHistory = new SessionHistoryService({
       messageRepository: this.#messageRepository,
@@ -1446,10 +1448,21 @@ export class RuntimeService {
           }, runTimeoutMs)
         : undefined;
     let streamCoordinator: ModelStreamCoordinator<ModelExecutionInput> | undefined;
+    let executionWorkspace = workspace;
+    let executionLease: import("./types.js").WorkspaceExecutionLease | undefined;
 
     try {
+      if (this.#workspaceExecutionProvider) {
+        executionLease = await this.#workspaceExecutionProvider.acquire({
+          workspace,
+          run,
+          ...(session ? { session } : {})
+        });
+        executionWorkspace = executionLease.workspace;
+      }
+
       if (run.triggerType === "api_action") {
-        await this.#processActionRun(workspace, run, session, abortController.signal);
+        await this.#processActionRun(executionWorkspace, run, session, abortController.signal);
         return;
       }
 
@@ -1468,18 +1481,18 @@ export class RuntimeService {
       };
       const runtimeMessages = await this.#loadSessionRuntimeMessages(session.id, allMessages);
       const modelInput = await this.#modelInputs.buildModelInput(
-        workspace,
+        executionWorkspace,
         session,
         run,
         runtimeMessages,
         executionContext.currentAgentName
       );
-      const hookedModelInput = await this.#applyBeforeModelHooks(workspace, session, run, modelInput);
-      const runtimeTools = this.#buildRuntimeTools(workspace, run, session, executionContext);
-      const activeToolServers = listVisibleEnabledToolServers(workspace, executionContext.currentAgentName);
+      const hookedModelInput = await this.#applyBeforeModelHooks(executionWorkspace, session, run, modelInput);
+      const runtimeTools = this.#buildRuntimeTools(executionWorkspace, run, session, executionContext);
+      const activeToolServers = listVisibleEnabledToolServers(executionWorkspace, executionContext.currentAgentName);
       const runtimeToolNames = Object.keys(runtimeTools);
       streamCoordinator = new ModelStreamCoordinator({
-        workspace,
+        workspace: executionWorkspace,
         session,
         run,
         executionContext,
@@ -1508,7 +1521,7 @@ export class RuntimeService {
         applyBeforeModelHooks: (targetWorkspace, targetSession, targetRun, nextModelInput) =>
           this.#applyBeforeModelHooks(targetWorkspace, targetSession, targetRun, nextModelInput),
         getRun: (targetRunId) => this.getRun(targetRunId),
-        getActiveToolNames: (agentName) => resolveActiveToolNamesForAgent(workspace, agentName),
+        getActiveToolNames: (agentName) => resolveActiveToolNamesForAgent(executionWorkspace, agentName),
         startRunStep: (input) => this.#startRunStep(input),
         completeRunStep: (step, status, output) => this.#completeRunStep(step, status, output),
         setRunStatusIfPossible: (targetRunId, nextStatus) => this.#setRunStatusIfPossible(targetRunId, nextStatus),
@@ -1565,7 +1578,7 @@ export class RuntimeService {
         previewValue: (value, maxLength) => this.#previewValue(value, maxLength)
       });
       const observableRuntimeTools = this.#toolExecution.wrapRuntimeToolsForEvents({
-        workspace,
+        workspace: executionWorkspace,
         session,
         run,
         runtimeTools,
@@ -1575,7 +1588,7 @@ export class RuntimeService {
         toolMessageMetadataByCallId: streamCoordinator.toolMessageMetadataByCallId
       });
       this.#logger?.debug?.("Runtime run starting model stream.", {
-        workspaceId: workspace.id,
+        workspaceId: executionWorkspace.id,
         sessionId: session.id,
         runId: run.id,
         triggerType: run.triggerType,
@@ -1609,8 +1622,8 @@ export class RuntimeService {
                 toolServers: activeToolServers
               }
             : {}),
-          maxSteps: workspace.agents[executionContext.currentAgentName]?.policy?.maxSteps ?? 8,
-          parallelToolCalls: workspace.agents[executionContext.currentAgentName]?.policy?.parallelToolCalls,
+          maxSteps: executionWorkspace.agents[executionContext.currentAgentName]?.policy?.maxSteps ?? 8,
+          parallelToolCalls: executionWorkspace.agents[executionContext.currentAgentName]?.policy?.parallelToolCalls,
           ...streamCoordinator.buildStreamOptions()
         }
       );
@@ -1622,14 +1635,14 @@ export class RuntimeService {
       const completed = await response.completed;
       const latestRun = await this.getRun(run.id);
       const hookedCompleted = await this.#applyAfterModelHooks(
-        workspace,
+        executionWorkspace,
         session,
         latestRun,
         streamCoordinator.latestHookedModelInput,
         completed
       );
       await this.#finalizeSuccessfulRun(
-        workspace,
+        executionWorkspace,
         session,
         latestRun,
         streamCoordinator.assistantMessage,
@@ -1648,7 +1661,7 @@ export class RuntimeService {
       if (abortController.signal.aborted) {
         if (runTimedOut) {
           this.#logger?.error?.("Runtime run timed out.", {
-            workspaceId: workspace.id,
+            workspaceId: executionWorkspace.id,
             sessionId: session?.id,
             runId: run.id,
             triggerType: run.triggerType,
@@ -1656,7 +1669,7 @@ export class RuntimeService {
             errorMessage: runTimeoutMs ? `Run exceeded timeout after ${runTimeoutMs}ms.` : "Run exceeded the configured timeout."
           });
           await this.#runFinalization.finalizeTimedOutRun({
-            workspace,
+            workspace: executionWorkspace,
             session,
             runId: run.id,
             runTimeoutMs
@@ -1665,7 +1678,7 @@ export class RuntimeService {
         }
 
         this.#logger?.warn?.("Runtime run cancelled.", {
-          workspaceId: workspace.id,
+          workspaceId: executionWorkspace.id,
           sessionId: session?.id,
           runId: run.id,
           triggerType: run.triggerType,
@@ -1680,7 +1693,7 @@ export class RuntimeService {
 
       const currentRun = await this.getRun(run.id);
       this.#logger?.error?.("Runtime run failed.", {
-        workspaceId: workspace.id,
+        workspaceId: executionWorkspace.id,
         sessionId: session?.id,
         runId: run.id,
         triggerType: run.triggerType,
@@ -1689,7 +1702,7 @@ export class RuntimeService {
         errorMessage: error instanceof Error ? error.message : "Unknown streaming error."
       });
       await this.#runFinalization.finalizeFailedRun({
-        workspace,
+        workspace: executionWorkspace,
         session,
         runId: run.id,
         errorCode: error instanceof AppError ? error.code : "model_stream_failed",
@@ -1701,6 +1714,19 @@ export class RuntimeService {
         clearTimeout(runTimeout);
       }
       this.#runAbortControllers.delete(run.id);
+      if (executionLease) {
+        try {
+          await executionLease.release({
+            dirty: !executionWorkspace.readOnly && executionWorkspace.kind === "project"
+          });
+        } catch (error) {
+          this.#logger?.warn?.("Failed to release execution workspace lease.", {
+            error: error instanceof Error ? error.message : String(error),
+            workspaceId: executionWorkspace.id,
+            runId: run.id
+          });
+        }
+      }
     }
   }
 
