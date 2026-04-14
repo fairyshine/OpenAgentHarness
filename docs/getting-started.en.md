@@ -4,7 +4,7 @@
 
 | Tool | Version |
 | --- | --- |
-| Node.js | 20+ |
+| Node.js | 24+ |
 | pnpm | 10+ |
 | Docker + docker compose | Latest stable |
 

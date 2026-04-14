@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@10.30.2",
+  "engines": {
+    "node": ">=24"
+  },
   "type": "module",
   "scripts": {
     "build": "tsc -b && pnpm --filter @oah/web build",

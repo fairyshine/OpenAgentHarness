@@ -57,7 +57,6 @@ import {
 import { HistoryEventCleaner, HistoryMirrorSyncer, inspectHistoryMirrorStatus } from "./history-mirror.js";
 import { createBuiltInPlatformAgents } from "./platform-agents.js";
 import { createStorageAdmin, type StorageAdmin } from "./storage-admin.js";
-import { WorkspaceArchiveExporter } from "./workspace-archive-export.js";
 
 export {
   buildSingleWorkspaceConfig,
@@ -469,15 +468,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       const retentionDays = Number.parseInt(process.env.OAH_HISTORY_EVENT_RETENTION_DAYS ?? "7", 10);
       return Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 7;
     })(),
-    archiveExportEnabled:
-      primaryStorageMode === "postgres" &&
-      shouldRunHistoryMirrorSync({
-        processKind,
-        startWorker,
-        hasRedisRunQueue: Boolean(redisRunQueue)
-      }) &&
-      "workspaceArchiveRepository" in persistence &&
-      Boolean(persistence.workspaceArchiveRepository),
+    archiveExportEnabled: false,
     archiveExportRoot: config.paths.archive_dir
   });
   const runtimeProcess = describeRuntimeProcess({
@@ -981,33 +972,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         })()
       : undefined;
   historyEventCleaner?.start();
-  const workspaceArchiveExporter =
-    primaryStorageMode === "postgres" &&
-    shouldRunHistoryMirrorSync({
-      processKind,
-      startWorker,
-      hasRedisRunQueue: Boolean(redisRunQueue)
-    }) &&
-    "workspaceArchiveRepository" in persistence &&
-    persistence.workspaceArchiveRepository
-      ? new WorkspaceArchiveExporter({
-          repository: persistence.workspaceArchiveRepository,
-          exportRoot: config.paths.archive_dir,
-          logger: {
-            info(message) {
-              console.info(message);
-            },
-            warn(message, error) {
-              console.warn(message, error);
-            },
-            error(message, error) {
-              console.error(message, error);
-            }
-          }
-        })
-      : undefined;
-  workspaceArchiveExporter?.start();
-
   const closePersistence =
     "close" in persistence && typeof persistence.close === "function" ? () => persistence.close() : async () => undefined;
 
@@ -1243,7 +1207,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       await Promise.all([
         historyMirrorSyncer?.close() ?? Promise.resolve(),
         historyEventCleaner?.close() ?? Promise.resolve(),
-        workspaceArchiveExporter?.close() ?? Promise.resolve(),
         redisRunWorkerPool?.close() ?? Promise.resolve(),
         storageAdmin.close(),
         redisBus?.close() ?? Promise.resolve(),

@@ -4,7 +4,7 @@
 
 | 工具 | 版本 |
 | --- | --- |
-| Node.js | 20+ |
+| Node.js | 24+ |
 | pnpm | 10+ |
 | Docker + docker compose | 最新稳定版 |
 
@@ -78,6 +78,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 | `pnpm install` | 安装依赖 |
 | `OAH_TEST_ROOT=/absolute/path pnpm storage:sync` | 同步测试数据到 MinIO |
 | `OAH_TEST_ROOT=/absolute/path pnpm local:up` | 启动本地整套服务 |
+| `OAH_TEST_ROOT=/absolute/path OAH_SKIP_BUILD=1 pnpm local:up` | 复用本地已有 OAH 镜像，跳过 Docker 构建 |
 | `pnpm local:down` | 停止本地整套服务 |
 | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --api-only --config ./server.example.yaml` | 仅启动 API |
 | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml` | 单独启动 Worker |
@@ -92,3 +93,34 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 - [Workspace 配置](./workspace/README.md) — 配置 Agent、Skill、Tool
 - [部署与运行](./deploy.md) — 本地一体 vs 生产拆分部署
 - [设计总览](./design-overview.md) — 理解核心设计决策
+
+## 常见故障
+
+### `failed to fetch anonymous token` / `auth.docker.io ... i/o timeout`
+
+这是 Docker daemon 拉取基础镜像时的网络或 DNS 问题，不一定是仓库本身有问题。
+
+- 如果本地已经有 `openagentharness-oah:latest`，可以直接跳过构建：
+  ```bash
+  OAH_TEST_ROOT=/absolute/path OAH_SKIP_BUILD=1 pnpm local:up
+  ```
+- 如果必须重新构建，先确认 Docker Desktop 自身能访问 Docker Hub，再重试。
+
+### `VolumeDriver.Get ... context deadline exceeded`
+
+这通常表示 `rclone` Docker volume 插件卡住了。一个明显信号是 `docker volume ls` 或 `docker volume inspect <name>` 也会长时间无响应。
+
+按顺序尝试：
+
+```bash
+docker plugin disable -f rclone:latest
+docker plugin enable rclone:latest
+```
+
+如果上面也卡住，重启 Docker Desktop。仍然不行时重新安装插件：
+
+```bash
+docker plugin rm -f rclone:latest
+docker run --rm --privileged -v /var/lib/docker-plugins/rclone/config:/config -v /var/lib/docker-plugins/rclone/cache:/cache alpine:3.20 sh -lc 'mkdir -p /config /cache'
+docker plugin install rclone/docker-volume-rclone:arm64 --grant-all-permissions --alias rclone
+```
