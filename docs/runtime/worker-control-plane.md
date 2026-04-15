@@ -30,8 +30,9 @@
 - standalone worker lease 现在会额外发布 `runtimeInstanceId`，让 controller 能把同一 Pod 内多个 slot 正确聚合为一个 replica
 - controller 当前会输出 `suggestedReplicas`、`desiredReplicas`、pressure streak、cooldown remaining 和 scale reason
 - controller 当前已经具备可插拔 `scale target` 抽象，并已支持 Kubernetes `Deployment /scale` 子资源 reconcile
+- controller 当前已经具备基于 Kubernetes Lease 的 leader election，只有 leader controller 会真正执行 reconcile
 - 第一版 target 默认仍保持 `allow_scale_down = false`，先把自动扩容打通，再把自动缩容显式挂到 drain / graceful shutdown 完成度上
-- 当前仍没有 leader election，也还缺少与 deployment / RBAC 清单的一体化交付；这一层仍处于“先把决策和执行接口接通，再补生产护栏”的阶段
+- 当前已经补出一套最小 `deploy/kubernetes` Deployment / Service / RBAC 骨架，但自动缩容护栏、drain 契约和更完整的生产清单仍需继续收敛
 
 ## 2. 组件关系
 

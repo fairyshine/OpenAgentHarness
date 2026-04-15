@@ -144,6 +144,8 @@ export function createApp(dependencies: AppDependencies, options: CreateAppOptio
             },
             worker: {
               mode: "disabled",
+              draining: false,
+              acceptsNewRuns: true,
               sessionSerialBoundary: "session",
               localSlots: [],
               activeWorkers: [],
@@ -165,6 +167,7 @@ export function createApp(dependencies: AppDependencies, options: CreateAppOptio
         ? await dependencies.readinessCheck()
         : {
             status: "ready",
+            draining: false,
             checks: {
               postgres: "not_configured",
               redisEvents: "not_configured",

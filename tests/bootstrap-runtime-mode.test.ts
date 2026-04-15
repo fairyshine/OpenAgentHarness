@@ -130,6 +130,8 @@ describe("server runtime process modes", () => {
       })
     ).toMatchObject({
       mode: "embedded",
+      draining: false,
+      acceptsNewRuns: true,
       sessionSerialBoundary: "session",
       localSlots: [],
       summary: {
@@ -147,6 +149,8 @@ describe("server runtime process modes", () => {
   it("builds a worker runtime control around the shared host lifecycle", async () => {
     const host = {
       start: vi.fn(),
+      isDraining: vi.fn(() => false),
+      beginDrain: vi.fn(async () => undefined),
       snapshot: vi.fn(() => ({
         running: true,
         sessionSerialBoundary: "session",
@@ -219,6 +223,8 @@ describe("server runtime process modes", () => {
     expect(host.start).toHaveBeenCalledTimes(1);
     await expect(workerRuntime.getStatus()).resolves.toMatchObject({
       mode: "embedded",
+      draining: false,
+      acceptsNewRuns: true,
       sessionSerialBoundary: "session",
       localSlots: [],
       summary: {
@@ -236,6 +242,8 @@ describe("server runtime process modes", () => {
         slotCapacity: 1
       }
     });
+    await workerRuntime.beginDrain();
+    expect(host.beginDrain).toHaveBeenCalledTimes(1);
     await workerRuntime.close();
     expect(host.close).toHaveBeenCalledTimes(1);
   });

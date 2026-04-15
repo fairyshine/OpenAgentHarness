@@ -415,6 +415,8 @@ describe("http api", () => {
       },
       worker: {
         mode: "disabled",
+        draining: false,
+        acceptsNewRuns: true,
         sessionSerialBoundary: "session",
         localSlots: [],
         activeWorkers: [],
@@ -431,6 +433,7 @@ describe("http api", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       status: "ready",
+      draining: false,
       checks: {
         postgres: "not_configured",
         redisEvents: "not_configured",

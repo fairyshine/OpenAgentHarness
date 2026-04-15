@@ -172,6 +172,7 @@ export interface BootstrappedRuntime {
   }): Promise<void>;
   healthReport(): Promise<HealthReport>;
   readinessReport(): Promise<ReadinessReport>;
+  beginDrain(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -1073,6 +1074,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       };
     },
     async readinessReport() {
+      const workerStatus = await workerRuntime.getStatus();
       const checks = {
         postgres: await postgresCheck(),
         redisEvents: await redisEventsCheck(),
@@ -1080,9 +1082,14 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       };
 
       return {
-        status: Object.values(checks).includes("down") ? "not_ready" : "ready",
+        status: workerStatus.draining || Object.values(checks).includes("down") ? "not_ready" : "ready",
+        ...(workerStatus.draining ? { reason: "draining" as const, draining: true } : {}),
+        ...(!workerStatus.draining && Object.values(checks).includes("down") ? { reason: "checks_down" as const } : {}),
         checks
       };
+    },
+    async beginDrain() {
+      await workerRuntime.beginDrain();
     },
     async close() {
       await Promise.all([
@@ -1121,15 +1128,20 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   };
 }
 
-export function installSignalHandlers(close: () => Promise<void>): void {
+export function installSignalHandlers(options: { close: () => Promise<void>; beginDrain?: (() => Promise<void>) | undefined }): void {
   let closing: Promise<void> | undefined;
 
   const shutdown = () => {
     if (!closing) {
-      closing = close().catch((error) => {
-        console.error(error);
-        process.exitCode = 1;
-      });
+      closing = (async () => {
+        try {
+          await options.beginDrain?.();
+          await options.close();
+        } catch (error) {
+          console.error(error);
+          process.exitCode = 1;
+        }
+      })();
     }
 
     return closing;

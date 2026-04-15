@@ -7,6 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { RedisWorkerRegistryEntry } from "@oah/storage-redis";
 
 import {
+  createWorkerControllerLeaderElector,
+  resolveWorkerControllerLeaderElectionConfig
+} from "../apps/worker-controller/src/leader-election.ts";
+import {
   calculateStandaloneWorkerReplicas,
   RedisWorkerController,
   resolveStandaloneWorkerControllerConfig,
@@ -363,6 +367,166 @@ describe("worker controller", () => {
         skipTlsVerify: false
       }
     });
+  });
+
+  it("resolves kubernetes leader election settings", () => {
+    const leaderElection = resolveWorkerControllerLeaderElectionConfig({
+      server: { host: "127.0.0.1", port: 8787 },
+      storage: { redis_url: "redis://local/0" },
+      paths: {
+        workspace_dir: "/tmp/workspaces",
+        chat_dir: "/tmp/chat",
+        template_dir: "/tmp/templates",
+        model_dir: "/tmp/models",
+        tool_dir: "/tmp/tools",
+        skill_dir: "/tmp/skills",
+        archive_dir: "/tmp/archives"
+      },
+      workers: {
+        controller: {
+          leader_election: {
+            type: "kubernetes",
+            kubernetes: {
+              namespace: "open-agent-harness",
+              lease_name: "oah-worker-controller",
+              api_url: "https://kubernetes.default.svc",
+              token_file: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+              ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+              lease_duration_ms: 15000,
+              renew_interval_ms: 5000,
+              retry_interval_ms: 2000,
+              identity: "controller-a"
+            }
+          }
+        }
+      },
+      llm: {
+        default_model: "openai-default"
+      }
+    });
+
+    expect(leaderElection).toEqual({
+      type: "kubernetes",
+      identity: "controller-a",
+      namespace: "open-agent-harness",
+      leaseName: "oah-worker-controller",
+      apiUrl: "https://kubernetes.default.svc",
+      tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+      caFile: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+      skipTlsVerify: false,
+      leaseDurationMs: 15000,
+      renewIntervalMs: 5000,
+      retryIntervalMs: 2000
+    });
+  });
+
+  it("acquires and renews kubernetes leadership lease", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-worker-controller-lease-"));
+    tempDirs.push(tempDir);
+    const tokenFile = path.join(tempDir, "token");
+    await writeFile(tokenFile, "test-token", "utf8");
+
+    let getCount = 0;
+    let currentHolder = "other-controller";
+    let currentResourceVersion = "12";
+    const gained: string[] = [];
+    const lost: string[] = [];
+    const requests: Array<{ method: string; body?: string | undefined }> = [];
+
+    const elector = createWorkerControllerLeaderElector(
+      {
+        type: "kubernetes",
+        identity: "controller-a",
+        namespace: "open-agent-harness",
+        leaseName: "oah-worker-controller",
+        apiUrl: "https://kubernetes.default.svc",
+        tokenFile,
+        caFile: undefined,
+        skipTlsVerify: true,
+        leaseDurationMs: 1000,
+        renewIntervalMs: 10,
+        retryIntervalMs: 10
+      },
+      {
+        onGainedLeadership() {
+          gained.push("gained");
+        },
+        onLostLeadership() {
+          lost.push("lost");
+        },
+        request: async (request) => {
+          requests.push({
+            method: request.method,
+            body: request.body
+          });
+          if (request.method === "GET") {
+            getCount += 1;
+            if (getCount === 1) {
+              return {
+                status: 200,
+                body: {
+                  metadata: {
+                    resourceVersion: currentResourceVersion
+                  },
+                  spec: {
+                    holderIdentity: currentHolder,
+                    renewTime: "2026-04-15T00:00:00.000Z",
+                    leaseDurationSeconds: 1,
+                    leaseTransitions: 2
+                  }
+                },
+                text: "{}"
+              };
+            }
+
+            return {
+              status: 200,
+              body: {
+                metadata: {
+                  resourceVersion: currentResourceVersion
+                },
+                spec: {
+                  holderIdentity: currentHolder,
+                  renewTime: new Date().toISOString(),
+                  leaseDurationSeconds: 1,
+                  leaseTransitions: 3
+                }
+              },
+              text: "{}"
+            };
+          }
+
+          currentHolder = "controller-a";
+          currentResourceVersion = "13";
+          return {
+            status: 200,
+            body: {
+              metadata: {
+                resourceVersion: currentResourceVersion
+              },
+              spec: {
+                holderIdentity: currentHolder,
+                renewTime: new Date().toISOString(),
+                leaseDurationSeconds: 1,
+                leaseTransitions: 3
+              }
+            },
+            text: "{}"
+          };
+        }
+      }
+    );
+
+    elector.start();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const snapshot = elector.snapshot();
+    await elector.close();
+
+    expect(snapshot.leader).toBe(true);
+    expect(snapshot.observedHolderIdentity).toBe("controller-a");
+    expect(gained.length).toBeGreaterThan(0);
+    expect(lost).toHaveLength(1);
+    expect(requests.some((request) => request.method === "PATCH")).toBe(true);
   });
 
   it("blocks kubernetes scale-down when policy disables it", async () => {

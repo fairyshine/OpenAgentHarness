@@ -38,6 +38,9 @@ export interface WorkerRuntimeSlot {
 
 export interface WorkerRuntimeStatus {
   mode: WorkerRuntimeMode;
+  draining: boolean;
+  acceptsNewRuns: boolean;
+  drainStartedAt?: string | undefined;
   sessionSerialBoundary: "session";
   localSlots: WorkerRuntimeSlot[];
   activeWorkers: RedisWorkerRegistryEntry[];
@@ -48,6 +51,7 @@ export interface WorkerRuntimeStatus {
 export interface WorkerRuntimeControl {
   mode: WorkerRuntimeMode;
   start(): void;
+  beginDrain(): Promise<void>;
   getStatus(): Promise<WorkerRuntimeStatus>;
   close(): Promise<void>;
 }
@@ -61,11 +65,16 @@ function localSlotsFromPool(pool: RedisRunWorkerPoolSnapshot | null): WorkerRunt
 
 export function summarizeWorkerRuntimeStatus(input: {
   mode: WorkerRuntimeMode;
+  draining?: boolean | undefined;
+  drainStartedAt?: string | undefined;
   activeWorkers: RedisWorkerRegistryEntry[];
   pool: RedisRunWorkerPoolSnapshot | null;
 }): WorkerRuntimeStatus {
   return {
     mode: input.mode,
+    draining: input.draining ?? false,
+    acceptsNewRuns: !(input.draining ?? false),
+    ...(input.drainStartedAt ? { drainStartedAt: input.drainStartedAt } : {}),
     sessionSerialBoundary: "session",
     localSlots: localSlotsFromPool(input.pool),
     activeWorkers: input.activeWorkers,
@@ -107,11 +116,21 @@ export function createWorkerRuntimeControl(options: {
     runtimeService: options.runtimeService,
     logger: options.logger
   });
+  let drainStartedAt: string | undefined;
+  let drainPromise: Promise<void> | undefined;
 
   return {
     mode,
     start() {
       host.start();
+    },
+    async beginDrain() {
+      if (!drainPromise) {
+        drainStartedAt = new Date().toISOString();
+        drainPromise = host.beginDrain();
+      }
+
+      await drainPromise;
     },
     async getStatus() {
       const activeWorkers =
@@ -121,11 +140,17 @@ export function createWorkerRuntimeControl(options: {
 
       return summarizeWorkerRuntimeStatus({
         mode,
+        draining: host.isDraining(),
+        ...(drainStartedAt ? { drainStartedAt } : {}),
         activeWorkers,
         pool: host.snapshot()
       });
     },
     async close() {
+      if (!drainPromise && host.isDraining()) {
+        drainPromise = host.close();
+      }
+
       await host.close();
     }
   };

@@ -106,6 +106,25 @@ export interface ServerConfig {
       cooldown_ms?: number | undefined;
       scale_up_busy_ratio_threshold?: number | undefined;
       scale_up_max_ready_age_ms?: number | undefined;
+      leader_election?:
+        | {
+            type?: "noop" | "kubernetes" | undefined;
+            kubernetes?:
+              | {
+                  namespace?: string | undefined;
+                  lease_name?: string | undefined;
+                  api_url?: string | undefined;
+                  token_file?: string | undefined;
+                  ca_file?: string | undefined;
+                  skip_tls_verify?: boolean | undefined;
+                  lease_duration_ms?: number | undefined;
+                  renew_interval_ms?: number | undefined;
+                  retry_interval_ms?: number | undefined;
+                  identity?: string | undefined;
+                }
+              | undefined;
+          }
+        | undefined;
       scale_target?:
         | {
             type?: "noop" | "kubernetes" | undefined;

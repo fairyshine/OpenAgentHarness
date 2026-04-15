@@ -53,6 +53,35 @@ pnpm dev:web
 
 API 进程只负责 HTTP 请求。Worker 进程消费 Redis 队列并执行 Run。
 
+### Kubernetes Split 部署
+
+仓库现在提供了一套最小可运行的 K8S split deployment 骨架：
+
+- [`deploy/kubernetes/kustomization.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/kustomization.yaml)
+- [`deploy/kubernetes/api-server.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/api-server.yaml)
+- [`deploy/kubernetes/worker.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/worker.yaml)
+- [`deploy/kubernetes/worker-controller.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/worker-controller.yaml)
+- [`deploy/kubernetes/controller-rbac.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller-rbac.yaml)
+- [`deploy/kubernetes/configmap.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/configmap.example.yaml)
+
+使用方式：
+
+```bash
+kubectl apply -f ./deploy/kubernetes/namespace.yaml
+kubectl apply -f ./deploy/kubernetes/configmap.example.yaml
+kubectl apply -f ./deploy/kubernetes/controller-rbac.yaml
+kubectl apply -f ./deploy/kubernetes/api-server.yaml
+kubectl apply -f ./deploy/kubernetes/worker.yaml
+kubectl apply -f ./deploy/kubernetes/worker-controller.yaml
+```
+
+当前这套骨架已经包含：
+
+- `api-server`、`worker`、`worker-controller` 三个独立 Deployment
+- `worker-controller` 使用 Kubernetes Lease 做 leader election
+- `worker-controller` 通过 `Deployment /scale` 子资源改写 `oah-worker` 副本数
+- 默认 `allow_scale_down = false`，即先开放自动扩容，再显式等待 drain 语义完备后开放自动缩容
+
 ---
 
 ## 单 Workspace 模式

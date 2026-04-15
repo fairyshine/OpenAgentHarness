@@ -37,8 +37,11 @@ export async function startApiServer(argv = process.argv.slice(2)): Promise<void
     await runtime.close();
   });
 
-  installSignalHandlers(async () => {
-    await app.close();
+  installSignalHandlers({
+    beginDrain: () => runtime.beginDrain(),
+    close: async () => {
+      await app.close();
+    }
   });
 
   await app.listen({
@@ -70,8 +73,11 @@ export async function startWorkerServer(argv = process.argv.slice(2)): Promise<v
     await runtime.close();
   });
 
-  installSignalHandlers(async () => {
-    await app.close();
+  installSignalHandlers({
+    beginDrain: () => runtime.beginDrain(),
+    close: async () => {
+      await app.close();
+    }
   });
 
   await app.listen({

@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oah-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oah-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oah-worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/open-agent-harness/open-agent-harness:latest
+          imagePullPolicy: IfNotPresent
+          command: ["node", "apps/server/dist/worker.js", "--config", "/etc/oah/server.yaml"]
+          env:
+            - name: OAH_CONFIG
+              value: /etc/oah/server.yaml
+            - name: OAH_INTERNAL_BASE_URL
+              value: http://$(HOSTNAME).oah-worker-internal.open-agent-harness.svc.cluster.local:8787
+          ports:
+            - containerPort: 8787
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: oah-config
+              mountPath: /etc/oah
+              readOnly: true
+            - name: oah-workspaces
+              mountPath: /var/lib/oah/workspaces
+      volumes:
+        - name: oah-config
+          configMap:
+            name: oah-config
+        - name: oah-workspaces
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oah-worker-internal
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: oah-worker
+  ports:
+    - name: http
+      port: 8787
+      targetPort: http

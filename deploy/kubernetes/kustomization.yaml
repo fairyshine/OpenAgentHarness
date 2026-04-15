@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: open-agent-harness
+resources:
+  - namespace.yaml
+  - controller-rbac.yaml
+  - api-server.yaml
+  - worker.yaml
+  - worker-controller.yaml

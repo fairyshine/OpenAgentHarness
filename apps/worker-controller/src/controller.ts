@@ -306,12 +306,16 @@ export class RedisWorkerController {
     this.#timer.unref?.();
   }
 
-  async close(): Promise<void> {
+  stop(): void {
     this.#running = false;
     if (this.#timer) {
       clearInterval(this.#timer);
       this.#timer = undefined;
     }
+  }
+
+  async close(): Promise<void> {
+    this.stop();
     await this.#scaleTarget?.close?.();
   }
 

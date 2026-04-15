@@ -16,6 +16,7 @@
   - 独立控制面入口
   - 当前负责读取 Redis queue / worker registry 并计算 `desiredReplicas`
   - 当前已可通过可插拔 `scale target` 把目标副本数 reconcile 到 Kubernetes `Deployment /scale`
+  - 当前已可通过 Kubernetes Lease 完成 leader election，仅由 leader 实例执行 reconcile
   - 第一版默认保持禁缩容安全语义，避免在 drain contract 完成前自动缩容
 
 ## 启动方式
@@ -87,8 +88,9 @@ worker Pod 侧至少需要保证这些目录可用：
 - `api-server` 与 `worker` 的独立 app 包边界
 - owner-worker 文件代理
 - worker internal-only HTTP surface
+- `worker-controller` 的 Kubernetes leader election + `Deployment /scale` reconcile
+- `deploy/kubernetes` 下的最小 Deployment / Service / RBAC 骨架
 
 当前仍未完成：
 
-- K8S deployment / service / probe manifests
-- drain / autoscaling / leader election / RBAC
+- drain / 自动缩容护栏完善 / 更完整的 RBAC 与镜像发布链路

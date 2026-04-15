@@ -48,6 +48,39 @@ workers:
     scale_down_window: 2
     cooldown_ms: 1000
     reserved_capacity_for_subagent: 1
+  # standalone:
+  #   min_replicas: 2
+  #   max_replicas: 12
+  #   slots_per_pod: 2
+  #   ready_sessions_per_worker: 1
+  #   reserved_capacity_for_subagent: 1
+  # controller:
+  #   scale_interval_ms: 2000
+  #   scale_up_window: 2
+  #   scale_down_window: 3
+  #   cooldown_ms: 5000
+  #   scale_up_busy_ratio_threshold: 0.75
+  #   scale_up_max_ready_age_ms: 2000
+  #   leader_election:
+  #     type: kubernetes
+  #     kubernetes:
+  #       namespace: open-agent-harness
+  #       lease_name: oah-worker-controller
+  #       api_url: https://kubernetes.default.svc
+  #       token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+  #       ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  #       lease_duration_ms: 15000
+  #       renew_interval_ms: 5000
+  #       retry_interval_ms: 2000
+  #   scale_target:
+  #     type: kubernetes
+  #     allow_scale_down: false
+  #     kubernetes:
+  #       namespace: open-agent-harness
+  #       deployment: oah-worker
+  #       api_url: https://kubernetes.default.svc
+  #       token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+  #       ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
 
 llm:
   default_model: openai-default

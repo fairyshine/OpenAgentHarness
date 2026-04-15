@@ -424,9 +424,11 @@ OAH 当前只负责：
 - `done` controller snapshot 当前已保留 `recentDecisions`、cooldown remaining、pressure streak 和 scale reason，作为后续接 K8S 执行器的决策基线
 - `done` controller 现在已经有可插拔 `scale target` 抽象，并已接上 Kubernetes `Deployment /scale` 子资源适配器
 - `done` controller 现在支持 `noop` / `kubernetes` 两类 target，并会把 target reconcile 结果写回 snapshot
+- `done` controller 现在已经接上 Kubernetes Lease leader election，仅由 leader 实例执行 `desiredReplicas` reconcile
 - `done` 第一版 K8S target 默认保留 `allow_scale_down = false` 的安全语义，避免在 drain / graceful shutdown 尚未完成前贸然自动缩容
-- `partial` 当前 controller 仍未接入 leader election，也还没有 workload discovery / manifest / RBAC 一体化落地
-- `next` 下一步优先补 controller 的 leader election、只扩不缩/可缩容 gating 的显式运维开关，以及 deployment manifests / RBAC 模板
+- `done` 仓库现在已经补出 `deploy/kubernetes` 下的最小 Deployment / Service / RBAC 骨架，覆盖 `api-server`、`worker`、`worker-controller`
+- `partial` 当前 controller 仍未接入 workload discovery、metrics/exporter 和更完整的生产 RBAC / image publishing / rollout 策略
+- `next` 下一步优先补自动缩容前置护栏、drain contract、controller 指标导出和更完整的生产 manifests / Helm 化
 
 ### Phase 6: 完成自动缩容与优雅下线
 

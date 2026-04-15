@@ -267,6 +267,64 @@
               "type": "integer",
               "minimum": 1
             },
+            "leader_election": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "noop",
+                    "kubernetes"
+                  ]
+                },
+                "kubernetes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "namespace": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "lease_name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "api_url": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "token_file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "ca_file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "skip_tls_verify": {
+                      "type": "boolean"
+                    },
+                    "lease_duration_ms": {
+                      "type": "integer",
+                      "minimum": 1000
+                    },
+                    "renew_interval_ms": {
+                      "type": "integer",
+                      "minimum": 250
+                    },
+                    "retry_interval_ms": {
+                      "type": "integer",
+                      "minimum": 250
+                    },
+                    "identity": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            },
             "scale_target": {
               "type": "object",
               "additionalProperties": false,

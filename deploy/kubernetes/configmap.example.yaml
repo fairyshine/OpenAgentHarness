@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oah-config
+data:
+  server.yaml: |
+    server:
+      host: 0.0.0.0
+      port: 8787
+
+    storage:
+      postgres_url: ${env.DATABASE_URL}
+      redis_url: ${env.REDIS_URL}
+
+    paths:
+      workspace_dir: /var/lib/oah/workspaces
+      chat_dir: /var/lib/oah/chat-workspaces
+      template_dir: /var/lib/oah/templates
+      model_dir: /var/lib/oah/models
+      tool_dir: /var/lib/oah/tools
+      skill_dir: /var/lib/oah/skills
+      archive_dir: /var/lib/oah/archives
+
+    workers:
+      standalone:
+        min_replicas: 2
+        max_replicas: 12
+        slots_per_pod: 2
+        ready_sessions_per_worker: 1
+        reserved_capacity_for_subagent: 1
+      controller:
+        scale_interval_ms: 2000
+        scale_up_window: 2
+        scale_down_window: 3
+        cooldown_ms: 5000
+        scale_up_busy_ratio_threshold: 0.75
+        scale_up_max_ready_age_ms: 2000
+        leader_election:
+          type: kubernetes
+          kubernetes:
+            namespace: open-agent-harness
+            lease_name: oah-worker-controller
+        scale_target:
+          type: kubernetes
+          allow_scale_down: false
+          kubernetes:
+            namespace: open-agent-harness
+            deployment: oah-worker
+
+    llm:
+      default_model: openai-default

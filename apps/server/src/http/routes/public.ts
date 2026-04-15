@@ -77,6 +77,8 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
             },
             worker: {
               mode: "disabled",
+              draining: false,
+              acceptsNewRuns: true,
               sessionSerialBoundary: "session",
               localSlots: [],
               activeWorkers: [],
@@ -100,6 +102,7 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
         ? await dependencies.readinessCheck()
         : {
             status: "ready",
+            draining: false,
             checks: {
               postgres: "not_configured",
               redisEvents: "not_configured",

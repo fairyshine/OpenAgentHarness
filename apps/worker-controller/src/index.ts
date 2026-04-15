@@ -4,6 +4,10 @@ import { loadServerConfig } from "@oah/config";
 import { createRedisSessionRunQueue, createRedisWorkerRegistry } from "@oah/storage-redis";
 
 import { RedisWorkerController, resolveStandaloneWorkerControllerConfig } from "./controller.js";
+import {
+  createWorkerControllerLeaderElector,
+  resolveWorkerControllerLeaderElectionConfig
+} from "./leader-election.js";
 import { createWorkerReplicaTarget, resolveWorkerReplicaTargetConfig } from "./scale-target.js";
 
 function parseConfigPath(argv: string[]): { path: string; explicit: boolean } {
@@ -64,8 +68,32 @@ async function main() {
       }
     }
   });
+  const leaderElector = createWorkerControllerLeaderElector(resolveWorkerControllerLeaderElectionConfig(config), {
+    logger: {
+      info(message) {
+        console.info(message);
+      },
+      warn(message, error) {
+        console.warn(message, error);
+      }
+    },
+    async onGainedLeadership() {
+      controller.start({
+        skipInitialEvaluation: true
+      });
+      const initial = await controller.evaluateNow("startup");
+      console.log(
+        `Open Agent Harness worker-controller leader active (desiredReplicas=${initial.desiredReplicas}, suggestedReplicas=${initial.suggestedReplicas}, activeReplicas=${initial.activeReplicas}, target=${initial.scaleTarget?.kind ?? "none"}, targetOutcome=${initial.scaleTarget?.outcome ?? "n/a"})`
+      );
+    },
+    async onLostLeadership() {
+      controller.stop();
+      console.log("Open Agent Harness worker-controller leadership inactive; reconcile loop paused.");
+    }
+  });
 
   const close = async () => {
+    await leaderElector.close();
     await controller.close();
     await Promise.all([queue.close(), registry.close()]);
   };
@@ -86,12 +114,10 @@ async function main() {
   process.once("SIGINT", handleSignal);
   process.once("SIGTERM", handleSignal);
 
-  controller.start({
-    skipInitialEvaluation: true
-  });
-  const initial = await controller.evaluateNow("startup");
+  leaderElector.start();
+  const leadership = leaderElector.snapshot();
   console.log(
-    `Open Agent Harness worker-controller started (desiredReplicas=${initial.desiredReplicas}, suggestedReplicas=${initial.suggestedReplicas}, activeReplicas=${initial.activeReplicas}, target=${initial.scaleTarget?.kind ?? "none"}, targetOutcome=${initial.scaleTarget?.outcome ?? "n/a"})`
+    `Open Agent Harness worker-controller started (leaderElection=${leadership.kind}, identity=${leadership.identity}, leader=${leadership.leader ? "yes" : "no"})`
   );
 
   await new Promise<void>(() => undefined);

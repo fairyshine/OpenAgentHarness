@@ -877,6 +877,7 @@ export const workerHealthSchema = z.enum(["healthy", "late"]);
 export const sessionSerialBoundarySchema = z.literal("session");
 export const healthCheckStatusSchema = z.enum(["up", "down", "not_configured"]);
 export const readinessStatusSchema = z.enum(["ready", "not_ready"]);
+export const readinessReasonSchema = z.enum(["draining", "checks_down"]);
 export const healthStatusSchema = z.enum(["ok", "degraded"]);
 export const runtimeProcessSchema = z.object({
   mode: z.enum(["api_embedded_worker", "api_only", "standalone_worker"]),
@@ -1010,6 +1011,9 @@ export const healthChecksSchema = z.object({
 });
 export const healthWorkerSchema = z.object({
   mode: workerModeSchema,
+  draining: z.boolean(),
+  acceptsNewRuns: z.boolean(),
+  drainStartedAt: timestampSchema.optional(),
   sessionSerialBoundary: sessionSerialBoundarySchema,
   localSlots: z.array(workerSlotSchema),
   activeWorkers: z.array(workerLeaseSchema),
@@ -1025,6 +1029,8 @@ export const healthReportSchema = z.object({
 });
 export const readinessReportSchema = z.object({
   status: readinessStatusSchema,
+  reason: readinessReasonSchema.optional(),
+  draining: z.boolean().optional(),
   checks: healthChecksSchema
 });
 
@@ -1114,6 +1120,7 @@ export type WorkerState = z.infer<typeof workerStateSchema>;
 export type WorkerHealth = z.infer<typeof workerHealthSchema>;
 export type SessionSerialBoundary = z.infer<typeof sessionSerialBoundarySchema>;
 export type HealthCheckStatus = z.infer<typeof healthCheckStatusSchema>;
+export type ReadinessReason = z.infer<typeof readinessReasonSchema>;
 export type RuntimeProcess = z.infer<typeof runtimeProcessSchema>;
 export type HealthStorage = z.infer<typeof healthStorageSchema>;
 export type WorkerLease = z.infer<typeof workerLeaseSchema>;

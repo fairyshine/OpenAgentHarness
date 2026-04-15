@@ -53,6 +53,35 @@ pnpm dev:web
 
 The API process handles HTTP requests only. Worker processes consume the Redis queue and execute runs.
 
+### Kubernetes Split Deployment
+
+The repository now includes a minimal Kubernetes split-deployment skeleton:
+
+- [`deploy/kubernetes/kustomization.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/kustomization.yaml)
+- [`deploy/kubernetes/api-server.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/api-server.yaml)
+- [`deploy/kubernetes/worker.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/worker.yaml)
+- [`deploy/kubernetes/worker-controller.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/worker-controller.yaml)
+- [`deploy/kubernetes/controller-rbac.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller-rbac.yaml)
+- [`deploy/kubernetes/configmap.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/configmap.example.yaml)
+
+Apply them in order:
+
+```bash
+kubectl apply -f ./deploy/kubernetes/namespace.yaml
+kubectl apply -f ./deploy/kubernetes/configmap.example.yaml
+kubectl apply -f ./deploy/kubernetes/controller-rbac.yaml
+kubectl apply -f ./deploy/kubernetes/api-server.yaml
+kubectl apply -f ./deploy/kubernetes/worker.yaml
+kubectl apply -f ./deploy/kubernetes/worker-controller.yaml
+```
+
+This baseline already includes:
+
+- Separate Deployments for `api-server`, `worker`, and `worker-controller`
+- Kubernetes Lease based leader election for `worker-controller`
+- Replica reconciliation through the `Deployment /scale` subresource
+- `allow_scale_down = false` by default so automatic scale-up is enabled before automatic scale-down is trusted
+
 ---
 
 ## Single Workspace Mode

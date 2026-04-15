@@ -262,6 +262,18 @@ workers:
     cooldown_ms: 4000
     scale_up_busy_ratio_threshold: 0.85
     scale_up_max_ready_age_ms: 2500
+    leader_election:
+      type: kubernetes
+      kubernetes:
+        namespace: open-agent-harness
+        lease_name: oah-worker-controller
+        api_url: https://kubernetes.default.svc
+        token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        lease_duration_ms: 15000
+        renew_interval_ms: 5000
+        retry_interval_ms: 2000
+        identity: controller-a
     scale_target:
       type: kubernetes
       allow_scale_down: false
@@ -292,6 +304,20 @@ llm:
       cooldown_ms: 4000,
       scale_up_busy_ratio_threshold: 0.85,
       scale_up_max_ready_age_ms: 2500,
+      leader_election: {
+        type: "kubernetes",
+        kubernetes: {
+          namespace: "open-agent-harness",
+          lease_name: "oah-worker-controller",
+          api_url: "https://kubernetes.default.svc",
+          token_file: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+          ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+          lease_duration_ms: 15000,
+          renew_interval_ms: 5000,
+          retry_interval_ms: 2000,
+          identity: "controller-a"
+        }
+      },
       scale_target: {
         type: "kubernetes",
         allow_scale_down: false,

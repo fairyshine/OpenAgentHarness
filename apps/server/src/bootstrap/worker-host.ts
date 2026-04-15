@@ -28,6 +28,8 @@ interface WorkerHostConfig {
 export interface WorkerHost {
   start(): void;
   snapshot(): RedisRunWorkerPoolSnapshot | null;
+  isDraining(): boolean;
+  beginDrain(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -171,6 +173,12 @@ export function createWorkerHost(options: {
       snapshot() {
         return null;
       },
+      isDraining() {
+        return false;
+      },
+      async beginDrain() {
+        return undefined;
+      },
       async close() {
         return undefined;
       }
@@ -222,16 +230,37 @@ export function createWorkerHost(options: {
     scaleUpMaxReadyAgeMs: poolConfig.scaleUpMaxReadyAgeMs,
     logger: options.logger
   });
+  let draining = false;
+  let closePromise: Promise<void> | undefined;
+
+  const closePool = () => {
+    if (!closePromise) {
+      draining = true;
+      closePromise = pool.close();
+    }
+
+    return closePromise;
+  };
 
   return {
     start() {
+      if (draining) {
+        return;
+      }
+
       pool.start();
     },
     snapshot() {
       return pool.snapshot();
     },
+    isDraining() {
+      return draining;
+    },
+    async beginDrain() {
+      await closePool();
+    },
     async close() {
-      await pool.close();
+      await closePool();
     }
   };
 }
