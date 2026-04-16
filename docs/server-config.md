@@ -15,14 +15,20 @@ storage:
   postgres_url: ${env.DATABASE_URL}   # PostgreSQL 连接串
   redis_url: ${env.REDIS_URL}         # Redis 连接串（可选）
 
+sandbox:
+  provider: self_hosted               # self_hosted | e2b
+  # self_hosted:
+  #   base_url: http://oah-sandbox:8787/internal/v1
+  # e2b:
+  #   base_url: https://sandbox-gateway.example.com/internal/v1
+  #   api_key: ${env.E2B_API_KEY}
+
 paths:
   workspace_dir: /srv/openharness/workspaces       # project workspace 根目录
-  chat_dir: /srv/openharness/chat-workspaces       # chat workspace 根目录
-  template_dir: /srv/openharness/templates         # workspace 模板目录
+  blueprint_dir: /srv/openharness/blueprints        # workspace blueprint 目录
   model_dir: /srv/openharness/models               # 平台模型目录
   tool_dir: /srv/openharness/tools                 # 公共 tool 目录
   skill_dir: /srv/openharness/skills               # 公共 skill 目录
-  archive_dir: /srv/openharness/archives           # 导出的归档 SQLite 存储目录（可选）
 
 workers:
   embedded:
@@ -57,23 +63,35 @@ llm:
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `postgres_url` | string | 是 | PostgreSQL 连接串，唯一事实源 |
+| `postgres_url` | string | 是 | PostgreSQL 连接串；未指定 `serviceName` 的 workspace 会直接使用该库，指定 `serviceName` 后默认库只保留 workspace/session/run 索引，业务真值会路由到同前缀的派生库（如 `OAH-acme`） |
 | `redis_url` | string | 否 | Redis 连接串，用于队列、锁、限流、SSE 事件分发 |
 
 > **tip**
 > 不配置 Redis 时，Run 会在 API 进程内直接执行（适合本地开发）。配置 Redis 后支持多实例 Worker 消费队列。
+
+### `sandbox`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `provider` | string | sandbox provider，支持 `self_hosted` 和 `e2b`。默认 `self_hosted` |
+| `self_hosted.base_url` | string | 可选。指向远端 self-hosted sandbox 服务的 `/internal/v1` 根地址；未设置时继续使用本地 materialization-backed sandbox |
+| `self_hosted.headers` | object | 可选。附加到远端 self-hosted sandbox 请求的固定请求头 |
+| `e2b.base_url` | string | `provider=e2b` 时必填。指向 E2B-backed sandbox gateway 的 `/internal/v1` 根地址 |
+| `e2b.api_key` | string | 可选。配置后会以 `Authorization: Bearer <key>` 形式附加到 e2b 请求 |
+| `e2b.headers` | object | 可选。附加到 e2b 请求的固定请求头 |
+
+> **tip**
+> OAH 对外仍保持统一的 `/sandboxes` API。切换 `sandbox.provider` 时，Web、OpenAPI 与上层 runtime 调用方式不变，差异只存在于服务端的 sandbox backend 配置。
 
 ### `paths`
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `workspace_dir` | string | project workspace 根目录 |
-| `chat_dir` | string | chat workspace 根目录 |
-| `template_dir` | string | workspace 模板目录 |
+| `blueprint_dir` | string | workspace blueprint 目录 |
 | `model_dir` | string | 平台模型定义目录 |
 | `tool_dir` | string | 公共 MCP tool server 定义目录 |
 | `skill_dir` | string | 公共 skill 目录 |
-| `archive_dir` | string | 导出的归档 SQLite 目录；省略时默认使用 `<workspace_dir>/.openharness/archives` |
 
 ### `llm`
 
@@ -102,13 +120,9 @@ llm:
 
 每个直接子目录视为一个 `project` workspace。仅扫描一级子目录。
 
-### `chat_dir`
+### `blueprint_dir`
 
-每个直接子目录视为一个只读 `chat` workspace。这些目录本身即可用的对话空间，不需要从模板创建。
-
-### `template_dir`
-
-存放 workspace 模板。通过 `POST /workspaces` 创建新 workspace 时，从此目录选择模板作为初始化源。运行时不会把模板当作活跃 workspace 加载。
+存放 workspace blueprint。通过 `POST /workspaces` 创建新 workspace 时，从此目录选择 blueprint 作为初始化源。运行时不会把 blueprint 当作活跃 workspace 加载。
 
 ### `model_dir`
 
@@ -132,17 +146,7 @@ openai-default:
 公共 skill 定义。与 workspace `.openharness/skills` 合并组成可见 skill 集合。同名 skill 中 workspace 级优先。
 
 > **warning**
-> `tool_dir` 和 `skill_dir` 的内容主要在模板初始化时导入。workspace 运行时默认只使用自身 `.openharness` 目录中声明的能力。
-
-### `archive_dir`
-
-用于存放历史归档导出的 SQLite 文件，文件名按归档日期生成，例如 `2026-04-08.sqlite`。
-
-每个归档文件旁边还会生成同名校验文件，例如 `2026-04-08.sqlite.sha256`，方便长期备份和完整性校验。
-
-服务启动后的归档巡检会检查这个目录中的残留 `.tmp` 文件、缺失校验文件的归档、孤立的 `.sha256` 文件，以及不符合 `YYYY-MM-DD.sqlite` 规范的文件名，并输出告警日志，但不会自动删除正式归档文件。
-
-如果不配置，默认路径为 `<workspace_dir>/.openharness/archives`。
+> `tool_dir` 和 `skill_dir` 的内容主要在蓝图初始化时导入。workspace 运行时默认只使用自身 `.openharness` 目录中声明的能力。
 
 ---
 

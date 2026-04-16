@@ -104,6 +104,7 @@ import {
   type RunQueuePriority,
   type WorkspaceListResult,
   type RunListResult,
+  normalizeWorkspaceRecord,
   toPublicWorkspace,
   type WorkspaceRecord
 } from "./types.js";
@@ -434,7 +435,7 @@ export class RuntimeService {
       throw new AppError(
         501,
         "workspace_initializer_not_configured",
-        "Workspace creation requires a configured template initializer."
+        "Workspace creation requires a configured blueprint initializer."
       );
     }
 
@@ -461,6 +462,7 @@ export class RuntimeService {
         workspaceId
       },
       externalRef: input.externalRef,
+      ...(input.serviceName ? { serviceName: input.serviceName } : {}),
       name: input.name,
       rootPath: initialized.rootPath,
       executionPolicy: input.executionPolicy ?? "local",
@@ -480,7 +482,7 @@ export class RuntimeService {
   async listWorkspaces(pageSize = 50, cursor?: string): Promise<WorkspaceListResult> {
     const startIndex = parseCursor(cursor);
     const workspaces = await this.#workspaceRepository.list(pageSize, cursor);
-    const items = workspaces.map((workspace) => toPublicWorkspace(workspace));
+    const items = workspaces.map((workspace) => toPublicWorkspace(normalizeWorkspaceRecord(workspace)));
     const nextCursor = workspaces.length === pageSize ? String(startIndex + pageSize) : undefined;
 
     return nextCursor === undefined ? { items } : { items, nextCursor };
@@ -492,7 +494,7 @@ export class RuntimeService {
       throw new AppError(404, "workspace_not_found", `Workspace ${workspaceId} was not found.`);
     }
 
-    return workspace;
+    return normalizeWorkspaceRecord(workspace);
   }
 
   async getWorkspaceCatalog(workspaceId: string): Promise<WorkspaceCatalog> {
@@ -1055,10 +1057,6 @@ export class RuntimeService {
     triggerSource
   }: TriggerActionRunParams): Promise<ActionRunAcceptedResult> {
     const workspace = await this.getWorkspaceRecord(workspaceId);
-    if (workspace.kind === "chat") {
-      throw new AppError(400, "actions_not_supported", `Workspace ${workspaceId} does not allow action execution.`);
-    }
-
     const action = workspace.actions[actionName];
     if (!action) {
       throw new AppError(404, "action_not_found", `Action ${actionName} was not found in workspace ${workspaceId}.`);
@@ -2556,23 +2554,11 @@ export class RuntimeService {
 
   #publicWorkspaceCatalog(workspace: WorkspaceRecord): RuntimeWorkspaceCatalog {
     const tools = workspace.catalog.tools ?? [];
-    if (workspace.kind !== "chat") {
-      return {
-        ...workspace.catalog,
-        tools,
-        nativeTools: [...NATIVE_TOOL_NAMES],
-        runtimeTools: listRuntimeToolNamesForCatalog(workspace)
-      };
-    }
-
     return {
       ...workspace.catalog,
-      actions: [],
-      skills: [],
-      tools: [],
-      hooks: [],
-      nativeTools: [],
-      runtimeTools: []
+      tools,
+      nativeTools: [...NATIVE_TOOL_NAMES],
+      runtimeTools: listRuntimeToolNamesForCatalog(workspace)
     };
   }
 

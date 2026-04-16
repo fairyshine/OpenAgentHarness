@@ -11,11 +11,11 @@ Hook 声明文件位于 `.openharness/hooks/*.yaml`，每个文件定义一个 h
 | `hooks/*.yaml` | Hook 声明入口（唯一） |
 | `hooks/scripts/` | 脚本和代码文件 |
 | `hooks/prompts/` | Prompt handler 复用的提示词 |
-| `hooks/resources/` | 配置片段、模板、测试数据 |
+| `hooks/resources/` | 配置片段、资源文件、测试数据 |
 
 !!! warning
 
-    仅 `kind=project` workspace 支持 hooks。`kind=chat` workspace 忽略所有 hook 定义。
+    hooks 在统一 workspace 模型下按声明生效，不再区分额外的只读对话形态。
 
 ## Hook YAML 结构
 

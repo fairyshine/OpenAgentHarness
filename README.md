@@ -179,4 +179,4 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts
 | [Workspace Guide](./docs/workspace/README.en.md) | Workspace configuration and capabilities |
 | [Runtime Internals](./docs/runtime/README.en.md) | Runtime lifecycle and context engine |
 | [API Reference](./docs/openapi/README.en.md) | OpenAPI specification and endpoints |
-| [Templates](./templates/README.md) | Workspace template usage |
+| [Blueprints](./blueprints/README.md) | Workspace blueprint usage |

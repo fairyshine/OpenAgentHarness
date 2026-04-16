@@ -29,8 +29,7 @@ ENV NODE_ENV=production
 RUN corepack enable \
   && mkdir -p /etc/oah \
   && mkdir -p /var/lib/oah/workspaces \
-  && mkdir -p /var/lib/oah/chat-workspaces \
-  && mkdir -p /var/lib/oah/templates \
+  && mkdir -p /var/lib/oah/blueprints \
   && mkdir -p /var/lib/oah/models \
   && mkdir -p /var/lib/oah/tools \
   && mkdir -p /var/lib/oah/skills \

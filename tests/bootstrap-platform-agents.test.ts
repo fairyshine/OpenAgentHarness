@@ -24,23 +24,21 @@ describe("bootstrap platform agents", () => {
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const chatDir = path.join(tempDir, "chat");
-    const templateDir = path.join(tempDir, "templates");
+    const blueprintDir = path.join(tempDir, "blueprints");
     const modelsDir = path.join(tempDir, "models");
     const toolDir = path.join(tempDir, "tools");
     const skillDir = path.join(tempDir, "skills");
     const projectRoot = path.join(workspaceDir, "demo-project");
-    const chatRoot = path.join(chatDir, "pair-mode");
+    const plainProjectRoot = path.join(workspaceDir, "plain-project");
 
     await Promise.all([
       mkdir(workspaceDir, { recursive: true }),
-      mkdir(chatDir, { recursive: true }),
-      mkdir(templateDir, { recursive: true }),
+      mkdir(blueprintDir, { recursive: true }),
       mkdir(modelsDir, { recursive: true }),
       mkdir(toolDir, { recursive: true }),
       mkdir(skillDir, { recursive: true }),
       mkdir(path.join(projectRoot, ".openharness", "agents"), { recursive: true }),
-      mkdir(path.join(chatRoot, ".openharness"), { recursive: true })
+      mkdir(path.join(plainProjectRoot, ".openharness"), { recursive: true })
     ]);
 
     await writeFile(
@@ -52,8 +50,7 @@ server:
 storage: {}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -74,7 +71,7 @@ openai-default:
     );
 
     await writeFile(path.join(projectRoot, ".openharness", "settings.yaml"), "default_agent: builder\n", "utf8");
-    await writeFile(path.join(chatRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(path.join(plainProjectRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
     await writeFile(
       path.join(projectRoot, ".openharness", "agents", "builder.md"),
       `---
@@ -98,7 +95,9 @@ Use the workspace-defined builder.
 
     try {
       const project = await runtime.runtimeService.getWorkspaceRecord(buildWorkspaceId("project", "demo-project", projectRoot));
-      const chat = await runtime.runtimeService.getWorkspaceRecord(buildWorkspaceId("chat", "pair-mode", chatRoot));
+      const plainProject = await runtime.runtimeService.getWorkspaceRecord(
+        buildWorkspaceId("project", "plain-project", plainProjectRoot)
+      );
 
       expect(project.defaultAgent).toBe("builder");
       expect(project.catalog.agents).toEqual([
@@ -107,8 +106,8 @@ Use the workspace-defined builder.
       expect(project.agents.assistant).toBeUndefined();
       expect(project.agents.builder.description).toBe("Workspace builder");
 
-      expect(chat.defaultAgent).toBe("assistant");
-      expect(chat.catalog.agents).toEqual(
+      expect(plainProject.defaultAgent).toBe("assistant");
+      expect(plainProject.catalog.agents).toEqual(
         expect.arrayContaining([
           { name: "assistant", mode: "primary", source: "platform", description: expect.any(String) },
           { name: "builder", mode: "primary", source: "platform", description: expect.any(String) }

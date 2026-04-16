@@ -42,6 +42,7 @@ export function RuntimeWorkspace(props: RuntimeProps) {
   const selectedAgent = visibleSessionAgents.find((agent) => agent.name === selectedAgentName);
   const selectedAgentValue = selectedAgent?.name;
   const agentSelectorSession = visibleSessionAgents.length > 0 && props.session ? props.session : null;
+  const selectedAgentSelectValue = selectedAgentValue ?? agentSelectorSession?.activeAgentName ?? visibleSessionAgents[0]?.name;
   const sessionModelOptions = [
     ...new Map(
       (sessionWorkspaceCatalog?.models ?? [])
@@ -141,7 +142,7 @@ export function RuntimeWorkspace(props: RuntimeProps) {
                       </SelectContent>
                     </Select>
                     <Select
-                      {...(selectedAgentValue ? { value: selectedAgentValue } : {})}
+                      value={selectedAgentSelectValue}
                       disabled={props.isSwitchingSessionAgent}
                       onValueChange={(value) => {
                         if (value !== agentSelectorSession.activeAgentName) {
@@ -179,7 +180,7 @@ export function RuntimeWorkspace(props: RuntimeProps) {
             agentSelectorSession ? (
               <div className="flex items-center gap-2">
                 <Select
-                  {...(selectedAgentValue ? { value: selectedAgentValue } : {})}
+                  value={selectedAgentSelectValue}
                   disabled={props.isSwitchingSessionAgent}
                   onValueChange={(value) => {
                     if (value !== agentSelectorSession.activeAgentName) {

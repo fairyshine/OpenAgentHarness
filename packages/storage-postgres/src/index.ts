@@ -102,6 +102,7 @@ function createMessage(input: {
 const workspaces = pgTable("workspaces", {
   id: text("id").primaryKey(),
   externalRef: text("external_ref"),
+  serviceName: text("service_name"),
   name: text("name").notNull(),
   rootPath: text("root_path").notNull(),
   executionPolicy: text("execution_policy").notNull(),
@@ -341,6 +342,7 @@ function buildWorkspaceRow(input: WorkspaceRecord) {
   return {
     id: input.id,
     externalRef: input.externalRef ?? null,
+    serviceName: input.serviceName ?? null,
     name: input.name,
     rootPath: input.rootPath,
     executionPolicy: input.executionPolicy,
@@ -369,6 +371,7 @@ function toWorkspaceRecord(row: typeof workspaces.$inferSelect): WorkspaceRecord
   return {
     id: row.id,
     ...(row.externalRef ? { externalRef: row.externalRef } : {}),
+    ...(row.serviceName ? { serviceName: row.serviceName } : {}),
     name: row.name,
     rootPath: row.rootPath,
     executionPolicy: row.executionPolicy as WorkspaceRecord["executionPolicy"],
@@ -1560,6 +1563,7 @@ const schemaStatements = [
   `create table if not exists workspaces (
     id text primary key,
     external_ref text,
+    service_name text,
     name text not null,
     root_path text not null,
     execution_policy text not null,
@@ -1582,6 +1586,7 @@ const schemaStatements = [
   )`,
   `create index if not exists workspaces_root_path_idx on workspaces (root_path)`,
   `create index if not exists workspaces_external_ref_idx on workspaces (external_ref)`,
+  `alter table workspaces add column if not exists service_name text`,
   `create table if not exists sessions (
     id text primary key,
     workspace_id text not null references workspaces(id) on delete cascade,

@@ -15,10 +15,17 @@ storage:
   postgres_url: ${env.DATABASE_URL}   # PostgreSQL connection string
   redis_url: ${env.REDIS_URL}         # Redis connection string (optional)
 
+sandbox:
+  provider: self_hosted               # self_hosted | e2b
+  # self_hosted:
+  #   base_url: http://oah-sandbox:8787/internal/v1
+  # e2b:
+  #   base_url: https://sandbox-gateway.example.com/internal/v1
+  #   api_key: ${env.E2B_API_KEY}
+
 paths:
   workspace_dir: /srv/openharness/workspaces       # Project workspace root
-  chat_dir: /srv/openharness/chat-workspaces       # Chat workspace root
-  template_dir: /srv/openharness/templates         # Workspace template directory
+  blueprint_dir: /srv/openharness/blueprints        # Workspace blueprint directory
   model_dir: /srv/openharness/models               # Platform model directory
   tool_dir: /srv/openharness/tools                 # Platform tool directory
   skill_dir: /srv/openharness/skills               # Platform skill directory
@@ -45,19 +52,32 @@ llm:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `postgres_url` | string | Yes | PostgreSQL connection string. Single source of truth. |
+| `postgres_url` | string | Yes | PostgreSQL connection string. Workspaces without `serviceName` use this database directly; once `serviceName` is set, the default database keeps only the workspace/session/run routing index while runtime truth is routed to a sibling derived database name (for example `OAH-acme`). |
 | `redis_url` | string | No | Redis connection string. Used for queues, locks, rate limiting, and SSE event fanout. |
 
 > **tip**
 > Without Redis, runs execute in-process on the API server (suitable for local dev). With Redis, multiple worker instances can consume the queue.
+
+### `sandbox`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `provider` | string | Sandbox provider. Supports `self_hosted` and `e2b`. Defaults to `self_hosted`. |
+| `self_hosted.base_url` | string | Optional. Base `/internal/v1` URL for a remote self-hosted sandbox service. When omitted, OAH keeps using the local materialization-backed sandbox. |
+| `self_hosted.headers` | object | Optional static headers attached to remote self-hosted sandbox requests. |
+| `e2b.base_url` | string | Required when `provider=e2b`. Base `/internal/v1` URL for an E2B-backed sandbox gateway. |
+| `e2b.api_key` | string | Optional. When set, OAH sends it as `Authorization: Bearer <key>` on e2b requests. |
+| `e2b.headers` | object | Optional static headers attached to e2b requests. |
+
+> **tip**
+> OAH keeps the external `/sandboxes` API stable. Switching `sandbox.provider` changes only the server-side sandbox backend wiring; the Web app, OpenAPI clients, and runtime callers do not need to change their request shape.
 
 ### `paths`
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `workspace_dir` | string | Project workspace root directory |
-| `chat_dir` | string | Chat workspace root directory |
-| `template_dir` | string | Workspace template directory |
+| `blueprint_dir` | string | Workspace blueprint directory |
 | `model_dir` | string | Platform model definition directory |
 | `tool_dir` | string | Platform MCP tool server definition directory |
 | `skill_dir` | string | Platform skill directory |
@@ -76,13 +96,9 @@ llm:
 
 Each direct subdirectory is treated as one `project` workspace. Only first-level subdirectories are scanned.
 
-### `chat_dir`
+### `blueprint_dir`
 
-Each direct subdirectory is treated as one read-only `chat` workspace. These directories are usable conversation spaces as-is -- they are not created from templates.
-
-### `template_dir`
-
-Stores workspace templates. When creating a new workspace via `POST /workspaces`, a template from this directory is used as the initialization source. Templates are never loaded as active workspaces at runtime.
+Stores workspace blueprints. When creating a new workspace via `POST /workspaces`, a blueprint from this directory is used as the initialization source. Blueprints are never loaded as active workspaces at runtime.
 
 ### `model_dir`
 
@@ -106,7 +122,7 @@ Platform-level MCP tool server definitions. Directory structure should match wor
 Platform-level skill definitions. Merged with workspace `.openharness/skills` to form the visible skill set. Workspace-level skills take precedence over platform skills with the same name.
 
 > **warning**
-> Contents of `tool_dir` and `skill_dir` are primarily imported during template initialization. At runtime, workspaces use only capabilities declared in their own `.openharness` directory.
+> Contents of `tool_dir` and `skill_dir` are primarily imported during blueprint initialization. At runtime, workspaces use only capabilities declared in their own `.openharness` directory.
 
 ---
 

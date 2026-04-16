@@ -163,7 +163,7 @@ tools:
 
 - 整体可选，未声明的子字段按空列表处理
 - 仅表达 allowlist，不承载执行逻辑
-- `kind=chat` workspace 中始终按空集合处理
+- 所有 workspace 统一按声明内容解析
 
 ### `switch`
 
@@ -188,7 +188,7 @@ subagents:
 - 每项为可 delegate 的 subagent 名，目标应为 `mode: subagent` 或 `mode: all`
 - 未声明时不允许 delegate
 - 运行时在执行 `agent.delegate` 前校验
-- `kind=chat` workspace 中默认禁用
+- 是否可用由 workspace 当前声明与运行时配置共同决定
 
 ### `policy`
 

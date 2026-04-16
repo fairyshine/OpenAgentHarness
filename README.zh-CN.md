@@ -179,4 +179,4 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts
 | [Workspace 指南](./docs/workspace/README.md) | Workspace 配置和能力定义 |
 | [运行时内部](./docs/runtime/README.md) | 运行时生命周期和 Context Engine |
 | [API 参考](./docs/openapi/README.md) | OpenAPI 规范和接口说明 |
-| [模板](./templates/README.md) | Workspace 模板使用方法 |
+| [蓝图](./blueprints/README.md) | Workspace 蓝图使用方法 |

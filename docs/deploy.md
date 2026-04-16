@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | **API + Worker 一体** | 1 个 `server` | PostgreSQL，Redis 可选 | 本地开发、PoC、单机部署 |
 | **API + Worker 分离** | 1 个 `server --api-only` + N 个 `worker` | PostgreSQL + Redis | 生产环境、需要独立扩缩容 |
-| **单 Workspace** | 1 个 `server --workspace <path>` | PostgreSQL，Redis 可选 | 只服务一个仓库或一个对话空间 |
+| **单 Workspace** | 1 个 `server --workspace <path>` | PostgreSQL，Redis 可选 | 只服务一个仓库 |
 
 > **tip**
 > 不确定选哪个？先用「一体模式」跑通，后续随时可以切到分离部署。
@@ -158,7 +158,6 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 
 | 参数 | 说明 |
 | --- | --- |
-| `--workspace-kind project\|chat` | workspace 类型，默认 `project` |
 | `--tool-dir <path>` | 公共 tool 目录 |
 | `--skill-dir <path>` | 公共 skill 目录 |
 | `--host <addr>` | 监听地址，默认 `127.0.0.1` |

@@ -53,10 +53,6 @@ export function visibleSkills(
   workspace: WorkspaceRecord,
   activeAgentName: string
 ): WorkspaceRecord["skills"][string][] {
-  if (workspace.kind === "chat") {
-    return [];
-  }
-
   const configuredSkills = configuredAgentSkills(workspace, activeAgentName);
   const excludedSkills = excludedSkillNames(workspace, activeAgentName);
   if (configuredSkills.length === 0) {
@@ -87,10 +83,6 @@ export function visibleActions(
   workspace: WorkspaceRecord,
   activeAgentName: string
 ): WorkspaceRecord["actions"][string][] {
-  if (workspace.kind === "chat") {
-    return [];
-  }
-
   const configuredActions = configuredAgentActions(workspace, activeAgentName);
   const excludedActions = excludedActionNames(workspace, activeAgentName);
   if (configuredActions.length === 0) {
@@ -121,10 +113,6 @@ export function visibleToolServers(
   workspace: WorkspaceRecord,
   activeAgentName: string
 ): WorkspaceRecord["toolServers"][string][] {
-  if (workspace.kind === "chat") {
-    return [];
-  }
-
   const configuredToolServers = workspace.agents[activeAgentName]?.tools?.external ?? [];
   const excludedToolServers = excludedExternalToolServerNames(workspace, activeAgentName);
   if (configuredToolServers.length === 0) {
@@ -158,18 +146,10 @@ export function visibleEnabledToolServers(
 export function enabledToolServers(
   workspace: WorkspaceRecord
 ): WorkspaceRecord["toolServers"][string][] {
-  if (workspace.kind === "chat") {
-    return [];
-  }
-
   return Object.values(workspace.toolServers).filter((server) => server.enabled);
 }
 
 export function visibleNativeToolNames(workspace: WorkspaceRecord, activeAgentName: string): string[] {
-  if (workspace.kind === "chat") {
-    return [];
-  }
-
   const activeAgent = workspace.agents[activeAgentName];
   const configuredNativeTools = activeAgent?.tools?.native ?? [];
   const availableNativeTools = [...NATIVE_TOOL_NAMES];
@@ -204,10 +184,6 @@ export function activeToolNamesForAgent(
   workspace: WorkspaceRecord,
   activeAgentName: string
 ): string[] | undefined {
-  if (workspace.kind === "chat") {
-    return undefined;
-  }
-
   if (visibleEnabledToolServers(workspace, activeAgentName).length > 0) {
     return undefined;
   }
@@ -230,10 +206,6 @@ export function activeToolNamesForAgent(
 }
 
 export function runtimeToolNamesForCatalog(workspace: WorkspaceRecord): string[] {
-  if (workspace.kind === "chat") {
-    return [];
-  }
-
   const agentNames = Object.keys(workspace.agents);
   if (agentNames.length === 0) {
     return [...NATIVE_TOOL_NAMES];
@@ -358,10 +330,6 @@ export interface BuildRuntimeToolsInput {
 
 export function buildRuntimeTools(input: BuildRuntimeToolsInput): RuntimeToolSet {
   const { workspace, run, session, getCurrentAgentName, modelGateway, defaultModel } = input;
-  if (workspace.kind === "chat") {
-    return {};
-  }
-
   return {
     ...createNativeToolSet(
       workspace.rootPath,

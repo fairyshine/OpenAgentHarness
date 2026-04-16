@@ -317,10 +317,6 @@ export class ActionRunService {
     signal: AbortSignal | undefined,
     explicitInput?: unknown
   ): Promise<ActionExecutionResult> {
-    if (workspace.kind === "chat") {
-      throw new AppError(400, "actions_not_supported", `Workspace ${workspace.id} does not allow action execution.`);
-    }
-
     validateActionInput(action, explicitInput ?? run.metadata?.input ?? null);
 
     const cwd = action.entry.cwd ? path.resolve(action.directory, action.entry.cwd) : action.directory;

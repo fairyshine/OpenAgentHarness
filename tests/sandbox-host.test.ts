@@ -292,7 +292,7 @@ describe("materialization sandbox host", () => {
         updatedAt: "2026-04-15T00:00:00.000Z"
       }
     });
-    expect(host.providerKind).toBe("e2b_compatible");
+    expect(host.providerKind).toBe("e2b");
     expect(executionLease.workspace.rootPath).toBe("/__oah_sandbox__/sandbox-1/workspace/ws_test");
 
     await host.workspaceCommandExecutor.runForeground({

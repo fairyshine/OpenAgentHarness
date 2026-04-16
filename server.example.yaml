@@ -19,24 +19,34 @@ storage: {}
 #   poll_interval_ms: 5000
 #   managed_paths:
 #     - workspace
-#     - chat
 #   key_prefixes:
 #     workspace: workspace
-#     chat: chat
-#     template: template
+#     blueprint: blueprint
 #     model: model
 #     tool: tool
 #     skill: skill
-#     archive: archive
+
+# sandbox:
+#   provider: self_hosted
+#   self_hosted:
+#     # Optional. When omitted, OAH uses the local materialization-backed sandbox host.
+#     # Set this to route sandbox requests to a remote self-hosted sandbox service.
+#     # base_url: http://oah-sandbox:8787/internal/v1
+#     # headers:
+#     #   x-oah-cluster: local
+#   e2b:
+#     # Point this at an E2B-backed sandbox gateway exposing the OAH sandbox API.
+#     # base_url: https://sandbox-gateway.example.com/internal/v1
+#     # api_key: ${env.E2B_API_KEY}
+#     # headers:
+#     #   x-oah-provider: e2b
 
 paths:
   workspace_dir: ./tmp/workspaces
-  chat_dir: ./tmp/chat-workspaces
-  template_dir: ./tmp/templates
+  blueprint_dir: ./tmp/blueprints
   model_dir: ./tests/fixtures/models
   tool_dir: ./tmp/tools
   skill_dir: ./tmp/skills
-  archive_dir: ./tmp/archives
 
 workers:
   embedded:

@@ -14,7 +14,7 @@ Open Agent Harness 是一个 headless Agent Runtime。不提供 UI，通过 Open
 | Kind | 说明 |
 |------|------|
 | `project` | 完整项目 workspace，可启用工具、执行和本地运行时数据 |
-| `chat` | 只读对话 workspace，只加载 prompt / agent / model，不允许执行 |
+| `workspace` | 统一 workspace，加载 prompt / agent / model / action / skill / tool / hook |
 
 ## 2. 设计原则
 
@@ -57,7 +57,7 @@ Open Agent Harness 是一个 headless Agent Runtime。不提供 UI，通过 Open
 
 - Worker 与宿主环境之间的稳定适配边界
 - 首个实现应是 OAH 自己的 sandbox pod
-- 后续可兼容 E2B 一类远程 sandbox 提供方
+- 对外 provider 统一为 `self_hosted | e2b`，目标是只改服务端配置即可切换 backend
 - 只承载宿主生命周期、文件访问、进程执行等能力，不改变 OAH 的 ownership 与控制面语义
 
 ### Workspace Ownership
@@ -139,7 +139,7 @@ flowchart TD
 - 加载平台级 model / tool / skill 目录
 - 组装 system prompt、历史消息和能力清单
 - `project` workspace：完整加载所有能力类型
-- `chat` workspace：只加载 agent / model / AGENTS.md，工具清单为空
+- workspace：统一加载 agent / model / AGENTS.md，以及声明的 action / skill / tool / hook
 - 负责 run 状态机、session 串行、tool loop、审计与恢复闭环
 
 ### Invocation Dispatcher
@@ -152,7 +152,7 @@ flowchart TD
 
 - 统一封装 workspace 执行环境（shell、文件读写、进程管理）
 - 屏蔽本地执行、自家 sandbox pod 与未来 E2B 类宿主的差异
-- `chat` workspace 不创建 backend session
+- workspace 统一创建 backend session，并在同一执行后端内处理
 
 ### Hook Runtime
 
@@ -166,7 +166,7 @@ flowchart TD
 | API + embedded worker | 默认。单进程完整执行。配置 Redis 时消费 Redis queue，否则 in-process 执行。 |
 | API only + standalone worker + controller | 生产主模式。API Server 负责入口与 owner 路由，Worker 负责执行，Controller 负责控制面。 |
 | Standalone worker in sandbox | Worker 的一种部署形态。worker 运行在独立 worker Pod / sandbox Pod 中。 |
-| API only + controller + sandbox-hosted worker | 推荐的演进方向。先使用自家 sandbox pod 承载 worker，再把宿主接口收敛到可兼容 E2B 的边界。 |
+| API only + controller + sandbox-hosted worker | 推荐的演进方向。先使用自家 sandbox pod 承载 worker，再把宿主接口收敛到可在 `self_hosted` / `e2b` provider 间切换的边界。 |
 
 ## 7. 请求链路
 
@@ -213,8 +213,8 @@ sequenceDiagram
 - 不内建用户系统，只消费外部身份上下文
 - Workspace 是配置和能力发现边界；`.openharness/settings.yaml` 是 workspace 总配置入口
 - 平台内建 agent 与 workspace agent 合并可见；同名时 workspace agent 覆盖
-- 模板只用于初始化，运行时只读当前 workspace 文件
-- `chat_dir` 下的子目录直接可用，不走模板复制
+- 蓝图只用于初始化，运行时只读当前 workspace 文件
+- workspace 统一从 `workspace_dir` 管理，蓝图仅用于初始化复制
 - `AGENTS.md` 按原文全文注入，不做摘要
 - Agent 以 `agents/*.md` 定义，frontmatter 承载结构化字段，正文承载 system prompt
 - Model / Hook / Tool Server 采用 YAML 声明式定义

@@ -37,6 +37,16 @@ const DEFAULT_BACKGROUND_SESSION_PREFIX = "sandbox";
 
 type WorkspaceOwnership = Awaited<ReturnType<NonNullable<AppDependencies["resolveWorkspaceOwnership"]>>>;
 
+function resolveSandboxOwnerId(input: { ownerId?: string | undefined; userId?: string | undefined }): string | undefined {
+  const ownerId = input.ownerId?.trim();
+  if (ownerId) {
+    return ownerId;
+  }
+
+  const userId = input.userId?.trim();
+  return userId && userId.length > 0 ? userId : undefined;
+}
+
 function copyProxyResponseHeaders(reply: FastifyReply, headers: Headers): void {
   for (const [name, value] of headers.entries()) {
     if (name === "transfer-encoding" || name === "connection" || name === "keep-alive") {
@@ -507,15 +517,16 @@ function registerSandboxCoreRoutes(
 
   app.post(`${prefix}/sandboxes`, async (request, reply) => {
     const input = createSandboxRequestSchema.parse(request.body);
+    const ownerId = resolveSandboxOwnerId(input);
 
     if (input.workspaceId) {
       if (isPublicApi) {
         assertWorkspaceAccess(toCallerContext(request), input.workspaceId);
       }
-      if (input.userId) {
+      if (ownerId) {
         await dependencies.assignWorkspacePlacementUser?.({
           workspaceId: input.workspaceId,
-          userId: input.userId,
+          userId: ownerId,
           overwrite: false
         });
       }
@@ -530,12 +541,13 @@ function registerSandboxCoreRoutes(
       const workspace = await dependencies.importWorkspace({
         rootPath: input.rootPath,
         ...(input.name ? { name: input.name } : {}),
-        ...(input.externalRef ? { externalRef: input.externalRef } : {})
+        ...(input.externalRef ? { externalRef: input.externalRef } : {}),
+        ...(input.serviceName ? { serviceName: input.serviceName } : {})
       });
-      if (input.userId) {
+      if (ownerId) {
         await dependencies.assignWorkspacePlacementUser?.({
           workspaceId: workspace.id,
-          userId: input.userId,
+          userId: ownerId,
           overwrite: true
         });
       }
@@ -549,15 +561,16 @@ function registerSandboxCoreRoutes(
     const workspace = await dependencies.runtimeService.createWorkspace({
       input: {
         name: input.name as string,
-        template: input.template as string,
+        blueprint: input.blueprint as string,
         executionPolicy: input.executionPolicy,
-        ...(input.externalRef ? { externalRef: input.externalRef } : {})
+        ...(input.externalRef ? { externalRef: input.externalRef } : {}),
+        ...(input.serviceName ? { serviceName: input.serviceName } : {})
       }
     });
-    if (input.userId) {
+    if (ownerId) {
       await dependencies.assignWorkspacePlacementUser?.({
         workspaceId: workspace.id,
-        userId: input.userId,
+        userId: ownerId,
         overwrite: true
       });
     }

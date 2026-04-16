@@ -37,4 +37,4 @@
 - 同 session 可连续写入多条消息，形成串行 run 队列
 - runtime 按 AI SDK 兼容结构持久化消息（含 tool-call / tool-result）
 - session 维护 `activeAgentName`，run 内 `agent.switch` 后可同步更新
-- `kind=chat` session/message/run 保存到中心库，不生成本地 `history.db`
+- session/message/run 统一保存到中心库，本地 `history.db` 仅作为运行时数据文件

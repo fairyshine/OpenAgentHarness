@@ -223,6 +223,81 @@ describe("storage admin", () => {
     await storageAdmin.close();
   });
 
+  it("routes postgres inspection to the matching service database", async () => {
+    const defaultQueries: string[] = [];
+    const serviceQueries: string[] = [];
+    const createdConnectionStrings: string[] = [];
+    let servicePoolClosed = false;
+    const defaultPool = {
+      async query<T extends Record<string, unknown>>(sqlText: string) {
+        defaultQueries.push(sqlText);
+        if (sqlText.startsWith("select count(*)::text as count from runs")) {
+          return {
+            rows: [{ count: "0" }],
+            fields: []
+          };
+        }
+
+        if (sqlText.startsWith("select * from runs")) {
+          return {
+            rows: [],
+            fields: []
+          };
+        }
+
+        throw new Error(`Unexpected default query: ${sqlText}`);
+      }
+    } as unknown as Pool;
+    const servicePool = {
+      async query<T extends Record<string, unknown>>(sqlText: string) {
+        serviceQueries.push(sqlText);
+        if (sqlText.startsWith("select count(*)::text as count from runs")) {
+          return {
+            rows: [{ count: "1" }],
+            fields: []
+          };
+        }
+
+        if (sqlText.startsWith("select * from runs")) {
+          return {
+            rows: [{ id: "run_service_1", status: "completed" }],
+            fields: [{ name: "id" }, { name: "status" }]
+          };
+        }
+
+        throw new Error(`Unexpected service query: ${sqlText}`);
+      },
+      async end() {
+        servicePoolClosed = true;
+      }
+    } as unknown as Pool;
+
+    const storageAdmin = createStorageAdmin({
+      postgresPool: defaultPool,
+      postgresConnectionString: "postgres://user:pass@127.0.0.1:5432/OAH",
+      postgresPoolFactory: ({ connectionString }) => {
+        createdConnectionStrings.push(connectionString);
+        return servicePool;
+      },
+      redisAvailable: false,
+      redisEventBusEnabled: false,
+      redisRunQueueEnabled: false
+    });
+
+    const page = await storageAdmin.postgresTable("runs", {
+      limit: 10,
+      serviceName: "Acme"
+    });
+
+    expect(page.rows).toEqual([{ id: "run_service_1", status: "completed" }]);
+    expect(createdConnectionStrings).toEqual(["postgres://user:pass@127.0.0.1:5432/OAH-acme"]);
+    expect(defaultQueries).toEqual([]);
+    expect(serviceQueries).toHaveLength(2);
+
+    await storageAdmin.close();
+    expect(servicePoolClosed).toBe(true);
+  });
+
   it("builds worker affinity summaries from the worker registry", async () => {
     const storageAdmin = createStorageAdmin({
       redisAvailable: true,

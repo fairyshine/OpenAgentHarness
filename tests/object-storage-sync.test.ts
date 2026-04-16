@@ -106,23 +106,20 @@ describe("object storage sync", () => {
         region: "us-east-1",
         endpoint: "http://127.0.0.1:9000",
         force_path_style: true,
-        managed_paths: ["workspace", "chat"]
+        managed_paths: ["workspace"]
       },
       {
         workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat",
-        template_dir: "/tmp/templates",
+        blueprint_dir: "/tmp/blueprints",
         model_dir: "/tmp/models",
         tool_dir: "/tmp/tools",
-        skill_dir: "/tmp/skills",
-        archive_dir: "/tmp/archives"
+        skill_dir: "/tmp/skills"
       }
     );
 
     expect(
       controller.managedWorkspaceExternalRef("/tmp/workspaces/demo", "project", {
-        workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat"
+        workspace_dir: "/tmp/workspaces"
       })
     ).toBe("s3://test-bucket/workspace/demo");
 
@@ -133,23 +130,20 @@ describe("object storage sync", () => {
         region: "us-east-1",
         endpoint: "http://127.0.0.1:9000",
         force_path_style: true,
-        managed_paths: ["template", "model"]
+        managed_paths: ["blueprint", "model"]
       },
       {
         workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat",
-        template_dir: "/tmp/templates",
+        blueprint_dir: "/tmp/blueprints",
         model_dir: "/tmp/models",
         tool_dir: "/tmp/tools",
-        skill_dir: "/tmp/skills",
-        archive_dir: "/tmp/archives"
+        skill_dir: "/tmp/skills"
       }
     );
 
     expect(
       unmanagedController.managedWorkspaceExternalRef("/tmp/workspaces/demo", "project", {
-        workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat"
+        workspace_dir: "/tmp/workspaces"
       })
     ).toBeUndefined();
   });

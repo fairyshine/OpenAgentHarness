@@ -54,7 +54,7 @@ oah
   workspace inspect
   catalog show
   session create
-  session chat
+  session inspect
   action run
   model generate
   model stream
@@ -70,7 +70,7 @@ oah
   - 列出已发现 workspace
 - `oah catalog show --workspace <id>`
   - 查看当前 workspace 的 agents / models / actions / skills / tools / hooks
-- `oah session chat --workspace <id>`
+- `oah session inspect --workspace <id>`
   - 直接发起交互式对话
 - `oah action run --workspace <id> --action <name>`
   - 手动触发 action
@@ -130,7 +130,7 @@ oah
 
 说明：
 
-- 对 `chat` workspace，这里就是主要调试界面
+- 对常规 workspace，这里是主要调试界面之一
 - 对 `project` workspace，可同时观察普通对话和工具调用结果
 
 ### 4. Run 时间线
@@ -164,7 +164,7 @@ oah
 
 - 查看最终可见 model catalog
 - 查看最终可见 agent catalog
-- 查看 `chat` workspace 自动发现结果
+- 查看 workspace 自动发现结果
 - 查看配置解析错误
 - 查看当前 run 选中了哪个模型
 - 查看最终 prompt 拼装顺序和段来源
@@ -227,5 +227,5 @@ CLI/TUI 不负责：
 
 1. 先做 CLI
 2. 在 CLI 基础上补 `oah tui`
-3. 先保证 catalog、session chat、run inspect、model generate 可用
+3. 先保证 catalog、session inspect、run inspect、model generate 可用
 4. 再补 hooks、subagent、prompt compose 可视化

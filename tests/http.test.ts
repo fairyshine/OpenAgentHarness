@@ -138,7 +138,7 @@ async function readSseEvents(
   return frames.map(({ event, data }) => ({ event, data }));
 }
 
-async function createStartedApp() {
+async function createStartedApp(options?: { sandboxHostProviderKind?: "self_hosted" | "e2b" }) {
   const gateway = new FakeModelGateway(20);
   const persistence = createMemoryRuntimePersistence();
   const runtimeService = new RuntimeService({
@@ -163,7 +163,7 @@ async function createStartedApp() {
           toolServers: {},
           hooks: {},
           catalog: {
-            workspaceId: "template",
+            workspaceId: "blueprint",
             agents: [],
             models: [],
             actions: [],
@@ -177,7 +177,7 @@ async function createStartedApp() {
     }
   });
 
-  return createStartedAppWithRuntimeService(runtimeService, gateway);
+  return createStartedAppWithRuntimeService(runtimeService, gateway, options);
 }
 
 async function createStartedAppWithRuntimeService(
@@ -199,9 +199,11 @@ async function createStartedAppWithRuntimeService(
     subscribePlatformModelSnapshot?: (listener: (snapshot: PlatformModelSnapshot) => void) => (() => void);
     importWorkspace?: (input: {
       rootPath: string;
-      kind?: "project" | "chat";
+      kind?: "project";
       name?: string;
       externalRef?: string;
+      ownerId?: string;
+      serviceName?: string;
     }) => Promise<any>;
     workspaceMode?: "multi" | "single";
     resolveCallerContext?: (request: import("fastify").FastifyRequest) => Promise<CallerContext | undefined> | CallerContext | undefined;
@@ -222,7 +224,7 @@ async function createStartedAppWithRuntimeService(
       userId: string;
       overwrite?: boolean | undefined;
     }) => Promise<void>;
-    sandboxHostProviderKind?: "self_hosted" | "e2b_compatible";
+    sandboxHostProviderKind?: "self_hosted" | "e2b";
   }
 ) {
   const app = createApp({
@@ -230,7 +232,7 @@ async function createStartedAppWithRuntimeService(
     modelGateway: gateway,
     defaultModel: "openai-default",
     logger: false,
-    listWorkspaceTemplates: async () => [{ name: "workspace" }],
+    listWorkspaceBlueprints: async () => [{ name: "workspace" }],
     ...(options?.listPlatformModels ? { listPlatformModels: options.listPlatformModels } : {}),
     ...(options?.getPlatformModelSnapshot ? { getPlatformModelSnapshot: options.getPlatformModelSnapshot } : {}),
     ...(options?.subscribePlatformModelSnapshot
@@ -454,13 +456,13 @@ describe("http api", () => {
     });
   });
 
-  it("lists workspace templates from template_dir", async () => {
+  it("lists workspace blueprints from blueprint_dir", async () => {
     activeApp = await createStartedApp();
 
-    const response = await fetch(`${activeApp.baseUrl}/api/v1/workspace-templates`);
+    const blueprintsResponse = await fetch(`${activeApp.baseUrl}/api/v1/blueprints`);
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    expect(blueprintsResponse.status).toBe(200);
+    await expect(blueprintsResponse.json()).resolves.toEqual({
       items: [{ name: "workspace" }]
     });
   });
@@ -621,9 +623,11 @@ describe("http api", () => {
   });
 
   it("exposes storage admin endpoints", async () => {
+    const overviewOptions: Array<Record<string, unknown>> = [];
     const postgresTableOptions: Array<Record<string, unknown>> = [];
     const storageAdmin: StorageAdmin = {
-      async overview() {
+      async overview(options) {
+        overviewOptions.push({ ...(options?.serviceName ? { serviceName: options.serviceName } : {}) });
         return {
           postgres: {
             configured: true,
@@ -682,6 +686,7 @@ describe("http api", () => {
           limit: options.limit,
           columns: ["id", "status"],
           ...(options.q ||
+          options.serviceName ||
           options.workspaceId ||
           options.sessionId ||
           options.runId ||
@@ -690,6 +695,7 @@ describe("http api", () => {
           options.recoveryState
             ? {
                 appliedFilters: {
+                  ...(options.serviceName ? { serviceName: options.serviceName } : {}),
                   ...(options.q ? { q: options.q } : {}),
                   ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
                   ...(options.sessionId ? { sessionId: options.sessionId } : {}),
@@ -836,6 +842,7 @@ describe("http api", () => {
 
     const [
       overviewResponse,
+      scopedOverviewResponse,
       tableResponse,
       filteredTableResponse,
       keysResponse,
@@ -848,9 +855,10 @@ describe("http api", () => {
       releaseLockResponse
     ] = await Promise.all([
       fetch(`${activeApp.baseUrl}/api/v1/storage/overview`),
+      fetch(`${activeApp.baseUrl}/api/v1/storage/overview?serviceName=@default`),
       fetch(`${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20&offset=40`),
       fetch(
-        `${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20&q=completed&runId=run_1&status=failed&errorCode=worker_recovery_failed&recoveryState=quarantined`
+        `${activeApp.baseUrl}/api/v1/storage/postgres/tables/runs?limit=20&q=completed&runId=run_1&status=failed&errorCode=worker_recovery_failed&recoveryState=quarantined&serviceName=acme`
       ),
       fetch(`${activeApp.baseUrl}/api/v1/storage/redis/keys?pattern=oah:*`),
       fetch(`${activeApp.baseUrl}/api/v1/storage/redis/key?key=oah:runs:ready`),
@@ -891,6 +899,7 @@ describe("http api", () => {
     ]);
 
     expect(overviewResponse.status).toBe(200);
+    expect(scopedOverviewResponse.status).toBe(200);
     expect(tableResponse.status).toBe(200);
     expect(filteredTableResponse.status).toBe(200);
     expect(keysResponse.status).toBe(200);
@@ -919,6 +928,12 @@ describe("http api", () => {
         dbSize: 8
       }
     });
+    await expect(scopedOverviewResponse.json()).resolves.toMatchObject({
+      postgres: {
+        database: "oah_test"
+      }
+    });
+    expect(overviewOptions).toEqual([{}, { serviceName: "@default" }]);
     await expect(tableResponse.json()).resolves.toMatchObject({
       table: "runs",
       rowCount: 12,
@@ -927,6 +942,7 @@ describe("http api", () => {
     });
     await expect(filteredTableResponse.json()).resolves.toMatchObject({
       appliedFilters: {
+        serviceName: "acme",
         q: "completed",
         runId: "run_1",
         status: "failed",
@@ -936,6 +952,7 @@ describe("http api", () => {
     });
     expect(postgresTableOptions.at(-1)).toMatchObject({
       limit: 20,
+      serviceName: "acme",
       q: "completed",
       runId: "run_1",
       status: "failed",
@@ -996,7 +1013,7 @@ describe("http api", () => {
       },
       body: JSON.stringify({
         name: "no-auth-workspace",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/no-auth-workspace"
       })
     });
@@ -1004,7 +1021,7 @@ describe("http api", () => {
     expect(response.status).toBe(201);
   });
 
-  it("records workspace placement user affinity from workspace creation and session creation", async () => {
+  it("records workspace owner affinity from workspace creation and session creation", async () => {
     const assignedUsers: Array<{ workspaceId: string; userId: string; overwrite?: boolean }> = [];
     const gateway = new FakeModelGateway(20);
     const persistence = createMemoryRuntimePersistence();
@@ -1028,7 +1045,7 @@ describe("http api", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -1055,13 +1072,15 @@ describe("http api", () => {
       },
       body: JSON.stringify({
         name: "placement-user-workspace",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/placement-user-workspace",
-        userId: "user_explicit"
+        ownerId: "user_explicit",
+        serviceName: "Acme-App"
       })
     });
     expect(workspaceResponse.status).toBe(201);
-    const workspace = (await workspaceResponse.json()) as { id: string };
+    const workspace = (await workspaceResponse.json()) as { id: string; serviceName?: string };
+    expect(workspace.serviceName).toBe("acme-app");
 
     const sessionResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/sessions`, {
       method: "POST",
@@ -1097,7 +1116,7 @@ describe("http api", () => {
       headers: authHeaders,
       body: JSON.stringify({
         name: "demo-a",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo-a"
       })
     });
@@ -1108,7 +1127,7 @@ describe("http api", () => {
       headers: authHeaders,
       body: JSON.stringify({
         name: "demo-b",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo-b"
       })
     });
@@ -1370,8 +1389,8 @@ describe("http api", () => {
       }
     );
 
-    const [templatesResponse, createResponse, importResponse, deleteResponse] = await Promise.all([
-      fetch(`${activeApp.baseUrl}/api/v1/workspace-templates`),
+    const [blueprintsResponse, createResponse, importResponse, deleteResponse] = await Promise.all([
+      fetch(`${activeApp.baseUrl}/api/v1/blueprints`),
       fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
         method: "POST",
         headers: {
@@ -1379,7 +1398,7 @@ describe("http api", () => {
         },
         body: JSON.stringify({
           name: "blocked-workspace",
-          template: "workspace"
+          blueprint: "workspace"
         })
       }),
       fetch(`${activeApp.baseUrl}/api/v1/workspaces/import`, {
@@ -1396,7 +1415,7 @@ describe("http api", () => {
       })
     ]);
 
-    expect(templatesResponse.status).toBe(501);
+    expect(blueprintsResponse.status).toBe(501);
     expect(createResponse.status).toBe(501);
     expect(importResponse.status).toBe(501);
     expect(deleteResponse.status).toBe(501);
@@ -1443,7 +1462,7 @@ describe("http api", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -1469,7 +1488,7 @@ describe("http api", () => {
       headers: authHeaders,
       body: JSON.stringify({
         name: "managed-workspace",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: workspaceRoot
       })
     });
@@ -1808,7 +1827,7 @@ describe("http api", () => {
       },
       body: JSON.stringify({
         name: "sandbox-demo",
-        template: "workspace"
+        blueprint: "workspace"
       })
     });
     expect(createResponse.status).toBe(201);
@@ -1869,6 +1888,28 @@ describe("http api", () => {
       stdout: "hello sandbox\n",
       stderr: "",
       exitCode: 0
+    });
+  });
+
+  it("reports the configured e2b sandbox provider on sandbox responses", async () => {
+    activeApp = await createStartedApp({
+      sandboxHostProviderKind: "e2b"
+    });
+
+    const createResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        name: "sandbox-provider-demo",
+        blueprint: "workspace"
+      })
+    });
+
+    expect(createResponse.status).toBe(201);
+    await expect(createResponse.json()).resolves.toMatchObject({
+      provider: "e2b"
     });
   });
 
@@ -2080,20 +2121,20 @@ describe("http api", () => {
     });
   });
 
-  it("sanitizes chat workspace catalogs over HTTP", async () => {
+  it("returns full project workspace catalogs over HTTP", async () => {
     const gateway = new FakeModelGateway(20);
     const persistence = createMemoryRuntimePersistence();
     await persistence.workspaceRepository.upsert({
-      id: "chat_http_catalog",
-      name: "chat-http-catalog",
-      rootPath: "/tmp/chat-http-catalog",
+      id: "project_http_catalog",
+      name: "project-http-catalog",
+      rootPath: "/tmp/project-http-catalog",
       executionPolicy: "local",
       status: "active",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      kind: "chat",
-      readOnly: true,
-      historyMirrorEnabled: false,
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
       defaultAgent: "assistant",
       settings: {
         defaultAgent: "assistant",
@@ -2104,7 +2145,7 @@ describe("http api", () => {
         assistant: {
           name: "assistant",
           mode: "primary",
-          prompt: "You are a chat-only assistant.",
+          prompt: "You are a project assistant.",
           tools: {
             native: [],
             actions: [],
@@ -2121,7 +2162,7 @@ describe("http api", () => {
           callableByApi: true,
           callableByUser: true,
           exposeToLlm: true,
-          directory: "/tmp/chat-http-catalog/actions/dangerous.run",
+          directory: "/tmp/project-http-catalog/actions/dangerous.run",
           entry: {
             command: "printf unsafe"
           }
@@ -2131,8 +2172,8 @@ describe("http api", () => {
         "repo-explorer": {
           name: "repo-explorer",
           exposeToLlm: true,
-          directory: "/tmp/chat-http-catalog/skills/repo-explorer",
-          sourceRoot: "/tmp/chat-http-catalog/skills/repo-explorer",
+          directory: "/tmp/project-http-catalog/skills/repo-explorer",
+          sourceRoot: "/tmp/project-http-catalog/skills/repo-explorer",
           content: "# Repo Explorer"
         }
       },
@@ -2156,7 +2197,7 @@ describe("http api", () => {
         }
       },
       catalog: {
-        workspaceId: "chat_http_catalog",
+        workspaceId: "project_http_catalog",
         agents: [{ name: "assistant", mode: "primary", source: "workspace" }],
         models: [],
         actions: [{ name: "dangerous.run", callableByApi: true, callableByUser: true, exposeToLlm: true }],
@@ -2174,7 +2215,7 @@ describe("http api", () => {
 
     activeApp = await createStartedAppWithRuntimeService(runtimeService, gateway);
 
-    const response = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/chat_http_catalog/catalog`, {
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/project_http_catalog/catalog`, {
       headers: {
         authorization: "Bearer token-1"
       }
@@ -2182,15 +2223,15 @@ describe("http api", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      workspaceId: "chat_http_catalog",
+      workspaceId: "project_http_catalog",
       agents: [{ name: "assistant", mode: "primary", source: "workspace" }],
       models: [],
-      actions: [],
-      skills: [],
-      tools: [],
-      hooks: [],
-      nativeTools: [],
-      runtimeTools: []
+      actions: [{ name: "dangerous.run", callableByApi: true, callableByUser: true, exposeToLlm: true }],
+      skills: [{ name: "repo-explorer", exposeToLlm: true }],
+      tools: [{ name: "docs", transportType: "http" }],
+      hooks: [{ name: "rewrite-request", handlerType: "prompt", events: ["before_model_call"] }],
+      nativeTools: expect.arrayContaining(["Bash", "Read", "Write"]),
+      runtimeTools: expect.arrayContaining(["run_action", "Skill"])
     });
   });
 
@@ -2204,7 +2245,7 @@ describe("http api", () => {
       },
       body: JSON.stringify({
         name: "demo",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo"
       })
     });
@@ -2250,7 +2291,7 @@ describe("http api", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -2287,7 +2328,7 @@ describe("http api", () => {
       },
       body: JSON.stringify({
         name: "resolver-demo",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/resolver-demo"
       })
     });
@@ -2332,7 +2373,7 @@ describe("http api", () => {
               toolServers: {},
               hooks: {},
               catalog: {
-                workspaceId: "template",
+                workspaceId: "blueprint",
                 agents: [],
                 models: [],
                 actions: [],
@@ -2359,7 +2400,7 @@ describe("http api", () => {
       },
       body: JSON.stringify({
         name: "no-context",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/no-context"
       })
     });
@@ -2431,7 +2472,7 @@ describe("http api", () => {
       headers: authHeaders,
       body: JSON.stringify({
         name: "demo",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo"
       })
     });
@@ -3133,7 +3174,7 @@ Use ripgrep first.
       headers: authHeaders,
       body: JSON.stringify({
         name: "demo-cursor",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo-cursor"
       })
     });
@@ -3205,7 +3246,7 @@ Use ripgrep first.
       headers: authHeaders,
       body: JSON.stringify({
         name: "demo-multi-turn",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo-multi-turn"
       })
     });

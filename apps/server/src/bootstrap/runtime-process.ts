@@ -24,7 +24,7 @@ function readFlagValue(argv: string[], flag: string): string | undefined {
 
 export interface SingleWorkspaceCliOptions {
   rootPath: string;
-  kind: "project" | "chat";
+  kind: "project";
   modelDir?: string | undefined;
   defaultModel?: string | undefined;
   toolDir?: string | undefined;
@@ -40,7 +40,7 @@ export function parseSingleWorkspaceOptions(argv: string[]): SingleWorkspaceCliO
   }
 
   const workspaceKind = readFlagValue(argv, "--workspace-kind") ?? "project";
-  if (workspaceKind !== "project" && workspaceKind !== "chat") {
+  if (workspaceKind !== "project") {
     throw new Error(`Invalid value for --workspace-kind: ${workspaceKind}`);
   }
 
@@ -89,15 +89,11 @@ export function buildSingleWorkspaceConfig(
     },
     paths: {
       workspace_dir: baseConfig?.paths.workspace_dir ?? path.dirname(singleWorkspace.rootPath),
-      chat_dir: baseConfig?.paths.chat_dir ?? path.dirname(singleWorkspace.rootPath),
-      template_dir: baseConfig?.paths.template_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__templates__"),
+      blueprint_dir: baseConfig?.paths.blueprint_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__blueprints__"),
       model_dir: modelDir,
       tool_dir: singleWorkspace.toolDir ?? baseConfig?.paths.tool_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__platform_tools__"),
       skill_dir:
-        singleWorkspace.skillDir ?? baseConfig?.paths.skill_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__platform_skills__"),
-      archive_dir:
-        baseConfig?.paths.archive_dir ??
-        path.join(baseConfig?.paths.workspace_dir ?? path.dirname(singleWorkspace.rootPath), ".openharness", "archives")
+        singleWorkspace.skillDir ?? baseConfig?.paths.skill_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__platform_skills__")
     },
     llm: {
       default_model: defaultModel

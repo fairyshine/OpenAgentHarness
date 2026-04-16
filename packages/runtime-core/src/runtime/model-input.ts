@@ -425,20 +425,12 @@ export class ModelInputService {
   }
 
   #buildAgentSwitchMessage(workspace: WorkspaceRecord, activeAgentName: string): string | undefined {
-    if (workspace.kind === "chat") {
-      return undefined;
-    }
-
     const currentAgent = workspace.agents[activeAgentName];
     const message = buildAvailableAgentSwitchesMessage(activeAgentName, currentAgent, workspace.agents);
     return message.length > 0 ? message : undefined;
   }
 
   #buildAvailableSubagentsMessage(workspace: WorkspaceRecord, activeAgentName: string): string | undefined {
-    if (workspace.kind === "chat") {
-      return undefined;
-    }
-
     if (!canDelegateFromAgent(workspace, activeAgentName)) {
       return undefined;
     }

@@ -62,10 +62,6 @@ export function selectHooks(
   eventName: string,
   matcherValue?: string
 ): HookDefinition[] {
-  if (workspace.kind === "chat") {
-    return [];
-  }
-
   return Object.values(workspace.hooks).filter((hook) => {
     if (!hook.events.includes(eventName)) {
       return false;

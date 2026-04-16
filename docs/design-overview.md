@@ -6,7 +6,7 @@ Open Agent Harness 设计文档的导航入口。
 
 | 概念 | 定位 | 说明 |
 |------|------|------|
-| **Workspace** | 能力边界 | 每个 workspace 声明自己的 agent、model、tool、skill、action、hook。分 `project`（可执行）和 `chat`（只读对话）两种。 |
+| **Workspace** | 能力边界 | 每个 workspace 声明自己的 agent、model、tool、skill、action、hook，并在同一目录结构内完成能力发现与执行。 |
 | **Session** | 上下文边界 | 一段连续的对话或任务协作，绑定在某个 workspace 下。 |
 | **Run** | 执行边界 | 一次模型推理 + 工具循环。同一 session 内 run 串行执行。 |
 

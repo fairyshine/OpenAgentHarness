@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
   healthReportSchema,
@@ -6,6 +6,7 @@ import {
   platformModelListSchema,
   readinessReportSchema,
   storageOverviewSchema,
+  storageOverviewQuerySchema,
   storagePostgresTableNameSchema,
   storagePostgresTablePageSchema,
   storageRedisDeleteKeyResponseSchema,
@@ -22,9 +23,9 @@ import {
   storageRedisMaintenanceRequestSchema,
   storageRedisMaintenanceResponseSchema,
   storageTableQuerySchema,
-  uploadWorkspaceTemplateRequestSchema,
-  uploadWorkspaceTemplateResponseSchema,
-  workspaceTemplateListSchema
+  uploadWorkspaceBlueprintRequestSchema,
+  uploadWorkspaceBlueprintResponseSchema,
+  workspaceBlueprintListSchema
 } from "@oah/api-contracts";
 import { SUPPORTED_MODEL_PROVIDERS } from "@oah/model-gateway";
 import { AppError } from "@oah/runtime-core";
@@ -41,6 +42,68 @@ import {
 import type { AppDependencies, AppRouteOptions } from "../types.js";
 
 export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDependencies, options: AppRouteOptions): void {
+  const listBlueprints = async (_request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.listWorkspaceBlueprints) {
+      throw new AppError(501, "workspace_blueprints_unavailable", "Workspace blueprints are not available on this server.");
+    }
+
+    const blueprints = await dependencies.listWorkspaceBlueprints();
+    return reply.send(
+      workspaceBlueprintListSchema.parse({
+        items: blueprints
+      })
+    );
+  };
+
+  const uploadBlueprint = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadWorkspaceBlueprint) {
+      throw new AppError(501, "blueprint_upload_unavailable", "Blueprint upload is not available on this server.");
+    }
+
+    if (!Buffer.isBuffer(request.body)) {
+      throw new AppError(415, "invalid_content_type", "Blueprint upload requires Content-Type: application/octet-stream.");
+    }
+
+    const query = uploadWorkspaceBlueprintRequestSchema.parse(request.query);
+
+    try {
+      const blueprint = await dependencies.uploadWorkspaceBlueprint({
+        blueprintName: query.name,
+        zipBuffer: request.body,
+        overwrite: query.overwrite
+      });
+      return reply.status(201).send(uploadWorkspaceBlueprintResponseSchema.parse({ name: blueprint.name }));
+    } catch (error) {
+      if (error instanceof Error && (error as Error & { code?: string }).code === "blueprint_already_exists") {
+        throw new AppError(409, "blueprint_already_exists", error.message);
+      }
+      if (error instanceof Error && (error as Error & { code?: string }).code === "empty_blueprint_zip") {
+        throw new AppError(400, "empty_blueprint_zip", error.message);
+      }
+      throw error;
+    }
+  };
+
+  const deleteBlueprint = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.deleteWorkspaceBlueprint) {
+      throw new AppError(501, "blueprint_delete_unavailable", "Blueprint deletion is not available on this server.");
+    }
+
+    const params = createParamsSchema("blueprintName").parse(request.params);
+
+    try {
+      await dependencies.deleteWorkspaceBlueprint({
+        blueprintName: params.blueprintName
+      });
+      return reply.status(204).send();
+    } catch (error) {
+      if (error instanceof Error && (error as Error & { code?: string }).code === "blueprint_not_found") {
+        throw new AppError(404, "blueprint_not_found", error.message);
+      }
+      throw error;
+    }
+  };
+
   app.get("/", async (request, reply) => {
     reply.type("text/html; charset=utf-8");
     return reply.send(buildDeveloperLandingHtml(request));
@@ -124,67 +187,9 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
 
   app.get("/api/v1", async (request, reply) => reply.send(buildApiIndex(request)));
 
-  app.get("/api/v1/workspace-templates", async (_request, reply) => {
-    if (options.workspaceMode === "single" || !dependencies.listWorkspaceTemplates) {
-      throw new AppError(501, "workspace_templates_unavailable", "Workspace templates are not available on this server.");
-    }
-
-    const templates = await dependencies.listWorkspaceTemplates();
-    return reply.send(
-      workspaceTemplateListSchema.parse({
-        items: templates
-      })
-    );
-  });
-
-  app.post("/api/v1/workspace-templates/upload", async (request, reply) => {
-    if (options.workspaceMode === "single" || !dependencies.uploadWorkspaceTemplate) {
-      throw new AppError(501, "template_upload_unavailable", "Template upload is not available on this server.");
-    }
-
-    if (!Buffer.isBuffer(request.body)) {
-      throw new AppError(415, "invalid_content_type", "Template upload requires Content-Type: application/octet-stream.");
-    }
-
-    const query = uploadWorkspaceTemplateRequestSchema.parse(request.query);
-
-    try {
-      const template = await dependencies.uploadWorkspaceTemplate({
-        templateName: query.name,
-        zipBuffer: request.body,
-        overwrite: query.overwrite
-      });
-      return reply.status(201).send(uploadWorkspaceTemplateResponseSchema.parse({ name: template.name }));
-    } catch (error) {
-      if (error instanceof Error && (error as Error & { code?: string }).code === "template_already_exists") {
-        throw new AppError(409, "template_already_exists", error.message);
-      }
-      if (error instanceof Error && (error as Error & { code?: string }).code === "empty_template_zip") {
-        throw new AppError(400, "empty_template_zip", error.message);
-      }
-      throw error;
-    }
-  });
-
-  app.delete("/api/v1/workspace-templates/:templateName", async (request, reply) => {
-    if (options.workspaceMode === "single" || !dependencies.deleteWorkspaceTemplate) {
-      throw new AppError(501, "template_delete_unavailable", "Template deletion is not available on this server.");
-    }
-
-    const params = createParamsSchema("templateName").parse(request.params);
-
-    try {
-      await dependencies.deleteWorkspaceTemplate({
-        templateName: params.templateName
-      });
-      return reply.status(204).send();
-    } catch (error) {
-      if (error instanceof Error && (error as Error & { code?: string }).code === "template_not_found") {
-        throw new AppError(404, "template_not_found", error.message);
-      }
-      throw error;
-    }
-  });
+  app.get("/api/v1/blueprints", listBlueprints);
+  app.post("/api/v1/blueprints/upload", uploadBlueprint);
+  app.delete("/api/v1/blueprints/:blueprintName", deleteBlueprint);
 
   app.get("/api/v1/model-providers", async (_request, reply) =>
     reply.send(
@@ -246,12 +251,17 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
     }
   );
 
-  app.get("/api/v1/storage/overview", async (_request, reply) => {
+  app.get("/api/v1/storage/overview", async (request, reply) => {
     if (!dependencies.storageAdmin) {
       throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
     }
 
-    return reply.send(storageOverviewSchema.parse(await dependencies.storageAdmin.overview()));
+    const query = storageOverviewQuerySchema.parse(request.query);
+    return reply.send(
+      storageOverviewSchema.parse(
+        await dependencies.storageAdmin.overview(query.serviceName ? { serviceName: query.serviceName } : undefined)
+      )
+    );
   });
 
   app.get("/api/v1/storage/postgres/tables/:table", async (request, reply) => {
@@ -274,6 +284,7 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
         await dependencies.storageAdmin.postgresTable(table, {
           limit: query.limit,
           offset: query.offset,
+          ...(query.serviceName ? { serviceName: query.serviceName } : {}),
           ...(query.q ? { q: query.q } : {}),
           ...(query.workspaceId ? { workspaceId: query.workspaceId } : {}),
           ...(query.sessionId ? { sessionId: query.sessionId } : {}),

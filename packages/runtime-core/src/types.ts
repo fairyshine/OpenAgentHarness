@@ -21,7 +21,7 @@ import { contentToPromptMessage } from "./runtime-message-content.js";
 import type { RuntimeMessage } from "./runtime/runtime-messages.js";
 
 export type RunStatus = Run["status"];
-export type WorkspaceKind = "project" | "chat";
+export type WorkspaceKind = "project";
 export type AgentMode = "primary" | "subagent" | "all";
 export type RunStepType = RunStep["stepType"];
 export type RunStepStatus = RunStep["status"];
@@ -271,7 +271,7 @@ export interface WorkspaceSystemPromptSettings {
 
 export interface WorkspaceSettingsDefinition {
   defaultAgent?: string | undefined;
-  template?: string | undefined;
+  blueprint?: string | undefined;
   skillDirs?: string[] | undefined;
   systemPrompt?: WorkspaceSystemPromptSettings | undefined;
 }
@@ -332,7 +332,7 @@ export interface WorkspaceExecutionLease {
  *
  * The current server bootstrap wires this to local workspace materialization,
  * but the same boundary can later be backed by a sandbox host implementation
- * such as a self-hosted sandbox pod or an E2B-compatible adapter.
+ * such as a self-hosted sandbox pod or an E2B-backed adapter.
  */
 export interface WorkspaceExecutionProvider {
   acquire(input: {
@@ -362,7 +362,7 @@ export interface WorkspaceFileAccessProvider {
   }): Promise<WorkspaceFileAccessLease>;
 }
 
-export type SandboxHostProviderKind = "self_hosted" | "e2b_compatible";
+export type SandboxHostProviderKind = "self_hosted" | "e2b";
 
 export interface SandboxHostDiagnostics {
   materialization?: Record<string, unknown> | undefined;
@@ -372,7 +372,7 @@ export interface SandboxHostDiagnostics {
  * Stable host-adapter boundary for worker execution environments.
  *
  * The first backend is the self-hosted materialization-backed worker host.
- * Future E2B-compatible adapters should implement the same contract without
+ * Future E2B-backed adapters should implement the same contract without
  * changing runtime-core's workspace ownership semantics.
  */
 export interface SandboxHost {
@@ -773,19 +773,38 @@ export function withCatalogActions(catalog: RuntimeWorkspaceCatalog, actions: Ac
   };
 }
 
-export function toPublicWorkspace(workspace: WorkspaceRecord): Workspace {
+export function normalizeWorkspaceRecord(workspace: WorkspaceRecord): WorkspaceRecord {
+  const rawKind = (workspace as { kind?: string }).kind;
+  if (rawKind === "project") {
+    return workspace;
+  }
+
   return {
-    id: workspace.id,
-    externalRef: workspace.externalRef,
-    name: workspace.name,
-    ...(workspace.template ? { template: workspace.template } : workspace.settings.template ? { template: workspace.settings.template } : {}),
-    rootPath: workspace.rootPath,
-    executionPolicy: workspace.executionPolicy,
-    status: workspace.status,
-    kind: workspace.kind,
-    readOnly: workspace.readOnly,
-    createdAt: workspace.createdAt,
-    updatedAt: workspace.updatedAt
+    ...workspace,
+    kind: "project",
+    readOnly: false,
+    historyMirrorEnabled: true
+  };
+}
+
+export function toPublicWorkspace(workspace: WorkspaceRecord): Workspace {
+  const normalizedWorkspace = normalizeWorkspaceRecord(workspace);
+  const blueprint =
+    normalizedWorkspace.blueprint ??
+    normalizedWorkspace.settings.blueprint;
+  return {
+    id: normalizedWorkspace.id,
+    externalRef: normalizedWorkspace.externalRef,
+    name: normalizedWorkspace.name,
+    ...(blueprint ? { blueprint } : {}),
+    ...(normalizedWorkspace.serviceName ? { serviceName: normalizedWorkspace.serviceName } : {}),
+    rootPath: normalizedWorkspace.rootPath,
+    executionPolicy: normalizedWorkspace.executionPolicy,
+    status: normalizedWorkspace.status,
+    kind: normalizedWorkspace.kind,
+    readOnly: normalizedWorkspace.readOnly,
+    createdAt: normalizedWorkspace.createdAt,
+    updatedAt: normalizedWorkspace.updatedAt
   };
 }
 

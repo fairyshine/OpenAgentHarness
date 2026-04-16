@@ -52,7 +52,10 @@ export interface SessionEventBus {
 }
 
 export interface SessionRunQueue extends RunQueue {
-  claimNextSession(timeoutMs?: number, options?: { workerId?: string | undefined }): Promise<string | undefined>;
+  claimNextSession(
+    timeoutMs?: number,
+    options?: { workerId?: string | undefined; runtimeInstanceId?: string | undefined }
+  ): Promise<string | undefined>;
   readyQueueLength(): Promise<number>;
   inspectReadyQueue(nowMs?: number): Promise<{
     length: number;
@@ -425,11 +428,12 @@ return queueLength
 
 const claimCompatibleSessionScript = `
 local workerId = ARGV[3]
+local runtimeInstanceId = ARGV[4]
 local readyEntries = redis.call("lrange", KEYS[1], 0, -1)
 
 for _, sessionId in ipairs(readyEntries) do
   local preferredWorkerId = redis.call("get", ARGV[1] .. sessionId .. ARGV[2])
-  if workerId == "" or preferredWorkerId == false or preferredWorkerId == "" or preferredWorkerId == workerId then
+  if workerId == "" or preferredWorkerId == false or preferredWorkerId == "" or preferredWorkerId == workerId or (runtimeInstanceId ~= "" and preferredWorkerId == runtimeInstanceId) then
     redis.call("lrem", KEYS[1], 1, sessionId)
     return sessionId
   end
@@ -1430,15 +1434,16 @@ export class RedisSessionRunQueue implements SessionRunQueue {
 
   async claimNextSession(
     timeoutMs = 1_000,
-    options?: { workerId?: string | undefined }
+    options?: { workerId?: string | undefined; runtimeInstanceId?: string | undefined }
   ): Promise<string | undefined> {
     const workerId = options?.workerId?.trim() ?? "";
+    const runtimeInstanceId = options?.runtimeInstanceId?.trim() ?? "";
     const deadline = Date.now() + Math.max(1, timeoutMs);
 
     while (Date.now() < deadline) {
       const claimed = await this.#commands.eval(claimCompatibleSessionScript, {
         keys: [this.#readyQueueKey()],
-        arguments: [`${this.#keyPrefix}:session:`, ":preferred-worker", workerId]
+        arguments: [`${this.#keyPrefix}:session:`, ":preferred-worker", workerId, runtimeInstanceId]
       });
       if (typeof claimed === "string" && claimed.length > 0) {
         return claimed;
@@ -1722,7 +1727,8 @@ export class RedisRunWorker {
         let sessionId: string | undefined;
         try {
           sessionId = await this.#queue.claimNextSession(this.#pollTimeoutMs, {
-            workerId: this.#workerId
+            workerId: this.#workerId,
+            ...(this.#runtimeInstanceId ? { runtimeInstanceId: this.#runtimeInstanceId } : {})
           });
         } catch (error) {
           this.#logger?.warn("Failed to claim next Redis run queue item.", error);

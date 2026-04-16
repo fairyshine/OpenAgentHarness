@@ -1,4 +1,4 @@
-import { Loader2, Network, Orbit, Palette, SquareTerminal } from "lucide-react";
+import { Layers3, Loader2, Network, Orbit, Palette, SquareTerminal } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -48,6 +48,7 @@ export function AppHeader(props: AppHeaderProps) {
                 : props.surfaceMode === "storage"
                   ? "Storage Workbench"
                   : "Runtime Workbench"}
+            {` · ${props.selectedServiceScopeLabel}`}
           </p>
         </div>
       </div>
@@ -75,6 +76,27 @@ export function AppHeader(props: AppHeaderProps) {
               {appThemeOptions.map((theme) => (
                 <SelectItem key={theme.value} value={theme.value}>
                   {theme.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="topbar-chip flex shrink-0 items-center gap-1 rounded-2xl p-1">
+          <div className="hidden items-center gap-1.5 pl-2 xl:flex">
+            <Layers3 className="h-3.5 w-3.5 text-foreground/48" />
+            <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-foreground/46">Service</span>
+          </div>
+          <Select value={props.serviceScope} onValueChange={props.onServiceScopeChange}>
+            <SelectTrigger
+              size="sm"
+              className="topbar-chip-hoverable h-7 min-w-[132px] border-none bg-transparent px-2 text-xs text-foreground shadow-none focus-visible:ring-2 focus-visible:ring-black/10 sm:min-w-[156px]"
+            >
+              <SelectValue placeholder="Service" />
+            </SelectTrigger>
+            <SelectContent className="min-w-[156px]">
+              {props.serviceScopeOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
                 </SelectItem>
               ))}
             </SelectContent>

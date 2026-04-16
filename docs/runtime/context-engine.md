@@ -10,7 +10,7 @@
 - `.openharness` 声明式配置
 - `settings.skill_dirs` 额外 skill 根目录
 
-说明：服务端 `paths.tool_dir` / `paths.skill_dir` 仅作为模板导入源，不直接进入运行时上下文。`paths.chat_dir` 下的只读对话空间直接按 workspace 加载，不走模板复制。
+说明：服务端 `paths.tool_dir` / `paths.skill_dir` 仅作为蓝图导入源，不直接进入运行时上下文。运行时统一从 `workspace_dir` 加载 workspace，不再区分额外的只读对话目录。
 
 ## 输出
 
@@ -21,7 +21,7 @@
 
 详细消息分层见 [message-projections.md](./message-projections.md)。
 
-`kind=chat` workspace 额外约束：只读取 agents/models/settings，不装配 actions/skills/tools/hooks，tool 列表为空。
+运行时不再区分额外的只读对话 workspace 形态；actions/skills/tools/hooks 是否生效由 workspace 自身声明决定。
 
 ## 上下文装配顺序
 

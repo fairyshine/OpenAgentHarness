@@ -23,11 +23,11 @@
 | 字段 | 说明 |
 |------|------|
 | `id` | 唯一标识 |
-| `kind` | `project` 或 `chat` |
+| `kind` | 当前固定为 `project` |
 | `external_ref` | 映射外部系统中的项目 / 仓库 / 业务对象 |
 | `name` | 显示名称 |
 | `root_path` | workspace 根目录路径 |
-| `execution_policy` | 执行策略，默认 `local`；`chat` 时视为 `none` |
+| `execution_policy` | 执行策略，默认 `local` |
 | `status` | 状态 |
 | `metadata` | 扩展字段（jsonb） |
 | `created_at` / `updated_at` | 时间戳 |
@@ -35,8 +35,8 @@
 约束：
 
 - `project` -- 完整能力，可按 agent allowlist 暴露工具与执行
-- `chat` -- 只加载 prompt / agent / model，不允许执行、文件写入或 hook
-- `chat` workspace 不创建本地 `history.db`
+- workspace 统一加载 prompt / agent / model / action / skill / tool / hook
+- workspace 统一维护本地 `.openharness/data/history.db`
 
 ## 2. 对话与执行域
 
@@ -131,7 +131,7 @@ Run 内的步骤级记录，用于诊断、审计和可视化。
 
 平台内建能力：`Bash`、`Read`、`Write`、`Edit`、`Glob`、`Grep`、`WebFetch`、`TodoWrite`。
 
-`chat` workspace 默认不暴露任何 native tool。
+native tool 是否暴露由 workspace 声明与运行时能力共同决定。
 
 ### Action
 

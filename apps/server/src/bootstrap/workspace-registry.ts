@@ -17,18 +17,11 @@ function workspaceDiscoveryKey(workspace: Pick<WorkspaceRecord, "kind" | "rootPa
   return `${workspace.kind}:${path.resolve(workspace.rootPath)}`;
 }
 
-function managedWorkspaceDirForKind(
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir">,
-  kind: WorkspaceRecord["kind"]
-): string {
-  return kind === "chat" ? paths.chat_dir : paths.workspace_dir;
-}
-
 export function isManagedWorkspace(
   workspace: Pick<WorkspaceRecord, "kind" | "rootPath">,
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir">
+  paths: Pick<ServerConfig["paths"], "workspace_dir">
 ): boolean {
-  return isManagedWorkspaceRoot(workspace.rootPath, managedWorkspaceDirForKind(paths, workspace.kind));
+  return isManagedWorkspaceRoot(workspace.rootPath, paths.workspace_dir);
 }
 
 export function hasPersistedWorkspaceListing(
@@ -103,7 +96,7 @@ export function reconcileDiscoveredWorkspaces(
 export function findManagedWorkspaceIdsToDelete(
   discoveredWorkspaces: WorkspaceRecord[],
   persistedWorkspaces: WorkspaceRecord[],
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir">
+  paths: Pick<ServerConfig["paths"], "workspace_dir">
 ): string[] {
   const discoveredKeys = new Set(discoveredWorkspaces.map((workspace) => workspaceDiscoveryKey(workspace)));
   const canonicalWorkspaceIds = new Set(

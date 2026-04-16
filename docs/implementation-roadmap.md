@@ -83,7 +83,7 @@
 ### Phase 4: Context Engine 与配置加载
 
 - 实现 workspace 根目录扫描
-- 实现服务端 `paths.chat_dir` 扫描
+- 收敛为单一 `workspace_dir` 扫描
 - 实现服务端 `paths.workspace_dir` 扫描
 - 解析 `AGENTS.md`
 - 加载平台内建 agent 注册表
@@ -104,7 +104,7 @@
 - 实现 agent 切换检测，以及在最新 user message 上附加 `<system_reminder>`
 - 实现 `agent.switch` 与 `agent.delegate` 的 allowlist 校验
 - 实现 `agent.await` 与并发 subagent 调度
-- 将 `paths.chat_dir` 下子目录自动注册为 `kind=chat` workspace
+- 将 workspace 自动发现统一收敛到 `paths.workspace_dir`
 - 将 `paths.workspace_dir` 下子目录自动注册为 `kind=project` workspace
 
 当前状态补充：
@@ -133,7 +133,7 @@
 
 - 实现 `oah workspace list`
 - 实现 `oah catalog show`
-- 实现 `oah session chat`
+- 实现统一的 `oah session inspect`
 - 实现 `oah action run`
 - 实现 `oah model generate`
 - 实现 `oah run inspect`

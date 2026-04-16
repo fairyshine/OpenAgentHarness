@@ -57,29 +57,43 @@ export interface ServerConfig {
     sync_on_boot?: boolean | undefined;
     sync_on_change?: boolean | undefined;
     poll_interval_ms?: number | undefined;
-    managed_paths?:
-      | Array<"workspace" | "chat" | "template" | "model" | "tool" | "skill" | "archive">
-      | undefined;
+    managed_paths?: Array<"workspace" | "blueprint" | "model" | "tool" | "skill"> | undefined;
     key_prefixes?:
       | {
           workspace?: string | undefined;
-          chat?: string | undefined;
-          template?: string | undefined;
+          blueprint?: string | undefined;
           model?: string | undefined;
           tool?: string | undefined;
           skill?: string | undefined;
-          archive?: string | undefined;
+        }
+      | undefined;
+  };
+  sandbox?: {
+    provider?: "self_hosted" | "e2b" | undefined;
+    self_hosted?:
+      | {
+          base_url?: string | undefined;
+          headers?: Record<string, string> | undefined;
+        }
+      | undefined;
+    e2b?:
+      | {
+          base_url?: string | undefined;
+          api_key?: string | undefined;
+          domain?: string | undefined;
+          template?: string | undefined;
+          timeout_ms?: number | undefined;
+          request_timeout_ms?: number | undefined;
+          headers?: Record<string, string> | undefined;
         }
       | undefined;
   };
   paths: {
     workspace_dir: string;
-    chat_dir: string;
-    template_dir: string;
+    blueprint_dir: string;
     model_dir: string;
     tool_dir: string;
     skill_dir: string;
-    archive_dir: string;
   };
   workers?: {
     embedded?: {
@@ -193,9 +207,9 @@ export interface DiscoveredHook {
 
 export interface WorkspaceSettings {
   defaultAgent?: string | undefined;
-  template?: string | undefined;
+  blueprint?: string | undefined;
   skillDirs?: string[] | undefined;
-  templateImports?:
+  imports?:
     | {
         tools?: string[] | undefined;
         skills?: string[] | undefined;
@@ -306,7 +320,7 @@ export interface DiscoveredWorkspace {
   status: "active";
   createdAt: string;
   updatedAt: string;
-  kind: "project" | "chat";
+  kind: "project";
   readOnly: boolean;
   historyMirrorEnabled: boolean;
   defaultAgent?: string | undefined;
@@ -324,24 +338,24 @@ export interface DiscoveredWorkspace {
 export type PlatformModelRegistry = Record<string, PlatformModelDefinition>;
 export type PlatformAgentRegistry = Record<string, DiscoveredAgent>;
 
-export interface WorkspaceTemplateSkill {
+export interface WorkspaceBlueprintSkill {
   name: string;
   content: string;
 }
 
-export interface WorkspaceTemplateDescriptor {
+export interface WorkspaceBlueprintDescriptor {
   name: string;
 }
 
-export interface InitializeWorkspaceFromTemplateInput {
-  templateDir: string;
-  templateName: string;
+export interface InitializeWorkspaceFromBlueprintInput {
+  blueprintDir: string;
+  blueprintName: string;
   rootPath: string;
   platformToolDir?: string | undefined;
   platformSkillDir?: string | undefined;
   agentsMd?: string | undefined;
   toolServers?: Record<string, Record<string, unknown>> | undefined;
-  skills?: WorkspaceTemplateSkill[] | undefined;
+  skills?: WorkspaceBlueprintSkill[] | undefined;
 }
 
 async function loadSchema<T>(relativePath: string): Promise<T> {
@@ -406,15 +420,10 @@ function resolveConfigPaths(config: ServerConfig, configPath: string): ServerCon
     },
     paths: {
       workspace_dir: workspaceDir,
-      chat_dir: path.resolve(configDir, config.paths.chat_dir),
-      template_dir: path.resolve(configDir, config.paths.template_dir),
+      blueprint_dir: path.resolve(configDir, config.paths.blueprint_dir),
       model_dir: path.resolve(configDir, config.paths.model_dir),
       tool_dir: path.resolve(configDir, config.paths.tool_dir),
-      skill_dir: path.resolve(configDir, config.paths.skill_dir),
-      archive_dir: path.resolve(
-        configDir,
-        config.paths.archive_dir ?? path.join(workspaceDir, ".openharness", "archives")
-      )
+      skill_dir: path.resolve(configDir, config.paths.skill_dir)
     }
   };
 }
@@ -683,14 +692,14 @@ async function resolveWorkspaceSystemPrompt(
   };
 }
 
-function workspaceIdSuffix(kind: "project" | "chat", rootPath: string): string {
+function workspaceIdSuffix(kind: "project", rootPath: string): string {
   return createHash("sha1")
     .update(`${kind}\0${path.resolve(rootPath).replaceAll("\\", "/")}`)
     .digest("hex")
     .slice(0, 10);
 }
 
-export function buildWorkspaceId(kind: "project" | "chat", name: string, rootPath?: string): string {
+export function buildWorkspaceId(kind: "project", name: string, rootPath?: string): string {
   const normalized = normalizeWorkspaceName(name);
   const base = `${kind}_${normalized || "workspace"}`;
   return rootPath ? `${base}_${workspaceIdSuffix(kind, rootPath)}` : base;
@@ -738,16 +747,21 @@ export async function loadServerConfig(configPath: string): Promise<ServerConfig
 
   const parsed = YAML.parse(fileContent) ?? {};
   const expandedRaw = expandEnv(parsed);
-  const expanded =
+  const expandedRecord =
     expandedRaw && typeof expandedRaw === "object" && !Array.isArray(expandedRaw)
-      ? ({
-          ...expandedRaw,
-          storage:
-            expandedRaw.storage && typeof expandedRaw.storage === "object" && !Array.isArray(expandedRaw.storage)
-              ? expandedRaw.storage
-              : {}
-        } as Record<string, unknown>)
-      : expandedRaw;
+      ? (expandedRaw as Record<string, unknown>)
+      : null;
+  const expanded = expandedRecord
+    ? ({
+        ...expandedRecord,
+        storage:
+          expandedRecord.storage &&
+          typeof expandedRecord.storage === "object" &&
+          !Array.isArray(expandedRecord.storage)
+            ? expandedRecord.storage
+            : {}
+      } as Record<string, unknown>)
+    : expandedRaw;
   const validate = createAjv().compile<ServerConfig>(schema);
   if (!validate(expanded)) {
     throw new Error(`Invalid server config: ${validationMessage(validate.errors)}`);
@@ -764,6 +778,10 @@ export async function loadServerConfig(configPath: string): Promise<ServerConfig
       object_storage:
         expanded.object_storage && typeof expanded.object_storage === "object" && !Array.isArray(expanded.object_storage)
           ? (expanded.object_storage as ServerConfig["object_storage"])
+          : undefined,
+      sandbox:
+        expanded.sandbox && typeof expanded.sandbox === "object" && !Array.isArray(expanded.sandbox)
+          ? (expanded.sandbox as ServerConfig["sandbox"])
           : undefined
     } as ServerConfig,
     configPath
@@ -816,7 +834,7 @@ async function mergeWorkspaceToolSettings(
   );
 }
 
-async function writeWorkspaceSkills(rootPath: string, skills: WorkspaceTemplateSkill[]): Promise<void> {
+async function writeWorkspaceSkills(rootPath: string, skills: WorkspaceBlueprintSkill[]): Promise<void> {
   if (skills.length === 0) {
     return;
   }
@@ -893,7 +911,7 @@ function rewriteImportedToolCommandForWorkspace(
   return command;
 }
 
-async function importTemplateSkills(
+async function importBlueprintSkills(
   rootPath: string,
   platformSkillDir: string | undefined,
   importedSkillNames: string[]
@@ -903,17 +921,17 @@ async function importTemplateSkills(
   }
 
   if (!platformSkillDir) {
-    throw new Error("Template requested skill imports, but platformSkillDir was not provided.");
+    throw new Error("Blueprint requested skill imports, but platformSkillDir was not provided.");
   }
 
   const skillsRoot = path.join(rootPath, ".openharness", "skills");
   await mkdir(skillsRoot, { recursive: true });
 
   for (const skillName of importedSkillNames) {
-    const sourceDirectory = resolvePathInsideRoot(platformSkillDir, skillName, "template skill import");
+    const sourceDirectory = resolvePathInsideRoot(platformSkillDir, skillName, "blueprint skill import");
     const sourceStats = await stat(sourceDirectory).catch(() => null);
     if (!sourceStats?.isDirectory()) {
-      throw new Error(`Template skill import was not found: ${skillName}`);
+      throw new Error(`Blueprint skill import was not found: ${skillName}`);
     }
 
     const targetDirectory = resolvePathInsideRoot(skillsRoot, skillName, "skill name");
@@ -926,7 +944,7 @@ async function importTemplateSkills(
   }
 }
 
-async function importTemplateTools(
+async function importBlueprintTools(
   rootPath: string,
   platformToolDir: string | undefined,
   importedToolNames: string[]
@@ -936,7 +954,7 @@ async function importTemplateTools(
   }
 
   if (!platformToolDir) {
-    throw new Error("Template requested tool imports, but platformToolDir was not provided.");
+    throw new Error("Blueprint requested tool imports, but platformToolDir was not provided.");
   }
 
   const platformToolServers = await loadPlatformToolServers(platformToolDir);
@@ -947,7 +965,7 @@ async function importTemplateTools(
   for (const toolName of importedToolNames) {
     const toolServer = platformToolServers[toolName];
     if (!toolServer) {
-      throw new Error(`Template tool import was not found: ${toolName}`);
+      throw new Error(`Blueprint tool import was not found: ${toolName}`);
     }
 
     const serializedDefinition = serializeToolServerDefinition(toolServer);
@@ -990,11 +1008,11 @@ async function importTemplateTools(
   await mergeWorkspaceToolSettings(rootPath, importedToolDefinitions);
 }
 
-export async function initializeWorkspaceFromTemplate(input: InitializeWorkspaceFromTemplateInput): Promise<void> {
-  const templatePath = resolvePathInsideRoot(input.templateDir, input.templateName, "template name");
-  const templateStats = await stat(templatePath).catch(() => null);
-  if (!templateStats?.isDirectory()) {
-    throw new Error(`Workspace template was not found: ${input.templateName}`);
+export async function initializeWorkspaceFromBlueprint(input: InitializeWorkspaceFromBlueprintInput): Promise<void> {
+  const blueprintPath = resolvePathInsideRoot(input.blueprintDir, input.blueprintName, "blueprint name");
+  const blueprintStats = await stat(blueprintPath).catch(() => null);
+  if (!blueprintStats?.isDirectory()) {
+    throw new Error(`Workspace blueprint was not found: ${input.blueprintName}`);
   }
 
   if (await pathExists(input.rootPath)) {
@@ -1002,18 +1020,18 @@ export async function initializeWorkspaceFromTemplate(input: InitializeWorkspace
   }
 
   await mkdir(path.dirname(input.rootPath), { recursive: true });
-  await cp(templatePath, input.rootPath, {
+  await cp(blueprintPath, input.rootPath, {
     recursive: true,
     force: false,
     errorOnExist: true
   });
 
-  const templateSettings = await loadWorkspaceSettings(input.rootPath);
-  const importedToolNames = uniqueNames(templateSettings.templateImports?.tools);
-  const importedSkillNames = uniqueNames(templateSettings.templateImports?.skills);
+  const blueprintSettings = await loadWorkspaceSettings(input.rootPath);
+  const importedToolNames = uniqueNames(blueprintSettings.imports?.tools);
+  const importedSkillNames = uniqueNames(blueprintSettings.imports?.skills);
 
-  await importTemplateTools(input.rootPath, input.platformToolDir, importedToolNames);
-  await importTemplateSkills(input.rootPath, input.platformSkillDir, importedSkillNames);
+  await importBlueprintTools(input.rootPath, input.platformToolDir, importedToolNames);
+  await importBlueprintSkills(input.rootPath, input.platformSkillDir, importedSkillNames);
 
   if (input.agentsMd) {
     await appendAgentsMd(input.rootPath, input.agentsMd);
@@ -1027,11 +1045,11 @@ export async function initializeWorkspaceFromTemplate(input: InitializeWorkspace
     await writeWorkspaceSkills(input.rootPath, input.skills);
   }
 
-  await updateWorkspaceTemplateSetting(input.rootPath, input.templateName);
+  await updateWorkspaceBlueprintSetting(input.rootPath, input.blueprintName);
 }
 
-export async function listWorkspaceTemplates(templateDir: string): Promise<WorkspaceTemplateDescriptor[]> {
-  const directoryEntries = await readDirectoryEntriesIfExists(templateDir);
+export async function listWorkspaceBlueprints(blueprintDir: string): Promise<WorkspaceBlueprintDescriptor[]> {
+  const directoryEntries = await readDirectoryEntriesIfExists(blueprintDir);
   return directoryEntries
     .filter((entry) => entry.isDirectory())
     .map((entry) => ({
@@ -1067,23 +1085,23 @@ function readZipEntry(readable: NodeJS.ReadableStream): Promise<Buffer> {
   });
 }
 
-export async function uploadWorkspaceTemplate(input: {
-  templateDir: string;
-  templateName: string;
+export async function uploadWorkspaceBlueprint(input: {
+  blueprintDir: string;
+  blueprintName: string;
   zipBuffer: Buffer;
   overwrite?: boolean;
-}): Promise<WorkspaceTemplateDescriptor> {
-  const targetDir = resolvePathInsideRoot(input.templateDir, input.templateName, "template name");
-  const templateExists = await pathExists(targetDir);
+}): Promise<WorkspaceBlueprintDescriptor> {
+  const targetDir = resolvePathInsideRoot(input.blueprintDir, input.blueprintName, "blueprint name");
+  const blueprintExists = await pathExists(targetDir);
 
-  if (templateExists && !input.overwrite) {
-    const err = new Error(`Template "${input.templateName}" already exists`);
+  if (blueprintExists && !input.overwrite) {
+    const err = new Error(`Blueprint "${input.blueprintName}" already exists`);
     (err as Error & { statusCode?: number }).statusCode = 409;
-    (err as Error & { code?: string }).code = "template_already_exists";
+    (err as Error & { code?: string }).code = "blueprint_already_exists";
     throw err;
   }
 
-  if (templateExists) {
+  if (blueprintExists) {
     await rm(targetDir, { recursive: true });
   }
 
@@ -1091,7 +1109,7 @@ export async function uploadWorkspaceTemplate(input: {
 
   const zipfile = await openZip(input.zipBuffer);
 
-  return new Promise<WorkspaceTemplateDescriptor>((resolve, reject) => {
+  return new Promise<WorkspaceBlueprintDescriptor>((resolve, reject) => {
     let entryCount = 0;
 
     zipfile.on("error", reject);
@@ -1112,7 +1130,7 @@ export async function uploadWorkspaceTemplate(input: {
       const resolvedEntryPath = path.resolve(targetDir, fileName);
       const relative = path.relative(targetDir, resolvedEntryPath);
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
-        reject(new Error(`Zip entry "${fileName}" escapes the template directory`));
+        reject(new Error(`Zip entry "${fileName}" escapes the blueprint directory`));
         return;
       }
 
@@ -1143,28 +1161,28 @@ export async function uploadWorkspaceTemplate(input: {
         await rm(targetDir, { recursive: true }).catch(() => {});
         const err = new Error("Zip archive contains no files");
         (err as Error & { statusCode?: number }).statusCode = 400;
-        (err as Error & { code?: string }).code = "empty_template_zip";
+        (err as Error & { code?: string }).code = "empty_blueprint_zip";
         reject(err);
         return;
       }
 
-      resolve({ name: input.templateName });
+      resolve({ name: input.blueprintName });
     });
 
     zipfile.readEntry();
   });
 }
 
-export async function deleteWorkspaceTemplate(input: {
-  templateDir: string;
-  templateName: string;
+export async function deleteWorkspaceBlueprint(input: {
+  blueprintDir: string;
+  blueprintName: string;
 }): Promise<void> {
-  const targetDir = resolvePathInsideRoot(input.templateDir, input.templateName, "template name");
+  const targetDir = resolvePathInsideRoot(input.blueprintDir, input.blueprintName, "blueprint name");
 
   if (!(await pathExists(targetDir))) {
-    const err = new Error(`Template "${input.templateName}" does not exist`);
+    const err = new Error(`Blueprint "${input.blueprintName}" does not exist`);
     (err as Error & { statusCode?: number }).statusCode = 404;
-    (err as Error & { code?: string }).code = "template_not_found";
+    (err as Error & { code?: string }).code = "blueprint_not_found";
     throw err;
   }
 
@@ -1190,9 +1208,9 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
 
   const typedParsed = parsed as {
     default_agent?: string;
-    template?: string;
+    blueprint?: string;
     skill_dirs?: string[];
-    template_imports?: {
+    imports?: {
       tools?: string[];
       skills?: string[];
     };
@@ -1221,13 +1239,13 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
 
   return {
     ...(typedParsed.default_agent ? { defaultAgent: typedParsed.default_agent } : {}),
-    ...(typedParsed.template ? { template: typedParsed.template } : {}),
+    ...(typedParsed.blueprint ? { blueprint: typedParsed.blueprint } : {}),
     ...(typedParsed.skill_dirs ? { skillDirs: typedParsed.skill_dirs } : {}),
-    ...(typedParsed.template_imports
+    ...(typedParsed.imports
       ? {
-          templateImports: {
-            ...(typedParsed.template_imports.tools ? { tools: typedParsed.template_imports.tools } : {}),
-            ...(typedParsed.template_imports.skills ? { skills: typedParsed.template_imports.skills } : {})
+          imports: {
+            ...(typedParsed.imports.tools ? { tools: typedParsed.imports.tools } : {}),
+            ...(typedParsed.imports.skills ? { skills: typedParsed.imports.skills } : {})
           }
         }
       : {}),
@@ -1239,7 +1257,7 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
   };
 }
 
-export async function updateWorkspaceTemplateSetting(workspaceRoot: string, template: string): Promise<void> {
+export async function updateWorkspaceBlueprintSetting(workspaceRoot: string, blueprint: string): Promise<void> {
   const settingsPath = path.join(workspaceRoot, ".openharness", "settings.yaml");
   await mkdir(path.dirname(settingsPath), { recursive: true });
 
@@ -1252,7 +1270,7 @@ export async function updateWorkspaceTemplateSetting(workspaceRoot: string, temp
     settingsPath,
     YAML.stringify({
       ...(currentRaw as Record<string, unknown>),
-      template
+      blueprint
     }),
     "utf8"
   );
@@ -1658,7 +1676,7 @@ function resolveSkillRoots(workspaceRoot: string, settings: WorkspaceSettings): 
 
 export async function discoverWorkspace(
   rootPath: string,
-  kind: "project" | "chat",
+  kind: "project",
   input: {
     platformModels: PlatformModelRegistry;
     platformAgents?: PlatformAgentRegistry;
@@ -1675,21 +1693,18 @@ export async function discoverWorkspace(
   const agentSources = Object.fromEntries(
     Object.keys(agents).map((name) => [name, name in workspaceAgents ? ("workspace" as const) : ("platform" as const)])
   );
-  const actions = kind === "chat" ? {} : await loadWorkspaceActions(rootPath);
+  const actions = await loadWorkspaceActions(rootPath);
   const workspaceSkillRoots = [
     path.join(rootPath, ".openharness", "skills"),
     ...(settings.skillDirs ?? []).map((skillDir) => path.resolve(rootPath, skillDir))
   ];
-  const discoveredWorkspaceSkills = kind === "chat" ? {} : await loadSkillsFromRoots(workspaceSkillRoots);
-  const skills = kind === "chat" ? {} : discoveredWorkspaceSkills;
-  const discoveredWorkspaceToolServers =
-    kind === "chat"
-      ? {}
-      : await loadWorkspaceToolServers(path.join(rootPath, ".openharness", "tools"), {
-          workingDirectory: rootPath
-        });
-  const toolServers = kind === "chat" ? {} : discoveredWorkspaceToolServers;
-  const hooks = kind === "chat" ? {} : await loadWorkspaceHooks(rootPath);
+  const discoveredWorkspaceSkills = await loadSkillsFromRoots(workspaceSkillRoots);
+  const skills = discoveredWorkspaceSkills;
+  const discoveredWorkspaceToolServers = await loadWorkspaceToolServers(path.join(rootPath, ".openharness", "tools"), {
+    workingDirectory: rootPath
+  });
+  const toolServers = discoveredWorkspaceToolServers;
+  const hooks = await loadWorkspaceHooks(rootPath);
   const projectAgentsMd = await loadProjectAgentsMd(rootPath);
   const name = path.basename(rootPath);
   const id = buildWorkspaceId(kind, name, rootPath);
@@ -1705,15 +1720,15 @@ export async function discoverWorkspace(
   return {
     id,
     name,
-    ...(settings.template ? { template: settings.template } : {}),
+    ...(settings.blueprint ? { blueprint: settings.blueprint } : {}),
     rootPath,
     executionPolicy: "local" as const,
     status: "active" as const,
     createdAt: timestamp,
     updatedAt: timestamp,
     kind,
-    readOnly: kind === "chat",
-    historyMirrorEnabled: kind === "project",
+    readOnly: false,
+    historyMirrorEnabled: true,
     defaultAgent: settings.defaultAgent,
     projectAgentsMd,
     settings,
@@ -1728,13 +1743,12 @@ export async function discoverWorkspace(
 }
 
 export async function discoverWorkspaces(input: {
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir" | "tool_dir" | "skill_dir">;
+  paths: Pick<ServerConfig["paths"], "workspace_dir" | "tool_dir" | "skill_dir">;
   platformModels: PlatformModelRegistry;
   platformAgents?: PlatformAgentRegistry;
-  onError?: ((input: { rootPath: string; kind: "project" | "chat"; error: unknown }) => void) | undefined;
+  onError?: ((input: { rootPath: string; kind: "project"; error: unknown }) => void) | undefined;
 }): Promise<DiscoveredWorkspace[]> {
   const projectEntries = await readDirectoryEntriesIfExists(input.paths.workspace_dir);
-  const chatEntries = await readDirectoryEntriesIfExists(input.paths.chat_dir);
 
   const projects = await Promise.all(
     projectEntries
@@ -1761,30 +1775,5 @@ export async function discoverWorkspaces(input: {
       })
   );
 
-  const chats = await Promise.all(
-    chatEntries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map(async (entry) => {
-        const rootPath = path.join(input.paths.chat_dir, entry.name);
-        try {
-          return await discoverWorkspace(rootPath, "chat", {
-            platformModels: input.platformModels,
-            ...(input.platformAgents ? { platformAgents: input.platformAgents } : {})
-          });
-        } catch (error) {
-          if (!input.onError) {
-            throw error;
-          }
-
-          input.onError({
-            rootPath,
-            kind: "chat",
-            error
-          });
-          return undefined;
-        }
-      })
-  );
-
-  return [...projects, ...chats].filter(isDefined);
+  return projects.filter(isDefined);
 }

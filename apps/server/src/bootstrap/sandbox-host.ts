@@ -23,7 +23,7 @@ export interface SandboxHostDiagnostics {
  * workspace incrementally adopts the shared contract surface.
  */
 export interface SandboxHost {
-  providerKind: "self_hosted" | "e2b_compatible";
+  providerKind: "self_hosted" | "e2b";
   workspaceCommandExecutor: ReturnType<typeof createLocalWorkspaceCommandExecutor>;
   workspaceFileSystem: ReturnType<typeof createLocalWorkspaceFileSystem>;
   workspaceExecutionProvider: {

@@ -5,7 +5,7 @@ import path from "node:path";
 import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import type { ServerConfig } from "@oah/config";
 
-export type ManagedPathKey = "workspace" | "chat" | "template" | "model" | "tool" | "skill" | "archive";
+export type ManagedPathKey = "workspace" | "blueprint" | "model" | "tool" | "skill";
 type ObjectStorageConfig = NonNullable<ServerConfig["object_storage"]> & {
   managed_paths?: ManagedPathKey[] | undefined;
 };
@@ -37,12 +37,10 @@ interface ManagedPathMapping {
 
 const DEFAULT_KEY_PREFIXES: Record<ManagedPathKey, string> = {
   workspace: "workspace",
-  chat: "chat",
-  template: "template",
+  blueprint: "blueprint",
   model: "model",
   tool: "tool",
-  skill: "skill",
-  archive: "archive"
+  skill: "skill"
 };
 
 const DEFAULT_MANAGED_PATHS = Object.keys(DEFAULT_KEY_PREFIXES) as ManagedPathKey[];
@@ -361,13 +359,13 @@ export class ObjectStorageMirrorController {
     return this.#mappings.length > 0;
   }
 
-  managedWorkspaceExternalRef(rootPath: string, kind: "project" | "chat", paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir">): string | undefined {
-    const mapping = this.#mappings.find((candidate) => candidate.key === (kind === "chat" ? "chat" : "workspace"));
+  managedWorkspaceExternalRef(rootPath: string, kind: "project", paths: Pick<ServerConfig["paths"], "workspace_dir">): string | undefined {
+    const mapping = this.#mappings.find((candidate) => candidate.key === "workspace");
     if (!mapping) {
       return undefined;
     }
 
-    const baseDir = kind === "chat" ? paths.chat_dir : paths.workspace_dir;
+    const baseDir = paths.workspace_dir;
     const relative = path.relative(baseDir, rootPath);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
       return undefined;

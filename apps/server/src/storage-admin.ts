@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import type { Pool } from "pg";
+import { Pool } from "pg";
 import { createClient } from "redis";
 
 import { AppError } from "@oah/runtime-core";
@@ -23,12 +23,16 @@ import {
   type RedisWorkerRegistryEntry
 } from "@oah/storage-redis";
 
+import { buildServiceDatabaseConnectionString } from "./bootstrap/service-routed-postgres.js";
+
 type RedisInspectorClient = ReturnType<typeof createClient>;
 type PostgresTableConfigName = keyof typeof POSTGRES_TABLE_CONFIG;
 type WorkerRegistryInspector = {
   listActive(nowMs?: number): Promise<RedisWorkerRegistryEntry[]>;
   close?(): Promise<void>;
 };
+
+type PostgresPoolFactory = (options: { connectionString: string }) => Pool;
 
 const POSTGRES_TABLE_CONFIG = {
   workspaces: {
@@ -124,6 +128,19 @@ const POSTGRES_TABLE_FILTER_COLUMNS: Record<
     workspaceId: "workspace_id"
   }
 };
+
+function normalizeServiceName(serviceName: string | undefined): string | undefined {
+  const trimmed = serviceName?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed === "@default") {
+    return "@default";
+  }
+
+  return trimmed.toLowerCase();
+}
 
 function decodeJsonish(value: string): unknown {
   const trimmed = value.trim();
@@ -275,12 +292,13 @@ async function summarizeArchiveExportDirectory(exportRoot: string): Promise<{
 }
 
 export interface StorageAdmin {
-  overview(): Promise<StorageOverview>;
+  overview(options?: { serviceName?: string | undefined }): Promise<StorageOverview>;
   postgresTable(
     table: StoragePostgresTableName,
     options: {
       limit: number;
       offset?: number | undefined;
+      serviceName?: string | undefined;
       q?: string | undefined;
       workspaceId?: string | undefined;
       sessionId?: string | undefined;
@@ -313,6 +331,8 @@ export interface StorageAdmin {
 
 export function createStorageAdmin(options: {
   postgresPool?: Pool | undefined;
+  postgresConnectionString?: string | undefined;
+  postgresPoolFactory?: PostgresPoolFactory | undefined;
   redisUrl?: string | undefined;
   redisAvailable: boolean;
   redisEventBusEnabled: boolean;
@@ -330,10 +350,12 @@ export function createStorageAdmin(options: {
   };
   const keyPrefix = options.keyPrefix ?? "oah";
   const postgresPool = options.postgresPool;
+  const postgresPoolFactory = options.postgresPoolFactory ?? ((input: { connectionString: string }) => new Pool(input));
   const postgresConfigured = Boolean(postgresPool);
   const postgresPrimary = Boolean(postgresPool);
   let redisClientPromise: Promise<RedisInspectorClient | undefined> | undefined;
   let workerRegistryPromise: Promise<WorkerRegistryInspector | undefined> | undefined;
+  const postgresServicePools = new Map<string, Promise<Pool>>();
 
   async function getRedisClient(): Promise<RedisInspectorClient | undefined> {
     if (!options.redisUrl) {
@@ -363,6 +385,34 @@ export function createStorageAdmin(options: {
     }
 
     return postgresPool;
+  }
+
+  async function getPostgresPoolForService(serviceName: string | undefined): Promise<Pool> {
+    const normalizedServiceName = normalizeServiceName(serviceName);
+    if (!normalizedServiceName || normalizedServiceName === "@default") {
+      return requirePostgresPool();
+    }
+
+    if (!options.postgresConnectionString?.trim()) {
+      throw new AppError(
+        501,
+        "postgres_service_scope_unavailable",
+        "Postgres service-scoped inspection is unavailable because the base connection string is not configured."
+      );
+    }
+
+    if (!postgresServicePools.has(normalizedServiceName)) {
+      postgresServicePools.set(
+        normalizedServiceName,
+        Promise.resolve(
+          postgresPoolFactory({
+            connectionString: buildServiceDatabaseConnectionString(options.postgresConnectionString, normalizedServiceName)
+          })
+        )
+      );
+    }
+
+    return postgresServicePools.get(normalizedServiceName)!;
   }
 
   async function requireRedisClient(): Promise<RedisInspectorClient> {
@@ -397,13 +447,14 @@ export function createStorageAdmin(options: {
   }
 
   return {
-    async overview() {
-      const postgresSummary = postgresPool
+    async overview(input) {
+      const selectedPostgresPool = postgresPool ? await getPostgresPoolForService(input?.serviceName) : undefined;
+      const postgresSummary = selectedPostgresPool
         ? await Promise.all([
-            postgresPool.query<{ database: string }>("select current_database() as database"),
+            selectedPostgresPool.query<{ database: string }>("select current_database() as database"),
             Promise.all(
               (Object.keys(POSTGRES_TABLE_CONFIG) as StoragePostgresTableName[]).map(async (table) => {
-                const count = await postgresPool.query<{ count: string }>(`select count(*)::text as count from ${table}`);
+                const count = await selectedPostgresPool.query<{ count: string }>(`select count(*)::text as count from ${table}`);
                 const tableKey = table as PostgresTableConfigName;
                 return {
                   name: table,
@@ -413,14 +464,14 @@ export function createStorageAdmin(options: {
                 };
               })
             ),
-            postgresPool.query<{ count: string; oldestOccurredAt: string | null; newestOccurredAt: string | null }>(
+            selectedPostgresPool.query<{ count: string; oldestOccurredAt: string | null; newestOccurredAt: string | null }>(
               `select
                  count(*)::text as count,
                  min(occurred_at)::text as "oldestOccurredAt",
                  max(occurred_at)::text as "newestOccurredAt"
                from history_events`
             ),
-            postgresPool.query<{ rowCount: string; pendingExports: string; exportedRows: string; oldestPendingArchiveDate: string | null; newestExportedAt: string | null }>(
+            selectedPostgresPool.query<{ rowCount: string; pendingExports: string; exportedRows: string; oldestPendingArchiveDate: string | null; newestExportedAt: string | null }>(
               `select
                  count(*)::text as "rowCount",
                  count(*) filter (where exported_at is null)::text as "pendingExports",
@@ -429,7 +480,7 @@ export function createStorageAdmin(options: {
                  max(exported_at)::text as "newestExportedAt"
                from archives`
             ),
-            postgresPool.query<{
+            selectedPostgresPool.query<{
               trackedRuns: string;
               quarantinedRuns: string;
               requeuedRuns: string;
@@ -450,7 +501,7 @@ export function createStorageAdmin(options: {
                  max(coalesce(ended_at, heartbeat_at, started_at, created_at)::text) filter (where coalesce(metadata->'recovery'->>'state', '') <> '') as "newestRecoveredAt"
                from runs`
             ),
-            postgresPool.query<{ reason: string | null; count: string }>(
+            selectedPostgresPool.query<{ reason: string | null; count: string }>(
               `select
                  coalesce(nullif(metadata->'recovery'->>'reason', ''), 'unknown') as reason,
                  count(*)::text as count
@@ -602,7 +653,7 @@ export function createStorageAdmin(options: {
     },
 
     async postgresTable(table, options) {
-      const pool = await requirePostgresPool();
+      const pool = await getPostgresPoolForService(options.serviceName);
       const config = POSTGRES_TABLE_CONFIG[table as PostgresTableConfigName];
       const filterColumns = POSTGRES_TABLE_FILTER_COLUMNS[table];
       const safeLimit = Math.max(1, Math.min(200, options.limit));
@@ -663,6 +714,7 @@ export function createStorageAdmin(options: {
           )
         ),
         ...(options.q?.trim() ||
+        options.serviceName?.trim() ||
         options.workspaceId?.trim() ||
         options.sessionId?.trim() ||
         options.runId?.trim() ||
@@ -671,6 +723,7 @@ export function createStorageAdmin(options: {
         options.recoveryState?.trim()
           ? {
               appliedFilters: {
+                ...(options.serviceName?.trim() ? { serviceName: normalizeServiceName(options.serviceName) } : {}),
                 ...(options.q?.trim() ? { q: options.q.trim() } : {}),
                 ...(options.workspaceId?.trim() ? { workspaceId: options.workspaceId.trim() } : {}),
                 ...(options.sessionId?.trim() ? { sessionId: options.sessionId.trim() } : {}),
@@ -936,6 +989,13 @@ export function createStorageAdmin(options: {
       if (workerRegistry && workerRegistry !== options.workerRegistry && typeof workerRegistry.close === "function") {
         await workerRegistry.close();
       }
+
+      const servicePools = await Promise.allSettled(postgresServicePools.values());
+      await Promise.allSettled(
+        servicePools
+          .filter((result): result is PromiseFulfilledResult<Pool> => result.status === "fulfilled")
+          .map((result) => result.value.end())
+      );
 
       const client = await getRedisClient();
       if (client?.isOpen) {

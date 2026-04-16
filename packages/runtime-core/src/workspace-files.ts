@@ -195,7 +195,7 @@ export class WorkspaceFileService {
   }
 
   assertWorkspaceMutable(workspace: WorkspaceRecord): void {
-    if (workspace.readOnly || workspace.kind === "chat") {
+    if (workspace.readOnly) {
       throw new AppError(403, "workspace_read_only", `Workspace ${workspace.id} is read-only.`);
     }
   }

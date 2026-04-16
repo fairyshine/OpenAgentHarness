@@ -44,12 +44,17 @@ export interface ExecutionBackend {
 
 ## Chat vs Project Workspace
 
-| 维度 | `project` | `chat` |
+| 维度 | 统一 workspace |
 | --- | --- | --- |
 | Backend | 创建 `LocalWorkspaceBackend` session | 不创建 |
 | Shell / 文件 / Native tools | 按 agent allowlist 暴露 | 全部禁止 |
 | Actions / Skills / Hooks | 按配置加载 | 不加载 |
 
-## SandboxBackend（计划中）
+## Sandbox Backend
 
-支持容器 / VM / Firecracker / 远程 runner，相同接口，`prepare()` 创建沙箱，`dispose()` 销毁。
+服务端通过统一的 sandbox backend 适配层屏蔽 provider 差异。当前 provider 词汇统一为：
+
+- `self_hosted`
+- `e2b`
+
+上层仍只消费统一的 `/sandboxes` API 与 runtime host contract。切换 provider 应尽量通过 `server.yaml` 中的 `sandbox.provider` 完成，而不是改动 Web 或调用方接口。

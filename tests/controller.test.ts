@@ -637,12 +637,10 @@ describe("controller", () => {
       storage: { redis_url: "redis://local/0" },
       paths: {
         workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat",
-        template_dir: "/tmp/templates",
+        blueprint_dir: "/tmp/blueprints",
         model_dir: "/tmp/models",
         tool_dir: "/tmp/tools",
-        skill_dir: "/tmp/skills",
-        archive_dir: "/tmp/archives"
+        skill_dir: "/tmp/skills"
       },
       workers: {
         standalone: {
@@ -1294,12 +1292,10 @@ describe("controller", () => {
       storage: { redis_url: "redis://local/0" },
       paths: {
         workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat",
-        template_dir: "/tmp/templates",
+        blueprint_dir: "/tmp/blueprints",
         model_dir: "/tmp/models",
         tool_dir: "/tmp/tools",
-        skill_dir: "/tmp/skills",
-        archive_dir: "/tmp/archives"
+        skill_dir: "/tmp/skills"
       },
       workers: {
         controller: {
@@ -1341,12 +1337,10 @@ describe("controller", () => {
       storage: { redis_url: "redis://local/0" },
       paths: {
         workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat",
-        template_dir: "/tmp/templates",
+        blueprint_dir: "/tmp/blueprints",
         model_dir: "/tmp/models",
         tool_dir: "/tmp/tools",
-        skill_dir: "/tmp/skills",
-        archive_dir: "/tmp/archives"
+        skill_dir: "/tmp/skills"
       },
       workers: {
         controller: {
@@ -1386,12 +1380,10 @@ describe("controller", () => {
       storage: { redis_url: "redis://local/0" },
       paths: {
         workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat",
-        template_dir: "/tmp/templates",
+        blueprint_dir: "/tmp/blueprints",
         model_dir: "/tmp/models",
         tool_dir: "/tmp/tools",
-        skill_dir: "/tmp/skills",
-        archive_dir: "/tmp/archives"
+        skill_dir: "/tmp/skills"
       },
       workers: {
         controller: {
@@ -1423,12 +1415,10 @@ describe("controller", () => {
       storage: { redis_url: "redis://local/0" },
       paths: {
         workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat",
-        template_dir: "/tmp/templates",
+        blueprint_dir: "/tmp/blueprints",
         model_dir: "/tmp/models",
         tool_dir: "/tmp/tools",
-        skill_dir: "/tmp/skills",
-        archive_dir: "/tmp/archives"
+        skill_dir: "/tmp/skills"
       },
       workers: {
         controller: {

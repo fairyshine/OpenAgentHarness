@@ -13,12 +13,10 @@ config:
 
     paths:
       workspace_dir: /var/lib/oah/workspaces
-      chat_dir: /var/lib/oah/chat-workspaces
-      template_dir: /var/lib/oah/templates
+      blueprint_dir: /var/lib/oah/blueprints
       model_dir: /var/lib/oah/models
       tool_dir: /var/lib/oah/tools
       skill_dir: /var/lib/oah/skills
-      archive_dir: /var/lib/oah/archives
 
     workers:
       standalone:

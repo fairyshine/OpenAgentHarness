@@ -52,12 +52,13 @@ system_prompt:
 | --- | --- | --- |
 | `default_agent` | No | Default primary agent. Must exist and not be a pure `subagent` |
 | `skill_dirs` | No | Additional skill search directories |
-| `template_imports` | No | Tools/skills to import during template initialization |
+| `blueprint` | No | Records which blueprint the workspace was initialized from |
+| `imports` | No | Tools/skills to import during blueprint initialization |
 | `system_prompt` | No | Workspace-level system prompt configuration |
 
 !!! tip
 
-    Both `project` and `chat` workspaces use the same structure. A `chat` workspace will not gain execution permissions even if settings.yaml references actions or tools.
+    Workspaces use one shared structure. Actions and tools become available according to the workspace declaration and runtime capabilities.
 
 ## `skill_dirs`
 
@@ -144,10 +145,10 @@ Available segments: `base`, `llm_optimized`, `agent`, `actions`, `project_agents
 | `skills` | Auto-skipped if the current agent has no visible skills |
 | `include_environment` | Whether to append a runtime environment summary (default: `false`) |
 
-## `template_imports`
+## `imports`
 
 ```yaml
-template_imports:
+imports:
   tools:
     - docs-server
   skills:
@@ -159,4 +160,4 @@ template_imports:
 | `tools` | Platform tools to copy into the workspace from `paths.tool_dir` |
 | `skills` | Platform skills to copy into the workspace from `paths.skill_dir` |
 
-Only used during template initialization. After import, the workspace uses its local copy and no longer depends on the platform directory. Referencing a nonexistent tool or skill causes initialization to fail.
+Only used during blueprint initialization. After import, the workspace uses its local copy and no longer depends on the platform directory. Referencing a nonexistent tool or skill causes initialization to fail.

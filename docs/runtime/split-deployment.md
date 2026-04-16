@@ -70,9 +70,6 @@ worker Pod 侧至少需要保证这些目录可用：
 - `paths.workspace_dir`
   - managed workspace 根目录
   - 也承载 materialization cache 和 sqlite shadow state
-- `paths.chat_dir`
-- `paths.archive_dir`
-  - 如果启用归档导出
 
 当 workspace externalRef 指向对象存储时，还需要：
 
@@ -100,7 +97,7 @@ worker Pod 侧至少需要保证这些目录可用：
 - `deploy/charts/open-agent-harness` 下的最小 Helm chart，可统一管理 split deployment、RBAC、ConfigMap 与可选 `ServiceMonitor`
 - Helm chart 当前也已支持 existing ConfigMap、worker PVC workspace volume，以及 per-component resources / securityContext / envFrom / scheduling 参数
 - Helm chart 当前还已支持 `PodDisruptionBudget`、`topologySpreadConstraints`、`priorityClassName` 与 `api-server` Ingress
-- chart 当前也已附带 `dev / staging / prod` 三套 values 样例，作为多环境起步模板
+- chart 当前也已附带 `dev / staging / prod` 三套 values 样例，作为多环境起步基线
 - 仓库根目录下的生产 `Dockerfile` 与 GHCR 发布 workflow
 - GHCR workflow 当前也已补上 `sbom/provenance` 与 Cosign keyless signing
 - Deployment rollout 策略现在已经显式写入 manifests，而不是依赖 K8S 默认值

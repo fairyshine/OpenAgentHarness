@@ -1,6 +1,6 @@
 # Project Workspace
 
-这是一个常规项目 workspace 模板。
+这是一个常规项目 workspace 蓝图。
 
 你可以在这里补充：
 

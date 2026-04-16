@@ -4,21 +4,20 @@ import { access, rm } from "node:fs/promises";
 
 import type { HealthReport, ReadinessReport } from "@oah/api-contracts";
 import {
-  deleteWorkspaceTemplate,
+  deleteWorkspaceBlueprint,
   discoverWorkspace,
   discoverWorkspaces,
-  initializeWorkspaceFromTemplate,
-  listWorkspaceTemplates,
+  initializeWorkspaceFromBlueprint,
+  listWorkspaceBlueprints,
   loadPlatformModels,
   loadServerConfig,
   resolveWorkspaceCreationRoot,
-  uploadWorkspaceTemplate
+  uploadWorkspaceBlueprint
 } from "@oah/config";
 import type { ServerConfig } from "@oah/config";
 import { AppError, RuntimeService, createId, parseCursor } from "@oah/runtime-core";
 import type { RuntimeLogger, SandboxHostProviderKind, WorkspaceRecord } from "@oah/runtime-core";
 import { AiSdkModelGateway } from "@oah/model-gateway";
-import { createPostgresRuntimePersistence } from "@oah/storage-postgres";
 import { createSQLiteRuntimePersistence, sqliteWorkspaceHistoryDbPath } from "@oah/storage-sqlite";
 import {
   FanoutSessionEventStore,
@@ -31,10 +30,12 @@ import {
 import {
   WorkspaceMaterializationManager
 } from "./bootstrap/workspace-materialization.js";
-import { createMaterializationSandboxHost, type SandboxHost } from "./bootstrap/sandbox-host.js";
+import type { SandboxHost } from "./bootstrap/sandbox-host.js";
+import { createConfiguredSandboxHost } from "./bootstrap/configured-sandbox-host.js";
 import { createWorkerRuntimeControl, type WorkerRuntimeStatus } from "./bootstrap/worker-runtime.js";
 import { createDirectoryObjectStore, ObjectStorageMirrorController } from "./object-storage.js";
 import { appendRuntimeLogEvent, buildRuntimeConsoleLogger } from "./runtime-console.js";
+import { createSandboxBackedWorkspaceInitializer } from "./bootstrap/sandbox-backed-workspace-initializer.js";
 import {
   buildSingleWorkspaceConfig,
   describeRuntimeProcess,
@@ -62,18 +63,38 @@ import {
 } from "./bootstrap/workspace-registry.js";
 import { createBuiltInPlatformAgents } from "./platform-agents.js";
 import { createStorageAdmin, type StorageAdmin } from "./storage-admin.js";
+import { createServiceRoutedPostgresRuntimePersistence } from "./bootstrap/service-routed-postgres.js";
+
+function resolveArchiveExportRoot(workspaceDir: string) {
+  return path.join(workspaceDir, ".openharness", "archives");
+}
 
 function selectPlacementPreferredWorkerId(placement: {
+  state?: "unassigned" | "active" | "idle" | "draining" | "evicted" | undefined;
+  userId?: string | undefined;
   ownerWorkerId?: string | undefined;
   preferredWorkerId?: string | undefined;
 } | null | undefined): string | undefined {
+  const userId = placement?.userId?.trim();
+  if (!userId) {
+    return undefined;
+  }
+
+  const preferredWorkerId = placement?.preferredWorkerId?.trim();
+  if (preferredWorkerId) {
+    return preferredWorkerId;
+  }
+
+  if (placement?.state === "evicted" || placement?.state === "unassigned") {
+    return undefined;
+  }
+
   const ownerWorkerId = placement?.ownerWorkerId?.trim();
   if (ownerWorkerId) {
     return ownerWorkerId;
   }
 
-  const preferredWorkerId = placement?.preferredWorkerId?.trim();
-  return preferredWorkerId && preferredWorkerId.length > 0 ? preferredWorkerId : undefined;
+  return undefined;
 }
 
 interface PlacementAwareSessionRunQueueLike {
@@ -84,7 +105,7 @@ interface PlacementAwareSessionRunQueueLike {
   ): Promise<void>;
   claimNextSession(
     timeoutMs?: number | undefined,
-    input?: { workerId?: string | undefined }
+    input?: { workerId?: string | undefined; runtimeInstanceId?: string | undefined }
   ): Promise<string | undefined>;
   readyQueueLength(): Promise<number>;
   inspectReadyQueue(nowMs?: number | undefined): Promise<{
@@ -109,11 +130,13 @@ export function createPlacementAwareSessionRunQueue<TQueue extends PlacementAwar
   runRepository: {
     getById(runId: string): Promise<{ workspaceId: string } | null>;
   };
-  workspacePlacementRegistry?: {
-    getByWorkspaceId?(workspaceId: string): Promise<{
-      ownerWorkerId?: string | undefined;
-      preferredWorkerId?: string | undefined;
-    } | undefined>;
+    workspacePlacementRegistry?: {
+      getByWorkspaceId?(workspaceId: string): Promise<{
+        state?: "unassigned" | "active" | "idle" | "draining" | "evicted" | undefined;
+        userId?: string | undefined;
+        ownerWorkerId?: string | undefined;
+        preferredWorkerId?: string | undefined;
+      } | undefined>;
   } | undefined;
 }): TQueue {
   const queue = options.queue;
@@ -265,10 +288,16 @@ export interface BootstrappedRuntime {
     | {
         kind: "single";
         workspaceId: string;
-        workspaceKind: "project" | "chat";
+        workspaceKind: "project";
         rootPath: string;
       };
-  listWorkspaceTemplates?: () => Promise<Array<{ name: string }>>;
+  listWorkspaceBlueprints?: () => Promise<Array<{ name: string }>>;
+  uploadWorkspaceBlueprint?: (input: {
+    blueprintName: string;
+    zipBuffer: Buffer;
+    overwrite?: boolean | undefined;
+  }) => Promise<{ name: string }>;
+  deleteWorkspaceBlueprint?: (input: { blueprintName: string }) => Promise<void>;
   listPlatformModels?: () => Promise<
     Array<{
       id: string;
@@ -286,9 +315,11 @@ export interface BootstrappedRuntime {
   ) => (() => void);
   importWorkspace?: (input: {
     rootPath: string;
-    kind?: "project" | "chat";
+    kind?: "project";
     name?: string;
     externalRef?: string;
+    ownerId?: string;
+    serviceName?: string;
   }) => Promise<import("@oah/api-contracts").Workspace>;
   resolveWorkspaceOwnership?: (workspaceId: string) => Promise<{
     workspaceId: string;
@@ -336,6 +367,15 @@ async function fileExists(targetPath: string): Promise<boolean> {
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   return value !== undefined && /^(1|true|yes|on)$/iu.test(value.trim());
+}
+
+function isRemoteSandboxProvider(config: Pick<ServerConfig, "sandbox">): boolean {
+  if (config.sandbox?.provider === "e2b") {
+    return true;
+  }
+
+  const selfHostedBaseUrl = config.sandbox?.self_hosted?.base_url?.trim();
+  return Boolean(selfHostedBaseUrl);
 }
 
 function resolveInternalBaseUrl(config: Pick<ServerConfig, "server">): string | undefined {
@@ -406,11 +446,10 @@ function serializePlatformModels(models: PlatformModelRegistry): string {
 
 export async function cleanupWorkspaceLocalArtifacts(input: {
   workspace: WorkspaceRecord;
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "chat_dir">;
+  paths: Pick<ServerConfig["paths"], "workspace_dir">;
   sqliteShadowRoot: string;
 }): Promise<WorkspaceLocalArtifactCleanupStatus> {
-  const managedRootDir = input.workspace.kind === "chat" ? input.paths.chat_dir : input.paths.workspace_dir;
-  if (isManagedWorkspaceRoot(input.workspace.rootPath, managedRootDir)) {
+  if (isManagedWorkspaceRoot(input.workspace.rootPath, input.paths.workspace_dir)) {
     await rm(input.workspace.rootPath, {
       recursive: true,
       force: true
@@ -452,10 +491,10 @@ export async function cleanupWorkspaceLocalArtifacts(input: {
 
 export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<BootstrappedRuntime> {
   const argv = options.argv ?? process.argv.slice(2);
-  const currentWorkerId = `${process.pid}`;
   const startWorker = options.startWorker ?? false;
   const processKind = options.processKind ?? "api";
   const runtimeInstanceId = resolveRuntimeInstanceId(processKind);
+  const currentWorkerId = runtimeInstanceId;
   const singleWorkspace = parseSingleWorkspaceOptions(argv);
   const requestedConfig = parseConfigPath(argv);
   const config =
@@ -491,7 +530,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   const logModelLoadError = (filePath: string, error: unknown): void => {
     console.error(`[oah-bootstrap] Failed to load model definition from ${filePath}; skipping entry.`, error);
   };
-  const logWorkspaceDiscoveryError = (rootPath: string, kind: "project" | "chat", error: unknown): void => {
+  const logWorkspaceDiscoveryError = (rootPath: string, kind: "project", error: unknown): void => {
     console.error(`[oah-bootstrap] Failed to discover ${kind} workspace at ${rootPath}; skipping workspace.`, error);
   };
   const models = await loadPlatformModels(modelDir, {
@@ -522,7 +561,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
             paths: config.paths,
             platformModels: models,
             platformAgents,
-            onError: ({ rootPath, kind, error }: { rootPath: string; kind: "project" | "chat"; error: unknown }) => {
+            onError: ({ rootPath, kind, error }: { rootPath: string; kind: "project"; error: unknown }) => {
               logWorkspaceDiscoveryError(rootPath, kind, error);
             }
           } as Parameters<typeof discoverWorkspaces>[0])
@@ -532,8 +571,8 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   const postgresConfigured = Boolean(config.storage.postgres_url && config.storage.postgres_url.trim().length > 0);
   const sqliteShadowRoot = path.join(config.paths.workspace_dir, ".openharness", "data", "workspace-state");
   const persistence = postgresConfigured
-    ? await createPostgresRuntimePersistence({
-        connectionString: config.storage.postgres_url
+    ? await createServiceRoutedPostgresRuntimePersistence({
+        connectionString: config.storage.postgres_url!
       }).catch((error) => {
         throw new Error(
           `Configured PostgreSQL persistence is unavailable: ${error instanceof Error ? error.message : "unknown error"}`
@@ -628,21 +667,23 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         ...(workspaceMaterializationManager ? { workspaceMaterializationManager } : {})
       })
     : undefined;
-  if (!sandboxHost && workspaceMaterializationManager) {
-    sandboxHost = createMaterializationSandboxHost({
-      materializationManager: workspaceMaterializationManager
+  if (!sandboxHost) {
+    sandboxHost = await createConfiguredSandboxHost({
+      config,
+      ...(workspaceMaterializationManager ? { workspaceMaterializationManager } : {})
     });
   }
   const redisConfigured = Boolean(config.storage.redis_url && config.storage.redis_url.trim().length > 0);
   const storageAdmin = createStorageAdmin({
     ...("pool" in persistence ? { postgresPool: persistence.pool } : {}),
+    ...(config.storage.postgres_url ? { postgresConnectionString: config.storage.postgres_url } : {}),
     redisUrl: config.storage.redis_url,
     redisAvailable: redisConfigured,
     redisEventBusEnabled: Boolean(redisBus),
     redisRunQueueEnabled: Boolean(redisRunQueue),
     ...(redisWorkspacePlacementRegistry ? { workspacePlacementRegistry: redisWorkspacePlacementRegistry } : {}),
     archiveExportEnabled: false,
-    archiveExportRoot: config.paths.archive_dir
+    archiveExportRoot: resolveArchiveExportRoot(config.paths.workspace_dir)
   });
   const runtimeProcess = describeRuntimeProcess({
     processKind,
@@ -742,9 +783,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               })
             ).map((workspace) => withManagedWorkspaceExternalRef(workspace as WorkspaceRecord, config, objectStorageMirror));
             const persistedWorkspaces = await listAllWorkspaces(persistence.workspaceRepository);
-            const staticWorkspaces = persistedWorkspaces.filter(
-              (workspace) => workspace.kind === "chat" || !isManagedWorkspace(workspace, config.paths)
-            );
+            const staticWorkspaces = persistedWorkspaces.filter((workspace) => !isManagedWorkspace(workspace, config.paths));
             const latestDiscoveredWorkspaces = [...latestProjectWorkspaces, ...staticWorkspaces];
             const staleWorkspaceIds = findManagedWorkspaceIdsToDelete(latestDiscoveredWorkspaces, persistedWorkspaces, config.paths);
             const staleWorkspaces = persistedWorkspaces.filter((workspace) => staleWorkspaceIds.includes(workspace.id));
@@ -857,6 +896,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
             createdAt: workspace.createdAt,
             updatedAt: workspace.updatedAt,
             historyMirrorEnabled: workspace.historyMirrorEnabled,
+            ...(workspace.serviceName ? { serviceName: workspace.serviceName } : {}),
             ...(workspace.externalRef ? { externalRef: workspace.externalRef } : {})
           } as WorkspaceRecord;
         } catch (error) {
@@ -989,7 +1029,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           workspaceFileAccessProvider: sandboxHost.workspaceFileAccessProvider
         }
       : {}),
-    ...(singleWorkspace === undefined
+    ...(singleWorkspace === undefined && !isRemoteSandboxProvider(config)
       ? {
           workspaceDeletionHandler: {
             async deleteWorkspace(workspace) {
@@ -1008,40 +1048,50 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     ...(singleWorkspace === undefined
       ? {
           workspaceInitializer: {
-            async initialize(input) {
-              const workspaceId = createId("ws");
-              const workspaceRoot = resolveWorkspaceCreationRoot({
-                workspaceDir: config.paths.workspace_dir,
-                name: input.name,
-                workspaceId,
-                rootPath: input.rootPath
-              });
-
-              await initializeWorkspaceFromTemplate(
-                {
-                  templateDir: config.paths.template_dir,
-                  templateName: input.template,
-                  rootPath: workspaceRoot,
+            initialize: isRemoteSandboxProvider(config) && sandboxHost
+              ? createSandboxBackedWorkspaceInitializer({
+                  blueprintDir: config.paths.blueprint_dir,
                   platformToolDir: config.paths.tool_dir,
                   platformSkillDir: config.paths.skill_dir,
-                  agentsMd: input.agentsMd,
-                  toolServers: (input as typeof input & { toolServers?: Record<string, Record<string, unknown>> | undefined }).toolServers,
-                  skills: input.skills
-                } as Parameters<typeof initializeWorkspaceFromTemplate>[0]
-              );
+                  toolDir,
+                  platformModels: models,
+                  platformAgents,
+                  sandboxHost
+                }).initialize
+              : async initialize(input) {
+                  const workspaceId = createId("ws");
+                  const workspaceRoot = resolveWorkspaceCreationRoot({
+                    workspaceDir: config.paths.workspace_dir,
+                    name: input.name,
+                    workspaceId,
+                    rootPath: input.rootPath
+                  });
 
-              const discovered = await discoverWorkspace(workspaceRoot, "project", {
-                platformModels: models,
-                platformAgents,
-                platformSkillDir: config.paths.skill_dir,
-                platformToolDir: toolDir
-              } as Parameters<typeof discoverWorkspace>[2]);
+                  await initializeWorkspaceFromBlueprint(
+                    {
+                      blueprintDir: config.paths.blueprint_dir,
+                      blueprintName: input.blueprint,
+                      rootPath: workspaceRoot,
+                      platformToolDir: config.paths.tool_dir,
+                      platformSkillDir: config.paths.skill_dir,
+                      agentsMd: input.agentsMd,
+                      toolServers: (input as typeof input & { toolServers?: Record<string, Record<string, unknown>> | undefined }).toolServers,
+                      skills: input.skills
+                    } as Parameters<typeof initializeWorkspaceFromBlueprint>[0]
+                  );
 
-              return {
-                ...discovered,
-                id: workspaceId
-              } as WorkspaceRecord;
-            }
+                  const discovered = await discoverWorkspace(workspaceRoot, "project", {
+                    platformModels: models,
+                    platformAgents,
+                    platformSkillDir: config.paths.skill_dir,
+                    platformToolDir: toolDir
+                  } as Parameters<typeof discoverWorkspace>[2]);
+
+                  return {
+                    ...discovered,
+                    id: workspaceId
+                  } as WorkspaceRecord;
+                }
           }
         }
       : {})
@@ -1126,48 +1176,47 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         platformModelSnapshotListeners.delete(listener);
       };
     },
-    ...(singleWorkspace === undefined
+    ...(singleWorkspace === undefined && !isRemoteSandboxProvider(config)
       ? {
-          listWorkspaceTemplates: () => listWorkspaceTemplates(config.paths.template_dir),
-          uploadWorkspaceTemplate: (input: { templateName: string; zipBuffer: Buffer; overwrite?: boolean | undefined }) =>
-            uploadWorkspaceTemplate({
-              templateDir: config.paths.template_dir,
-              templateName: input.templateName,
+          listWorkspaceBlueprints: () => listWorkspaceBlueprints(config.paths.blueprint_dir),
+          uploadWorkspaceBlueprint: (input: { blueprintName: string; zipBuffer: Buffer; overwrite?: boolean | undefined }) =>
+            uploadWorkspaceBlueprint({
+              blueprintDir: config.paths.blueprint_dir,
+              blueprintName: input.blueprintName,
               zipBuffer: input.zipBuffer,
               ...(input.overwrite !== undefined ? { overwrite: input.overwrite } : {})
             }),
-          deleteWorkspaceTemplate: (input: { templateName: string }) =>
-            deleteWorkspaceTemplate({
-              templateDir: config.paths.template_dir,
-              templateName: input.templateName
+          deleteWorkspaceBlueprint: (input: { blueprintName: string }) =>
+            deleteWorkspaceBlueprint({
+              blueprintDir: config.paths.blueprint_dir,
+              blueprintName: input.blueprintName
             }),
           async importWorkspace(input) {
-            const allowedDir = input.kind === "chat" ? config.paths.chat_dir : config.paths.workspace_dir;
             const resolvedRoot = path.resolve(input.rootPath);
-            const relativeToAllowed = path.relative(allowedDir, resolvedRoot);
+            const relativeToAllowed = path.relative(config.paths.workspace_dir, resolvedRoot);
             if (relativeToAllowed.startsWith("..") || path.isAbsolute(relativeToAllowed)) {
               throw new AppError(
                 403,
                 "workspace_path_not_allowed",
                 `rootPath "${input.rootPath}" resolves outside the allowed directory. ` +
-                  `Workspace imports must target paths within the configured ${input.kind === "chat" ? "chat_dir" : "workspace_dir"}.`
+                  "Workspace imports must target paths within the configured workspace_dir."
               );
             }
 
-            const discovered = await discoverWorkspace(input.rootPath, input.kind ?? "project", {
+            const discovered = await discoverWorkspace(input.rootPath, "project", {
               platformModels: models,
               platformAgents,
               platformSkillDir: config.paths.skill_dir,
               platformToolDir: toolDir
             } as Parameters<typeof discoverWorkspace>[2]);
             const existing = await workspaceRepository.getById(discovered.id);
-            const inferredExternalRef =
-              objectStorageMirror?.managedWorkspaceExternalRef(input.rootPath, input.kind ?? "project", config.paths);
+            const inferredExternalRef = objectStorageMirror?.managedWorkspaceExternalRef(input.rootPath, "project", config.paths);
             const persisted = await workspaceRepository.upsert({
               ...discovered,
               name: input.name ?? existing?.name ?? discovered.name,
               createdAt: existing?.createdAt ?? discovered.createdAt,
-              externalRef: input.externalRef ?? existing?.externalRef ?? inferredExternalRef
+              externalRef: input.externalRef ?? existing?.externalRef ?? inferredExternalRef,
+              ...(input.serviceName ? { serviceName: input.serviceName } : existing?.serviceName ? { serviceName: existing.serviceName } : {})
             });
             return runtimeService.getWorkspace(persisted.id);
           }

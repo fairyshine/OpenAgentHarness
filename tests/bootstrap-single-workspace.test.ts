@@ -82,22 +82,21 @@ describe("bootstrap single workspace mode", () => {
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const chatDir = path.join(tempDir, "chat-workspaces");
     const shadowRoot = path.join(workspaceDir, ".openharness", "data", "workspace-state");
     const externalProjectRoot = path.join(tempDir, "external-project");
-    const managedChatRoot = path.join(chatDir, "chat-demo");
+    const managedProjectRoot = path.join(workspaceDir, "managed-demo");
     const externalProjectDbPath = path.join(externalProjectRoot, ".openharness", "data", "history.db");
-    const shadowDbPath = path.join(shadowRoot, "ws_chat_external", "history.db");
+    const shadowDbPath = path.join(shadowRoot, "ws_external_read_only", "history.db");
 
     await Promise.all([
       mkdir(path.dirname(externalProjectDbPath), { recursive: true }),
       mkdir(path.dirname(shadowDbPath), { recursive: true }),
-      mkdir(managedChatRoot, { recursive: true })
+      mkdir(managedProjectRoot, { recursive: true })
     ]);
     await Promise.all([
       writeFile(externalProjectDbPath, "project-db", "utf8"),
-      writeFile(shadowDbPath, "chat-db", "utf8"),
-      writeFile(path.join(managedChatRoot, "note.txt"), "chat-root", "utf8")
+      writeFile(shadowDbPath, "shadow-db", "utf8"),
+      writeFile(path.join(managedProjectRoot, "note.txt"), "project-root", "utf8")
     ]);
 
     const projectCleanup = await cleanupWorkspaceLocalArtifacts({
@@ -135,23 +134,22 @@ describe("bootstrap single workspace mode", () => {
         }
       },
       paths: {
-        workspace_dir: workspaceDir,
-        chat_dir: chatDir
+        workspace_dir: workspaceDir
       },
       sqliteShadowRoot: shadowRoot
     });
-    const chatShadowCleanup = await cleanupWorkspaceLocalArtifacts({
+    const readOnlyProjectCleanup = await cleanupWorkspaceLocalArtifacts({
       workspace: {
-        id: "ws_chat_external",
-        name: "chat-external",
-        rootPath: path.join(tempDir, "external-chat"),
+        id: "ws_external_read_only",
+        name: "external-read-only",
+        rootPath: path.join(tempDir, "external-read-only"),
         executionPolicy: "local",
         status: "active",
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
-        kind: "chat",
+        kind: "project",
         readOnly: true,
-        historyMirrorEnabled: false,
+        historyMirrorEnabled: true,
         settings: {
           defaultAgent: "assistant",
           skillDirs: []
@@ -164,7 +162,7 @@ describe("bootstrap single workspace mode", () => {
         toolServers: {},
         hooks: {},
         catalog: {
-          workspaceId: "ws_chat_external",
+          workspaceId: "ws_external_read_only",
           agents: [],
           models: [],
           actions: [],
@@ -175,23 +173,22 @@ describe("bootstrap single workspace mode", () => {
         }
       },
       paths: {
-        workspace_dir: workspaceDir,
-        chat_dir: chatDir
+        workspace_dir: workspaceDir
       },
       sqliteShadowRoot: shadowRoot
     });
-    const managedChatCleanup = await cleanupWorkspaceLocalArtifacts({
+    const managedProjectCleanup = await cleanupWorkspaceLocalArtifacts({
       workspace: {
-        id: "ws_chat_managed",
-        name: "chat-managed",
-        rootPath: managedChatRoot,
+        id: "ws_managed_project",
+        name: "managed-project",
+        rootPath: managedProjectRoot,
         executionPolicy: "local",
         status: "active",
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
-        kind: "chat",
+        kind: "project",
         readOnly: false,
-        historyMirrorEnabled: false,
+        historyMirrorEnabled: true,
         settings: {
           defaultAgent: "assistant",
           skillDirs: []
@@ -204,7 +201,7 @@ describe("bootstrap single workspace mode", () => {
         toolServers: {},
         hooks: {},
         catalog: {
-          workspaceId: "ws_chat_managed",
+          workspaceId: "ws_managed_project",
           agents: [],
           models: [],
           actions: [],
@@ -215,19 +212,18 @@ describe("bootstrap single workspace mode", () => {
         }
       },
       paths: {
-        workspace_dir: workspaceDir,
-        chat_dir: chatDir
+        workspace_dir: workspaceDir
       },
       sqliteShadowRoot: shadowRoot
     });
 
     expect(projectCleanup.mode).toBe("history_db");
-    expect(chatShadowCleanup.mode).toBe("shadow_history_db");
-    expect(managedChatCleanup.mode).toBe("workspace_root");
+    expect(readOnlyProjectCleanup.mode).toBe("shadow_history_db");
+    expect(managedProjectCleanup.mode).toBe("workspace_root");
     await expect(access(externalProjectRoot)).resolves.toBeUndefined();
     await expect(access(externalProjectDbPath)).rejects.toBeDefined();
     await expect(access(shadowDbPath)).rejects.toBeDefined();
-    await expect(access(managedChatRoot)).rejects.toBeDefined();
+    await expect(access(managedProjectRoot)).rejects.toBeDefined();
   });
 
   it("reuses persisted workspace ids for rediscovered roots", async () => {
@@ -254,7 +250,7 @@ describe("bootstrap single workspace mode", () => {
       toolServers: {},
       hooks: {},
       catalog: {
-        workspaceId: "template",
+        workspaceId: "blueprint",
         agents: [],
         models: [],
         actions: [],
@@ -312,7 +308,7 @@ describe("bootstrap single workspace mode", () => {
         toolServers: {},
         hooks: {},
         catalog: {
-          workspaceId: "template",
+          workspaceId: "blueprint",
           agents: [],
           models: [],
           actions: [],
@@ -351,8 +347,7 @@ describe("bootstrap single workspace mode", () => {
         }
       ],
       {
-        workspace_dir: "/tmp/workspaces",
-        chat_dir: "/tmp/chat"
+        workspace_dir: "/tmp/workspaces"
       }
     );
 
@@ -395,7 +390,7 @@ openai-default:
         workspaceKind: "project",
         rootPath: workspaceRoot
       });
-      expect(runtime.listWorkspaceTemplates).toBeUndefined();
+      expect(runtime.listWorkspaceBlueprints).toBeUndefined();
       expect(runtime.importWorkspace).toBeUndefined();
 
       const workspacePage = await runtime.runtimeService.listWorkspaces(10);
@@ -406,7 +401,6 @@ openai-default:
         kind: "project"
       });
       expect(runtime.config.paths.model_dir).toBe(modelsDir);
-      expect(runtime.config.paths.archive_dir).toBe(path.join(path.dirname(workspaceRoot), ".openharness", "archives"));
       expect(runtime.config.llm.default_model).toBe("openai-default");
       await expect(runtime.healthReport()).resolves.toMatchObject({
         storage: {
@@ -543,8 +537,7 @@ openai-default:
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const chatDir = path.join(tempDir, "chat");
-    const templatesDir = path.join(tempDir, "templates");
+    const blueprintsDir = path.join(tempDir, "blueprints");
     const modelsDir = path.join(tempDir, "models");
     const toolsDir = path.join(tempDir, "tools");
     const skillsDir = path.join(tempDir, "skills");
@@ -552,8 +545,7 @@ openai-default:
     const configPath = path.join(tempDir, "server.yaml");
     await Promise.all([
       mkdir(path.join(workspaceRoot, ".openharness"), { recursive: true }),
-      mkdir(chatDir, { recursive: true }),
-      mkdir(templatesDir, { recursive: true }),
+      mkdir(blueprintsDir, { recursive: true }),
       mkdir(modelsDir, { recursive: true }),
       mkdir(toolsDir, { recursive: true }),
       mkdir(skillsDir, { recursive: true })
@@ -589,8 +581,7 @@ server:
 storage: {}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -643,8 +634,7 @@ llm:
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const chatDir = path.join(tempDir, "chat");
-    const templatesDir = path.join(tempDir, "templates");
+    const blueprintsDir = path.join(tempDir, "blueprints");
     const modelsDir = path.join(tempDir, "models");
     const toolsDir = path.join(tempDir, "tools");
     const skillsDir = path.join(tempDir, "skills");
@@ -654,8 +644,7 @@ llm:
     await Promise.all([
       mkdir(path.join(goodWorkspaceRoot, ".openharness"), { recursive: true }),
       mkdir(path.join(badWorkspaceRoot, ".openharness", "models"), { recursive: true }),
-      mkdir(chatDir, { recursive: true }),
-      mkdir(templatesDir, { recursive: true }),
+      mkdir(blueprintsDir, { recursive: true }),
       mkdir(modelsDir, { recursive: true }),
       mkdir(toolsDir, { recursive: true }),
       mkdir(skillsDir, { recursive: true })
@@ -691,8 +680,7 @@ server:
 storage: {}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -742,8 +730,7 @@ llm:
       mkdir(path.join(workspaceRoot, ".openharness"), { recursive: true }),
       mkdir(modelsDir, { recursive: true }),
       mkdir(path.join(tempDir, "workspaces"), { recursive: true }),
-      mkdir(path.join(tempDir, "chat"), { recursive: true }),
-      mkdir(path.join(tempDir, "templates"), { recursive: true }),
+      mkdir(path.join(tempDir, "blueprints"), { recursive: true }),
       mkdir(path.join(tempDir, "tools"), { recursive: true }),
       mkdir(path.join(tempDir, "skills"), { recursive: true })
     ]);
@@ -768,8 +755,7 @@ storage:
   postgres_url: postgres://127.0.0.1:9/oah_test
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -793,8 +779,7 @@ llm:
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const chatDir = path.join(tempDir, "chat");
-    const templatesDir = path.join(tempDir, "templates");
+    const blueprintsDir = path.join(tempDir, "blueprints");
     const modelsDir = path.join(tempDir, "models");
     const toolsDir = path.join(tempDir, "tools");
     const skillsDir = path.join(tempDir, "skills");
@@ -804,8 +789,7 @@ llm:
 
     await Promise.all([
       mkdir(path.join(workspaceRoot, ".openharness", "data"), { recursive: true }),
-      mkdir(chatDir, { recursive: true }),
-      mkdir(templatesDir, { recursive: true }),
+      mkdir(blueprintsDir, { recursive: true }),
       mkdir(modelsDir, { recursive: true }),
       mkdir(toolsDir, { recursive: true }),
       mkdir(skillsDir, { recursive: true })
@@ -830,8 +814,7 @@ server:
 storage: {}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -872,8 +855,7 @@ llm:
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const chatDir = path.join(tempDir, "chat");
-    const templatesDir = path.join(tempDir, "templates");
+    const blueprintsDir = path.join(tempDir, "blueprints");
     const modelsDir = path.join(tempDir, "models");
     const toolsDir = path.join(tempDir, "tools");
     const skillsDir = path.join(tempDir, "skills");
@@ -884,8 +866,7 @@ llm:
 
     await Promise.all([
       mkdir(workspaceDir, { recursive: true }),
-      mkdir(chatDir, { recursive: true }),
-      mkdir(templatesDir, { recursive: true }),
+      mkdir(blueprintsDir, { recursive: true }),
       mkdir(modelsDir, { recursive: true }),
       mkdir(toolsDir, { recursive: true }),
       mkdir(skillsDir, { recursive: true }),
@@ -911,8 +892,7 @@ server:
 storage: {}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -979,8 +959,7 @@ llm:
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const chatDir = path.join(tempDir, "chat");
-    const templatesDir = path.join(tempDir, "templates");
+    const blueprintsDir = path.join(tempDir, "blueprints");
     const modelsDir = path.join(tempDir, "models");
     const toolsDir = path.join(tempDir, "tools");
     const skillsDir = path.join(tempDir, "skills");
@@ -995,8 +974,7 @@ llm:
 
     await Promise.all([
       mkdir(workspaceDir, { recursive: true }),
-      mkdir(chatDir, { recursive: true }),
-      mkdir(templatesDir, { recursive: true }),
+      mkdir(blueprintsDir, { recursive: true }),
       mkdir(modelsDir, { recursive: true }),
       mkdir(toolsDir, { recursive: true }),
       mkdir(skillsDir, { recursive: true })
@@ -1019,8 +997,7 @@ server:
 storage: {}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -1125,8 +1102,7 @@ llm:
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const chatDir = path.join(tempDir, "chat");
-    const templatesDir = path.join(tempDir, "templates");
+    const blueprintsDir = path.join(tempDir, "blueprints");
     const modelsDir = path.join(tempDir, "models");
     const toolsDir = path.join(tempDir, "tools");
     const skillsDir = path.join(tempDir, "skills");
@@ -1136,8 +1112,7 @@ llm:
 
     await Promise.all([
       mkdir(workspaceDir, { recursive: true }),
-      mkdir(chatDir, { recursive: true }),
-      mkdir(templatesDir, { recursive: true }),
+      mkdir(blueprintsDir, { recursive: true }),
       mkdir(modelsDir, { recursive: true }),
       mkdir(toolsDir, { recursive: true }),
       mkdir(skillsDir, { recursive: true }),
@@ -1163,8 +1138,7 @@ server:
 storage: {}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills

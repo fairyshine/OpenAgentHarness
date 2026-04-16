@@ -19,7 +19,7 @@ Open Agent Harness 是一个可部署的 Agent 后端运行时。它管理 Works
 - **多 Workspace 并行** — PostgreSQL 持久化 + Redis 队列调度，支撑大量 Workspace 同时运行
 - **声明式 Agent 配置** — 用 YAML frontmatter 的 Markdown 文件定义 Agent，热加载生效
 - **能力自由组合** — agent / skill / action / tool / hook / context 按 Workspace 独立配置
-- **两种 Workspace 模式** — `project`（完整执行）和 `chat`（只读对话）
+- **统一 Workspace 结构** — 同一套目录结构承载对话、工具调用和执行能力
 - **REST + SSE API** — 全部能力通过 `/api/v1` 暴露，前端无关
 - **灵活部署** — 本地一体运行或 API + Worker 拆分部署
 

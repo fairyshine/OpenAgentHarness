@@ -66,7 +66,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
   --default-model openai-default
 ```
 
-Optional flags: `--workspace-kind chat`, `--tool-dir`, `--skill-dir`, `--host`, `--port`
+Optional flags: `--tool-dir`, `--skill-dir`, `--host`, `--port`
 
 !!! info
     In single workspace mode, the debug console enters the workspace automatically.

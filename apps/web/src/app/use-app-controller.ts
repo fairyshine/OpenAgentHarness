@@ -14,6 +14,8 @@ import {
 } from "@oah/api-contracts";
 
 import {
+  SERVICE_SCOPE_ALL,
+  SERVICE_SCOPE_DEFAULT,
   buildRuntimeConsoleEntries,
   buildMessageRecord,
   buildUrl,
@@ -27,9 +29,13 @@ import {
   isRecord,
   isTerminalRunEvent,
   isTerminalRunStatus,
+  normalizeServiceName,
+  normalizeServiceScope,
   normalizeMessageContent,
   readJsonResponse,
   sanitizeFileSegment,
+  serviceScopeLabel,
+  serviceScopeMatches,
   storageKeys,
   toErrorSummary,
   toErrorMessage,
@@ -49,6 +55,7 @@ import {
   type ModelProviderRecord,
   type ReadinessReportResponse,
   type RuntimeConsoleEntry,
+  type ServiceScope,
   type SurfaceMode,
   type PlatformModelSnapshotResponse,
   type SseFrame
@@ -67,7 +74,11 @@ export function useAppController() {
     baseUrl: "",
     token: ""
   });
-  const [workspaceTemplateFilter, setWorkspaceTemplateFilter] = usePersistentState<string>(storageKeys.workspaceTemplateFilter, "");
+  const [workspaceBlueprintFilter, setWorkspaceBlueprintFilter] = usePersistentState<string>(
+    storageKeys.workspaceBlueprintFilter,
+    ""
+  );
+  const [serviceScope, setServiceScope] = usePersistentState<ServiceScope>(storageKeys.serviceScope, SERVICE_SCOPE_ALL);
   const [modelDraft, setModelDraft] = usePersistentState<ModelDraft>(storageKeys.modelDraft, {
     model: "",
     prompt: "你好，请简短回复一句话，确认模型链路已经接通。"
@@ -131,8 +142,8 @@ export function useAppController() {
     setExpandedSessionIds,
     workspace,
     setWorkspace,
-    workspaceTemplates,
-    setWorkspaceTemplates,
+    workspaceBlueprints,
+    setWorkspaceBlueprints,
     catalog,
     setCatalog,
     session,
@@ -168,17 +179,49 @@ export function useAppController() {
   const shouldAutoFollowConversationRef = useRef(true);
   const selectedRunIdValue = selectedRunId.trim();
   const streamRunId = filterSelectedRun ? selectedRunIdValue : "";
-  const workspaceTemplateFilterValue = workspaceTemplateFilter.trim();
-  const workspaceTemplateFilterOptions = Array.from(
+  const normalizedServiceScope = normalizeServiceScope(serviceScope);
+  const serviceFilteredWorkspaces = orderedSavedWorkspaces.filter((entry) =>
+    serviceScopeMatches(normalizedServiceScope, entry.serviceName)
+  );
+  const knownServiceNames = Array.from(
     new Set(
-      [...workspaceTemplates, ...orderedSavedWorkspaces.map((entry) => entry.template ?? ""), workspaceTemplateFilterValue]
+      [
+        ...orderedSavedWorkspaces.map((entry) => normalizeServiceName(entry.serviceName)),
+        normalizeServiceName(workspace?.serviceName),
+        normalizeServiceName(normalizedServiceScope)
+      ].filter((entry): entry is string => Boolean(entry))
+    )
+  ).sort((left, right) => left.localeCompare(right));
+  const serviceScopeOptions = [
+    {
+      value: SERVICE_SCOPE_ALL,
+      label: serviceScopeLabel(SERVICE_SCOPE_ALL)
+    },
+    {
+      value: SERVICE_SCOPE_DEFAULT,
+      label: serviceScopeLabel(SERVICE_SCOPE_DEFAULT)
+    },
+    ...knownServiceNames.map((entry) => ({
+      value: entry,
+      label: serviceScopeLabel(entry)
+    }))
+  ];
+  const selectedServiceScopeLabel = serviceScopeLabel(normalizedServiceScope);
+  const workspaceBlueprintFilterValue = workspaceBlueprintFilter.trim();
+  const workspaceBlueprintFilterOptions = Array.from(
+    new Set(
+      [
+        ...workspaceBlueprints,
+        ...serviceFilteredWorkspaces.map((entry) => entry.blueprint ?? ""),
+        workspaceBlueprintFilterValue
+      ]
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0)
     )
   ).sort((left, right) => left.localeCompare(right));
-  const filteredSavedWorkspaces = workspaceTemplateFilterValue
-    ? orderedSavedWorkspaces.filter((entry) => (entry.template ?? "").trim() === workspaceTemplateFilterValue)
-    : orderedSavedWorkspaces;
+  const filteredSavedWorkspaces = workspaceBlueprintFilterValue
+    ? serviceFilteredWorkspaces.filter((entry) => (entry.blueprint ?? "").trim() === workspaceBlueprintFilterValue)
+    : serviceFilteredWorkspaces;
   const filteredSavedSessionsCount = filteredSavedWorkspaces.reduce(
     (count, entry) => count + (sessionsByWorkspaceId.get(entry.id)?.length ?? 0),
     0
@@ -265,9 +308,58 @@ export function useAppController() {
     );
   }, [errorMessage]);
 
+  useEffect(() => {
+    const targetWorkspaceId = activeWorkspaceId.trim();
+    if (!targetWorkspaceId) {
+      return;
+    }
+
+    const activeWorkspaceServiceName =
+      workspace?.id === targetWorkspaceId
+        ? workspace.serviceName
+        : savedWorkspaces.find((entry) => entry.id === targetWorkspaceId)?.serviceName;
+    if (serviceScopeMatches(normalizedServiceScope, activeWorkspaceServiceName)) {
+      return;
+    }
+
+    streamAbortRef.current?.abort();
+    lastCursorRef.current = undefined;
+    sessionAgentSwitchRef.current = null;
+    sessionModelUpdateRef.current = null;
+    window.clearTimeout(messageRefreshTimerRef.current);
+    window.clearTimeout(runRefreshTimerRef.current);
+    window.clearTimeout(workspaceIndexRefreshTimerRef.current);
+    window.clearTimeout(runPollingTimerRef.current);
+
+    startTransition(() => {
+      setWorkspaceId("");
+      setWorkspace(null);
+      setCatalog(null);
+      setSessionId("");
+      setSession(null);
+      setMessages([]);
+      setEvents([]);
+      setSelectedRunId("");
+      setSessionRuns([]);
+      setRun(null);
+      setRunSteps([]);
+      setLiveMessagesByKey({});
+      setSelectedTraceId("");
+      setSelectedMessageId("");
+      setSelectedStepId("");
+      setSelectedEventId("");
+      setPendingSessionAgentName(null);
+      setSwitchingSessionAgentId(null);
+      setPendingSessionModelRef(null);
+      setSwitchingSessionModelId(null);
+      setStreamState("idle");
+    });
+  }, [activeWorkspaceId, normalizedServiceScope, savedWorkspaces, setCatalog, setSession, setSessionId, setWorkspace, setWorkspaceId, workspace]);
+
   const storageController = useStorageController({
     connection,
     enabled: surfaceMode === "storage",
+    serviceScope: normalizedServiceScope,
     healthReport,
     request,
     setActivity,
@@ -306,7 +398,7 @@ export function useAppController() {
       setExpandedSessionIds,
       workspace,
       setWorkspace,
-      setWorkspaceTemplates,
+      setWorkspaceBlueprints,
       setCatalog,
       session,
       setSession,
@@ -1290,7 +1382,7 @@ export function useAppController() {
 
   useEffect(() => {
     void navigationActions.refreshWorkspaceIndex(true);
-    void navigationActions.refreshWorkspaceTemplates(true);
+    void navigationActions.refreshWorkspaceBlueprints(true);
     void refreshModelProviders(true);
     void refreshPlatformModels(true);
   }, [connection.baseUrl, connection.token, sessionId, workspaceId]);
@@ -1613,6 +1705,9 @@ export function useAppController() {
       surfaceMode,
       mainViewMode,
       setMainViewMode,
+      serviceScope: normalizedServiceScope,
+      selectedServiceScopeLabel,
+      serviceScopeOptions,
       hasActiveSession,
       currentSessionName,
       currentWorkspaceName,
@@ -1621,6 +1716,7 @@ export function useAppController() {
       storageHealthLabel: `${storageController.storageSurfaceProps.healthReport?.storage.primary ?? "unknown"} / ${storageController.storageSurfaceProps.healthReport?.storage.runQueue ?? "unknown"}`,
       healthStatus,
       streamState,
+      onServiceScopeChange: setServiceScope,
       onSurfaceModeChange: setSurfaceMode,
       consoleOpen,
       toggleConsole: () => setConsoleOpen((current) => !current)
@@ -1647,9 +1743,11 @@ export function useAppController() {
     },
     sidebarSurfaceProps: {
       surfaceMode,
-      workspaceTemplateFilter,
-      setWorkspaceTemplateFilter,
-      workspaceTemplateFilterOptions,
+      serviceScope: normalizedServiceScope,
+      selectedServiceScopeLabel,
+      workspaceBlueprintFilter,
+      setWorkspaceBlueprintFilter,
+      workspaceBlueprintFilterOptions,
       filteredSavedWorkspaces,
       orderedSavedWorkspaces,
       savedSessionsCount: filteredSavedSessionsCount,
@@ -1661,11 +1759,11 @@ export function useAppController() {
       expandWorkspaceInSidebar: navigationActions.expandWorkspaceInSidebar,
       workspaceDraft,
       setWorkspaceDraft,
-      workspaceTemplates,
+      workspaceBlueprints,
       createWorkspace: () => void navigationActions.createWorkspace(),
-      refreshWorkspaceTemplates: () => void navigationActions.refreshWorkspaceTemplates(),
-      uploadWorkspaceTemplate: navigationActions.uploadWorkspaceTemplate,
-      deleteWorkspaceTemplate: navigationActions.deleteWorkspaceTemplate,
+      refreshWorkspaceBlueprints: () => void navigationActions.refreshWorkspaceBlueprints(),
+      uploadWorkspaceBlueprint: navigationActions.uploadWorkspaceBlueprint,
+      deleteWorkspaceBlueprint: navigationActions.deleteWorkspaceBlueprint,
       refreshWorkspaceIndex: () => void navigationActions.refreshWorkspaceIndex(),
       createSession: () => void navigationActions.createSession(),
       sessionId,
@@ -1687,6 +1785,7 @@ export function useAppController() {
       filterSelectedRun,
       setFilterSelectedRun,
       storageOverview: storageController.storageSurfaceProps.storageOverview,
+      storageRedisEnabled: storageController.storageSurfaceProps.storageRedisEnabled,
       storageBrowserTab: storageController.storageSurfaceProps.storageBrowserTab,
       onStorageBrowserTabChange: storageController.storageSurfaceProps.onStorageBrowserTabChange,
       onRefreshStorageOverview: storageController.storageSurfaceProps.onRefreshStorageOverview,

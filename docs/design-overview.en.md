@@ -6,7 +6,7 @@ Navigation hub for the Open Agent Harness design documents.
 
 | Concept | Role | Description |
 |---------|------|-------------|
-| **Workspace** | Capability boundary | Each workspace declares its own agents, models, tools, skills, actions, and hooks. Two kinds: `project` (executable) and `chat` (read-only conversation). |
+| **Workspace** | Capability boundary | Each workspace declares its own agents, models, tools, skills, actions, and hooks, and uses one consistent directory structure for discovery and execution. |
 | **Session** | Context boundary | A continuous conversation or task collaboration, scoped to a workspace. |
 | **Run** | Execution boundary | One model inference + tool loop. Runs are serial within a session. |
 

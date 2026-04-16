@@ -29,7 +29,7 @@ function WorkspaceSidebarItem(props: {
 }) {
   const ExpandIcon = props.expanded ? ChevronDown : ChevronRight;
   const subtitleParts = [
-    props.entry.template,
+    props.entry.blueprint,
     `${props.sessionCount} sessions`,
     props.entry.lastOpenedAt ? formatTimestamp(props.entry.lastOpenedAt) : undefined
   ].filter(Boolean);

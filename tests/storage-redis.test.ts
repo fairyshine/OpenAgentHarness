@@ -240,14 +240,19 @@ function createInMemoryQueueRedisClients() {
         return sessionQueue.length;
       }
 
-      if (input.keys.length === 1 && args.length === 3) {
+      if (input.keys.length === 1 && args.length === 4) {
         const [readyQueueKey] = input.keys;
-        const [sessionPrefix, preferredSuffix, workerId] = args;
+        const [sessionPrefix, preferredSuffix, workerId, runtimeInstanceId] = args;
         const readyQueue = lists.get(readyQueueKey) ?? [];
 
         for (const sessionId of readyQueue) {
           const preferredWorkerId = strings.get(`${sessionPrefix}${sessionId}${preferredSuffix}`);
-          if (!workerId || !preferredWorkerId || preferredWorkerId === workerId) {
+          if (
+            !workerId ||
+            !preferredWorkerId ||
+            preferredWorkerId === workerId ||
+            (runtimeInstanceId && preferredWorkerId === runtimeInstanceId)
+          ) {
             const index = readyQueue.indexOf(sessionId);
             readyQueue.splice(index, 1);
             lists.set(readyQueueKey, readyQueue);
@@ -887,6 +892,27 @@ describe("storage redis", () => {
     await expect(queue.dequeueRun("ses_shared")).resolves.toBe("run_shared");
     await expect(queue.claimNextSession(20, { workerId: "worker_1" })).resolves.toBe("ses_targeted");
     await expect(queue.dequeueRun("ses_targeted")).resolves.toBe("run_targeted");
+  });
+
+  it("claims sessions pinned to the local runtime instance", async () => {
+    const clients = createInMemoryQueueRedisClients();
+    const queue = await createRedisSessionRunQueue({
+      url: "redis://memory/0",
+      commands: clients.commands,
+      blocking: clients.blocking
+    });
+
+    await queue.enqueue("ses_runtime_targeted", "run_targeted", {
+      preferredWorkerId: "api:pod-a"
+    });
+
+    await expect(
+      queue.claimNextSession(20, {
+        workerId: "worker_1",
+        runtimeInstanceId: "api:pod-a"
+      })
+    ).resolves.toBe("ses_runtime_targeted");
+    await expect(queue.dequeueRun("ses_runtime_targeted")).resolves.toBe("run_targeted");
   });
 
   it("publishes worker leases and removes them on shutdown", async () => {

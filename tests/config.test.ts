@@ -8,8 +8,8 @@ import {
   buildWorkspaceId,
   discoverWorkspace,
   discoverWorkspaces,
-  initializeWorkspaceFromTemplate,
-  listWorkspaceTemplates,
+  initializeWorkspaceFromBlueprint,
+  listWorkspaceBlueprints,
   loadPlatformModels,
   resolveWorkspaceCreationRoot,
   loadWorkspaceSettings,
@@ -31,7 +31,7 @@ describe("config loading", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-"));
     tempDirs.push(tempDir);
 
-    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
       await mkdir(path.join(tempDir, dirName), { recursive: true });
     }
 
@@ -50,8 +50,7 @@ storage:
   redis_url: \${env.REDIS_URL}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -64,49 +63,14 @@ llm:
     const config = await loadServerConfig(configPath);
     expect(config.storage.postgres_url).toBe("postgres://local/test");
     expect(config.paths.model_dir).toBe(path.join(tempDir, "models"));
-    expect(config.paths.archive_dir).toBe(path.join(tempDir, "workspaces", ".openharness", "archives"));
     expect(config.llm.default_model).toBe("openai-default");
-  });
-
-  it("accepts an explicit archive_dir in server config", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-archive-dir-"));
-    tempDirs.push(tempDir);
-
-    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills", "archives"]) {
-      await mkdir(path.join(tempDir, dirName), { recursive: true });
-    }
-
-    const configPath = path.join(tempDir, "server.yaml");
-    await writeFile(
-      configPath,
-      `
-server:
-  host: 127.0.0.1
-  port: 8787
-storage: {}
-paths:
-  workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
-  model_dir: ./models
-  tool_dir: ./tools
-  skill_dir: ./skills
-  archive_dir: ./archives
-llm:
-  default_model: openai-default
-`,
-      "utf8"
-    );
-
-    const config = await loadServerConfig(configPath);
-    expect(config.paths.archive_dir).toBe(path.join(tempDir, "archives"));
   });
 
   it("loads optional object storage settings for S3-compatible backends", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-object-storage-"));
     tempDirs.push(tempDir);
 
-    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills", "archives"]) {
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
       await mkdir(path.join(tempDir, dirName), { recursive: true });
     }
 
@@ -133,18 +97,14 @@ object_storage:
   poll_interval_ms: 4000
   managed_paths:
     - workspace
-    - chat
   key_prefixes:
     workspace: workspace
-    chat: chat
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
-  archive_dir: ./archives
 llm:
   default_model: openai-default
 `,
@@ -163,19 +123,118 @@ llm:
       sync_on_boot: true,
       sync_on_change: true,
       poll_interval_ms: 4000,
-      managed_paths: ["workspace", "chat"],
+      managed_paths: ["workspace"],
       key_prefixes: {
-        workspace: "workspace",
-        chat: "chat"
+        workspace: "workspace"
       }
     });
+  });
+
+  it("loads sandbox provider settings for self-hosted and e2b backends", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-sandbox-"));
+    tempDirs.push(tempDir);
+
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    process.env.E2B_API_KEY = "e2b-demo-token";
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+sandbox:
+  provider: e2b
+  self_hosted:
+    base_url: http://127.0.0.1:7878/internal/v1
+    headers:
+      x-oah-cluster: local
+  e2b:
+    base_url: https://sandbox-gateway.example.com/internal/v1
+    api_key: \${env.E2B_API_KEY}
+    headers:
+      x-oah-provider: e2b
+paths:
+  workspace_dir: ./workspaces
+  blueprint_dir: ./blueprints
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const config = await loadServerConfig(configPath);
+    expect(config.sandbox).toEqual({
+      provider: "e2b",
+      self_hosted: {
+        base_url: "http://127.0.0.1:7878/internal/v1",
+        headers: {
+          "x-oah-cluster": "local"
+        }
+      },
+      e2b: {
+        base_url: "https://sandbox-gateway.example.com/internal/v1",
+        api_key: "e2b-demo-token",
+        headers: {
+          "x-oah-provider": "e2b"
+        }
+      }
+    });
+  });
+
+  it("rejects plural object storage and paths aliases", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-legacy-object-storage-"));
+    tempDirs.push(tempDir);
+
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+object_storage:
+  provider: s3
+  bucket: open-agent-harness
+  region: us-east-1
+  managed_paths:
+    - workspaces
+    - blueprints
+  key_prefixes:
+    workspaces: workspace
+    blueprints: blueprint
+paths:
+  workspaces_dir: ./workspaces
+  blueprints_dir: ./blueprints
+  models_dir: ./models
+  tools_dir: ./tools
+  skills_dir: ./skills
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    await expect(loadServerConfig(configPath)).rejects.toThrow("Invalid server config");
   });
 
   it("loads embedded worker pool settings from server config", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-workers-"));
     tempDirs.push(tempDir);
 
-    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
       await mkdir(path.join(tempDir, dirName), { recursive: true });
     }
 
@@ -190,8 +249,7 @@ storage:
   redis_url: redis://local/0
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -228,7 +286,7 @@ llm:
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-controller-"));
     tempDirs.push(tempDir);
 
-    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
       await mkdir(path.join(tempDir, dirName), { recursive: true });
     }
 
@@ -243,8 +301,7 @@ storage:
   redis_url: redis://local/0
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -336,7 +393,7 @@ llm:
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-missing-required-paths-"));
     tempDirs.push(tempDir);
 
-    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
       await mkdir(path.join(tempDir, dirName), { recursive: true });
     }
 
@@ -350,8 +407,7 @@ server:
 storage: {}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   skill_dir: ./skills
 llm:
   default_model: openai-default
@@ -366,7 +422,7 @@ llm:
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-no-storage-"));
     tempDirs.push(tempDir);
 
-    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
       await mkdir(path.join(tempDir, dirName), { recursive: true });
     }
 
@@ -380,8 +436,7 @@ server:
 storage: {}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -400,7 +455,7 @@ llm:
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-comment-only-storage-"));
     tempDirs.push(tempDir);
 
-    for (const dirName of ["workspaces", "chat", "templates", "models", "tools", "skills"]) {
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
       await mkdir(path.join(tempDir, dirName), { recursive: true });
     }
 
@@ -416,8 +471,7 @@ storage:
   # redis_url: \${env.REDIS_URL}
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -450,8 +504,7 @@ storage:
   redis_url: redis://local/0
 paths:
   workspace_dir: ./workspaces
-  chat_dir: ./chat
-  template_dir: ./templates
+  blueprint_dir: ./blueprints
   model_dir: ./models
   tool_dir: ./tools
   skill_dir: ./skills
@@ -582,16 +635,16 @@ compat-qwen-max:
     expect(resolved).toBe("/tmp/workspaces/my-project");
   });
 
-  it("lists workspace templates from template_dir direct subdirectories", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-templates-list-"));
+  it("lists workspace blueprints from blueprint_dir direct subdirectories", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-blueprints-list-"));
     tempDirs.push(tempDir);
 
     await mkdir(path.join(tempDir, "workspace"), { recursive: true });
-    await mkdir(path.join(tempDir, "chat-workspace"), { recursive: true });
+    await mkdir(path.join(tempDir, "starter-kit"), { recursive: true });
     await writeFile(path.join(tempDir, "README.md"), "ignore", "utf8");
 
-    const templates = await listWorkspaceTemplates(tempDir);
-    expect(templates).toEqual([{ name: "chat-workspace" }, { name: "workspace" }]);
+    const blueprints = await listWorkspaceBlueprints(tempDir);
+    expect(blueprints).toEqual([{ name: "starter-kit" }, { name: "workspace" }]);
   });
 
   it("rejects unsupported platform prompt segments in compose order", async () => {
@@ -705,17 +758,60 @@ system_prompt:
     expect(settings.systemPrompt?.compose.includeEnvironment).toBe(true);
   });
 
-  it("discovers project and chat workspaces with merged model catalogs", async () => {
+  it("loads settings with blueprint metadata and imports", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-settings-blueprint-"));
+    tempDirs.push(tempDir);
+
+    await mkdir(path.join(tempDir, ".openharness"), { recursive: true });
+    await writeFile(
+      path.join(tempDir, ".openharness", "settings.yaml"),
+      `
+blueprint: starter
+imports:
+  tools:
+    - shell
+  skills:
+    - repo-explorer
+`,
+      "utf8"
+    );
+
+    const settings = await loadWorkspaceSettings(tempDir);
+    expect(settings.blueprint).toBe("starter");
+    expect(settings.imports).toEqual({
+      tools: ["shell"],
+      skills: ["repo-explorer"]
+    });
+  });
+
+  it("rejects legacy blueprint_imports settings", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-settings-legacy-blueprint-imports-"));
+    tempDirs.push(tempDir);
+
+    await mkdir(path.join(tempDir, ".openharness"), { recursive: true });
+    await writeFile(
+      path.join(tempDir, ".openharness", "settings.yaml"),
+      `
+blueprint: starter
+blueprint_imports:
+  tools:
+    - shell
+`,
+      "utf8"
+    );
+
+    await expect(loadWorkspaceSettings(tempDir)).rejects.toThrow("Invalid workspace settings");
+  });
+
+  it("discovers project workspaces with merged model catalogs", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-discovery-"));
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const chatDir = path.join(tempDir, "chat");
     const modelsDir = path.join(tempDir, "models");
     const skillDir = path.join(tempDir, "skills");
     const toolDir = path.join(tempDir, "tools");
     const projectRoot = path.join(workspaceDir, "demo-app");
-    const chatRoot = path.join(chatDir, "pair-mode");
 
     await mkdir(path.join(projectRoot, ".openharness", "models"), { recursive: true });
     await mkdir(path.join(projectRoot, ".openharness", "agents"), { recursive: true });
@@ -723,7 +819,6 @@ system_prompt:
     await mkdir(path.join(projectRoot, ".openharness", "skills", "repo-explorer"), { recursive: true });
     await mkdir(path.join(projectRoot, ".openharness", "tools"), { recursive: true });
     await mkdir(path.join(projectRoot, ".openharness", "hooks"), { recursive: true });
-    await mkdir(path.join(chatRoot, ".openharness", "models"), { recursive: true });
     await mkdir(modelsDir, { recursive: true });
     await mkdir(path.join(skillDir, "shared-skill"), { recursive: true });
     await mkdir(toolDir, { recursive: true });
@@ -878,14 +973,6 @@ capabilities:
       "utf8"
     );
 
-    await writeFile(
-      path.join(chatRoot, ".openharness", "settings.yaml"),
-      `
-default_agent: assistant
-`,
-      "utf8"
-    );
-
     const platformModels = await loadPlatformModels(modelsDir);
     const platformAgents = {
       assistant: {
@@ -907,7 +994,6 @@ default_agent: assistant
     const discovered = await discoverWorkspaces({
       paths: {
         workspace_dir: workspaceDir,
-        chat_dir: chatDir,
         skill_dir: skillDir,
         tool_dir: toolDir
       },
@@ -915,10 +1001,9 @@ default_agent: assistant
       platformAgents
     });
 
-    expect(discovered).toHaveLength(2);
+    expect(discovered).toHaveLength(1);
 
     const project = discovered.find((workspace) => workspace.kind === "project");
-    const chat = discovered.find((workspace) => workspace.kind === "chat");
 
     expect(project).toMatchObject({
       id: buildWorkspaceId("project", "demo-app", path.join(workspaceDir, "demo-app")),
@@ -1008,22 +1093,6 @@ default_agent: assistant
       handlerType: "command"
     });
 
-    expect(chat).toMatchObject({
-      id: buildWorkspaceId("chat", "pair-mode", path.join(chatDir, "pair-mode")),
-      name: "pair-mode",
-      defaultAgent: "assistant",
-      readOnly: true
-    });
-    expect(chat?.agents.assistant).toMatchObject({
-      name: "assistant",
-      description: "Platform assistant"
-    });
-    expect(chat?.catalog.agents).toEqual([{ name: "assistant", mode: "primary", source: "platform", description: "Platform assistant" }]);
-    expect(chat?.catalog.models.map((model) => model.ref)).toEqual(["platform/openai-default"]);
-    expect(chat?.catalog.actions).toEqual([]);
-    expect(chat?.catalog.skills).toEqual([]);
-    expect(chat?.catalog.tools).toEqual([]);
-    expect(chat?.catalog.hooks).toEqual([]);
   });
 
   it("discovers workspace-local model refs for a single workspace", async () => {
@@ -1278,28 +1347,28 @@ Workspace implementation prompt.
     expect(workspace.agents.builder.prompt).not.toContain("Platform implementation prompt.");
   });
 
-  it("initializes a workspace from template_dir before overlaying user AGENTS, MCP, and skills", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-template-init-"));
+  it("initializes a workspace from blueprint_dir before overlaying user AGENTS, MCP, and skills", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-blueprint-init-"));
     tempDirs.push(tempDir);
 
-    const templateDir = path.join(tempDir, "templates");
+    const blueprintDir = path.join(tempDir, "blueprints");
     const platformToolDir = path.join(tempDir, "tools");
     const platformSkillDir = path.join(tempDir, "skills");
     const workspaceRoot = path.join(tempDir, "workspaces", "demo");
-    const templateRoot = path.join(templateDir, "workspace");
+    const blueprintRoot = path.join(blueprintDir, "workspace");
 
     await mkdir(path.join(platformToolDir, "servers", "shared-browser"), { recursive: true });
     await mkdir(path.join(platformSkillDir, "shared-skill", "references"), { recursive: true });
-    await mkdir(path.join(templateRoot, ".openharness", "tools"), { recursive: true });
-    await mkdir(path.join(templateRoot, ".openharness", "skills", "repo-explorer"), { recursive: true });
-    await mkdir(path.join(templateRoot, ".openharness", "agents"), { recursive: true });
-    await mkdir(path.join(templateRoot, ".openharness", "models"), { recursive: true });
+    await mkdir(path.join(blueprintRoot, ".openharness", "tools"), { recursive: true });
+    await mkdir(path.join(blueprintRoot, ".openharness", "skills", "repo-explorer"), { recursive: true });
+    await mkdir(path.join(blueprintRoot, ".openharness", "agents"), { recursive: true });
+    await mkdir(path.join(blueprintRoot, ".openharness", "models"), { recursive: true });
 
-    await writeFile(path.join(templateRoot, "AGENTS.md"), "# Template Guide\n\nFollow template rules.\n", "utf8");
+    await writeFile(path.join(blueprintRoot, "AGENTS.md"), "# Blueprint Guide\n\nFollow blueprint rules.\n", "utf8");
     await writeFile(
-      path.join(templateRoot, ".openharness", "settings.yaml"),
+      path.join(blueprintRoot, ".openharness", "settings.yaml"),
       `default_agent: builder
-template_imports:
+imports:
   tools:
     - shared-browser
   skills:
@@ -1308,7 +1377,7 @@ template_imports:
       "utf8"
     );
     await writeFile(
-      path.join(templateRoot, ".openharness", "agents", "builder.md"),
+      path.join(blueprintRoot, ".openharness", "agents", "builder.md"),
       `---
 model:
   model_ref: platform/openai-default
@@ -1321,7 +1390,7 @@ Implement requested changes.
       "utf8"
     );
     await writeFile(
-      path.join(templateRoot, ".openharness", "models", "workspace.yaml"),
+      path.join(blueprintRoot, ".openharness", "models", "workspace.yaml"),
       `
 repo-model:
   provider: openai
@@ -1330,7 +1399,7 @@ repo-model:
       "utf8"
     );
     await writeFile(
-      path.join(templateRoot, ".openharness", "tools", "settings.yaml"),
+      path.join(blueprintRoot, ".openharness", "tools", "settings.yaml"),
       `
 docs-server:
   command: node ./servers/docs.js
@@ -1339,9 +1408,9 @@ docs-server:
       "utf8"
     );
     await writeFile(
-      path.join(templateRoot, ".openharness", "skills", "repo-explorer", "SKILL.md"),
+      path.join(blueprintRoot, ".openharness", "skills", "repo-explorer", "SKILL.md"),
       `
-# Template Skill
+# Blueprint Skill
 
 Explore the repository.
 `,
@@ -1376,9 +1445,9 @@ Platform-provided helper.
       "utf8"
     );
 
-    await initializeWorkspaceFromTemplate({
-      templateDir,
-      templateName: "workspace",
+    await initializeWorkspaceFromBlueprint({
+      blueprintDir: blueprintDir,
+      blueprintName: "workspace",
       rootPath: workspaceRoot,
       platformToolDir,
       platformSkillDir,
@@ -1412,7 +1481,7 @@ Platform-provided helper.
 
     const agentsMd = await readFile(path.join(workspaceRoot, "AGENTS.md"), "utf8");
 
-    expect(agentsMd).toContain("Follow template rules.");
+    expect(agentsMd).toContain("Follow blueprint rules.");
     expect(agentsMd).toContain("Always mention assumptions.");
     expect(workspace.defaultAgent).toBe("builder");
     expect(workspace.toolServers["docs-server"]).toMatchObject({
@@ -1444,20 +1513,20 @@ Platform-provided helper.
   });
 
   it("does not duplicate workspace tool prefixes when imported commands are already workspace-relative", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-template-import-tool-command-"));
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-blueprint-import-tool-command-"));
     tempDirs.push(tempDir);
 
-    const templateDir = path.join(tempDir, "templates");
+    const blueprintDir = path.join(tempDir, "blueprints");
     const platformToolDir = path.join(tempDir, "tools");
     const workspaceRoot = path.join(tempDir, "workspaces", "demo");
-    const templateRoot = path.join(templateDir, "workspace");
+    const blueprintRoot = path.join(blueprintDir, "workspace");
 
-    await mkdir(path.join(templateRoot, ".openharness"), { recursive: true });
+    await mkdir(path.join(blueprintRoot, ".openharness"), { recursive: true });
     await mkdir(path.join(platformToolDir, "servers", "test-echo"), { recursive: true });
 
     await writeFile(
-      path.join(templateRoot, ".openharness", "settings.yaml"),
-      `template_imports:
+      path.join(blueprintRoot, ".openharness", "settings.yaml"),
+      `imports:
   tools:
     - test-echo
 `,
@@ -1478,9 +1547,9 @@ test-echo:
       "utf8"
     );
 
-    await initializeWorkspaceFromTemplate({
-      templateDir,
-      templateName: "workspace",
+    await initializeWorkspaceFromBlueprint({
+      blueprintDir: blueprintDir,
+      blueprintName: "workspace",
       rootPath: workspaceRoot,
       platformToolDir
     });

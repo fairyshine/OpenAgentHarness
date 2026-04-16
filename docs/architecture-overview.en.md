@@ -14,7 +14,7 @@ Two workspace kinds:
 | Kind | Description |
 |------|-------------|
 | `project` | Full workspace with tools, execution, and local runtime state |
-| `chat` | Read-only conversation workspace; loads only prompts / agents / models; no execution |
+| `workspace` | Unified workspace; loads prompts, agents, models, actions, skills, tools, and hooks |
 
 ## 2. Design Principles
 
@@ -57,7 +57,7 @@ Two workspace kinds:
 
 - The stable adapter boundary between the worker and its host environment
 - The first implementation should be OAH's own sandbox pod
-- Future implementations may be compatible with E2B-style remote sandbox providers
+- The exposed provider vocabulary is `self_hosted | e2b`, and backend switching should be a server-config change rather than an API change
 - It carries host lifecycle, file access, and process execution capabilities only; it does not redefine OAH ownership or control-plane semantics
 
 ### Workspace Ownership
@@ -139,7 +139,7 @@ flowchart TD
 - Loads platform-level model / tool / skill directories
 - Assembles system prompt, history messages, and capability catalog
 - `project` workspace: loads all capability types
-- `chat` workspace: loads agents / models / AGENTS.md only; tool catalog is empty
+- workspace: loads agents / models / AGENTS.md together with declared actions / skills / tools / hooks
 - Owns the run state machine, session-serial boundaries, tool loop, audit, and recovery closure
 
 ### Invocation Dispatcher
@@ -152,7 +152,7 @@ flowchart TD
 
 - Unified workspace execution environment (shell, file I/O, process management)
 - Abstracts local execution, self-hosted sandbox pods, and future E2B-like host backends
-- `chat` workspaces never create a backend session
+- workspaces always create backend sessions and run through the same execution path
 
 ### Hook Runtime
 
@@ -166,7 +166,7 @@ flowchart TD
 | API + embedded worker | Default. Single-process, full execution. Uses Redis queue when configured, otherwise in-process. |
 | API only + standalone worker + controller | Main production mode. API Server handles ingress and owner routing, Worker handles execution, Controller handles the control plane. |
 | Standalone worker in sandbox | A worker deployment shape where the worker runs inside a dedicated worker Pod / sandbox Pod. |
-| API only + controller + sandbox-hosted worker | Preferred evolution path. Use OAH's own sandbox pod first, then converge the host interface toward an E2B-compatible boundary. |
+| API only + controller + sandbox-hosted worker | Preferred evolution path. Use OAH's own sandbox pod first, then converge the host interface toward a boundary that can switch between `self_hosted` and `e2b` providers. |
 
 ## 7. Request Flow
 
@@ -213,8 +213,8 @@ sequenceDiagram
 - No built-in user system -- consumes external identity and access context
 - Workspace is the configuration and capability discovery boundary; `.openharness/settings.yaml` is the entry point
 - Platform built-in agents merge with workspace agents; workspace agents override on name collision
-- Templates are for initialization only -- runtime reads current workspace files
-- `chat_dir` subdirectories are directly usable workspaces, not templates
+- Blueprints are for initialization only -- runtime reads current workspace files
+- workspaces are managed under `workspace_dir`; blueprints are only initialization sources
 - `AGENTS.md` is injected verbatim (no summarization)
 - Agents defined via `agents/*.md` -- frontmatter for config, body for system prompt
 - Model / Hook / Tool Server configs use declarative YAML

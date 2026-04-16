@@ -90,11 +90,25 @@ function SidebarHero(props: {
   );
 }
 
-function SidebarMetric(props: { label: string; value: string; tone?: StatusSemanticTone }) {
+function SidebarMetric(props: {
+  label: string;
+  value: string;
+  tone?: StatusSemanticTone;
+  detail?: string;
+  className?: string;
+  compact?: boolean;
+}) {
   return (
-    <div className={`rounded-2xl border px-3 py-2 ${toneBadgeClass(props.tone ?? "sky")}`}>
-      <p className="text-[10px] uppercase tracking-[0.14em]">{props.label}</p>
-      <p className="mt-1 truncate text-sm font-semibold tracking-tight">{props.value}</p>
+    <div
+      className={`border ${props.compact ? "rounded-xl px-3 py-2" : "rounded-[1.6rem] px-3.5 py-3"} ${toneBadgeClass(props.tone ?? "sky")} ${
+        props.className ?? ""
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <p className={`uppercase ${props.compact ? "text-[9px] tracking-[0.18em]" : "text-[10px] tracking-[0.2em]"}`}>{props.label}</p>
+      </div>
+      <p className={`truncate font-semibold tracking-tight ${props.compact ? "mt-1.5 text-sm" : "mt-2 text-[0.95rem]"}`}>{props.value}</p>
+      {props.detail ? <p className={`text-current/72 ${props.compact ? "mt-0.5 text-[10px]" : "mt-1 text-[11px]"}`}>{props.detail}</p> : null}
     </div>
   );
 }
@@ -119,20 +133,23 @@ function SidebarModeToggle(props: {
   onChange: (key: string) => void;
 }) {
   return (
-    <div className="info-panel grid grid-cols-2 gap-1 rounded-2xl p-1">
+    <div
+      className="info-panel grid gap-1.5 rounded-[1.7rem] p-1.5"
+      style={{ gridTemplateColumns: `repeat(${Math.max(1, props.items.length)}, minmax(0, 1fr))` }}
+    >
       {props.items.map((item) => (
         <Button
           key={item.key}
           variant="ghost"
-          className={`ob-list-item h-10 justify-start rounded-xl px-3 ${
+          className={`h-12 justify-center rounded-[1.25rem] px-3 text-sm transition-all ${
             props.activeKey === item.key
-              ? "ob-list-item-active text-foreground"
-              : "text-muted-foreground hover:text-foreground"
+              ? "border border-black/10 bg-white text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_-18px_rgba(17,17,17,0.4)]"
+              : "text-muted-foreground hover:bg-white/55 hover:text-foreground"
           }`}
           onClick={() => props.onChange(item.key)}
         >
-          {item.icon}
-          {item.label}
+          <span className="mr-2.5 opacity-80">{item.icon}</span>
+          <span>{item.label}</span>
         </Button>
       ))}
     </div>
@@ -270,7 +287,7 @@ function RuntimeSidebar(props: SidebarProps) {
             <div>
               <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">Workspaces</p>
               <p className="mt-1 text-[11px] text-muted-foreground">
-                {workspaceCountLabel} · {sessionCountLabel}
+                {workspaceCountLabel} · {sessionCountLabel} · {props.selectedServiceScopeLabel}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1">
@@ -283,7 +300,7 @@ function RuntimeSidebar(props: SidebarProps) {
                   variant="ghost"
                   className="h-8 w-8"
                   onClick={() => {
-                    props.setWorkspaceDraft((current) => ({ ...current, template: "" }));
+                    props.setWorkspaceDraft((current) => ({ ...current, blueprint: "" }));
                     props.setShowWorkspaceCreator(true);
                   }}
                   title="New Workspace"
@@ -310,19 +327,19 @@ function RuntimeSidebar(props: SidebarProps) {
             </div>
           </div>
           <label className="space-y-1 px-2">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Template</span>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Blueprint</span>
             <Select
-              value={props.workspaceTemplateFilter || "__all_templates__"}
-              onValueChange={(value) => props.setWorkspaceTemplateFilter(value === "__all_templates__" ? "" : value)}
+              value={props.workspaceBlueprintFilter || "__all_blueprints__"}
+              onValueChange={(value) => props.setWorkspaceBlueprintFilter(value === "__all_blueprints__" ? "" : value)}
             >
-              <SelectTrigger className="h-8 w-full rounded-xl border-black/10 bg-white/68 text-xs shadow-none" aria-label="Workspace template filter">
-                <SelectValue placeholder="All templates" />
+              <SelectTrigger className="h-8 w-full rounded-xl border-black/10 bg-white/68 text-xs shadow-none" aria-label="Workspace blueprint filter">
+                <SelectValue placeholder="All blueprints" />
               </SelectTrigger>
               <SelectContent align="start">
-                <SelectItem value="__all_templates__">All templates</SelectItem>
-                {props.workspaceTemplateFilterOptions.map((template) => (
-                  <SelectItem key={template} value={template}>
-                    {template}
+                <SelectItem value="__all_blueprints__">All blueprints</SelectItem>
+                {props.workspaceBlueprintFilterOptions.map((blueprint) => (
+                  <SelectItem key={blueprint} value={blueprint}>
+                    {blueprint}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -331,10 +348,14 @@ function RuntimeSidebar(props: SidebarProps) {
           {props.filteredSavedWorkspaces.length === 0 ? (
             <div className="rounded-xl border border-dashed border-black/12 bg-white/32 px-4 py-8 text-center">
               <p className="text-sm font-medium text-foreground">
-                {props.workspaceTemplateFilter ? "No matching workspaces" : "No workspaces"}
+                {props.workspaceBlueprintFilter ? "No matching workspaces" : "No workspaces"}
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {props.workspaceTemplateFilter ? "Try another template filter." : "Create or load one."}
+                {props.workspaceBlueprintFilter
+                  ? "Try another blueprint or service filter."
+                  : props.serviceScope !== "__all__"
+                    ? "Switch service scope or create a workspace in this service."
+                    : "Create or load one."}
               </p>
             </div>
           ) : (
@@ -433,21 +454,39 @@ function StorageSidebar(props: SidebarProps) {
     props.healthReport?.worker.summary.late ??
     props.healthReport?.worker.activeWorkers.filter((entry) => entry.health === "late").length ??
     0;
+  const storageModeItems = props.storageRedisEnabled
+    ? [
+        { key: "postgres", label: "Postgres", icon: <Database className="h-4 w-4" /> },
+        { key: "redis", label: "Redis", icon: <Workflow className="h-4 w-4" /> }
+      ]
+    : [{ key: "postgres", label: "Postgres", icon: <Database className="h-4 w-4" /> }];
 
   return (
     <div className="space-y-5 px-3 py-4">
-      <div className="space-y-3 border-b border-black/8 pb-4">
-        <SidebarModeToggle
-          activeKey={props.storageBrowserTab}
-          onChange={(key) => props.onStorageBrowserTabChange(key as "postgres" | "redis")}
-          items={[
-            { key: "postgres", label: "Postgres", icon: <Database className="h-4 w-4" /> },
-            { key: "redis", label: "Redis", icon: <Workflow className="h-4 w-4" /> }
-          ]}
-        />
-        <div className="grid grid-cols-2 gap-2">
-          <SidebarMetric label="Postgres" value={postgresAvailable ? "online" : "offline"} tone={postgresAvailable ? "emerald" : "rose"} />
-          <SidebarMetric label="Redis" value={redisAvailable ? "online" : "offline"} tone={redisAvailable ? "emerald" : "rose"} />
+      <div className="space-y-3 pb-1">
+        <SidebarModeToggle activeKey={props.storageBrowserTab} onChange={(key) => props.onStorageBrowserTabChange(key as "postgres" | "redis")} items={storageModeItems} />
+        <div className="grid grid-cols-3 gap-2">
+          <SidebarMetric
+            label="Postgres"
+            value={postgresAvailable ? "online" : "offline"}
+            detail={`${postgresTableCount} tables`}
+            tone={postgresAvailable ? "emerald" : "rose"}
+            compact
+          />
+          <SidebarMetric
+            label="Scope"
+            value={props.selectedServiceScopeLabel}
+            detail={props.serviceScope === "__all__" ? "cross-service" : "active scope"}
+            tone={props.serviceScope === "__all__" ? "sky" : "emerald"}
+            compact
+          />
+          <SidebarMetric
+            label="Redis"
+            value={redisAvailable ? "online" : "offline"}
+            detail={`${props.storageOverview?.redis.dbSize ?? 0} keys`}
+            tone={redisAvailable ? "emerald" : "rose"}
+            compact
+          />
         </div>
       </div>
 
@@ -846,29 +885,29 @@ export function AppSidebar(props: SidebarProps) {
           </DialogHeader>
           <div className="space-y-3">
             <Input
-              value={props.workspaceDraft.name}
+              value={props.workspaceDraft.name ?? ""}
               onChange={(event) => props.setWorkspaceDraft((current) => ({ ...current, name: event.target.value }))}
               placeholder="Workspace name"
             />
             <div className="space-y-1">
               <div className="flex items-center gap-1">
                 <Select
-                  {...(props.workspaceDraft.template.trim() ? { value: props.workspaceDraft.template.trim() } : {})}
-                  onValueChange={(value) => props.setWorkspaceDraft((current) => ({ ...current, template: value }))}
+                  value={props.workspaceDraft.blueprint?.trim() ?? ""}
+                  onValueChange={(value) => props.setWorkspaceDraft((current) => ({ ...current, blueprint: value }))}
                 >
-                  <SelectTrigger className="h-10 flex-1 rounded-xl border-black/10 bg-white/68 text-sm shadow-none" aria-label="Workspace template">
-                    <SelectValue placeholder={props.workspaceTemplates.length > 0 ? "Select template" : "No templates available"} />
+                  <SelectTrigger className="h-10 flex-1 rounded-xl border-black/10 bg-white/68 text-sm shadow-none" aria-label="Workspace blueprint">
+                    <SelectValue placeholder={props.workspaceBlueprints.length > 0 ? "Select blueprint" : "No blueprints available"} />
                   </SelectTrigger>
                   <SelectContent align="start">
-                    {props.workspaceTemplates.length > 0 ? (
-                      props.workspaceTemplates.map((template) => (
-                        <SelectItem key={template} value={template}>
-                          {template}
+                    {props.workspaceBlueprints.length > 0 ? (
+                      props.workspaceBlueprints.map((blueprint) => (
+                        <SelectItem key={blueprint} value={blueprint}>
+                          {blueprint}
                         </SelectItem>
                       ))
                     ) : (
                       <SelectItem value="__no_templates__" disabled>
-                        No templates available
+                        No blueprints available
                       </SelectItem>
                     )}
                   </SelectContent>
@@ -894,30 +933,54 @@ export function AppSidebar(props: SidebarProps) {
                   size="icon"
                   className="h-10 w-10 shrink-0 rounded-xl"
                   onClick={() => uploadTemplateInputRef.current?.click()}
-                  title="Upload template (.zip)"
+                  title="Upload blueprint (.zip)"
                 >
                   <Upload className="h-4 w-4" />
                 </Button>
               </div>
               <p className="px-1 text-xs leading-5 text-muted-foreground">
-                {props.workspaceTemplates.length > 0
-                  ? "Choose a template or upload a .zip folder as a new template."
-                  : "Template list is empty. Upload a .zip or use the refresh button."}
+                {props.workspaceBlueprints.length > 0
+                  ? "Choose a blueprint or upload a .zip folder as a new blueprint."
+                  : "Blueprint list is empty. Upload a .zip or use the refresh button."}
               </p>
             </div>
             <Input
-              value={props.workspaceDraft.rootPath}
+              value={props.workspaceDraft.rootPath ?? ""}
               onChange={(event) => props.setWorkspaceDraft((current) => ({ ...current, rootPath: event.target.value }))}
               placeholder="Root path"
             />
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <Input
+                  value={props.workspaceDraft.ownerId ?? ""}
+                  onChange={(event) => props.setWorkspaceDraft((current) => ({ ...current, ownerId: event.target.value }))}
+                  placeholder="Owner ID (optional)"
+                />
+                <p className="px-1 text-xs leading-5 text-muted-foreground">
+                  Only set this when the workspace should stay bound to one owner.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Input
+                  value={props.workspaceDraft.serviceName ?? ""}
+                  onChange={(event) =>
+                    props.setWorkspaceDraft((current) => ({ ...current, serviceName: event.target.value }))
+                  }
+                  placeholder="Service name (optional)"
+                />
+                <p className="px-1 text-xs leading-5 text-muted-foreground">
+                  Leave empty to use the default OAH service namespace.
+                </p>
+              </div>
+            </div>
             <p className="px-1 text-xs leading-5 text-muted-foreground">
               Managed mode: auto-create under workspace_dir/workspace_id. Custom mode: use the path you enter here.
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => props.refreshWorkspaceTemplates()}>
+            <Button variant="outline" onClick={() => props.refreshWorkspaceBlueprints()}>
               <RefreshCw className="h-4 w-4" />
-              Templates
+              Blueprints
             </Button>
             <Button
               onClick={() => {
@@ -935,16 +998,16 @@ export function AppSidebar(props: SidebarProps) {
       <Dialog open={showUploadTemplateDialog} onOpenChange={setShowUploadTemplateDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Upload Template</DialogTitle>
+            <DialogTitle>Upload Blueprint</DialogTitle>
             <DialogDescription>
-              Upload a .zip file containing the template folder structure. It will be extracted as a new workspace template.
+              Upload a .zip file containing the blueprint folder structure. It will be extracted as a new workspace blueprint.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <Input
               value={uploadTemplateName}
               onChange={(event) => setUploadTemplateName(event.target.value.replace(/[^a-zA-Z0-9_-]/g, "_"))}
-              placeholder="Template name"
+              placeholder="Blueprint name"
             />
             <p className="px-1 text-xs leading-5 text-muted-foreground">
               Only alphanumeric characters, hyphens, and underscores are allowed.
@@ -953,9 +1016,9 @@ export function AppSidebar(props: SidebarProps) {
               <Switch
                 checked={uploadTemplateOverwrite}
                 onCheckedChange={setUploadTemplateOverwrite}
-                id="overwrite-template"
+                id="overwrite-blueprint"
               />
-              <label htmlFor="overwrite-template" className="text-sm text-muted-foreground">
+              <label htmlFor="overwrite-blueprint" className="text-sm text-muted-foreground">
                 Overwrite if exists
               </label>
             </div>
@@ -971,7 +1034,7 @@ export function AppSidebar(props: SidebarProps) {
               disabled={!uploadTemplateName.trim() || !uploadTemplateFile}
               onClick={async () => {
                 if (!uploadTemplateFile) return;
-                const ok = await props.uploadWorkspaceTemplate(
+                const ok = await props.uploadWorkspaceBlueprint(
                   uploadTemplateFile,
                   uploadTemplateName.trim(),
                   uploadTemplateOverwrite
@@ -981,7 +1044,10 @@ export function AppSidebar(props: SidebarProps) {
                   setUploadTemplateFile(null);
                   setUploadTemplateName("");
                   setUploadTemplateOverwrite(false);
-                  props.setWorkspaceDraft((current) => ({ ...current, template: uploadTemplateName.trim() }));
+                  props.setWorkspaceDraft((current) => ({
+                    ...current,
+                    blueprint: uploadTemplateName.trim()
+                  }));
                 }
               }}
             >

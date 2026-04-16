@@ -9,7 +9,7 @@ const composeFile = path.join(repoRoot, "docker-compose.local.yml");
 const mode = process.argv[2];
 const composeProjectName =
   process.env.COMPOSE_PROJECT_NAME || path.basename(repoRoot).toLowerCase().replace(/[^a-z0-9]/g, "");
-const readonlyObjectStorageVolumeKeys = ["oah-templates", "oah-models", "oah-tools", "oah-skills", "oah-archives"];
+const readonlyObjectStorageVolumeKeys = ["oah-blueprints", "oah-models", "oah-tools", "oah-skills", "oah-archives"];
 
 if (mode !== "up" && mode !== "down") {
   console.error("Usage: node ./scripts/local-stack.mjs <up|down>");

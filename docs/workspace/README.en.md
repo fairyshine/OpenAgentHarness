@@ -2,14 +2,9 @@
 
 The workspace is the primary capability boundary. When a user opens a project, the runtime auto-discovers all capabilities from the project root -- no global configuration required.
 
-## Workspace Kinds
+## Workspace Kind
 
-| Kind | Description | Capability Scope |
-| --- | --- | --- |
-| `project` | Standard project workspace | Full: agents, models, actions, skills, tools, hooks |
-| `chat` | Read-only conversational workspace | Agents + models only; no tool or hook execution |
-
-The `chat` vs `project` distinction is determined by the server at registration time, not declared by the workspace itself. The server can designate a chat directory via `paths.chat_dir`; each subdirectory is auto-registered as `kind=chat`.
+There is one standard workspace shape. A workspace declares agents, models, actions, skills, tools, and hooks in one consistent directory structure, and the runtime discovers and executes them uniformly.
 
 ## Directory Structure
 
@@ -85,7 +80,7 @@ The runtime scans these paths at run startup:
 
 !!! info
 
-    `.openharness/data/` is a runtime-managed directory and is not part of capability discovery. `history.db` only stores local runtime data and is not a cross-process sync mechanism. `kind=chat` workspaces do not create this database.
+    `.openharness/data/` is a runtime-managed directory and is not part of capability discovery. `history.db` only stores local runtime data and is not a cross-process sync mechanism.
 
 **Merge rules:**
 
@@ -93,14 +88,9 @@ The runtime scans these paths at run startup:
 - Platform and workspace model entries merge (no override)
 - Agents must reference models via explicit `model_ref`
 - Explicit parameters can only select from the current catalog, not extend it
-- `kind=chat` workspaces only expose agents and models
 - If no `default_agent` is declared and the caller does not specify one, a config error is returned
 
 ## FAQ
-
-**What is the core difference between `chat` and `project`?**
-
-Execution strategy. `project` can assemble and execute tool capabilities. `chat` provides static conversation only and never enters the execution backend.
 
 **Why is `.openharness/data/` excluded from config parsing?**
 

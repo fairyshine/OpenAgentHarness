@@ -1,4 +1,0 @@
-openai-default:
-  provider: openai
-  key: ${env.OPENAI_API_KEY}
-  name: gpt-5

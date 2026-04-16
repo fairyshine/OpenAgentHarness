@@ -8,7 +8,7 @@ import type {
   SessionPage,
   Workspace,
   WorkspaceCatalog,
-  WorkspaceTemplateList
+  WorkspaceBlueprintList
 } from "@oah/api-contracts";
 
 import {
@@ -52,7 +52,7 @@ export function useNavigationActions(params: {
     setExpandedSessionIds: Dispatch<SetStateAction<string[]>>;
     workspace: Workspace | null;
     setWorkspace: Dispatch<SetStateAction<Workspace | null>>;
-    setWorkspaceTemplates: Dispatch<SetStateAction<string[]>>;
+    setWorkspaceBlueprints: Dispatch<SetStateAction<string[]>>;
     setCatalog: Dispatch<SetStateAction<WorkspaceCatalog | null>>;
     session: Session | null;
     setSession: Dispatch<SetStateAction<Session | null>>;
@@ -75,7 +75,7 @@ export function useNavigationActions(params: {
   function rememberWorkspace(
     workspaceRecord: Workspace,
     options?: {
-      template?: string;
+      blueprint?: string;
     }
   ) {
     const now = new Date().toISOString();
@@ -87,11 +87,12 @@ export function useNavigationActions(params: {
         rootPath: workspaceRecord.rootPath,
         status: workspaceRecord.status,
         createdAt: workspaceRecord.createdAt ?? existing?.createdAt,
-        lastOpenedAt: now
+        lastOpenedAt: now,
+        ...(workspaceRecord.serviceName ? { serviceName: workspaceRecord.serviceName } : {})
       };
-      const templateValue = options?.template ?? existing?.template;
-      if (templateValue) {
-        nextRecord.template = templateValue;
+      const blueprintValue = options?.blueprint ?? existing?.blueprint;
+      if (blueprintValue) {
+        nextRecord.blueprint = blueprintValue;
       }
 
       if (existing) {
@@ -414,26 +415,26 @@ export function useNavigationActions(params: {
     }
   }
 
-  async function refreshWorkspaceTemplates(quiet = false) {
+  async function refreshWorkspaceBlueprints(quiet = false) {
     try {
-      const response = await params.request<WorkspaceTemplateList>("/api/v1/workspace-templates");
+      const response = await params.request<WorkspaceBlueprintList>("/api/v1/blueprints");
       startTransition(() => {
         params.navigation.setWorkspaceManagementEnabled(true);
-        params.navigation.setWorkspaceTemplates(response.items.map((item) => item.name));
+        params.navigation.setWorkspaceBlueprints(response.items.map((item) => item.name));
       });
       if (!quiet) {
-        params.setActivity(`已加载 ${response.items.length} 个模板`);
+        params.setActivity(`已加载 ${response.items.length} 个蓝图`);
         params.setErrorMessage("");
       }
     } catch (error) {
       if (
         error instanceof Error &&
-        (error.message.includes("workspace_templates_unavailable") ||
-          error.message.toLowerCase().includes("workspace templates are not available"))
+        (error.message.includes("workspace_blueprints_unavailable") ||
+          error.message.toLowerCase().includes("workspace blueprints are not available"))
       ) {
         startTransition(() => {
           params.navigation.setWorkspaceManagementEnabled(false);
-          params.navigation.setWorkspaceTemplates([]);
+          params.navigation.setWorkspaceBlueprints([]);
         });
         if (!quiet) {
           params.setErrorMessage("");
@@ -447,22 +448,19 @@ export function useNavigationActions(params: {
     }
   }
 
-  async function uploadWorkspaceTemplate(file: File, name: string, overwrite: boolean): Promise<boolean> {
+  async function uploadWorkspaceBlueprint(file: File, name: string, overwrite: boolean): Promise<boolean> {
     try {
       const query = new URLSearchParams({ name, overwrite: String(overwrite) });
-      const response = await fetch(
-        buildUrl(params.connection.baseUrl, `/api/v1/workspace-templates/upload?${query.toString()}`),
-        {
-          method: "POST",
-          headers: buildAuthHeaders(params.connection, { "content-type": "application/octet-stream" }),
-          body: file
-        }
-      );
+      const response = await fetch(buildUrl(params.connection.baseUrl, `/api/v1/blueprints/upload?${query.toString()}`), {
+        method: "POST",
+        headers: buildAuthHeaders(params.connection, { "content-type": "application/octet-stream" }),
+        body: file
+      });
       if (!response.ok) {
         throw await createHttpRequestError(response);
       }
-      await refreshWorkspaceTemplates(true);
-      params.setActivity(`模板 "${name}" 上传成功`);
+      await refreshWorkspaceBlueprints(true);
+      params.setActivity(`蓝图 "${name}" 上传成功`);
       params.setErrorMessage("");
       return true;
     } catch (error) {
@@ -471,20 +469,17 @@ export function useNavigationActions(params: {
     }
   }
 
-  async function deleteWorkspaceTemplate(templateName: string): Promise<boolean> {
+  async function deleteWorkspaceBlueprint(blueprintName: string): Promise<boolean> {
     try {
-      const response = await fetch(
-        buildUrl(params.connection.baseUrl, `/api/v1/workspace-templates/${encodeURIComponent(templateName)}`),
-        {
-          method: "DELETE",
-          headers: buildAuthHeaders(params.connection)
-        }
-      );
+      const response = await fetch(buildUrl(params.connection.baseUrl, `/api/v1/blueprints/${encodeURIComponent(blueprintName)}`), {
+        method: "DELETE",
+        headers: buildAuthHeaders(params.connection)
+      });
       if (!response.ok) {
         throw await createHttpRequestError(response);
       }
-      await refreshWorkspaceTemplates(true);
-      params.setActivity(`模板 "${templateName}" 已删除`);
+      await refreshWorkspaceBlueprints(true);
+      params.setActivity(`蓝图 "${blueprintName}" 已删除`);
       params.setErrorMessage("");
       return true;
     } catch (error) {
@@ -579,7 +574,12 @@ export function useNavigationActions(params: {
               status: item.status,
               createdAt: item.createdAt,
               lastOpenedAt: existing?.lastOpenedAt ?? item.updatedAt,
-              ...(item.template ? { template: item.template } : existing?.template ? { template: existing.template } : {})
+              ...(item.serviceName ? { serviceName: item.serviceName } : {}),
+              ...(item.blueprint
+                ? { blueprint: item.blueprint }
+                : existing?.blueprint
+                  ? { blueprint: existing.blueprint }
+                  : {})
             } satisfies SavedWorkspaceRecord;
           });
         });
@@ -681,6 +681,10 @@ export function useNavigationActions(params: {
 
   async function createWorkspace() {
     try {
+      const rootPath = params.navigation.workspaceDraft.rootPath?.trim() ?? "";
+      const ownerId = params.navigation.workspaceDraft.ownerId?.trim() ?? "";
+      const serviceName = params.navigation.workspaceDraft.serviceName?.trim() ?? "";
+      const blueprint = params.navigation.workspaceDraft.blueprint?.trim() ?? "";
       const created = await params.request<Workspace>("/api/v1/workspaces", {
         method: "POST",
         headers: {
@@ -688,8 +692,10 @@ export function useNavigationActions(params: {
         },
         body: JSON.stringify({
           name: params.navigation.workspaceDraft.name.trim(),
-          template: params.navigation.workspaceDraft.template.trim(),
-          ...(params.navigation.workspaceDraft.rootPath.trim() ? { rootPath: params.navigation.workspaceDraft.rootPath.trim() } : {}),
+          blueprint,
+          ...(rootPath ? { rootPath } : {}),
+          ...(ownerId ? { ownerId } : {}),
+          ...(serviceName ? { serviceName } : {}),
           executionPolicy: "local"
         })
       });
@@ -707,12 +713,14 @@ export function useNavigationActions(params: {
         params.navigation.setRecentWorkspaces((current) => addRecentId(current, created.id));
       });
       rememberWorkspace(created, {
-        template: params.navigation.workspaceDraft.template.trim()
+        blueprint
       });
       params.runtime.lastCursorRef.current = undefined;
       params.navigation.setWorkspaceDraft((current) => ({
         ...current,
-        template: ""
+        blueprint: "",
+        ownerId: "",
+        serviceName: ""
       }));
       params.navigation.setShowWorkspaceCreator(false);
       expandWorkspaceInSidebar(created.id);
@@ -857,9 +865,9 @@ export function useNavigationActions(params: {
     clearSessionSelection,
     clearWorkspaceSelection,
     openWorkspace,
-    refreshWorkspaceTemplates,
-    uploadWorkspaceTemplate,
-    deleteWorkspaceTemplate,
+    refreshWorkspaceBlueprints,
+    uploadWorkspaceBlueprint,
+    deleteWorkspaceBlueprint,
     refreshWorkspaceIndex,
     refreshWorkspace,
     createWorkspace,

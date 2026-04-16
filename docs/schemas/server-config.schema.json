@@ -93,12 +93,10 @@
             "type": "string",
             "enum": [
               "workspace",
-              "chat",
-              "template",
+              "blueprint",
               "model",
               "tool",
-              "skill",
-              "archive"
+              "skill"
             ]
           },
           "uniqueItems": true
@@ -110,10 +108,7 @@
             "workspace": {
               "type": "string"
             },
-            "chat": {
-              "type": "string"
-            },
-            "template": {
+            "blueprint": {
               "type": "string"
             },
             "model": {
@@ -124,9 +119,71 @@
             },
             "skill": {
               "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "self_hosted",
+            "e2b"
+          ]
+        },
+        "self_hosted": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "minLength": 1
             },
-            "archive": {
-              "type": "string"
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "e2b": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "api_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "domain": {
+              "type": "string",
+              "minLength": 1
+            },
+            "template": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "request_timeout_ms": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           }
         }
@@ -136,8 +193,7 @@
       "type": "object",
       "required": [
         "workspace_dir",
-        "chat_dir",
-        "template_dir",
+        "blueprint_dir",
         "model_dir",
         "tool_dir",
         "skill_dir"
@@ -147,10 +203,7 @@
         "workspace_dir": {
           "type": "string"
         },
-        "chat_dir": {
-          "type": "string"
-        },
-        "template_dir": {
+        "blueprint_dir": {
           "type": "string"
         },
         "model_dir": {
@@ -163,11 +216,8 @@
         },
         "skill_dir": {
           "type": "string"
-        },
-        "archive_dir": {
-          "type": "string",
-          "description": "Optional path for exported archive SQLite bundles."
         }
+        
       }
     },
     "workers": {

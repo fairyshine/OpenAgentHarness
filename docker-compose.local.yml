@@ -74,8 +74,7 @@ services:
     volumes:
       - ${OAH_TEST_ROOT:?set OAH_TEST_ROOT}/server.docker.yaml:/config/server.docker.yaml:ro
       - oah-workspaces:/data/workspaces
-      - oah-chat:/data/chat
-      - oah-templates:/data/templates:ro
+      - oah-blueprints:/data/blueprints:ro
       - oah-models:/data/models:ro
       - oah-tools:/data/tools:ro
       - oah-skills:/data/skills:ro
@@ -86,12 +85,11 @@ volumes:
   redisdata:
   minio-data:
   oah-workspaces:
-  oah-chat:
-  oah-templates:
+  oah-blueprints:
     driver: rclone
     driver_opts:
       type: s3
-      path: test-oah-server/template
+      path: test-oah-server/blueprint
       s3_provider: Minio
       s3_access_key_id: oahadmin
       s3_secret_access_key: oahadmin123

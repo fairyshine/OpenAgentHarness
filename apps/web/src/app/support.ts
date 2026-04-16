@@ -23,15 +23,18 @@ interface ConnectionSettings {
 
 interface WorkspaceDraft {
   name: string;
-  template: string;
+  blueprint?: string;
   rootPath: string;
+  ownerId: string;
+  serviceName: string;
 }
 
 interface SavedWorkspaceRecord {
   id: string;
   name: string;
   rootPath: string;
-  template?: string;
+  blueprint?: string;
+  serviceName?: string;
   status: Workspace["status"];
   createdAt?: string;
   lastOpenedAt: string;
@@ -98,6 +101,7 @@ type InspectorTab = "overview" | "timeline" | "workspace";
 type MainViewMode = "conversation" | "inspector";
 type SurfaceMode = "runtime" | "storage" | "provider";
 type StorageBrowserTab = "postgres" | "redis";
+type ServiceScope = string;
 type ConsoleFilter = "all" | "errors" | "runs" | "tools" | "hooks" | "model" | "system";
 type MessageParts = Extract<Message["content"], unknown[]>;
 type MessagePart = MessageParts[number];
@@ -256,10 +260,14 @@ function storageTablePreviewLimit(table: StoragePostgresTableName) {
   }
 }
 
+const SERVICE_SCOPE_ALL = "__all__";
+const SERVICE_SCOPE_DEFAULT = "__default__";
+
 const storageKeys = {
   connection: "oah.web.connection",
   workspaceDraft: "oah.web.workspaceDraft",
-  workspaceTemplateFilter: "oah.web.workspaceTemplateFilter",
+  workspaceBlueprintFilter: "oah.web.workspaceBlueprintFilter",
+  serviceScope: "oah.web.serviceScope",
   sessionDraft: "oah.web.sessionDraft",
   modelDraft: "oah.web.modelDraft",
   workspaceId: "oah.web.workspaceId",
@@ -307,6 +315,67 @@ function normalizeBaseUrl(input: string) {
 function buildUrl(baseUrl: string, path: string) {
   const normalized = normalizeBaseUrl(baseUrl);
   return normalized ? `${normalized}${path}` : path;
+}
+
+function normalizeServiceName(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === SERVICE_SCOPE_ALL || normalized === SERVICE_SCOPE_DEFAULT) {
+    return undefined;
+  }
+
+  return normalized;
+}
+
+function normalizeServiceScope(value: string | undefined): ServiceScope {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === SERVICE_SCOPE_ALL) {
+    return SERVICE_SCOPE_ALL;
+  }
+
+  if (trimmed === SERVICE_SCOPE_DEFAULT) {
+    return SERVICE_SCOPE_DEFAULT;
+  }
+
+  return normalizeServiceName(trimmed) ?? SERVICE_SCOPE_ALL;
+}
+
+function serviceScopeMatches(scope: string, serviceName: string | undefined): boolean {
+  const normalizedScope = normalizeServiceScope(scope);
+  if (normalizedScope === SERVICE_SCOPE_ALL) {
+    return true;
+  }
+
+  if (normalizedScope === SERVICE_SCOPE_DEFAULT) {
+    return !normalizeServiceName(serviceName);
+  }
+
+  return normalizeServiceName(serviceName) === normalizedScope;
+}
+
+function serviceScopeLabel(scope: string): string {
+  const normalizedScope = normalizeServiceScope(scope);
+  if (normalizedScope === SERVICE_SCOPE_ALL) {
+    return "All Services";
+  }
+
+  if (normalizedScope === SERVICE_SCOPE_DEFAULT) {
+    return "Default (OAH)";
+  }
+
+  return normalizedScope;
+}
+
+function toStorageServiceNameParam(scope: string): string | undefined {
+  const normalizedScope = normalizeServiceScope(scope);
+  if (normalizedScope === SERVICE_SCOPE_ALL) {
+    return undefined;
+  }
+
+  if (normalizedScope === SERVICE_SCOPE_DEFAULT) {
+    return "@default";
+  }
+
+  return normalizedScope;
 }
 
 function buildAuthHeaders(connection: ConnectionSettings, extraHeaders?: HeadersInit): Headers {
@@ -1493,12 +1562,19 @@ function buildRuntimeConsoleEntries(events: SessionEventContract[], activeError:
 }
 
 export {
+  SERVICE_SCOPE_ALL,
+  SERVICE_SCOPE_DEFAULT,
   storageKeys,
   storagePostgresTables,
   storageTablePreviewLimit,
   usePersistentState,
   normalizeBaseUrl,
   buildUrl,
+  normalizeServiceName,
+  normalizeServiceScope,
+  serviceScopeMatches,
+  serviceScopeLabel,
+  toStorageServiceNameParam,
   buildAuthHeaders,
   createHttpRequestError,
   readJsonResponse,
@@ -1571,6 +1647,7 @@ export type {
   MainViewMode,
   SurfaceMode,
   StorageBrowserTab,
+  ServiceScope,
   RuntimeConsoleEntry,
   ModelCallTraceMessage,
   ModelCallTraceToolCall,

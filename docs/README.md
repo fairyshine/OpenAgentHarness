@@ -11,11 +11,11 @@
 - 部署假设：可信内网 / 自有环境
 - 身份边界：用户、组织、鉴权由外部服务管理，运行时只消费 caller context
 - 执行边界：workspace 是能力发现边界，session 是上下文边界，run 是执行边界
-- 运行时来源：平台内建 agent / model 与 workspace 当前文件声明；平台模板仅用于初始化生成文件
+- 运行时来源：平台内建 agent / model 与 workspace 当前文件声明；平台蓝图仅用于初始化生成文件
 - 模型接入：平台级与 workspace 级双层 model entries，底层 `provider` 字段对齐 AI SDK
 - 消息模型：session / model 调用统一采用 AI SDK 风格消息内容，`content` 可为文本或 message parts
 - 存储边界：PostgreSQL 是中心事实源；workspace 下 `.openharness/data/history.db` 仅作为本地运行时数据文件
-- 服务端配置：可通过独立配置文件声明 `chat` workspace 根目录等运行时级选项
+- 服务端配置：可通过独立配置文件声明 workspace 根目录、蓝图目录、模型目录等运行时级选项
 
 ## 文档索引
 

@@ -66,7 +66,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
   --default-model openai-default
 ```
 
-可选参数：`--workspace-kind chat`、`--tool-dir`、`--skill-dir`、`--host`、`--port`
+可选参数：`--tool-dir`、`--skill-dir`、`--host`、`--port`
 
 !!! info
     Single Workspace 模式下，调试控制台会自动进入唯一的 Workspace。

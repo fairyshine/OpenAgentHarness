@@ -19,7 +19,7 @@ Open Agent Harness is a deployable backend runtime for agent products. It manage
 - **Parallel workspaces** — PostgreSQL for persistence, Redis for queues and coordination. Many workspaces run concurrently.
 - **Declarative agent config** — Define agents in Markdown files with YAML frontmatter. Hot-reloaded.
 - **Composable capabilities** — agent / skill / action / tool / hook / context are configured independently per workspace.
-- **Two workspace modes** — `project` (full execution) and `chat` (read-only conversation).
+- **One workspace model** — the same directory structure supports conversation, tools, and execution.
 - **REST + SSE API** — Everything exposed under `/api/v1`. Frontend-agnostic.
 - **Flexible deployment** — Run unified locally or split into API + Worker for production.
 

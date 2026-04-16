@@ -124,7 +124,7 @@ async function createRuntime(delayMs = 0) {
           toolServers: {},
           hooks: {},
           catalog: {
-            workspaceId: "template",
+            workspaceId: "blueprint",
             agents: [],
             models: [],
             actions: [],
@@ -141,7 +141,7 @@ async function createRuntime(delayMs = 0) {
   const workspace = await runtimeService.createWorkspace({
     input: {
       name: "demo",
-      template: "workspace",
+      blueprint: "workspace",
       rootPath: "/tmp/demo",
       executionPolicy: "local"
     }
@@ -151,7 +151,7 @@ async function createRuntime(delayMs = 0) {
 }
 
 describe("runtime service", () => {
-  it("creates workspaces from a template initializer result", async () => {
+  it("creates workspaces from a blueprint initializer result", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();
     const runtimeService = new RuntimeService({
@@ -189,7 +189,7 @@ describe("runtime service", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [{ name: "builder", mode: "primary", source: "workspace" }],
               models: [],
               actions: [],
@@ -206,8 +206,9 @@ describe("runtime service", () => {
     const workspace = await runtimeService.createWorkspace({
       input: {
         name: "demo",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo",
+        serviceName: "svc-alpha",
         executionPolicy: "local"
       }
     });
@@ -217,8 +218,71 @@ describe("runtime service", () => {
     expect(stored.projectAgentsMd).toBe("Template rule: always add tests.");
     expect(stored.catalog.workspaceId).toBe(workspace.id);
     expect(stored.settings.defaultAgent).toBe("builder");
+    expect(stored.serviceName).toBe("svc-alpha");
     expect(workspace.kind).toBe("project");
     expect(workspace.readOnly).toBe(false);
+    expect(workspace.serviceName).toBe("svc-alpha");
+  });
+
+  it("normalizes legacy chat workspaces when listing and loading", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "ws_legacy_chat",
+      name: "legacy-chat",
+      rootPath: "/tmp/legacy-chat",
+      executionPolicy: "local",
+      status: "active",
+      kind: "chat" as never,
+      readOnly: true,
+      historyMirrorEnabled: false,
+      defaultAgent: "default",
+      settings: {
+        defaultAgent: "default",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_legacy_chat",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      },
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    } as never);
+
+    await expect(runtimeService.listWorkspaces(20)).resolves.toMatchObject({
+      items: [
+        {
+          id: "ws_legacy_chat",
+          kind: "project",
+          readOnly: false
+        }
+      ]
+    });
+
+    await expect(runtimeService.getWorkspaceRecord("ws_legacy_chat")).resolves.toMatchObject({
+      id: "ws_legacy_chat",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true
+    });
   });
 
   it("preserves the initializer workspace id when creating a workspace", async () => {
@@ -245,7 +309,7 @@ describe("runtime service", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -262,7 +326,7 @@ describe("runtime service", () => {
     const workspace = await runtimeService.createWorkspace({
       input: {
         name: "demo",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo",
         executionPolicy: "local"
       }
@@ -360,7 +424,7 @@ describe("runtime service", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -377,7 +441,7 @@ describe("runtime service", () => {
     const workspace = await runtimeService.createWorkspace({
       input: {
         name: "demo",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/workspace-delete-demo",
         executionPolicy: "local"
       }
@@ -452,7 +516,7 @@ describe("runtime service", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -470,7 +534,7 @@ describe("runtime service", () => {
       const workspace = await runtimeService.createWorkspace({
         input: {
           name: "demo",
-          template: "workspace",
+          blueprint: "workspace",
           rootPath: sourceRoot,
           executionPolicy: "local"
         }
@@ -530,7 +594,7 @@ describe("runtime service", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -549,7 +613,7 @@ describe("runtime service", () => {
       const workspace = await runtimeService.createWorkspace({
         input: {
           name: "demo",
-          template: "workspace",
+          blueprint: "workspace",
           rootPath: sourceRoot,
           executionPolicy: "local"
         }
@@ -607,7 +671,7 @@ describe("runtime service", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -625,7 +689,7 @@ describe("runtime service", () => {
       const workspace = await runtimeService.createWorkspace({
         input: {
           name: "demo",
-          template: "workspace",
+          blueprint: "workspace",
           rootPath: sourceRoot,
           executionPolicy: "local"
         }
@@ -690,7 +754,7 @@ describe("runtime service", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -709,7 +773,7 @@ describe("runtime service", () => {
       const workspace = await runtimeService.createWorkspace({
         input: {
           name: "demo",
-          template: "workspace",
+          blueprint: "workspace",
           rootPath: sourceRoot,
           executionPolicy: "local"
         }
@@ -817,7 +881,7 @@ describe("runtime service", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -834,7 +898,7 @@ describe("runtime service", () => {
     const workspace = await runtimeService.createWorkspace({
       input: {
         name: "demo",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo-delete-session-tree",
         executionPolicy: "local"
       }
@@ -978,7 +1042,7 @@ describe("runtime service", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -995,7 +1059,7 @@ describe("runtime service", () => {
     const workspace = await runtimeService.createWorkspace({
       input: {
         name: "runtime-message-sync",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/runtime-message-sync",
         executionPolicy: "local"
       }
@@ -7622,7 +7686,7 @@ describe("runtime service", () => {
     });
   });
 
-  it("does not inject environment summaries for chat workspaces", async () => {
+  it("does not inject environment summaries when compose order omits the environment segment", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();
     const runtimeService = new RuntimeService({
@@ -7632,16 +7696,16 @@ describe("runtime service", () => {
     });
 
     await persistence.workspaceRepository.upsert({
-      id: "chat_prompt_compose",
-      name: "chat-prompt-compose",
-      rootPath: "/tmp/chat-prompt-compose",
+      id: "project_prompt_compose",
+      name: "project-prompt-compose",
+      rootPath: "/tmp/project-prompt-compose",
       executionPolicy: "local",
       status: "active",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      kind: "chat",
-      readOnly: true,
-      historyMirrorEnabled: false,
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
       defaultAgent: "assistant",
       settings: {
         defaultAgent: "assistant",
@@ -7658,7 +7722,7 @@ describe("runtime service", () => {
         assistant: {
           name: "assistant",
           mode: "primary",
-          prompt: "You are a chat-only assistant.",
+          prompt: "You are a project assistant.",
           tools: {
             native: [],
             actions: [],
@@ -7674,7 +7738,7 @@ describe("runtime service", () => {
       toolServers: {},
       hooks: {},
       catalog: {
-        workspaceId: "chat_prompt_compose",
+        workspaceId: "project_prompt_compose",
         agents: [{ name: "assistant", mode: "primary", source: "workspace" }],
         models: [],
         actions: [],
@@ -7693,7 +7757,7 @@ describe("runtime service", () => {
     };
 
     const session = await runtimeService.createSession({
-      workspaceId: "chat_prompt_compose",
+      workspaceId: "project_prompt_compose",
       caller,
       input: {}
     });
@@ -7708,11 +7772,11 @@ describe("runtime service", () => {
     const systemMessages = gateway.invocations.at(0)?.input.messages?.filter((message) => message.role === "system") ?? [];
 
     expect(systemMessages).toHaveLength(1);
-    expect(systemMessages[0]?.content).toContain("You are a chat-only assistant.");
+    expect(systemMessages[0]?.content).toContain("You are a project assistant.");
     expect(systemMessages[0]?.content.includes("<environment>")).toBe(false);
   });
 
-  it("disables execution-only capabilities for chat workspaces even when records are dirty", async () => {
+  it("exposes execution capabilities for project workspaces when actions, skills, tools, and hooks are configured", async () => {
     const gateway = new FakeModelGateway();
     let capturedToolNames: string[] = [];
     let capturedMcpNames: string[] = [];
@@ -7720,7 +7784,7 @@ describe("runtime service", () => {
       capturedToolNames = Object.keys(options?.tools ?? {});
       capturedMcpNames = (options?.toolServers ?? []).map((server) => server.name);
       return {
-        text: "chat-only reply"
+        text: "project reply"
       };
     };
 
@@ -7732,16 +7796,16 @@ describe("runtime service", () => {
     });
 
     await persistence.workspaceRepository.upsert({
-      id: "chat_locked_down",
-      name: "chat-locked-down",
-      rootPath: "/tmp/chat-locked-down",
+      id: "project_runtime_catalog",
+      name: "project-runtime-catalog",
+      rootPath: "/tmp/project-runtime-catalog",
       executionPolicy: "local",
       status: "active",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      kind: "chat",
-      readOnly: true,
-      historyMirrorEnabled: false,
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
       defaultAgent: "assistant",
       settings: {
         defaultAgent: "assistant",
@@ -7758,7 +7822,7 @@ describe("runtime service", () => {
         assistant: {
           name: "assistant",
           mode: "primary",
-          prompt: "You are a chat-only assistant.",
+          prompt: "You are a project assistant.",
           tools: {
             native: [],
             actions: ["dangerous.run"],
@@ -7772,11 +7836,11 @@ describe("runtime service", () => {
       actions: {
         "dangerous.run": {
           name: "dangerous.run",
-          description: "Should never run inside chat workspaces.",
+          description: "Runs inside project workspaces.",
           callableByApi: true,
           callableByUser: true,
           exposeToLlm: true,
-          directory: "/tmp/chat-locked-down/actions/dangerous.run",
+          directory: "/tmp/project-runtime-catalog/actions/dangerous.run",
           entry: {
             command: "printf unsafe"
           }
@@ -7785,10 +7849,10 @@ describe("runtime service", () => {
       skills: {
         "repo-explorer": {
           name: "repo-explorer",
-          description: "Should never be exposed inside chat workspaces.",
+          description: "Exposed inside project workspaces.",
           exposeToLlm: true,
-          directory: "/tmp/chat-locked-down/skills/repo-explorer",
-          sourceRoot: "/tmp/chat-locked-down/skills/repo-explorer",
+          directory: "/tmp/project-runtime-catalog/skills/repo-explorer",
+          sourceRoot: "/tmp/project-runtime-catalog/skills/repo-explorer",
           content: "# Repo Explorer"
         }
       },
@@ -7816,7 +7880,7 @@ describe("runtime service", () => {
         }
       },
       catalog: {
-        workspaceId: "chat_locked_down",
+        workspaceId: "project_runtime_catalog",
         agents: [{ name: "assistant", mode: "primary", source: "workspace" }],
         models: [],
         actions: [{ name: "dangerous.run", callableByApi: true, callableByUser: true, exposeToLlm: true }],
@@ -7827,13 +7891,13 @@ describe("runtime service", () => {
       }
     });
 
-    const catalog = await runtimeService.getWorkspaceCatalog("chat_locked_down");
-    expect(catalog.actions).toEqual([]);
-    expect(catalog.skills).toEqual([]);
-    expect(catalog.tools).toEqual([]);
-    expect(catalog.hooks).toEqual([]);
-    expect(catalog.nativeTools).toEqual([]);
-    expect(catalog.runtimeTools).toEqual([]);
+    const catalog = await runtimeService.getWorkspaceCatalog("project_runtime_catalog");
+    expect(catalog.actions).toEqual([{ name: "dangerous.run", callableByApi: true, callableByUser: true, exposeToLlm: true }]);
+    expect(catalog.skills).toEqual([{ name: "repo-explorer", exposeToLlm: true }]);
+    expect(catalog.tools).toEqual([{ name: "docs", transportType: "http" }]);
+    expect(catalog.hooks).toEqual([{ name: "rewrite-request", handlerType: "command", events: ["before_model_call"] }]);
+    expect(catalog.nativeTools).toEqual(expect.arrayContaining(["Bash", "Read", "Write"]));
+    expect(catalog.runtimeTools).toEqual(expect.arrayContaining(["run_action", "Skill"]));
 
     const caller = {
       subjectRef: "dev:test",
@@ -7842,7 +7906,7 @@ describe("runtime service", () => {
       workspaceAccess: []
     };
     const session = await runtimeService.createSession({
-      workspaceId: "chat_locked_down",
+      workspaceId: "project_runtime_catalog",
       caller,
       input: {}
     });
@@ -7859,17 +7923,14 @@ describe("runtime service", () => {
     });
 
     const systemMessages = gateway.invocations.at(0)?.input.messages?.filter((message) => message.role === "system") ?? [];
-    expect(systemMessages).toHaveLength(1);
-    expect(systemMessages[0]?.content).toContain("You are a chat-only assistant.");
-    expect(systemMessages[0]?.content.includes("<available_actions>")).toBe(false);
-    expect(systemMessages[0]?.content.includes("<available_skills>")).toBe(false);
-    expect(systemMessages[0]?.content.includes("Hook warning.")).toBe(false);
-    expect(gateway.invocations.at(0)?.input.temperature).toBeUndefined();
-    expect(capturedToolNames).toEqual([]);
-    expect(capturedMcpNames).toEqual([]);
+    expect(systemMessages.some((message) => message.content.includes("You are a project assistant."))).toBe(true);
+    expect(systemMessages.some((message) => message.content.includes("<available_actions>"))).toBe(true);
+    expect(systemMessages.some((message) => message.content.includes("<available_skills>"))).toBe(true);
+    expect(capturedToolNames).toEqual(expect.arrayContaining(["run_action", "Skill"]));
+    expect(capturedMcpNames).toEqual(["docs"]);
 
     const runSteps = await runtimeService.listRunSteps(accepted.runId);
-    expect(runSteps.items.some((step) => step.stepType === "hook")).toBe(false);
+    expect(runSteps.items.some((step) => step.stepType === "hook")).toBe(true);
     expect(runSteps.items.some((step) => step.stepType === "tool_call")).toBe(false);
   });
 

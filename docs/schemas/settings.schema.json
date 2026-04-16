@@ -9,7 +9,7 @@
       "type": "string",
       "minLength": 1
     },
-    "template": {
+    "blueprint": {
       "type": "string",
       "minLength": 1
     },
@@ -21,8 +21,8 @@
       },
       "uniqueItems": true
     },
-    "template_imports": {
-      "$ref": "#/$defs/templateImports"
+    "imports": {
+      "$ref": "#/$defs/imports"
     },
     "system_prompt": {
       "$ref": "#/$defs/systemPrompt"
@@ -37,7 +37,7 @@
       },
       "uniqueItems": true
     },
-    "templateImports": {
+    "imports": {
       "type": "object",
       "additionalProperties": false,
       "properties": {

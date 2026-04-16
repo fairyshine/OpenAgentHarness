@@ -1,6 +1,6 @@
 # Files Module
 
-Sandbox 文件管理 API，支撑 web 文件管理和 E2B-compatible sandbox 场景。当前以 `sandboxes` 作为主语义，文件路径使用 sandbox 内绝对路径，例如 `/workspace/notes/todo.md`。
+Sandbox 文件管理 API，支撑 web 文件管理以及 `self_hosted` / `e2b` 两类 sandbox provider。当前以 `sandboxes` 作为主语义，文件路径使用 sandbox 内绝对路径，例如 `/workspace/notes/todo.md`。
 
 暂不包括：全 workspace 递归树、批量操作、全文搜索、分片上传、文件变更推送。
 
@@ -8,7 +8,7 @@ Sandbox 文件管理 API，支撑 web 文件管理和 E2B-compatible sandbox 场
 
 ### `POST /sandboxes`
 
-创建或解析一个 sandbox。可以直接传 `workspaceId` 绑定已有 workspace，也可以传 `name + template` 新建。
+创建或解析一个 sandbox。可以直接传 `workspaceId` 绑定已有 workspace，也可以传 `name + blueprint` 新建。
 
 ### `GET /sandboxes/{sandboxId}`
 
@@ -66,7 +66,7 @@ Sandbox 文件管理 API，支撑 web 文件管理和 E2B-compatible sandbox 场
 
 ## 设计说明
 
-- **统一 sandbox 语义：** 文件与命令执行都围绕 sandbox 暴露，便于兼容自建 sandbox pod 与 E2B-compatible provider
+- **统一 sandbox 语义：** 文件与命令执行都围绕 sandbox 暴露，便于在 `self_hosted` 与 `e2b` provider 之间做配置级切换
 - **不用全量树：** 大 workspace 全量树慢，懒加载更适合虚拟滚动和分页
 - **目录列表与文件内容分离：** 列表高频轻量，内容低频体积大
 - **entry 抽象：** 删除、移动对文件和目录通用，减少重复接口

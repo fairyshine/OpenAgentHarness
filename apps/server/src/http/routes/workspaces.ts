@@ -29,6 +29,16 @@ import type { AppDependencies, AppRouteOptions } from "../types.js";
 
 type WorkspaceOwnership = Awaited<ReturnType<NonNullable<AppDependencies["resolveWorkspaceOwnership"]>>>;
 
+function resolveWorkspaceOwnerId(input: { ownerId?: string | undefined; userId?: string | undefined }): string | undefined {
+  const ownerId = input.ownerId?.trim();
+  if (ownerId) {
+    return ownerId;
+  }
+
+  const userId = input.userId?.trim();
+  return userId && userId.length > 0 ? userId : undefined;
+}
+
 function copyProxyResponseHeaders(reply: FastifyReply, headers: Headers): void {
   for (const [name, value] of headers.entries()) {
     if (name === "transfer-encoding" || name === "connection" || name === "keep-alive") {
@@ -371,10 +381,11 @@ export function registerWorkspaceRoutes(
 
     const input = createWorkspaceRequestSchema.parse(request.body);
     const workspace = await dependencies.runtimeService.createWorkspace({ input });
-    if (input.userId) {
+    const ownerId = resolveWorkspaceOwnerId(input);
+    if (ownerId) {
       await dependencies.assignWorkspacePlacementUser?.({
         workspaceId: workspace.id,
-        userId: input.userId,
+        userId: ownerId,
         overwrite: true
       });
     }
@@ -392,21 +403,28 @@ export function registerWorkspaceRoutes(
       throw new AppError(400, "invalid_request", "rootPath is required.");
     }
 
-    const kind = body?.kind === "chat" ? "chat" : "project";
     const name = typeof body?.name === "string" ? body.name : undefined;
     const externalRef = typeof body?.externalRef === "string" ? body.externalRef : undefined;
-    const userId = typeof body?.userId === "string" && body.userId.trim().length > 0 ? body.userId.trim() : undefined;
+    const ownerId = resolveWorkspaceOwnerId({
+      ownerId: typeof body?.ownerId === "string" ? body.ownerId : undefined,
+      userId: typeof body?.userId === "string" ? body.userId : undefined
+    });
+    const serviceName =
+      typeof body?.serviceName === "string" && body.serviceName.trim().length > 0
+        ? body.serviceName.trim().toLowerCase()
+        : undefined;
     const workspace = await dependencies.importWorkspace({
       rootPath,
-      kind,
+      kind: "project",
       ...(name ? { name } : {}),
       ...(externalRef ? { externalRef } : {}),
-      ...(userId ? { userId } : {})
+      ...(ownerId ? { ownerId } : {}),
+      ...(serviceName ? { serviceName } : {})
     });
-    if (userId) {
+    if (ownerId) {
       await dependencies.assignWorkspacePlacementUser?.({
         workspaceId: workspace.id,
-        userId,
+        userId: ownerId,
         overwrite: true
       });
     }

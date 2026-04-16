@@ -13,8 +13,10 @@ import {
 export function useNavigationState() {
   const [workspaceDraft, setWorkspaceDraft] = usePersistentState<WorkspaceDraft>(storageKeys.workspaceDraft, {
     name: "debug-playground",
-    template: "",
-    rootPath: ""
+    blueprint: "",
+    rootPath: "",
+    ownerId: "",
+    serviceName: ""
   });
   const [workspaceId, setWorkspaceId] = usePersistentState(storageKeys.workspaceId, "");
   const [sessionId, setSessionId] = usePersistentState(storageKeys.sessionId, "");
@@ -25,7 +27,7 @@ export function useNavigationState() {
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = usePersistentState<string[]>(storageKeys.expandedWorkspaces, []);
   const [expandedSessionIds, setExpandedSessionIds] = usePersistentState<string[]>(storageKeys.expandedSessions, []);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [workspaceTemplates, setWorkspaceTemplates] = useState<string[]>([]);
+  const [workspaceBlueprints, setWorkspaceBlueprints] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<WorkspaceCatalog | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [showWorkspaceCreator, setShowWorkspaceCreator] = useState(false);
@@ -71,8 +73,8 @@ export function useNavigationState() {
     setExpandedSessionIds,
     workspace,
     setWorkspace,
-    workspaceTemplates,
-    setWorkspaceTemplates,
+    workspaceBlueprints,
+    setWorkspaceBlueprints,
     catalog,
     setCatalog,
     session,

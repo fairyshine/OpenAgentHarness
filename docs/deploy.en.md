@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | **API + Worker combined** | 1 `server` | PostgreSQL; Redis optional | Local dev, PoC, single-node |
 | **API + Worker split** | 1 `server --api-only` + N `worker` | PostgreSQL + Redis | Production, independent scaling |
-| **Single Workspace** | 1 `server --workspace <path>` | PostgreSQL; Redis optional | Serving one repo or one chat space |
+| **Single Workspace** | 1 `server --workspace <path>` | PostgreSQL; Redis optional | Serving one repo |
 
 > **tip**
 > Not sure which to pick? Start with combined mode. You can split later without code changes.
@@ -158,7 +158,6 @@ Optional flags:
 
 | Flag | Description |
 | --- | --- |
-| `--workspace-kind project\|chat` | Workspace type, defaults to `project` |
 | `--tool-dir <path>` | Platform tool directory |
 | `--skill-dir <path>` | Platform skill directory |
 | `--host <addr>` | Listen address, defaults to `127.0.0.1` |

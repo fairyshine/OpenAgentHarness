@@ -11,11 +11,14 @@ import type {
 } from "@oah/api-contracts";
 
 import {
+  SERVICE_SCOPE_ALL,
   downloadCsvFile,
   storageTablePreviewLimit,
+  toStorageServiceNameParam,
   toErrorMessage,
   type ConnectionSettings,
   type HealthReportResponse,
+  type ServiceScope,
   type StorageBrowserTab
 } from "./support";
 
@@ -24,6 +27,7 @@ type AppRequest = <T>(path: string, init?: RequestInit, options?: { auth?: boole
 export function useStorageController(params: {
   connection: ConnectionSettings;
   enabled: boolean;
+  serviceScope: ServiceScope;
   healthReport: HealthReportResponse | null;
   request: AppRequest;
   setActivity: (value: string) => void;
@@ -48,11 +52,23 @@ export function useStorageController(params: {
   const [redisKeyDetail, setRedisKeyDetail] = useState<StorageRedisKeyDetail | null>(null);
   const [storageBusy, setStorageBusy] = useState(false);
   const [storageBrowserTab, setStorageBrowserTab] = useState<StorageBrowserTab>("postgres");
+  const storageRedisEnabled = true;
+  const storageScopeRequiresSelection = false;
+
+  function appendServiceScope(paramsValue: URLSearchParams) {
+    const serviceName = toStorageServiceNameParam(params.serviceScope);
+    if (serviceName) {
+      paramsValue.set("serviceName", serviceName);
+    }
+  }
 
   async function refreshStorageOverview(quiet = false) {
     try {
       setStorageBusy(true);
-      const response = await params.request<StorageOverview>("/api/v1/storage/overview");
+      const paramsValue = new URLSearchParams();
+      appendServiceScope(paramsValue);
+      const suffix = paramsValue.size > 0 ? `?${paramsValue.toString()}` : "";
+      const response = await params.request<StorageOverview>(`/api/v1/storage/overview${suffix}`);
       setStorageOverview(response);
       if (!quiet) {
         params.setActivity("已刷新 PG / Redis 存储概览");
@@ -89,6 +105,7 @@ export function useStorageController(params: {
       const paramsValue = new URLSearchParams({
         limit: String(pageSize)
       });
+      appendServiceScope(paramsValue);
       const offset = overrides?.offset ?? storageTableOffset;
       const q = overrides?.q ?? storageTableSearch;
       const workspaceId = overrides?.workspaceId ?? storageTableWorkspaceId;
@@ -215,6 +232,11 @@ export function useStorageController(params: {
   }
 
   async function refreshRedisKeys(options?: { cursor?: string; quiet?: boolean }) {
+    if (!storageRedisEnabled) {
+      setRedisKeyPage(null);
+      return;
+    }
+
     try {
       setStorageBusy(true);
       const pattern = redisKeyPattern.trim() || "oah:*";
@@ -241,6 +263,11 @@ export function useStorageController(params: {
   }
 
   async function refreshRedisKeyDetail(key = selectedRedisKey, quiet = false) {
+    if (!storageRedisEnabled) {
+      setRedisKeyDetail(null);
+      return;
+    }
+
     const targetKey = key.trim();
     if (!targetKey) {
       setRedisKeyDetail(null);
@@ -387,13 +414,29 @@ export function useStorageController(params: {
     }
 
     void refreshStorageOverview(true);
-    void refreshStorageTable(selectedStorageTable, true);
-    void refreshRedisKeys({ quiet: true });
-  }, [params.connection.baseUrl, params.connection.token, params.enabled, selectedStorageTable]);
+    if (storageBrowserTab === "postgres") {
+      void refreshStorageTable(selectedStorageTable, true);
+    }
+    if (storageBrowserTab === "redis" && storageRedisEnabled) {
+      void refreshRedisKeys({ quiet: true });
+    }
+  }, [
+    params.connection.baseUrl,
+    params.connection.token,
+    params.enabled,
+    params.serviceScope,
+    storageBrowserTab,
+    selectedStorageTable,
+    storageRedisEnabled,
+    storageScopeRequiresSelection
+  ]);
 
   return {
     storageSurfaceProps: {
       healthReport: params.healthReport,
+      serviceScope: params.serviceScope,
+      storageScopeRequiresSelection,
+      storageRedisEnabled,
       storageBrowserTab,
       onStorageBrowserTabChange: setStorageBrowserTab,
       storageOverview,

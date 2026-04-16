@@ -48,7 +48,7 @@ describe("runtime queue integration", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -65,7 +65,7 @@ describe("runtime queue integration", () => {
     const workspace = await runtimeService.createWorkspace({
       input: {
         name: "demo",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/demo",
         executionPolicy: "local"
       }
@@ -149,7 +149,7 @@ describe("runtime queue integration", () => {
             toolServers: {},
             hooks: {},
             catalog: {
-              workspaceId: "template",
+              workspaceId: "blueprint",
               agents: [],
               models: [],
               actions: [],
@@ -166,7 +166,7 @@ describe("runtime queue integration", () => {
     const workspace = await runtimeService.createWorkspace({
       input: {
         name: "demo",
-        template: "workspace",
+        blueprint: "workspace",
         rootPath: "/tmp/source-demo",
         executionPolicy: "local"
       }

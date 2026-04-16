@@ -157,7 +157,7 @@ tools:
 
 - Optional; undeclared sub-fields default to empty lists
 - Expresses an allowlist only, not execution logic
-- In `chat` workspaces, always treated as empty
+- Parsed uniformly from the workspace declaration
 
 ### `switch`
 
@@ -182,7 +182,7 @@ subagents:
 - Each entry is a subagent this agent can delegate to; target should be `mode: subagent` or `mode: all`
 - Without `subagents`, the agent cannot delegate
 - The runtime validates targets before executing `agent.delegate`
-- Disabled by default in `chat` workspaces
+- Availability is determined by workspace declarations and runtime configuration
 
 ### `policy`
 

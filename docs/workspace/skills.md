@@ -10,7 +10,7 @@ skills/
     SKILL.md            # 主入口
     scripts/            # 可执行脚本
     references/         # 补充文档
-    assets/             # 模板、图片、数据
+    assets/             # 资源、图片、数据
 ```
 
 最小结构只需 `SKILL.md`。

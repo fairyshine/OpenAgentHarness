@@ -52,12 +52,13 @@ system_prompt:
 | --- | --- | --- |
 | `default_agent` | 否 | 默认主 agent。目标必须存在且不能是纯 `subagent` |
 | `skill_dirs` | 否 | 额外 skill 搜索目录列表 |
-| `template_imports` | 否 | 模板初始化时导入的公共 tools/skills |
+| `blueprint` | 否 | 记录当前 workspace 来源的 blueprint 名称 |
+| `imports` | 否 | blueprint 初始化时导入的公共 tools/skills |
 | `system_prompt` | 否 | Workspace 级 system prompt 配置 |
 
 !!! tip
 
-    `project` 与 `chat` workspace 使用同一结构。`chat` workspace 中即使引用了 actions/tools，运行时也不会授予执行权限。
+    workspace 使用统一结构。是否暴露 actions/tools 由当前 workspace 配置与运行时能力共同决定。
 
 ## `skill_dirs`
 
@@ -144,10 +145,10 @@ compose:
 | `skills` | 当前 agent 无可见 skills 时自动跳过 |
 | `include_environment` | 是否追加运行环境摘要，默认 `false` |
 
-## `template_imports`
+## `imports`
 
 ```yaml
-template_imports:
+imports:
   tools:
     - docs-server
   skills:
@@ -159,4 +160,4 @@ template_imports:
 | `tools` | 从 `paths.tool_dir` 导入到 workspace 的公共 tool 名称 |
 | `skills` | 从 `paths.skill_dir` 导入到 workspace 的公共 skill 名称 |
 
-仅用于模板初始化。导入后 workspace 以本地副本为准，不再依赖平台目录。引用不存在的 tool 或 skill 时，初始化失败。
+仅用于 blueprint 初始化。导入后 workspace 以本地副本为准，不再依赖平台目录。引用不存在的 tool 或 skill 时，初始化失败。

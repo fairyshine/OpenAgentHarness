@@ -20,7 +20,7 @@ actions/
     ACTION.yaml
     scripts/      # 内部脚本
     references/   # 补充文档
-    assets/       # 模板和静态资源
+    assets/       # 资源文件和静态资源
 ```
 
 ## 示例

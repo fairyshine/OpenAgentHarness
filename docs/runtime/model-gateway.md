@@ -129,7 +129,7 @@ const res = await fetch('http://localhost/internal/v1/models/generate', {
 
 ## 边界
 
-- `chat` workspace 不支持 action，不使用此能力
+- 所有 workspace 都可按配置暴露 action，此能力由运行时统一处理
 - `project` workspace 的 action/script 可调用
 - 面向脚本与工具，不替代 session/run 主对话接口
 

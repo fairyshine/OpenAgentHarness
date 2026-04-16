@@ -55,18 +55,70 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessReport'
-  /workspace-templates:
+  /blueprints:
     get:
       tags: [Workspaces]
-      summary: List workspace templates
-      operationId: listWorkspaceTemplates
+      summary: List workspace blueprints
+      operationId: listWorkspaceBlueprints
       responses:
         '200':
-          description: Workspace template list
+          description: Workspace blueprint list
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WorkspaceTemplateList'
+                $ref: '#/components/schemas/WorkspaceBlueprintList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /blueprints/upload:
+    post:
+      tags: [Workspaces]
+      summary: Upload workspace blueprint
+      operationId: uploadWorkspaceBlueprint
+      parameters:
+        - in: query
+          name: name
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - in: query
+          name: overwrite
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Workspace blueprint uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceBlueprintUploadResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /blueprints/{blueprintName}:
+    delete:
+      tags: [Workspaces]
+      summary: Delete workspace blueprint
+      operationId: deleteWorkspaceBlueprint
+      parameters:
+        - in: path
+          name: blueprintName
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '204':
+          description: Workspace blueprint deleted
         default:
           $ref: '#/components/responses/ErrorResponse'
   /model-providers:
@@ -1295,20 +1347,26 @@ components:
         checks:
           $ref: '#/components/schemas/HealthChecks'
       additionalProperties: false
-    WorkspaceTemplate:
+    WorkspaceBlueprint:
       type: object
       required: [name]
       properties:
         name:
           type: string
-    WorkspaceTemplateList:
+    WorkspaceBlueprintList:
       type: object
       required: [items]
       properties:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/WorkspaceTemplate'
+            $ref: '#/components/schemas/WorkspaceBlueprint'
+    WorkspaceBlueprintUploadResponse:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
     ModelProvider:
       type: object
       required:
@@ -1360,6 +1418,9 @@ components:
           type: string
         name:
           type: string
+        blueprint:
+          type: string
+          description: Preferred field for the workspace blueprint name.
         rootPath:
           type: string
         executionPolicy:
@@ -1370,7 +1431,7 @@ components:
           enum: [active, archived, disabled]
         kind:
           type: string
-          enum: [project, chat]
+          enum: [project]
         readOnly:
           type: boolean
         createdAt:
@@ -1406,14 +1467,14 @@ components:
           type: string
         provider:
           type: string
-          enum: [self_hosted, e2b_compatible]
+          enum: [self_hosted, e2b]
         rootPath:
           type: string
         name:
           type: string
         kind:
           type: string
-          enum: [project, chat]
+          enum: [project]
         executionPolicy:
           type: string
           enum: [local, container, remote_runner]
@@ -2068,21 +2129,27 @@ components:
           $ref: '#/components/schemas/JsonObject'
     CreateWorkspaceRequest:
       type: object
-      required:
-        - name
-        - template
       properties:
         externalRef:
           type: string
         name:
           type: string
           minLength: 1
-        template:
+        blueprint:
           type: string
           minLength: 1
+          description: Preferred field for selecting the workspace blueprint.
         rootPath:
           type: string
           minLength: 1
+        ownerId:
+          type: string
+          minLength: 1
+          description: Optional owner affinity key used to colocate workspaces for the same owner on one sandbox pod.
+        serviceName:
+          type: string
+          minLength: 1
+          description: Optional service namespace used for service-scoped storage partitioning.
         agentsMd:
           type: string
           minLength: 1
@@ -2109,6 +2176,9 @@ components:
           type: string
           enum: [local, container, remote_runner]
           default: local
+      required:
+        - name
+        - blueprint
       additionalProperties: false
     CreateSandboxRequest:
       type: object
@@ -2121,13 +2191,21 @@ components:
         name:
           type: string
           minLength: 1
-        template:
+        blueprint:
           type: string
           minLength: 1
+          description: Preferred field for selecting the workspace blueprint when creating a sandbox-backed workspace.
         rootPath:
           type: string
           minLength: 1
+        ownerId:
+          type: string
+          minLength: 1
         userId:
+          type: string
+          minLength: 1
+          deprecated: true
+        serviceName:
           type: string
           minLength: 1
         executionPolicy:
@@ -2291,7 +2369,7 @@ components:
           minLength: 1
         kind:
           type: string
-          enum: [project, chat]
+          enum: [project]
         name:
           type: string
         externalRef:

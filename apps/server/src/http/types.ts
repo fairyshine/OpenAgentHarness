@@ -188,14 +188,14 @@ export interface AppDependencies {
     isLocalOwner: boolean;
   } | undefined>) | undefined;
   resolveCallerContext?: ((request: FastifyRequest) => Promise<CallerContext | undefined> | CallerContext | undefined) | undefined;
-  listWorkspaceTemplates?: (() => Promise<import("@oah/config").WorkspaceTemplateDescriptor[]>) | undefined;
-  uploadWorkspaceTemplate?: ((input: {
-    templateName: string;
+  listWorkspaceBlueprints?: (() => Promise<import("@oah/config").WorkspaceBlueprintDescriptor[]>) | undefined;
+  uploadWorkspaceBlueprint?: ((input: {
+    blueprintName: string;
     zipBuffer: Buffer;
     overwrite: boolean;
-  }) => Promise<import("@oah/config").WorkspaceTemplateDescriptor>) | undefined;
-  deleteWorkspaceTemplate?: ((input: {
-    templateName: string;
+  }) => Promise<import("@oah/config").WorkspaceBlueprintDescriptor>) | undefined;
+  deleteWorkspaceBlueprint?: ((input: {
+    blueprintName: string;
   }) => Promise<void>) | undefined;
   listPlatformModels?: (() => Promise<
     Array<{
@@ -234,10 +234,11 @@ export interface AppDependencies {
   }) => void) => (() => void)) | undefined;
   importWorkspace?: (input: {
     rootPath: string;
-    kind?: "project" | "chat";
+    kind?: "project";
     name?: string;
     externalRef?: string;
-    userId?: string;
+    ownerId?: string;
+    serviceName?: string;
   }) => Promise<import("@oah/api-contracts").Workspace>;
   assignWorkspacePlacementUser?: ((input: {
     workspaceId: string;

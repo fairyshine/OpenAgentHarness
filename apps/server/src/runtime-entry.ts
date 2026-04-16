@@ -19,7 +19,9 @@ function buildAppDependencies(runtime: BootstrappedRuntime): AppDependencies {
     ...(runtime.subscribePlatformModelSnapshot
       ? { subscribePlatformModelSnapshot: runtime.subscribePlatformModelSnapshot }
       : {}),
-    ...(runtime.listWorkspaceTemplates ? { listWorkspaceTemplates: runtime.listWorkspaceTemplates } : {}),
+    ...(runtime.listWorkspaceBlueprints ? { listWorkspaceBlueprints: runtime.listWorkspaceBlueprints } : {}),
+    ...(runtime.uploadWorkspaceBlueprint ? { uploadWorkspaceBlueprint: runtime.uploadWorkspaceBlueprint } : {}),
+    ...(runtime.deleteWorkspaceBlueprint ? { deleteWorkspaceBlueprint: runtime.deleteWorkspaceBlueprint } : {}),
     ...(runtime.importWorkspace ? { importWorkspace: runtime.importWorkspace } : {}),
     ...(runtime.resolveWorkspaceOwnership
       ? { resolveWorkspaceOwnership: runtime.resolveWorkspaceOwnership }

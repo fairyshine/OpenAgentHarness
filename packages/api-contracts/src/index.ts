@@ -10,11 +10,12 @@ export const workspaceSchema = z.object({
   id: z.string(),
   externalRef: z.string().optional(),
   name: z.string(),
-  template: z.string().min(1).optional(),
+  blueprint: z.string().min(1).optional(),
+  serviceName: z.string().optional(),
   rootPath: z.string(),
   executionPolicy: z.enum(["local", "container", "remote_runner"]),
   status: z.enum(["active", "archived", "disabled"]),
-  kind: z.enum(["project", "chat"]),
+  kind: z.literal("project"),
   readOnly: z.boolean(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema
@@ -309,7 +310,7 @@ export function createSandboxHttpClient(transport: SandboxHttpTransport) {
   };
 }
 
-export const sandboxProviderKindSchema = z.enum(["self_hosted", "e2b_compatible"]);
+export const sandboxProviderKindSchema = z.enum(["self_hosted", "e2b"]);
 
 export const sandboxSchema = z.object({
   id: z.string(),
@@ -317,7 +318,7 @@ export const sandboxSchema = z.object({
   provider: sandboxProviderKindSchema,
   rootPath: z.string(),
   name: z.string(),
-  kind: z.enum(["project", "chat"]),
+  kind: z.literal("project"),
   executionPolicy: z.enum(["local", "container", "remote_runner"]),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
@@ -330,19 +331,28 @@ export const createSandboxRequestSchema = z
     workspaceId: z.string().trim().min(1).optional(),
     externalRef: z.string().optional(),
     name: z.string().min(1).optional(),
-    template: z.string().min(1).optional(),
+    blueprint: z.string().min(1).optional(),
     rootPath: z.string().min(1).optional(),
+    ownerId: z.string().trim().min(1).optional(),
     userId: z.string().trim().min(1).optional(),
+    serviceName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(63)
+      .regex(/^[a-z0-9](?:[a-z0-9-_]*[a-z0-9])?$/i, "serviceName may only contain letters, numbers, hyphen, and underscore.")
+      .transform((value) => value.toLowerCase())
+      .optional(),
     executionPolicy: z.enum(["local", "container", "remote_runner"]).default("local")
   })
   .superRefine((value, context) => {
-    if (value.workspaceId || value.rootPath || (value.name && value.template)) {
+    if (value.workspaceId || value.rootPath || (value.name && value.blueprint)) {
       return;
     }
 
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "Provide workspaceId, rootPath, or both name and template."
+      message: "Provide workspaceId, rootPath, or both name and blueprint."
     });
   });
 
@@ -733,20 +743,24 @@ export const workspaceSkillInputSchema = z.object({
   content: z.string().min(1)
 });
 
-export const workspaceTemplateSchema = z.object({
+export const workspaceBlueprintSchema = z.object({
   name: z.string()
 });
 
-export const workspaceTemplateListSchema = z.object({
-  items: z.array(workspaceTemplateSchema)
+export const workspaceBlueprintListSchema = z.object({
+  items: z.array(workspaceBlueprintSchema)
 });
 
-export const uploadWorkspaceTemplateRequestSchema = z.object({
-  name: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/, "Template name must contain only alphanumeric characters, hyphens, and underscores"),
+export const uploadWorkspaceBlueprintRequestSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[a-zA-Z0-9_-]+$/, "Blueprint name must contain only alphanumeric characters, hyphens, and underscores"),
   overwrite: z.boolean().default(false)
 });
 
-export const uploadWorkspaceTemplateResponseSchema = z.object({
+export const uploadWorkspaceBlueprintResponseSchema = z.object({
   name: z.string()
 });
 
@@ -896,6 +910,10 @@ export const storageOverviewSchema = z.object({
   })
 });
 
+export const storageOverviewQuerySchema = z.object({
+  serviceName: z.string().optional()
+});
+
 export const storagePostgresTablePageSchema = z.object({
   table: storagePostgresTableNameSchema,
   rowCount: z.number().int().min(0),
@@ -906,6 +924,7 @@ export const storagePostgresTablePageSchema = z.object({
   rows: z.array(z.record(z.string(), jsonValueSchema)),
   appliedFilters: z
     .object({
+      serviceName: z.string().optional(),
       q: z.string().optional(),
       workspaceId: z.string().optional(),
       sessionId: z.string().optional(),
@@ -997,17 +1016,27 @@ export const storageRedisWorkspacePlacementPageSchema = z.object({
   items: z.array(storageRedisWorkspacePlacementSchema)
 });
 
-export const createWorkspaceRequestSchema = z.object({
-  externalRef: z.string().optional(),
-  name: z.string().min(1),
-  template: z.string().min(1),
-  rootPath: z.string().min(1).optional(),
-  userId: z.string().trim().min(1).optional(),
-  agentsMd: z.string().min(1).optional(),
-  toolServers: z.record(z.string(), jsonObjectSchema).optional(),
-  skills: z.array(workspaceSkillInputSchema).optional(),
-  executionPolicy: z.enum(["local", "container", "remote_runner"]).default("local")
-});
+export const createWorkspaceRequestSchema = z
+  .object({
+    externalRef: z.string().optional(),
+    name: z.string().min(1),
+    blueprint: z.string().min(1),
+    rootPath: z.string().min(1).optional(),
+    ownerId: z.string().trim().min(1).optional(),
+    userId: z.string().trim().min(1).optional(),
+    serviceName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(63)
+      .regex(/^[a-z0-9](?:[a-z0-9-_]*[a-z0-9])?$/i, "serviceName may only contain letters, numbers, hyphen, and underscore.")
+      .transform((value) => value.toLowerCase())
+      .optional(),
+    agentsMd: z.string().min(1).optional(),
+    toolServers: z.record(z.string(), jsonObjectSchema).optional(),
+    skills: z.array(workspaceSkillInputSchema).optional(),
+    executionPolicy: z.enum(["local", "container", "remote_runner"]).default("local")
+  });
 
 export const putWorkspaceFileRequestSchema = z.object({
   path: z.string().min(1),
@@ -1218,6 +1247,7 @@ export const runtimeLogEventDataSchema = z.object({
 export const storageTableQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
+  serviceName: z.string().optional(),
   q: z.string().optional(),
   workspaceId: z.string().optional(),
   sessionId: z.string().optional(),
@@ -1538,10 +1568,10 @@ export type RunStepPage = z.infer<typeof runStepPageSchema>;
 export type RequeueRunAccepted = z.infer<typeof requeueRunAcceptedSchema>;
 export type BatchRequeueRunsRequest = z.infer<typeof batchRequeueRunsRequestSchema>;
 export type BatchRequeueRunsResponse = z.infer<typeof batchRequeueRunsResponseSchema>;
-export type WorkspaceTemplate = z.infer<typeof workspaceTemplateSchema>;
-export type WorkspaceTemplateList = z.infer<typeof workspaceTemplateListSchema>;
-export type UploadWorkspaceTemplateRequest = z.infer<typeof uploadWorkspaceTemplateRequestSchema>;
-export type UploadWorkspaceTemplateResponse = z.infer<typeof uploadWorkspaceTemplateResponseSchema>;
+export type WorkspaceBlueprint = z.infer<typeof workspaceBlueprintSchema>;
+export type WorkspaceBlueprintList = z.infer<typeof workspaceBlueprintListSchema>;
+export type UploadWorkspaceBlueprintRequest = z.infer<typeof uploadWorkspaceBlueprintRequestSchema>;
+export type UploadWorkspaceBlueprintResponse = z.infer<typeof uploadWorkspaceBlueprintResponseSchema>;
 export type PlatformModel = z.infer<typeof platformModelSchema>;
 export type PlatformModelList = z.infer<typeof platformModelListSchema>;
 export type PlatformModelSnapshot = z.infer<typeof platformModelSnapshotSchema>;
@@ -1551,6 +1581,7 @@ export type StorageRedisKeySummary = z.infer<typeof storageRedisKeySummarySchema
 export type StorageRedisQueueSummary = z.infer<typeof storageRedisQueueSummarySchema>;
 export type StorageRedisLockSummary = z.infer<typeof storageRedisLockSummarySchema>;
 export type StorageOverview = z.infer<typeof storageOverviewSchema>;
+export type StorageOverviewQuery = z.infer<typeof storageOverviewQuerySchema>;
 export type StoragePostgresTablePage = z.infer<typeof storagePostgresTablePageSchema>;
 export type StorageRedisKeyPage = z.infer<typeof storageRedisKeyPageSchema>;
 export type StorageRedisKeyDetail = z.infer<typeof storageRedisKeyDetailSchema>;

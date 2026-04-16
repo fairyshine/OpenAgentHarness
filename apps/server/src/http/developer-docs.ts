@@ -73,7 +73,7 @@ export function buildApiIndex(request: FastifyRequest) {
         "GET /api/v1/workspaces",
         "POST /api/v1/workspaces",
         "POST /api/v1/workspaces/import",
-        "GET /api/v1/workspace-templates"
+        "GET /api/v1/blueprints"
       ]
     },
     sessions: {
@@ -862,7 +862,7 @@ export function buildDeveloperDocsHtml(request: FastifyRequest): string {
             <h3>Workspace Discovery</h3>
             <ul class="route-list">
               <li><code>GET /api/v1/workspaces</code> List visible workspaces</li>
-              <li><code>GET /api/v1/workspace-templates</code> List templates</li>
+              <li><code>GET /api/v1/blueprints</code> List blueprints</li>
               <li><code>POST /api/v1/workspaces</code> Create a managed workspace</li>
               <li><code>POST /api/v1/workspaces/import</code> Register an existing root</li>
             </ul>

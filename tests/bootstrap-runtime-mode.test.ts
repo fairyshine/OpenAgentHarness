@@ -558,6 +558,8 @@ describe("server runtime process modes", () => {
       workspacePlacementRegistry: {
         async getByWorkspaceId() {
           return {
+            state: "active",
+            userId: "user_1",
             ownerWorkerId: "worker_owner",
             preferredWorkerId: "worker_hint"
           };
@@ -574,7 +576,107 @@ describe("server runtime process modes", () => {
         sessionId: "ses_1",
         runId: "run_1",
         priority: "subagent",
-        preferredWorkerId: "worker_owner"
+        preferredWorkerId: "worker_hint"
+      }
+    ]);
+  });
+
+  it("ignores evicted ownership hints when enqueueing queued runs", async () => {
+    const enqueues: Array<{
+      sessionId: string;
+      runId: string;
+      priority?: "normal" | "subagent";
+      preferredWorkerId?: string;
+    }> = [];
+
+    const queue = createPlacementAwareSessionRunQueue({
+      queue: {
+        async enqueue(sessionId, runId, input) {
+          enqueues.push({
+            sessionId,
+            runId,
+            ...(input?.priority ? { priority: input.priority } : {}),
+            ...(input?.preferredWorkerId ? { preferredWorkerId: input.preferredWorkerId } : {})
+          });
+        }
+      },
+      runRepository: {
+        async getById() {
+          return {
+            workspaceId: "ws_placement"
+          };
+        }
+      },
+      workspacePlacementRegistry: {
+        async getByWorkspaceId() {
+          return {
+            userId: "user_1",
+            state: "evicted",
+            ownerWorkerId: "worker_stale"
+          };
+        }
+      }
+    });
+
+    await queue.enqueue("ses_1", "run_1", {
+      priority: "normal"
+    });
+
+    expect(enqueues).toEqual([
+      {
+        sessionId: "ses_1",
+        runId: "run_1",
+        priority: "normal"
+      }
+    ]);
+  });
+
+  it("does not inject worker affinity for ownerless workspaces", async () => {
+    const enqueues: Array<{
+      sessionId: string;
+      runId: string;
+      priority?: "normal" | "subagent";
+      preferredWorkerId?: string;
+    }> = [];
+
+    const queue = createPlacementAwareSessionRunQueue({
+      queue: {
+        async enqueue(sessionId, runId, input) {
+          enqueues.push({
+            sessionId,
+            runId,
+            ...(input?.priority ? { priority: input.priority } : {}),
+            ...(input?.preferredWorkerId ? { preferredWorkerId: input.preferredWorkerId } : {})
+          });
+        }
+      },
+      runRepository: {
+        async getById() {
+          return {
+            workspaceId: "ws_shared"
+          };
+        }
+      },
+      workspacePlacementRegistry: {
+        async getByWorkspaceId() {
+          return {
+            state: "active",
+            ownerWorkerId: "worker_owner",
+            preferredWorkerId: "worker_hint"
+          };
+        }
+      }
+    });
+
+    await queue.enqueue("ses_shared", "run_shared", {
+      priority: "normal"
+    });
+
+    expect(enqueues).toEqual([
+      {
+        sessionId: "ses_shared",
+        runId: "run_shared",
+        priority: "normal"
       }
     ]);
   });
@@ -585,7 +687,7 @@ describe("server runtime process modes", () => {
         "--workspace",
         "./demo",
         "--workspace-kind",
-        "chat",
+        "project",
         "--model-dir",
         "./models",
         "--default-model",
@@ -601,7 +703,7 @@ describe("server runtime process modes", () => {
       ])
     ).toMatchObject({
       rootPath: expect.stringMatching(/demo$/),
-      kind: "chat",
+      kind: "project",
       modelDir: expect.stringMatching(/models$/),
       defaultModel: "openai-default",
       toolDir: expect.stringMatching(/tools$/),

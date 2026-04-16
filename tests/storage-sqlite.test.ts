@@ -856,18 +856,18 @@ describe("storage sqlite", () => {
     await persistenceB.close();
   });
 
-  it("stores read-only chat workspace data under the shadow root", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-chat-"));
+  it("stores read-only workspace data under the shadow root", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-read-only-"));
     tempDirs.push(tempDir);
 
-    const chatRoot = path.join(tempDir, "chat-workspace");
+    const workspaceRoot = path.join(tempDir, "read-only-workspace");
     const shadowRoot = path.join(tempDir, "shadow");
-    await mkdir(chatRoot, { recursive: true });
+    await mkdir(workspaceRoot, { recursive: true });
 
     const workspace = createWorkspace({
-      id: "ws_sqlite_chat",
-      rootPath: chatRoot,
-      kind: "chat",
+      id: "ws_sqlite_read_only",
+      rootPath: workspaceRoot,
+      kind: "project",
       readOnly: true
     });
 
@@ -884,7 +884,7 @@ describe("storage sqlite", () => {
     });
     await persistence.close();
 
-    expect(await exists(path.join(chatRoot, ".openharness", "data", "history.db"))).toBe(false);
+    expect(await exists(path.join(workspaceRoot, ".openharness", "data", "history.db"))).toBe(false);
     expect(await exists(path.join(shadowRoot, workspace.id, "history.db"))).toBe(true);
   });
 
