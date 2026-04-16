@@ -1,10 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type {
+  CreateWorkspaceDirectoryRequest,
+  MoveWorkspaceEntryRequest,
+  SandboxHttpBody,
+  PutWorkspaceFileRequest,
+  SandboxHttpTransport,
   Workspace,
+  WorkspaceDeleteEntryQuery,
+  WorkspaceEntriesQuery,
   WorkspaceEntry,
   WorkspaceEntryPage,
-  WorkspaceFileContent
+  WorkspaceFileContent,
+  WorkspaceFileContentQuery,
+  WorkspaceFileUploadQuery
+} from "@oah/api-contracts";
+import {
+  createSandboxHttpClient,
+  joinWorkspaceRelativePath,
+  normalizeWorkspaceRelativePath,
+  parentWorkspaceRelativePath,
+  sandboxPathToWorkspaceRelativePath,
+  workspaceRelativePathToSandboxPath
 } from "@oah/api-contracts";
 
 import {
@@ -21,39 +38,26 @@ type AppRequest = <T>(path: string, init?: RequestInit, options?: { auth?: boole
 const LARGE_TEXT_FILE_BYTES = 256 * 1024;
 const BINARY_PREVIEW_BYTES = 192 * 1024;
 
-function normalizeWorkspacePath(value: string): string {
-  const rawSegments = value
-    .trim()
-    .replace(/\\/g, "/")
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0 && segment !== ".");
-  const segments: string[] = [];
-
-  for (const segment of rawSegments) {
-    if (segment === "..") {
-      segments.pop();
-      continue;
-    }
-
-    segments.push(segment);
-  }
-
-  return segments.length > 0 ? segments.join("/") : ".";
+function toWorkspaceEntry(entry: WorkspaceEntry): WorkspaceEntry {
+  return {
+    ...entry,
+    path: sandboxPathToWorkspaceRelativePath(entry.path)
+  };
 }
 
-function joinWorkspacePath(basePath: string, childPath: string): string {
-  return normalizeWorkspacePath(basePath === "." ? childPath : `${basePath}/${childPath}`);
+function toWorkspaceEntryPage(page: WorkspaceEntryPage): WorkspaceEntryPage {
+  return {
+    ...page,
+    path: sandboxPathToWorkspaceRelativePath(page.path),
+    items: page.items.map(toWorkspaceEntry)
+  };
 }
 
-function parentWorkspacePath(value: string): string {
-  const normalized = normalizeWorkspacePath(value);
-  if (normalized === ".") {
-    return ".";
-  }
-
-  const segments = normalized.split("/");
-  return segments.length > 1 ? segments.slice(0, -1).join("/") : ".";
+function toWorkspaceFileContent(file: WorkspaceFileContent): WorkspaceFileContent {
+  return {
+    ...file,
+    path: sandboxPathToWorkspaceRelativePath(file.path)
+  };
 }
 
 function pathExtension(value: string): string {
@@ -140,6 +144,26 @@ export function useWorkspaceFileManager(params: {
   const workspaceReadOnly = params.workspace?.readOnly ?? false;
   const entries = entryPage?.items ?? [];
   const nextCursor = entryPage?.nextCursor;
+
+  const sandboxClient = useMemo(() => {
+    const transport: SandboxHttpTransport = {
+      requestJson: (path, init) => params.request(path, init),
+      async requestBytes(path, init) {
+        const response = await fetch(buildUrl(params.connection.baseUrl, path), {
+          ...init,
+          headers: buildAuthHeaders(params.connection, init?.headers)
+        });
+        if (!response.ok) {
+          throw await createHttpRequestError(response);
+        }
+
+        return new Uint8Array(await response.arrayBuffer());
+      }
+    };
+
+    return createSandboxHttpClient(transport);
+  }, [params.connection, params.request]);
+
   const selectedFileEditable =
     !workspaceReadOnly &&
     selectedEntry?.type === "file" &&
@@ -148,8 +172,9 @@ export function useWorkspaceFileManager(params: {
     !selectedFile.readOnly &&
     isTextEntry(selectedEntry);
   const selectedFileDirty = selectedFileEditable && selectedFile !== null && selectedFileDraft !== selectedFile.content;
+
   const breadcrumbs = useMemo(() => {
-    const normalized = normalizeWorkspacePath(currentPath);
+    const normalized = normalizeWorkspaceRelativePath(currentPath);
     if (normalized === ".") {
       return [{ label: "workspace", path: "." }];
     }
@@ -175,23 +200,20 @@ export function useWorkspaceFileManager(params: {
       return null;
     }
 
-    const targetPath = normalizeWorkspacePath(options?.path ?? currentPath);
-    const query = new URLSearchParams({
-      path: targetPath,
-      pageSize: "100",
-      sortBy: "name",
-      sortOrder: "asc"
-    });
-    if (options?.cursor) {
-      query.set("cursor", options.cursor);
-    }
+    const targetPath = normalizeWorkspaceRelativePath(options?.path ?? currentPath);
 
     try {
       setEntriesBusy(true);
-      const response = await params.request<WorkspaceEntryPage>(
-        `/api/v1/workspaces/${workspaceIdValue}/entries?${query.toString()}`
+      const response = toWorkspaceEntryPage(
+        await sandboxClient.listEntries(workspaceIdValue, {
+          path: workspaceRelativePathToSandboxPath(targetPath),
+          pageSize: 100,
+          sortBy: "name",
+          sortOrder: "asc",
+          ...(options?.cursor ? { cursor: options.cursor } : {})
+        } satisfies WorkspaceEntriesQuery)
       );
-      setCurrentPath(targetPath);
+      setCurrentPath(response.path);
       setEntryPage((current) =>
         options?.append && current?.path === response.path
           ? {
@@ -223,19 +245,14 @@ export function useWorkspaceFileManager(params: {
       return;
     }
 
-    const query = new URLSearchParams({
-      path: entry.path,
-      encoding: isTextEntry(entry) ? "utf8" : "base64"
-    });
-
-    if (!isTextEntry(entry) || (entry.sizeBytes ?? 0) > LARGE_TEXT_FILE_BYTES) {
-      query.set("maxBytes", String(BINARY_PREVIEW_BYTES));
-    }
-
     try {
       setFileBusy(true);
-      const response = await params.request<WorkspaceFileContent>(
-        `/api/v1/workspaces/${workspaceIdValue}/files/content?${query.toString()}`
+      const response = toWorkspaceFileContent(
+        await sandboxClient.getFileContent(workspaceIdValue, {
+          path: workspaceRelativePathToSandboxPath(entry.path),
+          encoding: isTextEntry(entry) ? "utf8" : "base64",
+          ...(!isTextEntry(entry) || (entry.sizeBytes ?? 0) > LARGE_TEXT_FILE_BYTES ? { maxBytes: BINARY_PREVIEW_BYTES } : {})
+        } satisfies WorkspaceFileContentQuery)
       );
       setSelectedFile(response);
       setSelectedFileDraft(response.encoding === "utf8" ? response.content : "");
@@ -266,20 +283,16 @@ export function useWorkspaceFileManager(params: {
       return;
     }
 
-    const targetPath = normalizeWorkspacePath(path);
+    const targetPath = normalizeWorkspaceRelativePath(path);
     try {
       setMutationBusy(true);
-      const entry = await params.request<WorkspaceEntry>(`/api/v1/workspaces/${workspaceIdValue}/directories`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          path: targetPath,
+      const entry = toWorkspaceEntry(
+        await sandboxClient.createDirectory(workspaceIdValue, {
+          path: workspaceRelativePathToSandboxPath(targetPath),
           createParents: true
-        })
-      });
-      await refreshEntries({ path: parentWorkspacePath(entry.path), quiet: true });
+        } satisfies CreateWorkspaceDirectoryRequest)
+      );
+      await refreshEntries({ path: parentWorkspaceRelativePath(entry.path), quiet: true });
       setSelectedEntry(entry);
       setSelectedFile(null);
       setSelectedFileDraft("");
@@ -297,22 +310,18 @@ export function useWorkspaceFileManager(params: {
       return;
     }
 
-    const targetPath = normalizeWorkspacePath(path);
+    const targetPath = normalizeWorkspaceRelativePath(path);
     try {
       setMutationBusy(true);
-      const entry = await params.request<WorkspaceEntry>(`/api/v1/workspaces/${workspaceIdValue}/files/content`, {
-        method: "PUT",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          path: targetPath,
+      const entry = toWorkspaceEntry(
+        await sandboxClient.putFileContent(workspaceIdValue, {
+          path: workspaceRelativePathToSandboxPath(targetPath),
           content: "",
           encoding: "utf8",
           overwrite: true
-        })
-      });
-      await refreshEntries({ path: parentWorkspacePath(entry.path), quiet: true });
+        } satisfies PutWorkspaceFileRequest)
+      );
+      await refreshEntries({ path: parentWorkspaceRelativePath(entry.path), quiet: true });
       await focusEntry(entry, true);
       params.setActivity(`已创建文件 ${entry.path}`);
       params.setErrorMessage("");
@@ -330,20 +339,16 @@ export function useWorkspaceFileManager(params: {
 
     try {
       setMutationBusy(true);
-      const entry = await params.request<WorkspaceEntry>(`/api/v1/workspaces/${workspaceIdValue}/files/content`, {
-        method: "PUT",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          path: selectedEntry.path,
+      const entry = toWorkspaceEntry(
+        await sandboxClient.putFileContent(workspaceIdValue, {
+          path: workspaceRelativePathToSandboxPath(selectedEntry.path),
           content: selectedFileDraft,
           encoding: "utf8",
           overwrite: true,
           ...(selectedFile?.etag ? { ifMatch: selectedFile.etag } : {})
-        })
-      });
-      await refreshEntries({ path: parentWorkspacePath(entry.path), quiet: true });
+        } satisfies PutWorkspaceFileRequest)
+      );
+      await refreshEntries({ path: parentWorkspaceRelativePath(entry.path), quiet: true });
       await focusEntry(entry, true);
       params.setActivity(`已保存 ${entry.path}`);
       params.setErrorMessage("");
@@ -359,23 +364,19 @@ export function useWorkspaceFileManager(params: {
       return;
     }
 
-    const normalizedSourcePath = normalizeWorkspacePath(sourcePath);
-    const normalizedTargetPath = normalizeWorkspacePath(targetPath);
+    const normalizedSourcePath = normalizeWorkspaceRelativePath(sourcePath);
+    const normalizedTargetPath = normalizeWorkspaceRelativePath(targetPath);
 
     try {
       setMutationBusy(true);
-      const entry = await params.request<WorkspaceEntry>(`/api/v1/workspaces/${workspaceIdValue}/entries/move`, {
-        method: "PATCH",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          sourcePath: normalizedSourcePath,
-          targetPath: normalizedTargetPath,
+      const entry = toWorkspaceEntry(
+        await sandboxClient.moveEntry(workspaceIdValue, {
+          sourcePath: workspaceRelativePathToSandboxPath(normalizedSourcePath),
+          targetPath: workspaceRelativePathToSandboxPath(normalizedTargetPath),
           overwrite: false
-        })
-      });
-      const targetDirectory = parentWorkspacePath(entry.path);
+        } satisfies MoveWorkspaceEntryRequest)
+      );
+      const targetDirectory = parentWorkspaceRelativePath(entry.path);
       if (targetDirectory === currentPath) {
         await refreshEntries({ path: currentPath, quiet: true });
         await focusEntry(entry, true);
@@ -399,18 +400,12 @@ export function useWorkspaceFileManager(params: {
       return;
     }
 
-    const query = new URLSearchParams({
-      path: entry.path
-    });
-    if (entry.type === "directory") {
-      query.set("recursive", "true");
-    }
-
     try {
       setMutationBusy(true);
-      await params.request(`/api/v1/workspaces/${workspaceIdValue}/entries?${query.toString()}`, {
-        method: "DELETE"
-      });
+      await sandboxClient.deleteEntry(workspaceIdValue, {
+        path: workspaceRelativePathToSandboxPath(entry.path),
+        ...(entry.type === "directory" ? { recursive: true } : {})
+      } satisfies WorkspaceDeleteEntryQuery);
       await refreshEntries({ path: currentPath, quiet: true });
       if (selectedEntry?.path === entry.path) {
         setSelectedEntry(null);
@@ -439,24 +434,13 @@ export function useWorkspaceFileManager(params: {
     try {
       setMutationBusy(true);
       for (const file of normalizedFiles) {
-        const targetPath = joinWorkspacePath(currentPath, file.name);
-        const query = new URLSearchParams({
-          path: targetPath,
-          overwrite: "true"
-        });
-        const response = await fetch(
-          buildUrl(params.connection.baseUrl, `/api/v1/workspaces/${workspaceIdValue}/files/upload?${query.toString()}`),
-          {
-            method: "PUT",
-            headers: buildAuthHeaders(params.connection, {
-              "content-type": "application/octet-stream"
-            }),
-            body: file
-          }
-        );
-        if (!response.ok) {
-          throw await createHttpRequestError(response);
-        }
+        const targetPath = joinWorkspaceRelativePath(currentPath, file.name);
+        await sandboxClient.uploadFile(workspaceIdValue, {
+          path: workspaceRelativePathToSandboxPath(targetPath),
+          overwrite: true,
+          data: file,
+          contentType: "application/octet-stream"
+        } satisfies WorkspaceFileUploadQuery & { data: SandboxHttpBody; contentType: string });
       }
       await refreshEntries({ path: currentPath, quiet: true });
       params.setActivity(
@@ -475,24 +459,12 @@ export function useWorkspaceFileManager(params: {
       return;
     }
 
-    const query = new URLSearchParams({
-      path: entry.path
-    });
-
     try {
       setMutationBusy(true);
-      const response = await fetch(
-        buildUrl(params.connection.baseUrl, `/api/v1/workspaces/${workspaceIdValue}/files/download?${query.toString()}`),
-        {
-          method: "GET",
-          headers: buildAuthHeaders(params.connection)
-        }
-      );
-      if (!response.ok) {
-        throw await createHttpRequestError(response);
-      }
-
-      const blob = await response.blob();
+      const bytes = await sandboxClient.downloadFile(workspaceIdValue, {
+        path: workspaceRelativePathToSandboxPath(entry.path)
+      });
+      const blob = new Blob([bytes]);
       const objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = objectUrl;
@@ -532,7 +504,7 @@ export function useWorkspaceFileManager(params: {
     }
 
     void refreshEntries({ path: currentPath, quiet: true });
-  }, [params.enabled, open, workspaceIdValue, currentPath]);
+  }, [params.enabled, open, workspaceIdValue, currentPath, entryPage?.workspaceId, entryPage?.path, sandboxClient]);
 
   return {
     fileManagerSurfaceProps: {
@@ -565,7 +537,7 @@ export function useWorkspaceFileManager(params: {
           quiet: true
         }),
       focusEntry: (entry: WorkspaceEntry) => void focusEntry(entry),
-      navigateUp: () => void openDirectory(parentWorkspacePath(currentPath)),
+      navigateUp: () => void openDirectory(parentWorkspaceRelativePath(currentPath)),
       closeSelection,
       createDirectory: (path: string) => void createDirectory(path),
       createFile: (path: string) => void createFile(path),

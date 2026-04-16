@@ -1509,7 +1509,7 @@ describe("http api", () => {
     await expect(access(workspaceRoot)).rejects.toBeDefined();
   });
 
-  it("manages workspace files over HTTP", async () => {
+  it("manages sandbox files over HTTP", async () => {
     const gateway = new FakeModelGateway(20);
     const persistence = createMemoryRuntimePersistence();
     const workspace = await createWorkspaceRecord();
@@ -1523,43 +1523,45 @@ describe("http api", () => {
       gateway
     );
 
-    const mkdirResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/directories`, {
+    const mkdirResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/directories`, {
       method: "POST",
       headers: {
         "content-type": "application/json"
       },
       body: JSON.stringify({
-        path: "notes"
+        path: "/workspace/notes"
       })
     });
     expect(mkdirResponse.status).toBe(201);
 
-    const writeResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/files/content`, {
+    const writeResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/content`, {
       method: "PUT",
       headers: {
         "content-type": "application/json"
       },
       body: JSON.stringify({
-        path: "notes/hello.txt",
+        path: "/workspace/notes/hello.txt",
         content: "hello workspace",
         encoding: "utf8"
       })
     });
     expect(writeResponse.status).toBe(200);
     await expect(writeResponse.json()).resolves.toMatchObject({
-      path: "notes/hello.txt",
+      path: "/workspace/notes/hello.txt",
       type: "file",
       readOnly: false
     });
 
-    const listResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/entries?path=notes`);
+    const listResponse = await fetch(
+      `${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/entries?path=${encodeURIComponent("/workspace/notes")}`
+    );
     expect(listResponse.status).toBe(200);
     await expect(listResponse.json()).resolves.toMatchObject({
       workspaceId: workspace.id,
-      path: "notes",
+      path: "/workspace/notes",
       items: [
         {
-          path: "notes/hello.txt",
+          path: "/workspace/notes/hello.txt",
           name: "hello.txt",
           type: "file"
         }
@@ -1567,31 +1569,31 @@ describe("http api", () => {
     });
 
     const readResponse = await fetch(
-      `${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/files/content?path=${encodeURIComponent("notes/hello.txt")}`
+      `${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/content?path=${encodeURIComponent("/workspace/notes/hello.txt")}`
     );
     expect(readResponse.status).toBe(200);
     const readPayload = (await readResponse.json()) as { content: string; etag?: string };
     expect(readPayload.content).toBe("hello workspace");
     expect(readPayload.etag).toBeTruthy();
 
-    const moveResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/entries/move`, {
+    const moveResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/move`, {
       method: "PATCH",
       headers: {
         "content-type": "application/json"
       },
       body: JSON.stringify({
-        sourcePath: "notes/hello.txt",
-        targetPath: "notes/renamed.txt"
+        sourcePath: "/workspace/notes/hello.txt",
+        targetPath: "/workspace/notes/renamed.txt"
       })
     });
     expect(moveResponse.status).toBe(200);
     await expect(moveResponse.json()).resolves.toMatchObject({
-      path: "notes/renamed.txt",
+      path: "/workspace/notes/renamed.txt",
       name: "renamed.txt"
     });
 
     const deleteResponse = await fetch(
-      `${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/entries?path=${encodeURIComponent("notes/renamed.txt")}`,
+      `${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/entry?path=${encodeURIComponent("/workspace/notes/renamed.txt")}`,
       {
         method: "DELETE"
       }
@@ -1599,13 +1601,13 @@ describe("http api", () => {
     expect(deleteResponse.status).toBe(200);
     await expect(deleteResponse.json()).resolves.toEqual({
       workspaceId: workspace.id,
-      path: "notes/renamed.txt",
+      path: "/workspace/notes/renamed.txt",
       type: "file",
       deleted: true
     });
   });
 
-  it("uploads and downloads workspace files over HTTP", async () => {
+  it("uploads and downloads sandbox files over HTTP", async () => {
     const gateway = new FakeModelGateway(20);
     const persistence = createMemoryRuntimePersistence();
     const workspace = await createWorkspaceRecord();
@@ -1621,7 +1623,7 @@ describe("http api", () => {
 
     const bytes = Uint8Array.from([0, 1, 2, 250, 255]);
     const uploadResponse = await fetch(
-      `${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/files/upload?path=${encodeURIComponent("bin/data.bin")}`,
+      `${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/upload?path=${encodeURIComponent("/workspace/bin/data.bin")}`,
       {
         method: "PUT",
         headers: {
@@ -1632,13 +1634,13 @@ describe("http api", () => {
     );
     expect(uploadResponse.status).toBe(200);
     await expect(uploadResponse.json()).resolves.toMatchObject({
-      path: "bin/data.bin",
+      path: "/workspace/bin/data.bin",
       type: "file",
       sizeBytes: 5
     });
 
     const downloadResponse = await fetch(
-      `${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/files/download?path=${encodeURIComponent("bin/data.bin")}`
+      `${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/download?path=${encodeURIComponent("/workspace/bin/data.bin")}`
     );
     expect(downloadResponse.status).toBe(200);
     expect(downloadResponse.headers.get("content-disposition")).toContain("data.bin");
@@ -1646,14 +1648,14 @@ describe("http api", () => {
     expect(new Uint8Array(await downloadResponse.arrayBuffer())).toEqual(bytes);
 
     const contentResponse = await fetch(
-      `${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/files/content?path=${encodeURIComponent("bin/data.bin")}&encoding=base64`
+      `${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/content?path=${encodeURIComponent("/workspace/bin/data.bin")}&encoding=base64`
     );
     expect(contentResponse.status).toBe(200);
     const contentPayload = (await contentResponse.json()) as { content: string };
     expect(contentPayload.content).toBe(Buffer.from(bytes).toString("base64"));
   });
 
-  it("returns a routing hint when workspace files are owned by another worker", async () => {
+  it("returns a routing hint when sandbox files are owned by another worker", async () => {
     const gateway = new FakeModelGateway(20);
     const persistence = createMemoryRuntimePersistence();
     const workspace = await createWorkspaceRecord();
@@ -1680,7 +1682,7 @@ describe("http api", () => {
     );
 
     const readResponse = await fetch(
-      `${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/files/content?path=${encodeURIComponent("hello.txt")}`
+      `${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/content?path=${encodeURIComponent("/workspace/hello.txt")}`
     );
     expect(readResponse.status).toBe(409);
     await expect(readResponse.json()).resolves.toMatchObject({
@@ -1695,13 +1697,13 @@ describe("http api", () => {
       }
     });
 
-    const writeResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/files/content`, {
+    const writeResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/content`, {
       method: "PUT",
       headers: {
         "content-type": "application/json"
       },
       body: JSON.stringify({
-        path: "hello.txt",
+        path: "/workspace/hello.txt",
         content: "blocked",
         encoding: "utf8"
       })
@@ -1714,7 +1716,7 @@ describe("http api", () => {
     });
   });
 
-  it("proxies workspace file requests to the owner when an internal owner base url is available", async () => {
+  it("proxies sandbox file requests to the owner when an internal owner base url is available", async () => {
     const ownerGateway = new FakeModelGateway(20);
     const ownerPersistence = createMemoryRuntimePersistence();
     const ownerRuntime = new RuntimeService({
@@ -1765,22 +1767,22 @@ describe("http api", () => {
     );
 
     const readResponse = await fetch(
-      `${activeApp.baseUrl}/api/v1/workspaces/${ownerWorkspace.id}/files/content?path=${encodeURIComponent("hello.txt")}`
+      `${activeApp.baseUrl}/api/v1/sandboxes/${ownerWorkspace.id}/files/content?path=${encodeURIComponent("/workspace/hello.txt")}`
     );
     expect(readResponse.status).toBe(200);
     await expect(readResponse.json()).resolves.toMatchObject({
       workspaceId: ownerWorkspace.id,
-      path: "hello.txt",
+      path: "/workspace/hello.txt",
       content: "Hello from OAH.\n"
     });
 
-    const writeResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${ownerWorkspace.id}/files/content`, {
+    const writeResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${ownerWorkspace.id}/files/content`, {
       method: "PUT",
       headers: {
         "content-type": "application/json"
       },
       body: JSON.stringify({
-        path: "hello.txt",
+        path: "/workspace/hello.txt",
         content: "proxied write\n",
         encoding: "utf8"
       })
@@ -1788,7 +1790,7 @@ describe("http api", () => {
     expect(writeResponse.status).toBe(200);
 
     const verifyResponse = await fetch(
-      `${ownerBaseUrl}/internal/v1/workspaces/${ownerWorkspace.id}/files/content?path=${encodeURIComponent("hello.txt")}`
+      `${ownerBaseUrl}/internal/v1/sandboxes/${ownerWorkspace.id}/files/content?path=${encodeURIComponent("/workspace/hello.txt")}`
     );
     expect(verifyResponse.status).toBe(200);
     await expect(verifyResponse.json()).resolves.toMatchObject({
@@ -1970,17 +1972,22 @@ describe("http api", () => {
     );
 
     const traversalResponse = await fetch(
-      `${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/files/content?path=${encodeURIComponent("../secret.txt")}`
+      `${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/content?path=${encodeURIComponent("/workspace/../secret.txt")}`
     );
-    expect(traversalResponse.status).toBe(403);
+    expect(traversalResponse.status).toBe(400);
+    await expect(traversalResponse.json()).resolves.toMatchObject({
+      error: {
+        code: "invalid_sandbox_path"
+      }
+    });
 
-    const readonlyResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/directories`, {
+    const readonlyResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/directories`, {
       method: "POST",
       headers: {
         "content-type": "application/json"
       },
       body: JSON.stringify({
-        path: "notes"
+        path: "/workspace/notes"
       })
     });
     expect(readonlyResponse.status).toBe(403);

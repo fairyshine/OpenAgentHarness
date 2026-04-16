@@ -1,9 +1,11 @@
-import path from "node:path";
 import { Readable } from "node:stream";
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
+  SANDBOX_ROOT_PATH,
+  sandboxPathToWorkspaceRelativePath,
+  workspaceRelativePathToSandboxPath,
   createSandboxRequestSchema,
   createWorkspaceDirectoryRequestSchema,
   moveWorkspaceEntryRequestSchema,
@@ -31,7 +33,6 @@ import { AppError } from "@oah/runtime-core";
 import { assertWorkspaceAccess, createParamsSchema, sendError, toCallerContext } from "../context.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
 
-const SANDBOX_ROOT_PATH = "/workspace";
 const DEFAULT_BACKGROUND_SESSION_PREFIX = "sandbox";
 
 type WorkspaceOwnership = Awaited<ReturnType<NonNullable<AppDependencies["resolveWorkspaceOwnership"]>>>;
@@ -188,46 +189,20 @@ async function guardSandboxOwnership(
   return "blocked";
 }
 
-function normalizeSandboxAbsolutePath(targetPath: string): string {
-  const raw = targetPath.trim();
-  if (!raw || raw === ".") {
-    return SANDBOX_ROOT_PATH;
-  }
-
-  const normalized = raw.startsWith("/")
-    ? path.posix.normalize(raw)
-    : path.posix.normalize(path.posix.join(SANDBOX_ROOT_PATH, raw));
-  if (normalized === "/") {
-    return SANDBOX_ROOT_PATH;
-  }
-
-  if (normalized === SANDBOX_ROOT_PATH || normalized.startsWith(`${SANDBOX_ROOT_PATH}/`)) {
-    return normalized;
-  }
-
-  throw new AppError(400, "invalid_sandbox_path", `Path ${targetPath} is outside sandbox root ${SANDBOX_ROOT_PATH}.`);
-}
-
 function sandboxPathToWorkspacePath(targetPath: string | undefined): string | undefined {
   if (!targetPath) {
     return undefined;
   }
 
-  const normalized = normalizeSandboxAbsolutePath(targetPath);
-  if (normalized === SANDBOX_ROOT_PATH) {
-    return ".";
+  try {
+    return sandboxPathToWorkspaceRelativePath(targetPath);
+  } catch {
+    throw new AppError(400, "invalid_sandbox_path", `Path ${targetPath} is outside sandbox root ${SANDBOX_ROOT_PATH}.`);
   }
-
-  return normalized.slice(`${SANDBOX_ROOT_PATH}/`.length);
 }
 
 function workspacePathToSandboxPath(targetPath: string | undefined): string {
-  if (!targetPath || targetPath === ".") {
-    return SANDBOX_ROOT_PATH;
-  }
-
-  const normalized = targetPath.replace(/\\/gu, "/").replace(/^\/+/u, "");
-  return path.posix.join(SANDBOX_ROOT_PATH, normalized);
+  return workspaceRelativePathToSandboxPath(targetPath ?? ".");
 }
 
 async function buildSandboxResponse(dependencies: AppDependencies, workspaceId: string) {
@@ -530,53 +505,32 @@ function registerSandboxCoreRoutes(
   const isPublicApi = options?.publicApi ?? false;
   const workspaceMode = options?.workspaceMode ?? "multi";
 
-  if (isPublicApi) {
-    app.post(`${prefix}/sandboxes`, async (request, reply) => {
-      const input = createSandboxRequestSchema.parse(request.body);
+  app.post(`${prefix}/sandboxes`, async (request, reply) => {
+    const input = createSandboxRequestSchema.parse(request.body);
 
-      if (input.workspaceId) {
+    if (input.workspaceId) {
+      if (isPublicApi) {
         assertWorkspaceAccess(toCallerContext(request), input.workspaceId);
-        if (input.userId) {
-          await dependencies.assignWorkspacePlacementUser?.({
-            workspaceId: input.workspaceId,
-            userId: input.userId,
-            overwrite: false
-          });
-        }
-        return reply.status(200).send(await buildSandboxResponse(dependencies, input.workspaceId));
       }
-
-      if (input.rootPath) {
-        if (workspaceMode === "single" || !dependencies.importWorkspace) {
-          throw new AppError(501, "sandbox_import_unavailable", "Sandbox import is not available on this server.");
-        }
-
-        const workspace = await dependencies.importWorkspace({
-          rootPath: input.rootPath,
-          ...(input.name ? { name: input.name } : {}),
-          ...(input.externalRef ? { externalRef: input.externalRef } : {})
+      if (input.userId) {
+        await dependencies.assignWorkspacePlacementUser?.({
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          overwrite: false
         });
-        if (input.userId) {
-          await dependencies.assignWorkspacePlacementUser?.({
-            workspaceId: workspace.id,
-            userId: input.userId,
-            overwrite: true
-          });
-        }
-        return reply.status(201).send(await buildSandboxResponse(dependencies, workspace.id));
+      }
+      return reply.status(200).send(await buildSandboxResponse(dependencies, input.workspaceId));
+    }
+
+    if (input.rootPath) {
+      if (workspaceMode === "single" || !dependencies.importWorkspace) {
+        throw new AppError(501, "sandbox_import_unavailable", "Sandbox import is not available on this server.");
       }
 
-      if (workspaceMode === "single") {
-        throw new AppError(501, "sandbox_creation_unavailable", "Sandbox creation is not available in single-workspace mode.");
-      }
-
-      const workspace = await dependencies.runtimeService.createWorkspace({
-        input: {
-          name: input.name as string,
-          template: input.template as string,
-          executionPolicy: input.executionPolicy,
-          ...(input.externalRef ? { externalRef: input.externalRef } : {})
-        }
+      const workspace = await dependencies.importWorkspace({
+        rootPath: input.rootPath,
+        ...(input.name ? { name: input.name } : {}),
+        ...(input.externalRef ? { externalRef: input.externalRef } : {})
       });
       if (input.userId) {
         await dependencies.assignWorkspacePlacementUser?.({
@@ -586,8 +540,29 @@ function registerSandboxCoreRoutes(
         });
       }
       return reply.status(201).send(await buildSandboxResponse(dependencies, workspace.id));
+    }
+
+    if (workspaceMode === "single") {
+      throw new AppError(501, "sandbox_creation_unavailable", "Sandbox creation is not available in single-workspace mode.");
+    }
+
+    const workspace = await dependencies.runtimeService.createWorkspace({
+      input: {
+        name: input.name as string,
+        template: input.template as string,
+        executionPolicy: input.executionPolicy,
+        ...(input.externalRef ? { externalRef: input.externalRef } : {})
+      }
     });
-  }
+    if (input.userId) {
+      await dependencies.assignWorkspacePlacementUser?.({
+        workspaceId: workspace.id,
+        userId: input.userId,
+        overwrite: true
+      });
+    }
+    return reply.status(201).send(await buildSandboxResponse(dependencies, workspace.id));
+  });
 
   app.get(`${prefix}/sandboxes/:sandboxId`, async (request, reply) => {
     const params = createParamsSchema("sandboxId").parse(request.params);

@@ -380,6 +380,7 @@ describe("materialization sandbox host", () => {
       workspaceMode: "multi"
     });
     await app.listen({ host: "127.0.0.1", port: 0 });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     try {
       const address = app.server.address() as AddressInfo;
@@ -403,6 +404,12 @@ describe("materialization sandbox host", () => {
         }
       });
 
+      expect(
+        fetchSpy.mock.calls.some(([input, init]) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          return url.endsWith("/internal/v1/sandboxes") && (init?.method ?? "GET") === "POST";
+        })
+      ).toBe(true);
       expect(executionLease.workspace.rootPath).toBe(`/__oah_sandbox__/${workspace.id}/workspace`);
 
       const foreground = await host.workspaceCommandExecutor.runForeground({
@@ -425,6 +432,7 @@ describe("materialization sandbox host", () => {
       });
       expect(created.content).toBe("created\n");
     } finally {
+      fetchSpy.mockRestore();
       await app.close();
     }
   });

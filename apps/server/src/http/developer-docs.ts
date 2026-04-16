@@ -101,17 +101,20 @@ export function buildApiIndex(request: FastifyRequest) {
       ]
     },
     filesAndCatalog: {
-      description: "Browse workspace files, read or mutate content, and inspect discovered catalog state.",
+      description: "Inspect workspace catalog state and use sandbox-scoped file and command surfaces for execution data access.",
       routes: [
         "GET /api/v1/workspaces/{workspaceId}/catalog",
-        "GET /api/v1/workspaces/{workspaceId}/entries",
-        "GET /api/v1/workspaces/{workspaceId}/files/content",
-        "PUT /api/v1/workspaces/{workspaceId}/files/content",
-        "PUT /api/v1/workspaces/{workspaceId}/files/upload",
-        "GET /api/v1/workspaces/{workspaceId}/files/download",
-        "POST /api/v1/workspaces/{workspaceId}/directories",
-        "DELETE /api/v1/workspaces/{workspaceId}/entries",
-        "PATCH /api/v1/workspaces/{workspaceId}/entries/move"
+        "POST /api/v1/sandboxes",
+        "GET /api/v1/sandboxes/{sandboxId}",
+        "GET /api/v1/sandboxes/{sandboxId}/files/entries",
+        "GET /api/v1/sandboxes/{sandboxId}/files/content",
+        "PUT /api/v1/sandboxes/{sandboxId}/files/content",
+        "PUT /api/v1/sandboxes/{sandboxId}/files/upload",
+        "GET /api/v1/sandboxes/{sandboxId}/files/download",
+        "POST /api/v1/sandboxes/{sandboxId}/directories",
+        "DELETE /api/v1/sandboxes/{sandboxId}/files/entry",
+        "PATCH /api/v1/sandboxes/{sandboxId}/files/move",
+        "POST /api/v1/sandboxes/{sandboxId}/commands/foreground"
       ]
     },
     modelsAndDiagnostics: {
@@ -584,11 +587,11 @@ curl ${escapeHtml(JSON.stringify(apiIndex))}</pre>
           </article>
           <article class="subcard">
             <h3>Work With Files</h3>
-            <p>Browse, read, write, upload, download, or move entries inside a workspace root.</p>
+            <p>Resolve a sandbox, then browse, read, write, upload, download, or move entries inside its root filesystem.</p>
             <ul>
-              <li><code>GET /api/v1/workspaces/{workspaceId}/entries</code></li>
-              <li><code>GET /api/v1/workspaces/{workspaceId}/files/content</code></li>
-              <li><code>PUT /api/v1/workspaces/{workspaceId}/files/upload</code></li>
+              <li><code>GET /api/v1/sandboxes/{sandboxId}</code></li>
+              <li><code>GET /api/v1/sandboxes/{sandboxId}/files/entries</code></li>
+              <li><code>PUT /api/v1/sandboxes/{sandboxId}/files/upload</code></li>
             </ul>
           </article>
         </div>
@@ -884,12 +887,13 @@ export function buildDeveloperDocsHtml(request: FastifyRequest): string {
             </ul>
           </article>
           <article class="subcard">
-            <h3>Workspace Files</h3>
+            <h3>Sandbox Files</h3>
             <ul class="route-list">
-              <li><code>GET /api/v1/workspaces/{workspaceId}/entries</code> List files</li>
-              <li><code>GET /api/v1/workspaces/{workspaceId}/files/content</code> Read a file</li>
-              <li><code>PUT /api/v1/workspaces/{workspaceId}/files/content</code> Write a file</li>
-              <li><code>PUT /api/v1/workspaces/{workspaceId}/files/upload</code> Upload raw bytes</li>
+              <li><code>POST /api/v1/sandboxes</code> Create or resolve a sandbox</li>
+              <li><code>GET /api/v1/sandboxes/{sandboxId}/files/entries</code> List files</li>
+              <li><code>GET /api/v1/sandboxes/{sandboxId}/files/content</code> Read a file</li>
+              <li><code>PUT /api/v1/sandboxes/{sandboxId}/files/content</code> Write a file</li>
+              <li><code>PUT /api/v1/sandboxes/{sandboxId}/files/upload</code> Upload raw bytes</li>
             </ul>
           </article>
         </div>

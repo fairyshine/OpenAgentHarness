@@ -27,18 +27,29 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | DELETE | `/workspaces/{id}` | 删除 |
 | GET | `/workspaces/{id}/catalog` | 获取能力目录 |
 
-### Files
+### Sandboxes & Files
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/workspaces/{id}/entries` | 列出目录条目 |
-| DELETE | `/workspaces/{id}/entries` | 删除条目 |
-| PATCH | `/workspaces/{id}/entries/move` | 移动/重命名 |
-| GET | `/workspaces/{id}/files/content` | 读取文件 |
-| PUT | `/workspaces/{id}/files/content` | 写入文件 |
-| PUT | `/workspaces/{id}/files/upload` | 上传二进制 |
-| GET | `/workspaces/{id}/files/download` | 下载文件 |
-| POST | `/workspaces/{id}/directories` | 创建目录 |
+| POST | `/sandboxes` | 创建或解析 sandbox |
+| GET | `/sandboxes/{id}` | 获取 sandbox 元数据 |
+| GET | `/sandboxes/{id}/files/entries` | 列出目录条目 |
+| GET | `/sandboxes/{id}/files/stat` | 读取文件/目录元数据 |
+| DELETE | `/sandboxes/{id}/files/entry` | 删除条目 |
+| PATCH | `/sandboxes/{id}/files/move` | 移动/重命名 |
+| GET | `/sandboxes/{id}/files/content` | 读取文件 |
+| PUT | `/sandboxes/{id}/files/content` | 写入文件 |
+| PUT | `/sandboxes/{id}/files/upload` | 上传二进制 |
+| GET | `/sandboxes/{id}/files/download` | 下载文件 |
+| POST | `/sandboxes/{id}/directories` | 创建目录 |
+
+### Commands
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/sandboxes/{id}/commands/foreground` | 前台执行 shell command |
+| POST | `/sandboxes/{id}/commands/process` | 结构化执行 process |
+| POST | `/sandboxes/{id}/commands/background` | 启动后台命令 |
 
 ### Sessions & Messages
 
@@ -82,7 +93,7 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | [sessions.md](./sessions.md) | session 与 message |
 | [runs.md](./runs.md) | run 查询与取消 |
 | [actions.md](./actions.md) | action 手动触发 |
-| [files.md](./files.md) | workspace 文件管理 |
+| [files.md](./files.md) | sandbox 文件与命令接口 |
 | [models.md](./models.md) | 模型网关 |
 | [streaming.md](./streaming.md) | SSE 事件流 |
 | [components.md](./components.md) | 通用 schema 与错误模型 |
