@@ -5,6 +5,7 @@ import { isAppError } from "@oah/runtime-core";
 import { createStandaloneCallerContext, isLoopbackAddress, isPrivateNetworkAddress, sendError } from "./http/context.js";
 import { registerPublicRoutes } from "./http/routes/public.js";
 import { registerInternalWorkspaceRoutes, registerWorkspaceRoutes } from "./http/routes/workspaces.js";
+import { registerInternalSandboxRoutes, registerSandboxRoutes } from "./http/routes/sandboxes.js";
 import { registerSessionRoutes } from "./http/routes/sessions.js";
 import { registerInternalModelRoutes } from "./http/routes/internal-models.js";
 import type { AppDependencies } from "./http/types.js";
@@ -120,6 +121,7 @@ export function createApp(dependencies: AppDependencies, options: CreateAppOptio
   if (appSurface === "full") {
     registerPublicRoutes(app, dependencies, { workspaceMode });
     registerWorkspaceRoutes(app, dependencies, { workspaceMode });
+    registerSandboxRoutes(app, dependencies, { workspaceMode });
     registerSessionRoutes(app, dependencies);
   } else {
     app.get("/healthz", async () =>
@@ -184,6 +186,7 @@ export function createApp(dependencies: AppDependencies, options: CreateAppOptio
   }
 
   registerInternalWorkspaceRoutes(app, dependencies);
+  registerInternalSandboxRoutes(app, dependencies);
   registerInternalModelRoutes(app, dependencies);
 
   return app;

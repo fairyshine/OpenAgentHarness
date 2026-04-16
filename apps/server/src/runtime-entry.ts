@@ -13,6 +13,7 @@ function buildAppDependencies(runtime: BootstrappedRuntime): AppDependencies {
     readinessCheck: () => runtime.readinessReport(),
     storageAdmin: runtime.storageAdmin,
     appendRuntimeLog: runtime.appendRuntimeLog,
+    ...(runtime.sandboxHostProviderKind ? { sandboxHostProviderKind: runtime.sandboxHostProviderKind } : {}),
     ...(runtime.listPlatformModels ? { listPlatformModels: runtime.listPlatformModels } : {}),
     ...(runtime.getPlatformModelSnapshot ? { getPlatformModelSnapshot: runtime.getPlatformModelSnapshot } : {}),
     ...(runtime.subscribePlatformModelSnapshot

@@ -1,7 +1,13 @@
 import type { Readable } from "node:stream";
 import type { FastifyRequest } from "fastify";
 
-import type { CallerContext, ModelGateway, RuntimeService, WorkspaceRecord } from "@oah/runtime-core";
+import type {
+  CallerContext,
+  ModelGateway,
+  RuntimeService,
+  SandboxHostProviderKind,
+  WorkspaceRecord
+} from "@oah/runtime-core";
 import type { HealthReport, ReadinessReport, RuntimeLogEventContext } from "@oah/api-contracts";
 import type { StorageAdmin } from "../storage-admin.js";
 
@@ -75,6 +81,62 @@ export interface AppDependencies {
         openReadStream(): Readable;
       };
       release(options?: { dirty?: boolean | undefined }): Promise<void>;
+    }>;
+    getWorkspaceFileStat?: (
+      workspaceId: string,
+      targetPath: string
+    ) => Promise<{
+      kind: "file" | "directory";
+      size: number;
+      mtimeMs: number;
+      birthtimeMs: number;
+      path: string;
+    }>;
+    runWorkspaceCommandForeground?: (
+      workspaceId: string,
+      input: {
+        command: string;
+        cwd?: string | undefined;
+        env?: Record<string, string> | undefined;
+        timeoutMs?: number | undefined;
+        stdinText?: string | undefined;
+        access?: "read" | "write" | undefined;
+      }
+    ) => Promise<{
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+    }>;
+    runWorkspaceCommandProcess?: (
+      workspaceId: string,
+      input: {
+        executable: string;
+        args: string[];
+        cwd?: string | undefined;
+        env?: Record<string, string> | undefined;
+        timeoutMs?: number | undefined;
+        stdinText?: string | undefined;
+        access?: "read" | "write" | undefined;
+      }
+    ) => Promise<{
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+    }>;
+    runWorkspaceCommandBackground?: (
+      workspaceId: string,
+      input: {
+        command: string;
+        sessionId: string;
+        description?: string | undefined;
+        cwd?: string | undefined;
+        env?: Record<string, string> | undefined;
+        access?: "read" | "write" | undefined;
+      }
+    ) => Promise<{
+      outputPath: string;
+      taskId: string;
+      pid: number;
     }>;
     createWorkspaceDirectory: (
       workspaceId: string,
@@ -194,6 +256,7 @@ export interface AppDependencies {
     details?: unknown;
     context?: RuntimeLogEventContext | undefined;
   }) => Promise<void>;
+  sandboxHostProviderKind?: SandboxHostProviderKind | undefined;
 }
 
 export interface AppRouteOptions {

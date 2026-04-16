@@ -1,13 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import type { AddressInfo } from "node:net";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AppError,
+  RuntimeService,
   type WorkspaceRecord
 } from "@oah/runtime-core";
+import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
-import { createE2BCompatibleSandboxHost } from "../apps/server/src/bootstrap/e2b-compatible-sandbox-host.ts";
+import {
+  createE2BCompatibleSandboxHost,
+  createHttpE2BCompatibleSandboxService
+} from "../apps/server/src/bootstrap/e2b-compatible-sandbox-host.ts";
+import { createApp } from "../apps/server/src/app.ts";
 import { createMaterializationSandboxHost } from "../apps/server/src/bootstrap/sandbox-host.ts";
 import { WorkspaceMaterializationDrainingError } from "../apps/server/src/bootstrap/workspace-materialization.ts";
+import { FakeModelGateway } from "./helpers/fake-model-gateway";
+
+const tempRoots: string[] = [];
 
 function buildWorkspace(overrides?: Partial<WorkspaceRecord>): WorkspaceRecord {
   return {
@@ -22,15 +36,38 @@ function buildWorkspace(overrides?: Partial<WorkspaceRecord>): WorkspaceRecord {
     skills: {},
     toolServers: {},
     hooks: {},
-    settings: undefined,
-    executionPolicy: undefined,
-    status: "ready",
+    settings: {
+      defaultAgent: "assistant",
+      skillDirs: []
+    },
+    executionPolicy: "local",
+    status: "active",
     createdAt: "2026-04-15T00:00:00.000Z",
     updatedAt: "2026-04-15T00:00:00.000Z",
     historyMirrorEnabled: false,
     ...overrides
   };
 }
+
+async function createPersistedWorkspace(overrides?: Partial<WorkspaceRecord>): Promise<WorkspaceRecord> {
+  const rootPath = await mkdtemp(path.join(os.tmpdir(), "oah-sandbox-host-"));
+  tempRoots.push(rootPath);
+  return buildWorkspace({
+    rootPath,
+    ...overrides
+  });
+}
+
+afterEach(async () => {
+  await Promise.all(
+    tempRoots.splice(0).map((rootPath) =>
+      rm(rootPath, {
+        recursive: true,
+        force: true
+      })
+    )
+  );
+});
 
 describe("materialization sandbox host", () => {
   it("maps execution leases onto the materialized local workspace path", async () => {
@@ -321,5 +358,74 @@ describe("materialization sandbox host", () => {
         { kind: "close" }
       ])
     );
+  });
+
+  it("can consume the http sandbox interface through the e2b-compatible host adapter", async () => {
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+    const workspace = await createPersistedWorkspace();
+    await writeFile(path.join(workspace.rootPath, "hello.txt"), "hello over http\n", "utf8");
+    await persistence.workspaceRepository.upsert(workspace);
+
+    const app = createApp({
+      runtimeService,
+      modelGateway: gateway,
+      defaultModel: "openai-default",
+      logger: false,
+      workspaceMode: "multi"
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+
+    try {
+      const address = app.server.address() as AddressInfo;
+      const host = createE2BCompatibleSandboxHost({
+        service: createHttpE2BCompatibleSandboxService({
+          baseUrl: `http://127.0.0.1:${address.port}/internal/v1`
+        })
+      });
+
+      const executionLease = await host.workspaceExecutionProvider.acquire({
+        workspace,
+        run: {
+          id: "run_http",
+          sessionId: "ses_http",
+          workspaceId: workspace.id,
+          status: "queued",
+          triggerType: "message",
+          effectiveAgentName: "main",
+          createdAt: "2026-04-16T00:00:00.000Z",
+          updatedAt: "2026-04-16T00:00:00.000Z"
+        }
+      });
+
+      expect(executionLease.workspace.rootPath).toBe(`/__oah_sandbox__/${workspace.id}/workspace`);
+
+      const foreground = await host.workspaceCommandExecutor.runForeground({
+        workspace: executionLease.workspace,
+        command: "cat hello.txt",
+        cwd: executionLease.workspace.rootPath
+      });
+      expect(foreground).toMatchObject({
+        stdout: "hello over http\n",
+        exitCode: 0
+      });
+
+      const readFile = await host.workspaceFileSystem.readFile(`${executionLease.workspace.rootPath}/hello.txt`);
+      expect(readFile.toString("utf8")).toBe("hello over http\n");
+
+      await host.workspaceFileSystem.writeFile(`${executionLease.workspace.rootPath}/created.txt`, Buffer.from("created\n"));
+      const created = await runtimeService.getWorkspaceFileContent(workspace.id, {
+        path: "created.txt",
+        encoding: "utf8"
+      });
+      expect(created.content).toBe("created\n");
+    } finally {
+      await app.close();
+    }
   });
 });

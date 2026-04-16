@@ -16,7 +16,7 @@ import {
 } from "@oah/config";
 import type { ServerConfig } from "@oah/config";
 import { AppError, RuntimeService, createId, parseCursor } from "@oah/runtime-core";
-import type { RuntimeLogger, WorkspaceRecord } from "@oah/runtime-core";
+import type { RuntimeLogger, SandboxHostProviderKind, WorkspaceRecord } from "@oah/runtime-core";
 import { AiSdkModelGateway } from "@oah/model-gateway";
 import { createPostgresRuntimePersistence } from "@oah/storage-postgres";
 import { createSQLiteRuntimePersistence, sqliteWorkspaceHistoryDbPath } from "@oah/storage-sqlite";
@@ -302,6 +302,7 @@ export interface BootstrappedRuntime {
     isLocalOwner: boolean;
   } | undefined>;
   storageAdmin: StorageAdmin;
+  sandboxHostProviderKind?: SandboxHostProviderKind | undefined;
   appendRuntimeLog(input: {
     sessionId: string;
     runId?: string | undefined;
@@ -1207,6 +1208,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         }
       : {}),
     storageAdmin,
+    ...(sandboxHost ? { sandboxHostProviderKind: sandboxHost.providerKind } : {}),
     appendRuntimeLog(input) {
       return appendRuntimeLogEvent(primarySessionEventStore, {
         ...input,

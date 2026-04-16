@@ -69,6 +69,92 @@ export const workspaceDeleteResultSchema = z.object({
   deleted: z.boolean()
 });
 
+export const sandboxProviderKindSchema = z.enum(["self_hosted", "e2b_compatible"]);
+
+export const sandboxSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  provider: sandboxProviderKindSchema,
+  rootPath: z.string(),
+  name: z.string(),
+  kind: z.enum(["project", "chat"]),
+  executionPolicy: z.enum(["local", "container", "remote_runner"]),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+  ownerWorkerId: z.string().optional(),
+  ownerBaseUrl: z.string().optional()
+});
+
+export const createSandboxRequestSchema = z
+  .object({
+    workspaceId: z.string().trim().min(1).optional(),
+    externalRef: z.string().optional(),
+    name: z.string().min(1).optional(),
+    template: z.string().min(1).optional(),
+    rootPath: z.string().min(1).optional(),
+    userId: z.string().trim().min(1).optional(),
+    executionPolicy: z.enum(["local", "container", "remote_runner"]).default("local")
+  })
+  .superRefine((value, context) => {
+    if (value.workspaceId || value.rootPath || (value.name && value.template)) {
+      return;
+    }
+
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Provide workspaceId, rootPath, or both name and template."
+    });
+  });
+
+export const sandboxCommandRequestSchema = z.object({
+  command: z.string().min(1),
+  cwd: z.string().min(1).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  stdinText: z.string().optional()
+});
+
+export const sandboxProcessRequestSchema = z.object({
+  executable: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().min(1).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  stdinText: z.string().optional()
+});
+
+export const sandboxBackgroundCommandRequestSchema = z.object({
+  command: z.string().min(1),
+  sessionId: z.string().trim().min(1).optional(),
+  description: z.string().min(1).optional(),
+  cwd: z.string().min(1).optional(),
+  env: z.record(z.string(), z.string()).optional()
+});
+
+export const sandboxCommandResultSchema = z.object({
+  stdout: z.string(),
+  stderr: z.string(),
+  exitCode: z.number().int()
+});
+
+export const sandboxBackgroundCommandResultSchema = z.object({
+  outputPath: z.string(),
+  taskId: z.string(),
+  pid: z.number().int().nonnegative()
+});
+
+export const sandboxFileStatSchema = z.object({
+  kind: z.enum(["file", "directory"]),
+  size: z.number().int().min(0),
+  mtimeMs: z.number().min(0),
+  birthtimeMs: z.number().min(0),
+  path: z.string()
+});
+
+export const sandboxFileStatQuerySchema = z.object({
+  path: z.string().min(1)
+});
+
 export const agentCatalogItemSchema = z.object({
   name: z.string(),
   mode: z.enum(["primary", "subagent", "all"]),
@@ -1189,6 +1275,8 @@ export type WorkspaceEntry = z.infer<typeof workspaceEntrySchema>;
 export type WorkspaceEntryPage = z.infer<typeof workspaceEntryPageSchema>;
 export type WorkspaceFileContent = z.infer<typeof workspaceFileContentSchema>;
 export type WorkspaceDeleteResult = z.infer<typeof workspaceDeleteResultSchema>;
+export type SandboxProviderKind = z.infer<typeof sandboxProviderKindSchema>;
+export type Sandbox = z.infer<typeof sandboxSchema>;
 export type WorkspaceCatalog = z.infer<typeof workspaceCatalogSchema>;
 export type AgentCatalogItem = z.infer<typeof agentCatalogItemSchema>;
 export type ModelCatalogItem = z.infer<typeof modelCatalogItemSchema>;
@@ -1259,7 +1347,14 @@ export type RuntimeLogEventContext = z.infer<typeof runtimeLogEventContextSchema
 export type RuntimeLogEventData = z.infer<typeof runtimeLogEventDataSchema>;
 export type WorkspaceSkillInput = z.infer<typeof workspaceSkillInputSchema>;
 export type CreateWorkspaceRequest = z.infer<typeof createWorkspaceRequestSchema>;
+export type CreateSandboxRequest = z.infer<typeof createSandboxRequestSchema>;
 export type PutWorkspaceFileRequest = z.infer<typeof putWorkspaceFileRequestSchema>;
+export type SandboxCommandRequest = z.infer<typeof sandboxCommandRequestSchema>;
+export type SandboxProcessRequest = z.infer<typeof sandboxProcessRequestSchema>;
+export type SandboxBackgroundCommandRequest = z.infer<typeof sandboxBackgroundCommandRequestSchema>;
+export type SandboxCommandResult = z.infer<typeof sandboxCommandResultSchema>;
+export type SandboxBackgroundCommandResult = z.infer<typeof sandboxBackgroundCommandResultSchema>;
+export type SandboxFileStat = z.infer<typeof sandboxFileStatSchema>;
 export type CreateWorkspaceDirectoryRequest = z.infer<typeof createWorkspaceDirectoryRequestSchema>;
 export type MoveWorkspaceEntryRequest = z.infer<typeof moveWorkspaceEntryRequestSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
@@ -1281,6 +1376,7 @@ export type WorkspaceEntryPathQuery = z.infer<typeof workspaceEntryPathQuerySche
 export type WorkspaceDeleteEntryQuery = z.infer<typeof workspaceDeleteEntryQuerySchema>;
 export type WorkspaceFileContentQuery = z.infer<typeof workspaceFileContentQuerySchema>;
 export type WorkspaceFileUploadQuery = z.infer<typeof workspaceFileUploadQuerySchema>;
+export type SandboxFileStatQuery = z.infer<typeof sandboxFileStatQuerySchema>;
 export type RunEventsQuery = z.infer<typeof runEventsQuerySchema>;
 export type StorageTableQuery = z.infer<typeof storageTableQuerySchema>;
 export type StorageRedisKeysQuery = z.infer<typeof storageRedisKeysQuerySchema>;

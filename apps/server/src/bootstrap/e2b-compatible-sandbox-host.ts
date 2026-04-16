@@ -1,6 +1,13 @@
 import path from "node:path";
 import { Readable } from "node:stream";
 
+import {
+  sandboxBackgroundCommandResultSchema,
+  sandboxCommandResultSchema,
+  sandboxFileStatSchema,
+  sandboxSchema,
+  workspaceEntryPageSchema
+} from "@oah/api-contracts";
 import type {
   WorkspaceBackgroundCommandExecutionResult,
   WorkspaceCommandExecutor,
@@ -84,6 +91,259 @@ export interface E2BCompatibleSandboxService {
   maintain?(options: { idleBefore: string }): Promise<void>;
   beginDrain?(): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface HttpE2BCompatibleSandboxServiceOptions {
+  baseUrl: string;
+  headers?: Record<string, string> | (() => Record<string, string> | Promise<Record<string, string>>);
+}
+
+async function resolveHttpHeaders(
+  input: HttpE2BCompatibleSandboxServiceOptions["headers"]
+): Promise<Record<string, string> | undefined> {
+  if (!input) {
+    return undefined;
+  }
+
+  return typeof input === "function" ? await input() : input;
+}
+
+async function readJsonResponse<T>(response: Response): Promise<T> {
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(raw || `Sandbox backend request failed with status ${response.status}.`);
+  }
+
+  return JSON.parse(raw) as T;
+}
+
+function normalizeHttpSandboxPath(rootPath: string, targetPath: string): string {
+  const normalizedRoot = path.posix.normalize(rootPath);
+  const normalizedTarget = path.posix.normalize(targetPath);
+  if (normalizedTarget === normalizedRoot) {
+    return normalizedRoot;
+  }
+
+  if (normalizedTarget.startsWith(`${normalizedRoot}/`)) {
+    return normalizedTarget;
+  }
+
+  return path.posix.join(normalizedRoot, normalizedTarget.replace(/^\/+/u, ""));
+}
+
+export function createHttpE2BCompatibleSandboxService(
+  options: HttpE2BCompatibleSandboxServiceOptions
+): E2BCompatibleSandboxService {
+  const baseUrl = options.baseUrl.replace(/\/+$/u, "");
+
+  async function requestJson<T>(input: {
+    path: string;
+    method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    query?: URLSearchParams | undefined;
+    body?: unknown;
+  }): Promise<T> {
+    const headers = new Headers(await resolveHttpHeaders(options.headers));
+    if (input.body !== undefined) {
+      headers.set("content-type", "application/json");
+    }
+
+    const querySuffix = input.query && Array.from(input.query.keys()).length > 0 ? `?${input.query.toString()}` : "";
+    const response = await fetch(`${baseUrl}${input.path}${querySuffix}`, {
+      method: input.method ?? "GET",
+      headers,
+      ...(input.body !== undefined ? { body: JSON.stringify(input.body) } : {})
+    });
+    return readJsonResponse<T>(response);
+  }
+
+  async function requestBytes(input: { path: string; query: URLSearchParams }): Promise<Buffer> {
+    const resolvedHeaders = await resolveHttpHeaders(options.headers);
+    const response = await fetch(`${baseUrl}${input.path}?${input.query.toString()}`, {
+      method: "GET",
+      ...(resolvedHeaders ? { headers: resolvedHeaders } : {})
+    });
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Sandbox backend request failed with status ${response.status}.`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  async function loadSandbox(sandboxId: string) {
+    return sandboxSchema.parse(await requestJson<unknown>({ path: `/sandboxes/${encodeURIComponent(sandboxId)}` }));
+  }
+
+  function relativeToSandboxRoot(rootPath: string, targetPath: string) {
+    return normalizeHttpSandboxPath(rootPath, targetPath);
+  }
+
+  return {
+    async acquireExecution(input) {
+      const sandbox = await loadSandbox(input.workspace.id);
+      return {
+        sandboxId: sandbox.id,
+        rootPath: sandbox.rootPath,
+        async release() {
+          return undefined;
+        }
+      };
+    },
+    async acquireFileAccess(input) {
+      const sandbox = await loadSandbox(input.workspace.id);
+      return {
+        sandboxId: sandbox.id,
+        rootPath: sandbox.rootPath,
+        async release() {
+          return undefined;
+        }
+      };
+    },
+    async runCommand(input) {
+      return sandboxCommandResultSchema.parse(
+        await requestJson<unknown>({
+          path: `/sandboxes/${encodeURIComponent(input.sandboxId)}/commands/foreground`,
+          method: "POST",
+          body: {
+            command: input.command,
+            ...(input.cwd ? { cwd: relativeToSandboxRoot(input.rootPath, input.cwd) } : {}),
+            ...(input.env ? { env: input.env } : {}),
+            ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+            ...(input.stdinText !== undefined ? { stdinText: input.stdinText } : {})
+          }
+        })
+      );
+    },
+    async runProcess(input) {
+      return sandboxCommandResultSchema.parse(
+        await requestJson<unknown>({
+          path: `/sandboxes/${encodeURIComponent(input.sandboxId)}/commands/process`,
+          method: "POST",
+          body: {
+            executable: input.executable,
+            args: input.args,
+            ...(input.cwd ? { cwd: relativeToSandboxRoot(input.rootPath, input.cwd) } : {}),
+            ...(input.env ? { env: input.env } : {}),
+            ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+            ...(input.stdinText !== undefined ? { stdinText: input.stdinText } : {})
+          }
+        })
+      );
+    },
+    async runBackground(input) {
+      return sandboxBackgroundCommandResultSchema.parse(
+        await requestJson<unknown>({
+          path: `/sandboxes/${encodeURIComponent(input.sandboxId)}/commands/background`,
+          method: "POST",
+          body: {
+            command: input.command,
+            sessionId: input.sessionId,
+            ...(input.description ? { description: input.description } : {}),
+            ...(input.cwd ? { cwd: relativeToSandboxRoot(input.rootPath, input.cwd) } : {}),
+            ...(input.env ? { env: input.env } : {})
+          }
+        })
+      );
+    },
+    async stat(input) {
+      const query = new URLSearchParams({
+        path: input.path
+      });
+      return sandboxFileStatSchema.parse(
+        await requestJson<unknown>({
+          path: `/sandboxes/${encodeURIComponent(input.sandboxId)}/files/stat`,
+          query
+        })
+      );
+    },
+    async readFile(input) {
+      const query = new URLSearchParams({
+        path: input.path
+      });
+      return requestBytes({
+        path: `/sandboxes/${encodeURIComponent(input.sandboxId)}/files/download`,
+        query
+      });
+    },
+    async readdir(input) {
+      const query = new URLSearchParams({
+        path: input.path,
+        pageSize: "1000",
+        sortBy: "name",
+        sortOrder: "asc"
+      });
+      const page = workspaceEntryPageSchema.parse(
+        await requestJson<unknown>({
+          path: `/sandboxes/${encodeURIComponent(input.sandboxId)}/files/entries`,
+          query
+        })
+      );
+      return page.items.map((entry) => ({
+        name: path.posix.basename(entry.path),
+        kind: entry.type,
+        ...(entry.updatedAt ? { updatedAt: entry.updatedAt } : {}),
+        ...(entry.sizeBytes !== undefined ? { sizeBytes: entry.sizeBytes } : {})
+      }));
+    },
+    async mkdir(input) {
+      await requestJson<unknown>({
+        path: `/sandboxes/${encodeURIComponent(input.sandboxId)}/directories`,
+        method: "POST",
+        body: {
+          path: input.path,
+          createParents: input.recursive ?? true
+        }
+      });
+    },
+    async writeFile(input) {
+      const headers = new Headers(await resolveHttpHeaders(options.headers));
+      headers.set("content-type", "application/octet-stream");
+      const query = new URLSearchParams({
+        path: input.path,
+        overwrite: "true"
+      });
+      const response = await fetch(`${baseUrl}/sandboxes/${encodeURIComponent(input.sandboxId)}/files/upload?${query.toString()}`, {
+        method: "PUT",
+        headers,
+        body: input.data
+      });
+      if (!response.ok) {
+        throw new Error((await response.text()) || `Sandbox backend request failed with status ${response.status}.`);
+      }
+    },
+    async rm(input) {
+      const query = new URLSearchParams({
+        path: input.path,
+        recursive: String(input.recursive ?? false)
+      });
+      await requestJson<unknown>({
+        path: `/sandboxes/${encodeURIComponent(input.sandboxId)}/files/entry`,
+        method: "DELETE",
+        query
+      });
+    },
+    async rename(input) {
+      await requestJson<unknown>({
+        path: `/sandboxes/${encodeURIComponent(input.sandboxId)}/files/move`,
+        method: "PATCH",
+        body: {
+          sourcePath: input.sourcePath,
+          targetPath: input.targetPath,
+          overwrite: true
+        }
+      });
+    },
+    async realpath(input) {
+      return normalizeHttpSandboxPath("/workspace", input.path);
+    },
+    diagnostics() {
+      return {
+        transport: "http"
+      };
+    },
+    async close() {
+      return undefined;
+    }
+  };
 }
 
 function toVirtualWorkspaceRoot(lease: E2BCompatibleSandboxLease): string {

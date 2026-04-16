@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   ChatMessage,
   Message,
@@ -110,6 +111,7 @@ import { createId, nowIso, parseCursor } from "./utils.js";
 import type { RuntimeMessage } from "./runtime/runtime-messages.js";
 import { createLocalWorkspaceCommandExecutor } from "./workspace-command-executor.js";
 import { createLocalWorkspaceFileSystem } from "./workspace-file-system.js";
+import { resolveWorkspacePath } from "./native-tools/paths.js";
 
 interface RunExecutionContext {
   currentAgentName: string;
@@ -646,6 +648,103 @@ export class RuntimeService {
         dirty: access === "write" && !lease.workspace.readOnly && lease.workspace.kind === "project"
       });
     }
+  }
+
+  async runWorkspaceCommandForeground(
+    workspaceId: string,
+    input: {
+      command: string;
+      cwd?: string | undefined;
+      env?: Record<string, string> | undefined;
+      timeoutMs?: number | undefined;
+      stdinText?: string | undefined;
+      access?: "read" | "write" | undefined;
+    }
+  ) {
+    return this.#withWorkspaceCommandLease(workspaceId, input.cwd, input.access ?? "write", async (workspace, cwd) =>
+      this.#workspaceCommandExecutor.runForeground({
+        workspace,
+        command: input.command,
+        ...(cwd ? { cwd } : {}),
+        ...(input.env ? { env: input.env } : {}),
+        ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+        ...(input.stdinText !== undefined ? { stdinText: input.stdinText } : {})
+      })
+    );
+  }
+
+  async runWorkspaceCommandProcess(
+    workspaceId: string,
+    input: {
+      executable: string;
+      args: string[];
+      cwd?: string | undefined;
+      env?: Record<string, string> | undefined;
+      timeoutMs?: number | undefined;
+      stdinText?: string | undefined;
+      access?: "read" | "write" | undefined;
+    }
+  ) {
+    return this.#withWorkspaceCommandLease(workspaceId, input.cwd, input.access ?? "write", async (workspace, cwd) =>
+      this.#workspaceCommandExecutor.runProcess({
+        workspace,
+        executable: input.executable,
+        args: input.args,
+        ...(cwd ? { cwd } : {}),
+        ...(input.env ? { env: input.env } : {}),
+        ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+        ...(input.stdinText !== undefined ? { stdinText: input.stdinText } : {})
+      })
+    );
+  }
+
+  async runWorkspaceCommandBackground(
+    workspaceId: string,
+    input: {
+      command: string;
+      sessionId: string;
+      description?: string | undefined;
+      cwd?: string | undefined;
+      env?: Record<string, string> | undefined;
+      access?: "read" | "write" | undefined;
+    }
+  ) {
+    return this.#withWorkspaceCommandLease(workspaceId, input.cwd, input.access ?? "write", async (workspace, cwd) =>
+      this.#workspaceCommandExecutor.runBackground({
+        workspace,
+        command: input.command,
+        sessionId: input.sessionId,
+        ...(input.description ? { description: input.description } : {}),
+        ...(cwd ? { cwd } : {}),
+        ...(input.env ? { env: input.env } : {})
+      })
+    );
+  }
+
+  async getWorkspaceFileStat(workspaceId: string, targetPath: string) {
+    return this.#withWorkspaceFileLease(workspaceId, "read", targetPath, async (workspace) => {
+      const resolved = await resolveWorkspacePath(this.#workspaceFileSystem, workspace.rootPath, targetPath);
+      const stats = await this.#workspaceFileSystem.stat(resolved.absolutePath);
+      return {
+        ...stats,
+        path: targetPath
+      };
+    });
+  }
+
+  async #withWorkspaceCommandLease<T>(
+    workspaceId: string,
+    commandPath: string | undefined,
+    access: "read" | "write",
+    operation: (workspace: WorkspaceRecord, cwd: string | undefined) => Promise<T>
+  ): Promise<T> {
+    return this.#withWorkspaceFileLease(workspaceId, access, commandPath, async (workspace) => {
+      const cwd =
+        commandPath !== undefined
+          ? (await resolveWorkspacePath(this.#workspaceFileSystem, workspace.rootPath, commandPath)).absolutePath
+          : undefined;
+      return operation(workspace, cwd ?? path.resolve(workspace.rootPath));
+    });
   }
 
   async deleteWorkspace(workspaceId: string): Promise<void> {

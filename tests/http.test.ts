@@ -147,8 +147,10 @@ async function createStartedApp() {
     ...persistence,
     workspaceInitializer: {
       async initialize(input) {
+        const rootPath = input.rootPath ?? (await mkdtemp(path.join(os.tmpdir(), "oah-http-created-")));
+        tempWorkspaceRoots.push(rootPath);
         return {
-          rootPath: input.rootPath,
+          rootPath,
           settings: {
             defaultAgent: "default",
             skillDirs: []
@@ -220,6 +222,7 @@ async function createStartedAppWithRuntimeService(
       userId: string;
       overwrite?: boolean | undefined;
     }) => Promise<void>;
+    sandboxHostProviderKind?: "self_hosted" | "e2b_compatible";
   }
 ) {
   const app = createApp({
@@ -240,6 +243,7 @@ async function createStartedAppWithRuntimeService(
     ...(options?.assignWorkspacePlacementUser
       ? { assignWorkspacePlacementUser: options.assignWorkspacePlacementUser }
       : {}),
+    ...(options?.sandboxHostProviderKind ? { sandboxHostProviderKind: options.sandboxHostProviderKind } : {}),
     ...(options?.importWorkspace ? { importWorkspace: options.importWorkspace } : {})
   });
 
@@ -1789,6 +1793,163 @@ describe("http api", () => {
     expect(verifyResponse.status).toBe(200);
     await expect(verifyResponse.json()).resolves.toMatchObject({
       content: "proxied write\n"
+    });
+  });
+
+  it("exposes sandbox-compatible create, file, stat, and command routes", async () => {
+    activeApp = await createStartedApp();
+
+    const createResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        name: "sandbox-demo",
+        template: "workspace"
+      })
+    });
+    expect(createResponse.status).toBe(201);
+    const sandbox = await createResponse.json();
+    expect(sandbox).toMatchObject({
+      provider: "self_hosted",
+      rootPath: "/workspace",
+      name: "sandbox-demo"
+    });
+
+    const writeResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${sandbox.id}/files/content`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        path: "/workspace/hello.txt",
+        content: "hello sandbox\n",
+        encoding: "utf8"
+      })
+    });
+    expect(writeResponse.status).toBe(200);
+    await expect(writeResponse.json()).resolves.toMatchObject({
+      path: "/workspace/hello.txt"
+    });
+
+    const statResponse = await fetch(
+      `${activeApp.baseUrl}/api/v1/sandboxes/${sandbox.id}/files/stat?path=${encodeURIComponent("/workspace/hello.txt")}`
+    );
+    expect(statResponse.status).toBe(200);
+    await expect(statResponse.json()).resolves.toMatchObject({
+      kind: "file",
+      path: "/workspace/hello.txt"
+    });
+
+    const readResponse = await fetch(
+      `${activeApp.baseUrl}/api/v1/sandboxes/${sandbox.id}/files/content?path=${encodeURIComponent("/workspace/hello.txt")}`
+    );
+    expect(readResponse.status).toBe(200);
+    await expect(readResponse.json()).resolves.toMatchObject({
+      workspaceId: sandbox.workspaceId,
+      path: "/workspace/hello.txt",
+      content: "hello sandbox\n"
+    });
+
+    const commandResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${sandbox.id}/commands/foreground`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        command: "cat hello.txt",
+        cwd: "/workspace"
+      })
+    });
+    expect(commandResponse.status).toBe(200);
+    await expect(commandResponse.json()).resolves.toMatchObject({
+      stdout: "hello sandbox\n",
+      stderr: "",
+      exitCode: 0
+    });
+  });
+
+  it("proxies sandbox requests to the owner worker", async () => {
+    const ownerGateway = new FakeModelGateway(20);
+    const ownerPersistence = createMemoryRuntimePersistence();
+    const ownerRuntime = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: ownerGateway,
+      ...ownerPersistence
+    });
+    const ownerWorkspace = await createWorkspaceRecord();
+    await writeFile(path.join(ownerWorkspace.rootPath, "hello.txt"), "Hello sandbox owner.\n", "utf8");
+    await ownerPersistence.workspaceRepository.upsert(ownerWorkspace);
+
+    const ownerApp = createApp({
+      runtimeService: ownerRuntime,
+      modelGateway: ownerGateway,
+      defaultModel: "openai-default",
+      logger: false,
+      workspaceMode: "multi"
+    });
+    await ownerApp.listen({ host: "127.0.0.1", port: 0 });
+    activeClosers.push(async () => {
+      await ownerApp.close();
+    });
+    const ownerAddress = ownerApp.server.address() as AddressInfo;
+    const ownerBaseUrl = `http://127.0.0.1:${ownerAddress.port}`;
+
+    const proxyGateway = new FakeModelGateway(20);
+    const proxyPersistence = createMemoryRuntimePersistence();
+    activeApp = await createStartedAppWithRuntimeService(
+      new RuntimeService({
+        defaultModel: "openai-default",
+        modelGateway: proxyGateway,
+        ...proxyPersistence
+      }),
+      proxyGateway,
+      {
+        resolveWorkspaceOwnership: async (workspaceId) => ({
+          workspaceId,
+          version: "live",
+          ownerWorkerId: "worker-owner",
+          ownerBaseUrl,
+          health: "healthy",
+          lastActivityAt: "2026-04-16T00:00:00.000Z",
+          localPath: "/tmp/worker-owner/ws",
+          remotePrefix: "workspace/demo",
+          isLocalOwner: false
+        }),
+        sandboxHostProviderKind: "self_hosted"
+      }
+    );
+
+    const infoResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${ownerWorkspace.id}`);
+    expect(infoResponse.status).toBe(200);
+    await expect(infoResponse.json()).resolves.toMatchObject({
+      id: ownerWorkspace.id,
+      rootPath: "/workspace"
+    });
+
+    const readResponse = await fetch(
+      `${activeApp.baseUrl}/api/v1/sandboxes/${ownerWorkspace.id}/files/content?path=${encodeURIComponent("/workspace/hello.txt")}`
+    );
+    expect(readResponse.status).toBe(200);
+    await expect(readResponse.json()).resolves.toMatchObject({
+      content: "Hello sandbox owner.\n"
+    });
+
+    const commandResponse = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes/${ownerWorkspace.id}/commands/foreground`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        command: "cat hello.txt",
+        cwd: "/workspace"
+      })
+    });
+    expect(commandResponse.status).toBe(200);
+    await expect(commandResponse.json()).resolves.toMatchObject({
+      stdout: "Hello sandbox owner.\n",
+      exitCode: 0
     });
   });
 
