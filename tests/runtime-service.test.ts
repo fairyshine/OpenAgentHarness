@@ -224,6 +224,185 @@ describe("runtime service", () => {
     expect(workspace.serviceName).toBe("svc-alpha");
   });
 
+  it("treats explicit workspaceId creation as idempotent when the workspace already exists", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      workspaceInitializer: {
+        async initialize(input) {
+          return {
+            id: (input as typeof input & { workspaceId?: string }).workspaceId,
+            rootPath: "/workspace",
+            settings: {
+              defaultAgent: "builder",
+              blueprint: input.blueprint,
+              skillDirs: []
+            },
+            defaultAgent: "builder",
+            workspaceModels: {},
+            agents: {},
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "blueprint",
+              agents: [],
+              models: [],
+              actions: [],
+              skills: [],
+              tools: [],
+              hooks: [],
+              nativeTools: []
+            }
+          };
+        }
+      }
+    });
+
+    await persistence.workspaceRepository.create({
+      id: "ws_existing_shared",
+      name: "already-created",
+      rootPath: "/data/workspaces/ws_existing_shared",
+      executionPolicy: "local",
+      status: "active",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        blueprint: "workspace",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_existing_shared",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      },
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    const workspace = await runtimeService.createWorkspace({
+      input: {
+        name: "already-created",
+        blueprint: "workspace",
+        executionPolicy: "local",
+        workspaceId: "ws_existing_shared"
+      } as {
+        name: string;
+        blueprint: string;
+        executionPolicy: "local";
+        workspaceId: string;
+      }
+    });
+
+    expect(workspace.id).toBe("ws_existing_shared");
+    expect(workspace.name).toBe("already-created");
+    expect(workspace.rootPath).toBe("/data/workspaces/ws_existing_shared");
+  });
+
+  it("treats initializer-provided workspace ids as idempotent when the workspace already exists", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      workspaceInitializer: {
+        async initialize(input) {
+          return {
+            id: "ws_initializer_shared",
+            rootPath: "/workspace",
+            settings: {
+              defaultAgent: "builder",
+              blueprint: input.blueprint,
+              skillDirs: []
+            },
+            defaultAgent: "builder",
+            workspaceModels: {},
+            agents: {},
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "blueprint",
+              agents: [],
+              models: [],
+              actions: [],
+              skills: [],
+              tools: [],
+              hooks: [],
+              nativeTools: []
+            }
+          };
+        }
+      }
+    });
+
+    await persistence.workspaceRepository.create({
+      id: "ws_initializer_shared",
+      name: "shared-from-initializer",
+      rootPath: "/data/workspaces/ws_initializer_shared",
+      executionPolicy: "local",
+      status: "active",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        blueprint: "workspace",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_initializer_shared",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      },
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    const workspace = await runtimeService.createWorkspace({
+      input: {
+        name: "shared-from-initializer",
+        blueprint: "workspace",
+        executionPolicy: "local"
+      }
+    });
+
+    expect(workspace.id).toBe("ws_initializer_shared");
+    expect(workspace.rootPath).toBe("/data/workspaces/ws_initializer_shared");
+  });
+
   it("normalizes legacy chat workspaces when listing and loading", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();

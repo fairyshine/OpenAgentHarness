@@ -92,7 +92,7 @@ pnpm install
 # Point to your external test environment directory
 export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
 
-# Start the local stack (PostgreSQL + Redis + MinIO + OAH)
+# Start the local stack (PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox)
 # This also waits for MinIO and auto-runs one storage sync.
 pnpm local:up
 
@@ -123,7 +123,9 @@ This local stack is designed for a single OAH instance on host port `8787`. If y
 | Service | URL |
 | --- | --- |
 | Web Console | `http://localhost:5174` |
-| Backend API | `http://127.0.0.1:8787` |
+| `oah-api` | `http://127.0.0.1:8787` |
+| `oah-sandbox` internal worker | `http://127.0.0.1:8788` |
+| `oah-controller` metrics | `http://127.0.0.1:8789` |
 | MinIO Console | `http://127.0.0.1:9001` |
 
 ### Single Workspace Mode
@@ -143,9 +145,9 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 pnpm build          # Build all packages
 pnpm test           # Run tests
 OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync  # Push source to MinIO
-OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm local:up      # Start local Docker stack and auto-sync once
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm local:up      # Start oah-api + oah-controller + oah-sandbox and auto-sync once
 pnpm local:down                                                    # Stop local Docker stack
-pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml  # Advanced: start standalone worker
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml  # Advanced: start a standalone worker (typically sandbox-hosted)
 ```
 
 ## Who Is It For?

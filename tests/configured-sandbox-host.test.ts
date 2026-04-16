@@ -56,13 +56,13 @@ function createFakeMaterializationManager() {
 }
 
 describe("configured sandbox host", () => {
-  it("uses the local self-hosted sandbox host by default", async () => {
+  it("uses the embedded sandbox host by default", async () => {
     const host = await createConfiguredSandboxHost({
       config: buildConfig(),
       workspaceMaterializationManager: createFakeMaterializationManager()
     });
 
-    expect(host?.providerKind).toBe("self_hosted");
+    expect(host?.providerKind).toBe("embedded");
   });
 
   it("can create a remote self-hosted sandbox host", async () => {
@@ -87,24 +87,46 @@ describe("configured sandbox host", () => {
           provider: "e2b",
           e2b: {
             base_url: "https://sandbox-gateway.example.com/internal/v1",
-            api_key: "secret"
+            api_key: "secret",
+            template: "oah-base",
+            timeout_ms: 120000
           }
         }
       })
     });
 
     expect(host?.providerKind).toBe("e2b");
+    expect(host?.diagnostics()).toMatchObject({
+      provider: "e2b",
+      transport: "native_e2b",
+      executionModel: "sandbox_hosted",
+      workerPlacement: "inside_sandbox",
+      apiUrl: "https://sandbox-gateway.example.com",
+      template: "oah-base",
+      timeoutMs: 120000
+    });
   });
 
-  it("requires a base url when e2b provider is selected", async () => {
-    await expect(
-      createConfiguredSandboxHost({
-        config: buildConfig({
-          sandbox: {
-            provider: "e2b"
+  it("can create a native e2b sandbox host without a base url override", async () => {
+    const host = await createConfiguredSandboxHost({
+      config: buildConfig({
+        sandbox: {
+          provider: "e2b",
+          e2b: {
+            api_key: "secret",
+            domain: "e2b.dev"
           }
-        })
+        }
       })
-    ).rejects.toThrow("sandbox.e2b.base_url is required");
+    });
+
+    expect(host?.providerKind).toBe("e2b");
+    expect(host?.diagnostics()).toMatchObject({
+      provider: "e2b",
+      transport: "native_e2b",
+      executionModel: "sandbox_hosted",
+      workerPlacement: "inside_sandbox",
+      domain: "e2b.dev"
+    });
   });
 });

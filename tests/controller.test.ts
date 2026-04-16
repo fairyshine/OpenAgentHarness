@@ -15,7 +15,9 @@ import {
   buildPlacementExecutionOperations,
   createPlacementRegistryActionExecutor,
   RedisController,
+  resolveSandboxFleetConfig,
   resolveStandaloneControllerConfig,
+  summarizeSandboxFleet,
   summarizePlacementActionPlan,
   summarizePlacementPolicy,
   summarizePlacementRecommendations,
@@ -89,8 +91,7 @@ describe("controller", () => {
       config: {
         minReplicas: 1,
         maxReplicas: 6,
-        slotsPerPod: 2,
-        readySessionsPerWorker: 1,
+        readySessionsPerCapacityUnit: 1,
         reservedSubagentCapacity: 1,
         scaleIntervalMs: 5_000,
         scaleUpCooldownMs: 1_000,
@@ -132,6 +133,121 @@ describe("controller", () => {
 
     expect(result.suggestedWorkers).toBeGreaterThan(2);
     expect(result.suggestedReplicas).toBe(4);
+  });
+
+  it("derives sandbox fleet demand from owner-affinity grouping", () => {
+    const fleet = summarizeSandboxFleet({
+      config: {
+        providerKind: "e2b",
+        managedByController: true,
+        minCount: 1,
+        maxCount: 8,
+        maxWorkspacesPerSandbox: 2,
+        ownerlessPool: "shared"
+      },
+      placements: [
+        {
+          workspaceId: "ws_1",
+          version: "live",
+          userId: "owner_1",
+          state: "active",
+          updatedAt: "2026-04-15T00:00:00.000Z"
+        },
+        {
+          workspaceId: "ws_2",
+          version: "live",
+          userId: "owner_1",
+          state: "idle",
+          updatedAt: "2026-04-15T00:00:01.000Z"
+        },
+        {
+          workspaceId: "ws_3",
+          version: "live",
+          userId: "owner_1",
+          state: "idle",
+          updatedAt: "2026-04-15T00:00:02.000Z"
+        },
+        {
+          workspaceId: "ws_4",
+          version: "live",
+          userId: "owner_2",
+          state: "active",
+          updatedAt: "2026-04-15T00:00:03.000Z"
+        },
+        {
+          workspaceId: "ws_5",
+          version: "live",
+          state: "unassigned",
+          updatedAt: "2026-04-15T00:00:04.000Z"
+        },
+        {
+          workspaceId: "ws_6",
+          version: "live",
+          state: "idle",
+          updatedAt: "2026-04-15T00:00:05.000Z"
+        }
+      ] satisfies RedisWorkspacePlacementEntry[]
+    });
+
+    expect(fleet).toEqual({
+      providerKind: "e2b",
+      managedByController: true,
+      minSandboxes: 1,
+      maxSandboxes: 8,
+      maxWorkspacesPerSandbox: 2,
+      ownerlessPool: "shared",
+      trackedWorkspaces: 6,
+      ownerScopedWorkspaces: 4,
+      ownerlessWorkspaces: 2,
+      ownerGroups: 2,
+      ownerScopedSandboxes: 3,
+      ownerlessSandboxes: 1,
+      sharedSandboxes: 1,
+      logicalSandboxes: 4,
+      desiredSandboxes: 4,
+      capped: false
+    });
+  });
+
+  it("resolves sandbox fleet defaults for self-hosted providers", () => {
+    const config = resolveSandboxFleetConfig({
+      server: {
+        host: "127.0.0.1",
+        port: 8787
+      },
+      storage: {},
+      sandbox: {
+        provider: "self_hosted",
+        fleet: {
+          min_count: 2,
+          max_count: 10,
+          max_workspaces_per_sandbox: 5,
+          ownerless_pool: "dedicated"
+        },
+        self_hosted: {
+          base_url: "http://oah-sandbox:8787/internal/v1"
+        }
+      },
+      paths: {
+        workspace_dir: "/tmp/workspaces",
+        blueprint_dir: "/tmp/blueprints",
+        model_dir: "/tmp/models",
+        tool_dir: "/tmp/tools",
+        skill_dir: "/tmp/skills"
+      },
+      llm: {
+        default_model: "openai-default"
+      }
+    });
+
+    expect(config).toEqual({
+      providerKind: "self_hosted",
+      managedByController: true,
+      minCount: 2,
+      maxCount: 10,
+      maxWorkspacesPerSandbox: 5,
+      ownerlessPool: "dedicated"
+    });
   });
 
   it("summarizes first-class workspace placement state for controller snapshots", () => {
@@ -263,7 +379,7 @@ describe("controller", () => {
           lastSeenAgeMs: 0
         }
       ] satisfies RedisWorkerRegistryEntry[],
-      slotsPerPod: 1
+      maxWorkspacesPerSandbox: 1
     });
 
     expect(policy).toEqual({
@@ -274,8 +390,8 @@ describe("controller", () => {
       drainingOwnerWorkspaces: 1,
       usersSpanningWorkers: 1,
       maxWorkersPerUser: 2,
-      workersAboveSoftCapacity: 1,
-      maxRefCountPerWorker: 2
+      sandboxesAboveWorkspaceCapacity: 1,
+      maxWorkspaceRefsPerSandbox: 2
     });
   });
 
@@ -306,8 +422,8 @@ describe("controller", () => {
         drainingOwnerWorkspaces: 1,
         usersSpanningWorkers: 1,
         maxWorkersPerUser: 2,
-        workersAboveSoftCapacity: 1,
-        maxRefCountPerWorker: 3
+        sandboxesAboveWorkspaceCapacity: 1,
+        maxWorkspaceRefsPerSandbox: 3
       },
       placements: [
         {
@@ -364,7 +480,7 @@ describe("controller", () => {
           lastSeenAgeMs: 0
         }
       ] satisfies RedisWorkerRegistryEntry[],
-      slotsPerPod: 1
+      maxWorkspacesPerSandbox: 1
     });
 
     expect(recommendations).toEqual([
@@ -410,12 +526,12 @@ describe("controller", () => {
         message: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
       },
       {
-        kind: "rebalance_soft_capacity",
+        kind: "rebalance_workspace_capacity",
         priority: "medium",
         workspaceCount: 0,
         workerCount: 1,
         sampleWorkerIds: ["worker_missing"],
-        message: "rebalance placements away from 1 worker(s) above the soft slots-per-pod capacity"
+        message: "rebalance placements away from 1 sandbox owner(s) above the workspace capacity limit"
       }
     ]);
   });
@@ -608,7 +724,7 @@ describe("controller", () => {
           lastSeenAgeMs: 0
         }
       ] satisfies RedisWorkerRegistryEntry[],
-      slotsPerPod: 1
+      maxWorkspacesPerSandbox: 1
     });
 
     expect(operations).toEqual(
@@ -647,7 +763,7 @@ describe("controller", () => {
           min_replicas: 2,
           max_replicas: 7,
           slots_per_pod: 3,
-          ready_sessions_per_worker: 2,
+          ready_sessions_per_capacity_unit: 2,
           reserved_capacity_for_subagent: 5
         },
         controller: {
@@ -667,8 +783,7 @@ describe("controller", () => {
     expect(config).toEqual({
       minReplicas: 2,
       maxReplicas: 7,
-      slotsPerPod: 3,
-      readySessionsPerWorker: 2,
+      readySessionsPerCapacityUnit: 2,
       reservedSubagentCapacity: 5,
       scaleIntervalMs: 1500,
       scaleUpCooldownMs: 2500,
@@ -728,8 +843,7 @@ describe("controller", () => {
       config: {
         minReplicas: 1,
         maxReplicas: 6,
-        slotsPerPod: 1,
-        readySessionsPerWorker: 1,
+        readySessionsPerCapacityUnit: 1,
         reservedSubagentCapacity: 0,
         scaleIntervalMs: 5_000,
         scaleUpCooldownMs: 1,
@@ -792,8 +906,7 @@ describe("controller", () => {
       config: {
         minReplicas: 1,
         maxReplicas: 6,
-        slotsPerPod: 1,
-        readySessionsPerWorker: 1,
+        readySessionsPerCapacityUnit: 1,
         reservedSubagentCapacity: 0,
         scaleIntervalMs: 5_000,
         scaleUpCooldownMs: 1,
@@ -902,8 +1015,7 @@ describe("controller", () => {
       config: {
         minReplicas: 1,
         maxReplicas: 6,
-        slotsPerPod: 1,
-        readySessionsPerWorker: 1,
+        readySessionsPerCapacityUnit: 1,
         reservedSubagentCapacity: 0,
         scaleIntervalMs: 5_000,
         scaleUpCooldownMs: 1,
@@ -1022,8 +1134,7 @@ describe("controller", () => {
       config: {
         minReplicas: 2,
         maxReplicas: 6,
-        slotsPerPod: 1,
-        readySessionsPerWorker: 1,
+        readySessionsPerCapacityUnit: 1,
         reservedSubagentCapacity: 0,
         scaleIntervalMs: 5_000,
         scaleUpCooldownMs: 1,
@@ -1053,8 +1164,8 @@ describe("controller", () => {
       drainingOwnerWorkspaces: 1,
       usersSpanningWorkers: 1,
       maxWorkersPerUser: 2,
-      workersAboveSoftCapacity: 1,
-      maxRefCountPerWorker: 2
+      sandboxesAboveWorkspaceCapacity: 0,
+      maxWorkspaceRefsPerSandbox: 2
     });
     expect(snapshot.placementRecommendations).toEqual([
       {
@@ -1072,18 +1183,10 @@ describe("controller", () => {
         userCount: 1,
         sampleUserIds: ["user_1"],
         message: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
-      },
-      {
-        kind: "rebalance_soft_capacity",
-        priority: "medium",
-        workspaceCount: 0,
-        workerCount: 1,
-        sampleWorkerIds: ["worker_1"],
-        message: "rebalance placements away from 1 worker(s) above the soft slots-per-pod capacity"
       }
     ]);
     expect(snapshot.placementActionPlan).toEqual({
-      totalItems: 3,
+      totalItems: 2,
       highPriorityItems: 0,
       nextItem: {
         id: "finish_draining_owner:1",
@@ -1114,15 +1217,6 @@ describe("controller", () => {
           blockers: ["user_affinity_split"],
           userIds: ["user_1"],
           summary: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
-        },
-        {
-          id: "rebalance_soft_capacity:3",
-          phase: "optimize",
-          kind: "rebalance_soft_capacity",
-          priority: "medium",
-          blockers: ["soft_capacity_exceeded"],
-          workerIds: ["worker_1"],
-          summary: "rebalance placements away from 1 worker(s) above the soft slots-per-pod capacity"
         }
       ]
     });
@@ -1233,8 +1327,7 @@ describe("controller", () => {
       config: {
         minReplicas: 1,
         maxReplicas: 6,
-        slotsPerPod: 1,
-        readySessionsPerWorker: 1,
+        readySessionsPerCapacityUnit: 1,
         reservedSubagentCapacity: 0,
         scaleIntervalMs: 5_000,
         scaleUpCooldownMs: 1,
@@ -1504,8 +1597,7 @@ describe("controller", () => {
       config: {
         minReplicas: 1,
         maxReplicas: 6,
-        slotsPerPod: 1,
-        readySessionsPerWorker: 1,
+        readySessionsPerCapacityUnit: 1,
         reservedSubagentCapacity: 0,
         scaleIntervalMs: 5_000,
         scaleUpCooldownMs: 1,
@@ -1588,8 +1680,7 @@ describe("controller", () => {
       config: {
         minReplicas: 1,
         maxReplicas: 6,
-        slotsPerPod: 1,
-        readySessionsPerWorker: 1,
+        readySessionsPerCapacityUnit: 1,
         reservedSubagentCapacity: 0,
         scaleIntervalMs: 5_000,
         scaleUpCooldownMs: 1,
@@ -2003,23 +2094,41 @@ describe("controller", () => {
         running: true,
         minReplicas: 1,
         maxReplicas: 6,
-        slotsPerPod: 2,
-        suggestedReplicas: 3,
-        desiredReplicas: 2,
-        suggestedWorkers: 4,
-        activeReplicas: 2,
-        busyReplicas: 1,
-        activeSlots: 4,
-        busySlots: 1,
-        idleSlots: 3,
-        readySessionsPerWorker: 1,
-        reservedSubagentCapacity: 1,
+      suggestedReplicas: 3,
+      desiredReplicas: 2,
+      suggestedWorkers: 4,
+      activeReplicas: 2,
+      busyReplicas: 1,
+      activeSlots: 4,
+      busySlots: 1,
+      idleSlots: 3,
+      effectiveCapacityPerReplica: 2,
+      readySessionsPerCapacityUnit: 1,
+      reservedSubagentCapacity: 1,
         readySessionCount: 2,
         subagentReadySessionCount: 1,
         scaleUpPressureStreak: 1,
         scaleDownPressureStreak: 0,
         scaleUpCooldownRemainingMs: 0,
         scaleDownCooldownRemainingMs: 2500,
+        sandboxFleet: {
+          providerKind: "e2b",
+          managedByController: true,
+          minSandboxes: 1,
+          maxSandboxes: 12,
+          maxWorkspacesPerSandbox: 4,
+          ownerlessPool: "shared",
+          trackedWorkspaces: 5,
+          ownerScopedWorkspaces: 4,
+          ownerlessWorkspaces: 1,
+          ownerGroups: 2,
+          ownerScopedSandboxes: 2,
+          ownerlessSandboxes: 1,
+          sharedSandboxes: 1,
+          logicalSandboxes: 3,
+          desiredSandboxes: 3,
+          capped: false
+        },
         placement: {
           totalWorkspaces: 3,
           assignedUsers: 2,
@@ -2045,8 +2154,8 @@ describe("controller", () => {
           drainingOwnerWorkspaces: 0,
           usersSpanningWorkers: 1,
           maxWorkersPerUser: 2,
-          workersAboveSoftCapacity: 1,
-          maxRefCountPerWorker: 3
+          sandboxesAboveWorkspaceCapacity: 1,
+          maxWorkspaceRefsPerSandbox: 3
         },
         placementRecommendations: [
           {
@@ -2067,12 +2176,12 @@ describe("controller", () => {
             message: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
           },
           {
-            kind: "rebalance_soft_capacity",
+            kind: "rebalance_workspace_capacity",
             priority: "medium",
             workspaceCount: 0,
             workerCount: 1,
             sampleWorkerIds: ["worker_1"],
-            message: "rebalance placements away from 1 worker(s) above the soft slots-per-pod capacity"
+            message: "rebalance placements away from 1 sandbox owner(s) above the workspace capacity limit"
           }
         ],
         placementActionPlan: {
@@ -2109,13 +2218,13 @@ describe("controller", () => {
               summary: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
             },
             {
-              id: "rebalance_soft_capacity:3",
+              id: "rebalance_workspace_capacity:3",
               phase: "optimize",
-              kind: "rebalance_soft_capacity",
+              kind: "rebalance_workspace_capacity",
               priority: "medium",
-              blockers: ["soft_capacity_exceeded"],
+              blockers: ["workspace_capacity_exceeded"],
               workerIds: ["worker_1"],
-              summary: "rebalance placements away from 1 worker(s) above the soft slots-per-pod capacity"
+              summary: "rebalance placements away from 1 sandbox owner(s) above the workspace capacity limit"
             }
           ]
         },
@@ -2163,6 +2272,12 @@ describe("controller", () => {
     expect(metrics).toContain("oah_controller_leader 1");
     expect(metrics).toContain("oah_controller_scale_down_allowed 0");
     expect(metrics).toContain("oah_controller_scale_down_blocked_replicas 1");
+    expect(metrics).toContain("oah_controller_sandbox_desired 3");
+    expect(metrics).toContain("oah_controller_sandbox_logical 3");
+    expect(metrics).toContain("oah_controller_sandbox_owner_groups 2");
+    expect(metrics).toContain("oah_controller_sandbox_ownerless_workspaces 1");
+    expect(metrics).toContain("oah_controller_sandbox_shared 1");
+    expect(metrics).toContain("oah_controller_sandbox_capped 0");
     expect(metrics).toContain("oah_controller_placement_owned_by_active_workers 2");
     expect(metrics).toContain("oah_controller_placement_owned_by_late_workers 1");
     expect(metrics).toContain("oah_controller_placement_policy_attention_required 1");
@@ -2191,7 +2306,6 @@ describe("controller", () => {
         running: false,
         minReplicas: 1,
         maxReplicas: 6,
-        slotsPerPod: 1,
         suggestedReplicas: 1,
         desiredReplicas: 1,
         suggestedWorkers: 1,
@@ -2200,7 +2314,8 @@ describe("controller", () => {
         activeSlots: 1,
         busySlots: 0,
         idleSlots: 1,
-        readySessionsPerWorker: 1,
+        effectiveCapacityPerReplica: 1,
+        readySessionsPerCapacityUnit: 1,
         reservedSubagentCapacity: 0,
         scaleUpPressureStreak: 0,
         scaleDownPressureStreak: 0,

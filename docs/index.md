@@ -21,21 +21,21 @@ Open Agent Harness 是一个可部署的 Agent 后端运行时。它管理 Works
 - **能力自由组合** — agent / skill / action / tool / hook / context 按 Workspace 独立配置
 - **统一 Workspace 结构** — 同一套目录结构承载对话、工具调用和执行能力
 - **REST + SSE API** — 全部能力通过 `/api/v1` 暴露，前端无关
-- **灵活部署** — 本地一体运行或 API + Worker 拆分部署
+- **灵活部署** — 最小化时可用 `oah-api` 内嵌 worker，拆分时使用 `oah-api + oah-controller + oah-sandbox`
 
 ## 快速开始
 
 ```bash
 pnpm install                                        # 安装依赖
 export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
-pnpm local:up                                       # 启动 PostgreSQL + Redis + MinIO + OAH，并自动同步一次
+pnpm local:up                                       # 启动 PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox，并自动同步一次
 pnpm dev:web                                        # 启动调试控制台
 ```
 
 启动后访问：
 
 - :material-monitor-dashboard: **调试控制台** — [http://localhost:5174](http://localhost:5174)
-- :material-api: **后端 API** — [http://localhost:8787](http://localhost:8787)
+- :material-api: **oah-api** — [http://localhost:8787](http://localhost:8787)
 
 [:octicons-arrow-right-24: 完整指南](./getting-started.md){ .md-button .md-button--primary }
 

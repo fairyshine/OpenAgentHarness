@@ -2,7 +2,7 @@
 
 ## 队列与并发
 
-默认部署：`server` 以 `API + embedded worker` 模式运行。需拆分时使用 `server --api-only` + 独立 `worker`。
+默认部署：`oah-api` 以 `API + embedded worker` 模式运行。需拆分时使用 `oah-api --api-only` + `oah-controller` + 承载 standalone worker 的 `oah-sandbox`。
 
 ### 队列原则
 
@@ -81,8 +81,8 @@
 
 扩容触发主要依赖三类压力：
 
-- 队列压力：`ceil(readySessionCount / readySessionsPerWorker)`
-- 饱和压力：`ceil((readySessionCount + busyWorkers) / readySessionsPerWorker)`
+- 队列压力：`ceil(readySessionCount / readySessionsPerCapacityUnit)`
+- 饱和压力：`ceil((readySessionCount + busyWorkers) / readySessionsPerCapacityUnit)`
 - subagent 保底容量：当存在 `subagentReadySessionCount > 0` 时，至少满足 `busyWorkers + reservedSubagentCapacity`
 - 老化压力：当 busy ratio 超过阈值，且最老可调度 session 等待时间超过阈值时，额外建议增加一个 worker
 

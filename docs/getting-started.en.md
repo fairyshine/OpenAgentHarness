@@ -31,7 +31,7 @@ pnpm local:up
 pnpm local:up
 ```
 
-Listens on `http://127.0.0.1:8787` by default. The embedded worker starts automatically.
+The local stack starts `oah-api`, `oah-controller`, and `oah-sandbox`. `oah-api` listens on `http://127.0.0.1:8787`, and `oah-sandbox` carries the standalone worker in the local topology.
 
 ### Step 4: Start the debug console
 
@@ -45,7 +45,7 @@ Open [http://localhost:5174](http://localhost:5174).
 
 After startup, check:
 
-1. Backend logs show the runtime mode (embedded worker / api-only)
+1. `oah-api`, `oah-controller`, and `oah-sandbox` all start successfully
 2. Browser opens `http://localhost:5174`
 3. Send a message in the console. The run should move from `queued` to executing.
 
@@ -77,10 +77,11 @@ Optional flags: `--tool-dir`, `--skill-dir`, `--host`, `--port`
 | --- | --- |
 | `pnpm install` | Install dependencies |
 | `OAH_TEST_ROOT=/absolute/path pnpm storage:sync` | Sync test data to MinIO |
-| `OAH_TEST_ROOT=/absolute/path pnpm local:up` | Start the full local stack |
+| `OAH_TEST_ROOT=/absolute/path pnpm local:up` | Start the full local stack (`oah-api` / `oah-controller` / `oah-sandbox`) |
 | `pnpm local:down` | Stop the full local stack |
-| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --api-only --config ./server.example.yaml` | Start API only |
-| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml` | Start standalone worker |
+| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --api-only --config ./server.example.yaml` | Start `oah-api` only |
+| `pnpm exec tsx --tsconfig ./apps/controller/tsconfig.json ./apps/controller/src/index.ts -- --config ./server.example.yaml` | Start `oah-controller` only |
+| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml` | Start a standalone worker (typically inside `oah-sandbox`) |
 | `pnpm dev:web` | Start debug console |
 | `pnpm build` | Full build |
 | `pnpm test` | Run tests |

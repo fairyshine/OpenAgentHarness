@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildWorkspaceId,
@@ -149,6 +149,11 @@ server:
 storage: {}
 sandbox:
   provider: e2b
+  fleet:
+    min_count: 1
+    max_count: 12
+    max_workspaces_per_sandbox: 6
+    ownerless_pool: dedicated
   self_hosted:
     base_url: http://127.0.0.1:7878/internal/v1
     headers:
@@ -173,6 +178,12 @@ llm:
     const config = await loadServerConfig(configPath);
     expect(config.sandbox).toEqual({
       provider: "e2b",
+      fleet: {
+        min_count: 1,
+        max_count: 12,
+        max_workspaces_per_sandbox: 6,
+        ownerless_pool: "dedicated"
+      },
       self_hosted: {
         base_url: "http://127.0.0.1:7878/internal/v1",
         headers: {
@@ -309,8 +320,7 @@ workers:
   standalone:
     min_replicas: 2
     max_replicas: 9
-    slots_per_pod: 3
-    ready_sessions_per_worker: 2
+    ready_sessions_per_capacity_unit: 2
     reserved_capacity_for_subagent: 4
   controller:
     scale_interval_ms: 1200
@@ -350,8 +360,7 @@ llm:
     expect(config.workers?.standalone).toEqual({
       min_replicas: 2,
       max_replicas: 9,
-      slots_per_pod: 3,
-      ready_sessions_per_worker: 2,
+      ready_sessions_per_capacity_unit: 2,
       reserved_capacity_for_subagent: 4
     });
     expect(config.workers?.controller).toEqual({
@@ -387,6 +396,55 @@ llm:
         }
       }
     });
+  });
+
+  it("warns when legacy standalone.slots_per_pod is configured", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-controller-warning-"));
+    tempDirs.push(tempDir);
+
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage:
+  redis_url: redis://local/0
+paths:
+  workspace_dir: ./workspaces
+  blueprint_dir: ./blueprints
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+workers:
+  standalone:
+    min_replicas: 1
+    max_replicas: 2
+    slots_per_pod: 3
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const emitWarningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+
+    await loadServerConfig(configPath);
+
+    expect(emitWarningSpy).toHaveBeenCalledWith(
+      expect.stringContaining("workers.standalone.slots_per_pod is deprecated"),
+      expect.objectContaining({
+        type: "DeprecationWarning",
+        code: "OAH_CONFIG_DEPRECATED_SLOTS_PER_POD"
+      })
+    );
+
+    emitWarningSpy.mockRestore();
   });
 
   it("requires model_dir and tool_dir in server config", async () => {

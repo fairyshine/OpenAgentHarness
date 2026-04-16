@@ -11,6 +11,7 @@ import {
   type ControllerPlacementOwnershipRegistry,
   createPlacementRegistryActionExecutor,
   RedisController,
+  resolveSandboxFleetConfig,
   resolveStandaloneControllerConfig,
   type ControllerLogger
 } from "./controller.js";
@@ -74,6 +75,7 @@ async function main() {
     })
   ]);
   const controllerConfig = resolveStandaloneControllerConfig(config);
+  const sandboxConfig = resolveSandboxFleetConfig(config);
 
   const logger: ControllerLogger = {
     info(message) {
@@ -90,11 +92,12 @@ async function main() {
     placementExecutor: isTruthyEnvValue(process.env.OAH_CONTROLLER_PLACEMENT_ACTIONS_ENABLED)
       ? createPlacementRegistryActionExecutor({
           placementRegistry: placementRegistry as unknown as ControllerPlacementOwnershipRegistry,
-          slotsPerPod: controllerConfig.slotsPerPod,
+          maxWorkspacesPerSandbox: sandboxConfig.maxWorkspacesPerSandbox,
           logger
         })
       : undefined,
     config: controllerConfig,
+    sandboxConfig,
     scaleTarget: createWorkerReplicaTarget(resolveWorkerReplicaTargetConfig(config)),
     logger
   });

@@ -307,7 +307,7 @@ Implemented so far:
 
 - `runtime-core` now carries a first-class `SandboxHost` contract alongside the existing execution / file-access provider seam
 - the shared host contract now includes:
-  - provider kind (`self_hosted` / `e2b_compatible`)
+  - provider kind (`embedded` / `self_hosted` / `e2b`)
   - workspace command execution
   - workspace file access
   - workspace execution lease acquisition
@@ -342,23 +342,61 @@ Implemented so far:
   - diagnostics / maintain / beginDrain / close lifecycle
 - the adapter uses a virtual sandbox path boundary so runtime-core and server code can keep using normal workspace path semantics while the backend remains remote
 - E2B compatibility remains optional and adapter-scoped:
-  - self-hosted materialization remains the default backend
+  - `embedded` remains the local materialization backend
+  - `self_hosted` remains the remote self-hosted sandbox backend
   - bootstrap injection is the extension point
   - ownership truth and OSS semantics remain unchanged
+
+### Phase F: Sandbox Fleet Signals
+
+- make sandbox fleet demand a first-class controller concern
+- keep worker execution and sandbox hosting as separate layers
+- derive sandbox grouping from `ownerId` affinity instead of inventing a new API surface
+- prepare for future sandbox autoscaling targets without forcing one backend today
+
+Status:
+
+- in progress
+
+Implemented so far:
+
+- server config now exposes `sandbox.fleet.*` for remote sandbox capacity hints:
+  - `min_count`
+  - `max_count`
+  - `max_workspaces_per_sandbox`
+  - `ownerless_pool`
+- controller now resolves a first-class `SandboxFleetConfig` from `embedded | self_hosted | e2b`
+- controller snapshots now include `sandboxFleet`, which derives:
+  - owner-scoped workspace counts
+  - ownerless workspace counts
+  - logical sandbox demand
+  - bounded desired sandbox count
+  - whether fleet demand is capped by configured max capacity
+- controller metrics now expose sandbox fleet signals so `self_hosted` / `e2b` rollouts can observe real demand before attaching a concrete autoscaling target
+
+Still remaining:
+
+1. add a real sandbox registry / observed active sandbox inventory instead of logical demand only
+2. attach `sandboxFleet.desiredSandboxes` to a concrete scaling target for self-hosted sandbox deployments
+3. add an E2B-native control path for sandbox lifecycle reuse / warm-pool management
 
 ## 6. Completion Audit
 
 Current state:
 
 - `Phase A-E` are implemented at the architecture / contract layer.
+- `Phase F` has started with real controller/config/metrics wiring, but does not yet own concrete sandbox scaling actions.
 - placement hints already feed real runtime queueing paths via `preferredWorkerId`, not only storage/admin inspection.
 - worker ownership, sticky routing, self-hosted default backend, and adapter-scoped E2B compatibility remain intact.
 
 The main remaining follow-up is:
 
-1. Add a production-grade remote sandbox backend behind the existing `createE2BCompatibleSandboxHost(...)` adapter, instead of stopping at the adapter contract plus test/dummy bridge surface.
+1. Add a production-grade sandbox fleet control path:
+   - real remote sandbox inventory / registry
+   - self-hosted sandbox autoscaling target
+   - native E2B lifecycle adapter behind the same contract
 
-That means this roadmap is largely complete, but not fully closed if the goal is "remote sandbox backend ready for real production traffic".
+That means this roadmap is largely complete at the contract level, but not fully closed if the goal is "controller-managed sandbox fleet that can switch seamlessly between self_hosted and e2b in production".
 
 ## 7. Non-Goals Right Now
 

@@ -5,7 +5,7 @@
 | 模式 | 进程 | 依赖 | 适用场景 |
 | --- | --- | --- | --- |
 | **API + Worker 一体** | 1 个 `server` | PostgreSQL，Redis 可选 | 本地开发、PoC、单机部署 |
-| **API + Worker 分离** | 1 个 `server --api-only` + N 个 `worker` | PostgreSQL + Redis | 生产环境、需要独立扩缩容 |
+| **API + Controller + Sandbox 分离** | 1 个 `server --api-only` + 1 个 `controller` + N 个 sandbox-hosted `worker` | PostgreSQL + Redis | 生产环境、需要独立控制面与 sandbox 扩缩容 |
 | **单 Workspace** | 1 个 `server --workspace <path>` | PostgreSQL，Redis 可选 | 只服务一个仓库 |
 
 > **tip**
@@ -18,7 +18,7 @@
 三个终端，最简路径：
 
 ```bash
-# 终端 1 — 本地整套服务（PostgreSQL + Redis + MinIO + OAH）
+# 终端 1 — 本地整套服务（PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox）
 export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
 pnpm local:up
 
@@ -41,17 +41,20 @@ pnpm dev:web
 # 终端 1 — 本地基础设施
 docker compose -f docker-compose.local.yml up -d postgres redis minio
 
-# 终端 2 — API（不内嵌 Worker）
+# 终端 2 — API（oah-api，不内嵌 Worker）
 pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config ./server.example.yaml --api-only
 
-# 终端 3 — Worker（可启动多个实例）
+# 终端 3 — Controller（oah-controller）
+pnpm exec tsx --tsconfig ./apps/controller/tsconfig.json ./apps/controller/src/index.ts -- --config ./server.example.yaml
+
+# 终端 4 — Standalone worker（通常跑在 oah-sandbox，可启动多个实例）
 pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml
 
-# 终端 4 — 前端
+# 终端 5 — 前端
 pnpm dev:web
 ```
 
-API 进程只负责 HTTP 请求。Worker 进程消费 Redis 队列并执行 Run。
+`oah-api` 只负责 HTTP 请求与 owner 路由；`oah-controller` 负责控制面；standalone worker 通常运行在 `oah-sandbox` 或 E2B sandbox 内，消费 Redis 队列并执行 Run。
 
 ### Kubernetes Split 部署
 
@@ -120,23 +123,23 @@ git push origin master
 
 当前这套骨架已经包含：
 
-- `api-server`、`worker`、`controller` 三个独立 Deployment
+- `oah-api`、`oah-sandbox`、`oah-controller` 三个独立 Deployment
 - `controller` 额外暴露一个 ClusterIP Service，提供 `/healthz`、`/readyz`、`/snapshot`、`/metrics`
 - `controller` 使用 Kubernetes Lease 做 leader election
-- `controller` 通过 `Deployment /scale` 子资源改写 worker 副本数，并已支持通过 `label_selector` 自动发现目标 Deployment
+- `controller` 通过 `Deployment /scale` 子资源改写 `oah-sandbox` 副本数，并已支持通过 `label_selector` 自动发现目标 Deployment
 - `controller-rbac.yaml` 当前已包含 `leases`、`deployments` 和 `deployments/scale` 所需权限，能够覆盖 leader election、label selector 发现和副本数改写
-- 默认已经允许在安全前提满足时自动缩容；真正的缩容护栏由 controller 对 worker `/healthz` 的动态探测决定
-- `worker` 收到退出信号后会先进入 drain，使 readiness 先摘除，再等待当前 run 自然结束
+- 默认已经允许在安全前提满足时自动缩容；真正的缩容护栏由 controller 对 standalone worker `/healthz` 的动态探测决定
+- standalone worker 收到退出信号后会先进入 drain，使 readiness 先摘除，再等待当前 run 自然结束
 - drain 开始时会优先 flush + evict 空闲 workspace 副本，并阻止新的 object-store materialization 启动
-- 三个 Deployment 现在都显式声明了 rollout 策略；`api-server` / `worker` 使用 `maxUnavailable: 0`，`worker` 还额外保留更长的 `terminationGracePeriodSeconds` 用于 drain 收敛
+- 三个 Deployment 现在都显式声明了 rollout 策略；`oah-api` / `oah-sandbox` 使用 `maxUnavailable: 0`，`oah-sandbox` 还额外保留更长的 `terminationGracePeriodSeconds` 用于 drain 收敛
 - `controller` Service 默认带 `prometheus.io/*` annotations，便于最小化接入 scrape；更完整的 ServiceMonitor/Prometheus Operator 对接仍建议在生产 overlays/Helm 中补充
 - 仓库额外提供 [`controller-servicemonitor.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller-servicemonitor.example.yaml) 作为 Prometheus Operator 接入示例，默认不纳入 `kustomization.yaml`
 - 现在也提供一个可直接使用的 Prometheus Operator kustomization：
   [`deploy/kustomization.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kustomization.yaml)
   它会在基础 `deploy/kubernetes` 骨架之上额外包含 [`deploy/controller-servicemonitor.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/controller-servicemonitor.yaml)，可直接通过 `kubectl apply -k ./deploy` 启用 `controller` 的 `ServiceMonitor`
 - 现在也提供了最小 Helm chart，可把 split deployment、RBAC、ConfigMap 和可选 `ServiceMonitor` 一起交给 Helm 管理
-- Helm chart 当前还已支持复用已有 ConfigMap、为 worker 切换到现有 PVC、以及给三个组件分别配置 resources / securityContext / envFrom / scheduling
-- Helm chart 现在还支持 `PodDisruptionBudget`、`topologySpreadConstraints`、`priorityClassName`，并可直接为 `api-server` 生成 Ingress
+- Helm chart 当前还已支持复用已有 ConfigMap、为 `oah-sandbox` 切换到现有 PVC、以及给三个组件分别配置 resources / securityContext / envFrom / scheduling
+- Helm chart 现在还支持 `PodDisruptionBudget`、`topologySpreadConstraints`、`priorityClassName`，并可直接为 `oah-api` 生成 Ingress
 - chart 目录下现在还已附带 `dev / staging / prod` 三套 values 样例，便于按环境起步而不是手写所有参数
 - 现在也提供了生产 `Dockerfile` 与最小 GHCR 发布 workflow，K8S manifests/chart 不再只是假定“外部已有镜像”
 - GHCR workflow 现在还会产出 `sbom/provenance`，并通过 Cosign 做 keyless signing

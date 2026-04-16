@@ -31,7 +31,7 @@ pnpm local:up
 pnpm local:up
 ```
 
-服务默认监听 `http://127.0.0.1:8787`，内嵌 Worker 自动启动。
+本地整套服务会启动 `oah-api`、`oah-controller` 和 `oah-sandbox`。其中 `oah-api` 对外监听 `http://127.0.0.1:8787`，`oah-sandbox` 在本地栈中承载 standalone worker。
 
 ### 第 4 步：启动调试控制台
 
@@ -45,7 +45,7 @@ pnpm dev:web
 
 启动成功后检查以下几点：
 
-1. 后端日志显示运行模式（embedded worker / api-only）
+1. `oah-api`、`oah-controller`、`oah-sandbox` 三个服务都启动成功
 2. 浏览器能打开 `http://localhost:5174`
 3. 在控制台发送消息，Run 从 `queued` 进入执行状态
 
@@ -77,11 +77,12 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 | --- | --- |
 | `pnpm install` | 安装依赖 |
 | `OAH_TEST_ROOT=/absolute/path pnpm storage:sync` | 同步测试数据到 MinIO |
-| `OAH_TEST_ROOT=/absolute/path pnpm local:up` | 启动本地整套服务 |
+| `OAH_TEST_ROOT=/absolute/path pnpm local:up` | 启动本地整套服务（`oah-api` / `oah-controller` / `oah-sandbox`） |
 | `OAH_TEST_ROOT=/absolute/path OAH_SKIP_BUILD=1 pnpm local:up` | 复用本地已有 OAH 镜像，跳过 Docker 构建 |
 | `pnpm local:down` | 停止本地整套服务 |
-| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --api-only --config ./server.example.yaml` | 仅启动 API |
-| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml` | 单独启动 Worker |
+| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --api-only --config ./server.example.yaml` | 仅启动 `oah-api` |
+| `pnpm exec tsx --tsconfig ./apps/controller/tsconfig.json ./apps/controller/src/index.ts -- --config ./server.example.yaml` | 单独启动 `oah-controller` |
+| `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml` | 单独启动 standalone worker（通常跑在 `oah-sandbox`） |
 | `pnpm dev:web` | 启动调试控制台 |
 | `pnpm build` | 全量构建 |
 | `pnpm test` | 运行测试 |

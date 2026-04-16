@@ -34,9 +34,19 @@ export class ScopedWorkspaceRepository implements WorkspaceRepository {
   ) {}
 
   async create(input: WorkspaceRecord): Promise<WorkspaceRecord> {
-    const created = await this.inner.create(input);
-    this.visibleWorkspaceIds.add(input.id);
-    return created;
+    try {
+      const created = await this.inner.create(input);
+      this.visibleWorkspaceIds.add(input.id);
+      return created;
+    } catch (error) {
+      const existing = await this.inner.getById(input.id);
+      if (!existing) {
+        throw error;
+      }
+
+      this.visibleWorkspaceIds.add(input.id);
+      return existing;
+    }
   }
 
   async upsert(input: WorkspaceRecord): Promise<WorkspaceRecord> {

@@ -510,7 +510,10 @@ export function createE2BCompatibleSandboxHost(options: {
     workspaceFileAccessProvider,
     diagnostics() {
       return {
-        ...(options.service.diagnostics ? options.service.diagnostics() : options.diagnostics ?? {})
+        executionModel: "sandbox_hosted",
+        workerPlacement: "inside_sandbox",
+        ...(options.diagnostics ?? {}),
+        ...(options.service.diagnostics ? options.service.diagnostics() : {})
       };
     },
     async maintain({ idleBefore }) {

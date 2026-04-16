@@ -58,11 +58,16 @@ export function renderControllerMetrics(input: {
   const metricFamilies: Array<{ name: string; help: string; value: number }> = [
     { name: "running", help: "Whether the controller reconcile loop is running.", value: input.controller.running ? 1 : 0 },
     { name: "leader", help: "Whether this controller instance currently holds leadership.", value: input.leaderElection.leader ? 1 : 0 },
-    { name: "active_replicas", help: "Currently observed active standalone worker replicas.", value: input.controller.activeReplicas },
-    { name: "desired_replicas", help: "Desired worker replicas after gating and cooldown.", value: input.controller.desiredReplicas },
-    { name: "suggested_replicas", help: "Raw suggested worker replicas before gating and cooldown.", value: input.controller.suggestedReplicas },
-    { name: "active_slots", help: "Currently observed active standalone worker slots.", value: input.controller.activeSlots },
-    { name: "busy_slots", help: "Currently observed busy standalone worker slots.", value: input.controller.busySlots },
+    { name: "active_replicas", help: "Currently observed active sandbox runtime replicas.", value: input.controller.activeReplicas },
+    { name: "desired_replicas", help: "Desired sandbox replicas after gating and cooldown.", value: input.controller.desiredReplicas },
+    { name: "suggested_replicas", help: "Raw suggested sandbox replicas before gating and cooldown.", value: input.controller.suggestedReplicas },
+    { name: "active_slots", help: "Observed active execution capacity units reported by standalone workers.", value: input.controller.activeSlots },
+    { name: "busy_slots", help: "Observed busy execution capacity units reported by standalone workers.", value: input.controller.busySlots },
+    {
+      name: "effective_capacity_per_replica",
+      help: "Observed average execution capacity units currently reported per sandbox replica.",
+      value: input.controller.effectiveCapacityPerReplica
+    },
     { name: "scale_up_pressure_streak", help: "Current accumulated scale-up pressure streak.", value: input.controller.scaleUpPressureStreak },
     { name: "scale_down_pressure_streak", help: "Current accumulated scale-down pressure streak.", value: input.controller.scaleDownPressureStreak },
     { name: "scale_up_cooldown_remaining_ms", help: "Remaining scale-up cooldown in milliseconds.", value: input.controller.scaleUpCooldownRemainingMs },
@@ -79,6 +84,36 @@ export function renderControllerMetrics(input: {
       name: "placement_total_workspaces",
       help: "Number of workspace placement records currently tracked by the controller.",
       value: input.controller.placement?.totalWorkspaces ?? 0
+    },
+    {
+      name: "sandbox_desired",
+      help: "Desired number of logical sandboxes after applying provider grouping and fleet bounds.",
+      value: input.controller.sandboxFleet?.desiredSandboxes ?? 0
+    },
+    {
+      name: "sandbox_logical",
+      help: "Unbounded logical sandbox count implied by current workspace grouping rules.",
+      value: input.controller.sandboxFleet?.logicalSandboxes ?? 0
+    },
+    {
+      name: "sandbox_owner_groups",
+      help: "Number of owner-affinity groups currently mapped into sandboxes.",
+      value: input.controller.sandboxFleet?.ownerGroups ?? 0
+    },
+    {
+      name: "sandbox_ownerless_workspaces",
+      help: "Number of ownerless workspaces currently routed through the shared sandbox pool.",
+      value: input.controller.sandboxFleet?.ownerlessWorkspaces ?? 0
+    },
+    {
+      name: "sandbox_shared",
+      help: "Number of shared sandboxes currently implied by ownerless grouping.",
+      value: input.controller.sandboxFleet?.sharedSandboxes ?? 0
+    },
+    {
+      name: "sandbox_capped",
+      help: "Whether desired sandbox count is currently capped by sandbox fleet max_count.",
+      value: input.controller.sandboxFleet?.capped ? 1 : 0
     },
     {
       name: "placement_assigned_users",
@@ -121,9 +156,9 @@ export function renderControllerMetrics(input: {
       value: input.controller.placementPolicy?.usersSpanningWorkers ?? 0
     },
     {
-      name: "placement_policy_workers_above_soft_capacity",
-      help: "Number of workers whose placement ref-load currently exceeds the soft slots-per-pod capacity.",
-      value: input.controller.placementPolicy?.workersAboveSoftCapacity ?? 0
+      name: "placement_policy_sandboxes_above_workspace_capacity",
+      help: "Number of sandbox owners whose workspace ref-load currently exceeds max_workspaces_per_sandbox.",
+      value: input.controller.placementPolicy?.sandboxesAboveWorkspaceCapacity ?? 0
     },
     {
       name: "placement_recommendations_total",

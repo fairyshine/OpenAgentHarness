@@ -441,7 +441,20 @@ export class RuntimeService {
 
     const initialized = await this.#workspaceInitializer.initialize(input);
     const now = nowIso();
-    const workspaceId = initialized.id ?? createId("ws");
+    const requestedWorkspaceId = (
+      input as CreateWorkspaceParams["input"] & {
+        workspaceId?: string | undefined;
+      }
+    ).workspaceId?.trim();
+    const initializedWorkspaceId = initialized.id?.trim();
+    const workspaceId = requestedWorkspaceId || initializedWorkspaceId || createId("ws");
+
+    if (requestedWorkspaceId || initializedWorkspaceId) {
+      const existing = await this.#workspaceRepository.getById(workspaceId);
+      if (existing) {
+        return toPublicWorkspace(existing);
+      }
+    }
 
     const workspace: WorkspaceRecord = {
       id: workspaceId,
@@ -462,6 +475,7 @@ export class RuntimeService {
         workspaceId
       },
       externalRef: input.externalRef,
+      ...(input.ownerId ? { ownerId: input.ownerId } : {}),
       ...(input.serviceName ? { serviceName: input.serviceName } : {}),
       name: input.name,
       rootPath: initialized.rootPath,
@@ -471,8 +485,21 @@ export class RuntimeService {
       updatedAt: now
     };
 
-    const created = await this.#workspaceRepository.create(workspace);
-    return toPublicWorkspace(created);
+    try {
+      const created = await this.#workspaceRepository.create(workspace);
+      return toPublicWorkspace(created);
+    } catch (error) {
+      if (!requestedWorkspaceId && !initializedWorkspaceId) {
+        throw error;
+      }
+
+      const existing = await this.#workspaceRepository.getById(workspaceId);
+      if (existing) {
+        return toPublicWorkspace(existing);
+      }
+
+      throw error;
+    }
   }
 
   async getWorkspace(workspaceId: string): Promise<import("@oah/api-contracts").Workspace> {

@@ -131,6 +131,7 @@
         "provider": {
           "type": "string",
           "enum": [
+            "embedded",
             "self_hosted",
             "e2b"
           ]
@@ -184,6 +185,31 @@
               "additionalProperties": {
                 "type": "string"
               }
+            }
+          }
+        },
+        "fleet": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_workspaces_per_sandbox": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ownerless_pool": {
+              "type": "string",
+              "enum": [
+                "shared",
+                "dedicated"
+              ]
             }
           }
         }
@@ -276,10 +302,12 @@
             },
             "slots_per_pod": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "description": "Deprecated compatibility field. Controller sizing ignores this static value and uses observed worker-reported capacity instead."
             },
-            "ready_sessions_per_worker": {
+            "ready_sessions_per_capacity_unit": {
               "type": "integer",
+              "description": "Queue-density target used by controller when translating observed worker capacity into sandbox replica demand.",
               "minimum": 1
             },
             "reserved_capacity_for_subagent": {

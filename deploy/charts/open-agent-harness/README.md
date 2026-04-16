@@ -2,9 +2,9 @@
 
 这个 chart 提供当前 split deployment 骨架的 Helm 入口，覆盖：
 
-- `api-server`
-- `worker`
-- `controller`
+- `oah-api`
+- `oah-sandbox`
+- `oah-controller`
 - `controller` 所需的 ServiceAccount / RBAC
 - `server.yaml` ConfigMap
 - 可选的 Prometheus Operator `ServiceMonitor`
@@ -72,6 +72,10 @@ helm upgrade --install oah ./deploy/charts/open-agent-harness \
 - `controller.topologySpreadConstraints`
 - `serviceMonitor.enabled`
 
+> 兼容说明
+>
+> Helm values 目前仍保留 `worker.*` 作为配置 key，但渲染出来的运行时资源名和组件标签已经统一到 `sandbox`，对应 `oah-sandbox` 这层部署形态。
+
 ## 样例定位
 
 - `dev.values.yaml`
@@ -114,4 +118,4 @@ helm upgrade --install oah ./deploy/charts/open-agent-harness \
 - `apiServer.serviceAnnotations` / `worker.serviceAnnotations` / `controller.service.annotations` 可用于补充 LB / scrape / mesh 侧 annotations
 - `controller.serviceAccount.annotations` 可用于 IRSA / Workload Identity 等集群集成
 - worker 的 `OAH_INTERNAL_BASE_URL` 会自动按 release 名称和 namespace 生成 headless service DNS
-- controller 默认使用 release 级 label selector，只会缩放当前 release 对应的 worker Deployment
+- controller 默认使用 release 级 label selector，只会缩放当前 release 对应的 sandbox Deployment

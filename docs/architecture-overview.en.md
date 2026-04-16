@@ -25,7 +25,7 @@ Two workspace kinds:
 - **Identity Externalized** -- No built-in user system; consumes external identity and access context.
 - **Auditable by Default** -- All runs, tool calls, action runs, and hook runs produce structured records.
 - **Central Truth, Local Runtime State** -- PostgreSQL is the central source of truth; workspace `history.db` only stores local runtime data and is not a cross-process sync path.
-- **Embedded by Default, Controlled in Production** -- Default single-process API + embedded worker; production uses a split `API Server + Worker + Controller` topology.
+- **Embedded by Default, Controlled in Production** -- The smallest deployment uses `oah-api` with an embedded worker; production uses a split `oah-api + oah-controller + oah-sandbox` topology.
 
 ## 3. Formal Terms
 
@@ -52,13 +52,16 @@ Two workspace kinds:
 - The isolated host environment where a worker runs
 - May be a local process, a dedicated Pod, a container, or a future VM / remote executor
 - `Sandbox` describes the execution environment; it does not replace `Worker` as the primary term
+- With the `embedded` provider there is no separate sandbox process; the worker runs directly inside `oah-api`
+- With `self_hosted / e2b`, the standalone worker must run inside a real sandbox
 
 ### Sandbox Host API
 
 - The stable adapter boundary between the worker and its host environment
 - The first implementation should be OAH's own sandbox pod
-- The exposed provider vocabulary is `self_hosted | e2b`, and backend switching should be a server-config change rather than an API change
+- The exposed provider vocabulary is `embedded | self_hosted | e2b`, and backend switching should be a server-config change rather than an API change
 - It carries host lifecycle, file access, and process execution capabilities only; it does not redefine OAH ownership or control-plane semantics
+- The formal `e2b` semantics now match the self-hosted path: host the standalone worker inside the real sandbox rather than driving E2B indirectly from an external worker
 
 ### Workspace Ownership
 
@@ -119,6 +122,7 @@ flowchart TD
 
 - Owns workspace placement and worker lifecycle governance
 - Combines `user affinity + workspace ownership + worker health + capacity` into placement decisions
+- For `self_hosted / e2b` providers, also derives logical sandbox fleet demand: same `ownerId` reuses a sandbox, while ownerless workspaces fall into a shared pool by default
 - Owns drain, rebalance, recovery, and scaling
 - Does not execute business runs directly
 
@@ -163,10 +167,10 @@ flowchart TD
 
 | Mode | Description |
 |------|-------------|
-| API + embedded worker | Default. Single-process, full execution. Uses Redis queue when configured, otherwise in-process. |
-| API only + standalone worker + controller | Main production mode. API Server handles ingress and owner routing, Worker handles execution, Controller handles the control plane. |
-| Standalone worker in sandbox | A worker deployment shape where the worker runs inside a dedicated worker Pod / sandbox Pod. |
-| API only + controller + sandbox-hosted worker | Preferred evolution path. Use OAH's own sandbox pod first, then converge the host interface toward a boundary that can switch between `self_hosted` and `e2b` providers. |
+| `oah-api` + embedded worker | Smallest deployment. One API process directly hosts the embedded worker. |
+| `oah-api` + `oah-controller` + `oah-sandbox` | Preferred main mode. `oah-api` handles ingress, `oah-controller` handles the control plane, and `oah-sandbox` hosts the standalone worker. |
+| Standalone worker in sandbox | The typical standalone-worker deployment shape. The worker runs inside a self-hosted sandbox or an E2B sandbox. |
+| `oah-api` + `oah-controller` + E2B sandbox | Remote sandbox form. The standalone worker runs inside a real E2B sandbox while API and control-plane semantics stay the same. |
 
 ## 7. Request Flow
 
@@ -223,6 +227,7 @@ sequenceDiagram
 - `Worker` is the unified execution role; `sandbox` is only the worker host environment, not the primary runtime term
 - `Sandbox Host API` is the host compatibility boundary; the first implementation should be the self-hosted sandbox pod, with E2B as a later pluggable backend rather than the primary architecture vocabulary
 - `Controller` is the unified control-plane role; it owns placement, lifecycle, and capacity rather than direct business execution
+- For remote sandbox providers, the controller now also owns logical sandbox-fleet sizing signals so we can later attach real sandbox autoscaling targets without changing API semantics
 - `workspace -> owner worker` is the routing truth for execution and file access; `userId` is used only for affinity scheduling, not as the ownership truth
 - While active, a workspace's read/write truth lives in the owner worker's local copy; after flush / evict, truth returns to OSS / external storage
 - Default trusted intranet environment -- no strong container isolation by default; if the platform is exposed more broadly, sandbox backend hardening should be prioritized

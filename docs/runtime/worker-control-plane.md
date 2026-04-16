@@ -7,7 +7,7 @@
 补充约束：
 
 - 当前优先路线不是“直接改造成 E2B 原生架构”
-- 当前优先路线是“保留 OAH 自己的 worker + sandbox pod 语义，同时把宿主能力收敛到稳定适配层”
+- 当前优先路线是“保留 OAH 自己的 standalone worker + `oah-sandbox` 语义，同时把宿主能力收敛到稳定适配层”
 - 后续如果接 E2B，应通过宿主适配器切入，而不是改写 `workspace -> owner worker`、OSS flush / evict、owner proxy 这些核心语义
 
 ## 1. 目标
@@ -38,12 +38,13 @@
 
 - controller 当前从 Redis queue pressure 与 worker registry 读取 backlog / busy slot / ready age 等信号
 - standalone worker lease 现在会额外发布 `runtimeInstanceId`，让 controller 能把同一 Pod 内多个 slot 正确聚合为一个 replica
+- controller 当前只负责 sandbox 级别的副本与放置；sandbox 内 worker 要开多少线程 / slot / 进程由 worker runtime 自己决定，controller 只消费其上报出来的观测容量
 - controller 当前会输出 `suggestedReplicas`、`desiredReplicas`、pressure streak、cooldown remaining 和 scale reason
 - controller 当前已经具备可插拔 `scale target` 抽象，并已支持 Kubernetes `Deployment /scale` 子资源 reconcile
 - controller 当前已经具备基于 Kubernetes Lease 的 leader election，只有 leader controller 会真正执行 reconcile
 - `allow_scale_down` 现在仍保留为显式 override 开关，但默认已经切换为允许缩容，真正的缩容护栏改为 controller 动态探测 worker drain / blocker 状态
-- 当前已经补出一套最小 `deploy/kubernetes` Deployment / Service / RBAC 骨架，controller 也已支持通过 `label_selector` 自动发现目标 worker Deployment；对应 RBAC 现已覆盖 `leases`、`deployments`、`deployments/scale`。Prometheus Operator 侧现在也已有可直接 `kubectl apply -k ./deploy` 复用的 `ServiceMonitor` kustomization，同时也已补出最小 Helm chart 和生产 `Dockerfile`/GHCR workflow 作为生产分发入口；其中 chart 也已开始支持 existing ConfigMap、PVC workspace volume、PDB、topology spread、Ingress 等常见生产参数，并已附带 `dev / staging / prod` values 样例，workflow 也已接上 `sbom/provenance` 与 Cosign keyless signing
-- `api-server` / `worker` / `controller` 三个 Deployment 当前也都已经显式声明 rollout 策略与 shutdown 窗口，减少升级期间对 K8S 默认行为的依赖
+- 当前已经补出一套最小 `deploy/kubernetes` Deployment / Service / RBAC 骨架，controller 也已支持通过 `label_selector` 自动发现目标 `oah-sandbox` Deployment；对应 RBAC 现已覆盖 `leases`、`deployments`、`deployments/scale`。Prometheus Operator 侧现在也已有可直接 `kubectl apply -k ./deploy` 复用的 `ServiceMonitor` kustomization，同时也已补出最小 Helm chart 和生产 `Dockerfile`/GHCR workflow 作为生产分发入口；其中 chart 也已开始支持 existing ConfigMap、PVC workspace volume、PDB、topology spread、Ingress 等常见生产参数，并已附带 `dev / staging / prod` values 样例，workflow 也已接上 `sbom/provenance` 与 Cosign keyless signing
+- `oah-api` / `oah-sandbox` / `oah-controller` 三个 Deployment 当前也都已经显式声明 rollout 策略与 shutdown 窗口，减少升级期间对 K8S 默认行为的依赖
 
 与此同时，worker runtime 现在也已经补上了第一层 drain 生命周期：
 
@@ -185,13 +186,15 @@ flowchart LR
 
 根据可调度 session 数计算理论 worker 需求：
 
-`ceil(readySessionCount / readySessionsPerWorker)`
+`ceil(readySessionCount / readySessionsPerCapacityUnit)`
 
 ### 6.2 饱和压力
 
 当已有 worker 很忙时，即使 ready session 数不大，也可能需要扩容：
 
-`ceil((readySessionCount + busyWorkers) / readySessionsPerWorker)`
+`ceil((readySessionCount + busyWorkers) / readySessionsPerCapacityUnit)`
+
+说明：运行时 / observability 统一使用 `readySessionsPerCapacityUnit`。
 
 ### 6.3 SubAgent 保底容量
 

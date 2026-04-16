@@ -4,7 +4,7 @@ kind: Deployment
 metadata:
   name: {{ include "open-agent-harness.apiServerName" . }}
   labels:
-    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "api-server") | nindent 4 }}
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
 spec:
   replicas: {{ .Values.apiServer.replicaCount }}
   minReadySeconds: {{ .Values.apiServer.minReadySeconds }}
@@ -15,11 +15,11 @@ spec:
       maxSurge: {{ .Values.apiServer.strategy.maxSurge }}
   selector:
     matchLabels:
-      {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "api-server") | nindent 6 }}
+      {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "api") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "api-server") | nindent 8 }}
+        {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "api") | nindent 8 }}
         {{- with .Values.apiServer.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -45,7 +45,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: api-server
+        - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["node", "apps/server/dist/index.js", "--config", "/etc/oah/server.yaml", "--api-only"]
@@ -106,7 +106,7 @@ kind: Service
 metadata:
   name: {{ include "open-agent-harness.apiServerName" . }}
   labels:
-    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "api-server") | nindent 4 }}
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
   {{- with .Values.apiServer.serviceAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -114,7 +114,7 @@ metadata:
 spec:
   type: {{ .Values.apiServer.service.type }}
   selector:
-    {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "api-server") | nindent 4 }}
+    {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "api") | nindent 4 }}
   ports:
     - name: http
       port: {{ .Values.apiServer.service.port }}

@@ -92,7 +92,7 @@ pnpm install
 # 指向你自己的测试环境目录
 export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
 
-# 启动本地整套服务（PostgreSQL + Redis + MinIO + OAH）
+# 启动本地整套服务（PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox）
 # 这里会先等待 MinIO 就绪，再自动执行一次 storage sync。
 pnpm local:up
 
@@ -123,7 +123,9 @@ pnpm local:down
 | 服务 | 地址 |
 | --- | --- |
 | Web 控制台 | `http://localhost:5174` |
-| 后端 API | `http://127.0.0.1:8787` |
+| `oah-api` | `http://127.0.0.1:8787` |
+| `oah-sandbox` 内部 Worker | `http://127.0.0.1:8788` |
+| `oah-controller` 指标 | `http://127.0.0.1:8789` |
 | MinIO Console | `http://127.0.0.1:9001` |
 
 ### 单 Workspace 模式
@@ -143,9 +145,9 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 pnpm build          # 构建所有包
 pnpm test           # 运行测试
 OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync   # 把 source 发布到 MinIO
-OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm local:up       # 启动本地 Docker 整套服务，并自动同步一次
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm local:up       # 启动 oah-api + oah-controller + oah-sandbox，并自动同步一次
 pnpm local:down                                                     # 停止本地 Docker 整套服务
-pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml  # 进阶：单独启动 worker
+pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml  # 进阶：单独启动 standalone worker（通常跑在 sandbox 里）
 ```
 
 ## 适用场景

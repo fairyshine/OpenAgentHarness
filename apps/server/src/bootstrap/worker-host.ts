@@ -43,7 +43,7 @@ export interface EmbeddedWorkerPoolConfig {
   minWorkers: number;
   maxWorkers: number;
   scaleIntervalMs: number;
-  readySessionsPerWorker: number;
+  readySessionsPerCapacityUnit: number;
   reservedSubagentCapacity: number;
   scaleUpCooldownMs: number;
   scaleDownCooldownMs: number;
@@ -164,7 +164,7 @@ export function resolveEmbeddedWorkerPoolConfig(options: {
     minWorkers,
     maxWorkers,
     scaleIntervalMs,
-    readySessionsPerWorker: readPositiveIntEnv("OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_WORKER", 1),
+    readySessionsPerCapacityUnit: readPositiveIntEnv("OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_CAPACITY_UNIT", 1),
     reservedSubagentCapacity: readNonNegativeIntEnv(
       "OAH_EMBEDDED_WORKER_RESERVED_CAPACITY_FOR_SUBAGENT",
       embedded?.reserved_capacity_for_subagent ?? 1
@@ -255,7 +255,7 @@ export function createWorkerHost(options: {
     minWorkers: poolConfig.minWorkers,
     maxWorkers: poolConfig.maxWorkers,
     scaleIntervalMs: poolConfig.scaleIntervalMs,
-    readySessionsPerWorker: poolConfig.readySessionsPerWorker,
+    readySessionsPerCapacityUnit: poolConfig.readySessionsPerCapacityUnit,
     reservedSubagentCapacity: poolConfig.reservedSubagentCapacity,
     scaleUpCooldownMs: poolConfig.scaleUpCooldownMs,
     scaleDownCooldownMs: poolConfig.scaleDownCooldownMs,

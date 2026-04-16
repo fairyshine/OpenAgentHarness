@@ -32,6 +32,7 @@ import {
 } from "./bootstrap/workspace-materialization.js";
 import type { SandboxHost } from "./bootstrap/sandbox-host.js";
 import { createConfiguredSandboxHost } from "./bootstrap/configured-sandbox-host.js";
+import { describeSandboxTopology } from "./sandbox-topology.js";
 import { createWorkerRuntimeControl, type WorkerRuntimeStatus } from "./bootstrap/worker-runtime.js";
 import { createDirectoryObjectStore, ObjectStorageMirrorController } from "./object-storage.js";
 import { appendRuntimeLogEvent, buildRuntimeConsoleLogger } from "./runtime-console.js";
@@ -370,12 +371,8 @@ function isTruthyEnvValue(value: string | undefined): boolean {
 }
 
 function isRemoteSandboxProvider(config: Pick<ServerConfig, "sandbox">): boolean {
-  if (config.sandbox?.provider === "e2b") {
-    return true;
-  }
-
-  const selfHostedBaseUrl = config.sandbox?.self_hosted?.base_url?.trim();
-  return Boolean(selfHostedBaseUrl);
+  const provider = config.sandbox?.provider ?? (config.sandbox?.self_hosted?.base_url?.trim() ? "self_hosted" : "embedded");
+  return provider === "self_hosted" || provider === "e2b";
 }
 
 function resolveInternalBaseUrl(config: Pick<ServerConfig, "server">): string | undefined {
@@ -514,8 +511,18 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               ? requestedConfig.path
               : path.resolve(process.cwd(), "server.example.yaml")
         );
-  const objectStorageMirror = config.object_storage
-    ? new ObjectStorageMirrorController(config.object_storage, config.paths, (message) => {
+  const remoteSandboxProvider = isRemoteSandboxProvider(config);
+  const objectStorageMirrorConfig =
+    config.object_storage && remoteSandboxProvider
+      ? {
+          ...config.object_storage,
+          managed_paths: (config.object_storage.managed_paths ?? ["workspace", "blueprint", "model", "tool", "skill"]).filter(
+            (managedPath) => managedPath !== "workspace"
+          )
+        }
+      : config.object_storage;
+  const objectStorageMirror = objectStorageMirrorConfig
+    ? new ObjectStorageMirrorController(objectStorageMirrorConfig, config.paths, (message) => {
         console.info(`[oah-object-storage] ${message}`);
       })
     : undefined;
@@ -556,6 +563,8 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
             objectStorageMirror
           )
         ]
+      : remoteSandboxProvider
+        ? []
       : (
           await discoverWorkspaces({
             paths: config.paths,
@@ -645,7 +654,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           workspacePlacementRegistry: redisWorkspacePlacementRegistry
         })
       : redisRawRunQueue;
-  workspaceMaterializationManager = config.object_storage
+  workspaceMaterializationManager = !remoteSandboxProvider && config.object_storage
     ? new WorkspaceMaterializationManager({
         cacheRoot: path.join(config.paths.workspace_dir, ".openharness", "__materialized__"),
         workerId: currentWorkerId,
@@ -697,10 +706,12 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       : await listAllWorkspaces(persistence.workspaceRepository);
   const bootWorkspaceCandidates =
     singleWorkspace === undefined
-      ? [
-          ...discoveredWorkspaces,
-          ...persistedWorkspaceSnapshots.filter((workspace) => !isManagedWorkspace(workspace, config.paths))
-        ]
+      ? remoteSandboxProvider
+        ? persistedWorkspaceSnapshots
+        : [
+            ...discoveredWorkspaces,
+            ...persistedWorkspaceSnapshots.filter((workspace) => !isManagedWorkspace(workspace, config.paths))
+          ]
       : discoveredWorkspaces;
   const reconciledWorkspaces = reconcileDiscoveredWorkspaces(bootWorkspaceCandidates, persistedWorkspaceSnapshots).map((workspace) =>
     withManagedWorkspaceExternalRef(workspace, config, objectStorageMirror)
@@ -745,7 +756,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   let workspaceRegistryPollTimer: NodeJS.Timeout | undefined;
   let watchedProjectRoots = new Map<string, FSWatcher>();
   const rootWorkspaceWatcher =
-    singleWorkspace === undefined ? openFsWatcher(config.paths.workspace_dir, scheduleWorkspaceRegistrySync) : undefined;
+    singleWorkspace === undefined && !remoteSandboxProvider
+      ? openFsWatcher(config.paths.workspace_dir, scheduleWorkspaceRegistrySync)
+      : undefined;
   let workspaceSyncTimer: NodeJS.Timeout | undefined;
   let platformModelsReloadPromise: Promise<void> | undefined;
   let lastPlatformModelsReloadAt = 0;
@@ -759,7 +772,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   await Promise.all(reconciledWorkspaces.map((workspace) => workspaceRepository.upsert(workspace)));
 
   const syncWorkspaceRegistry =
-    singleWorkspace === undefined
+    singleWorkspace === undefined && !remoteSandboxProvider
       ? async () => {
           const now = Date.now();
           if (workspaceRegistrySyncPromise) {
@@ -826,7 +839,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       : undefined;
 
   function updateWatchedProjectRoots(workspaces: WorkspaceRecord[]): void {
-    if (singleWorkspace !== undefined) {
+    if (singleWorkspace !== undefined || remoteSandboxProvider) {
       return;
     }
 
@@ -876,6 +889,10 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   }
 
   async function refreshWorkspaceDefinitionsForPlatformModels(): Promise<void> {
+    if (remoteSandboxProvider) {
+      return;
+    }
+
     const currentWorkspaces = await listAllWorkspaces(persistence.workspaceRepository);
     const refreshedWorkspaces = await Promise.all(
       currentWorkspaces.map(async (workspace) => {
@@ -1029,7 +1046,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           workspaceFileAccessProvider: sandboxHost.workspaceFileAccessProvider
         }
       : {}),
-    ...(singleWorkspace === undefined && !isRemoteSandboxProvider(config)
+    ...(singleWorkspace === undefined && !remoteSandboxProvider
       ? {
           workspaceDeletionHandler: {
             async deleteWorkspace(workspace) {
@@ -1048,7 +1065,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     ...(singleWorkspace === undefined
       ? {
           workspaceInitializer: {
-            initialize: isRemoteSandboxProvider(config) && sandboxHost
+            initialize: remoteSandboxProvider && sandboxHost
               ? createSandboxBackedWorkspaceInitializer({
                   blueprintDir: config.paths.blueprint_dir,
                   platformToolDir: config.paths.tool_dir,
@@ -1056,10 +1073,22 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
                   toolDir,
                   platformModels: models,
                   platformAgents,
-                  sandboxHost
+                  sandboxHost,
+                  ...(sandboxHost.providerKind === "self_hosted" && config.sandbox?.self_hosted?.base_url?.trim()
+                    ? {
+                        selfHosted: {
+                          baseUrl: config.sandbox.self_hosted.base_url.trim(),
+                          headers: config.sandbox.self_hosted.headers
+                        }
+                      }
+                    : {})
                 }).initialize
-              : async initialize(input) {
-                  const workspaceId = createId("ws");
+              : async (input) => {
+                  const workspaceId = (
+                    input as typeof input & {
+                      workspaceId?: string | undefined;
+                    }
+                  ).workspaceId?.trim() || createId("ws");
                   const workspaceRoot = resolveWorkspaceCreationRoot({
                     workspaceDir: config.paths.workspace_dir,
                     name: input.name,
@@ -1176,7 +1205,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         platformModelSnapshotListeners.delete(listener);
       };
     },
-    ...(singleWorkspace === undefined && !isRemoteSandboxProvider(config)
+    ...(singleWorkspace === undefined
       ? {
           listWorkspaceBlueprints: () => listWorkspaceBlueprints(config.paths.blueprint_dir),
           uploadWorkspaceBlueprint: (input: { blueprintName: string; zipBuffer: Buffer; overwrite?: boolean | undefined }) =>
@@ -1191,35 +1220,48 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               blueprintDir: config.paths.blueprint_dir,
               blueprintName: input.blueprintName
             }),
-          async importWorkspace(input) {
-            const resolvedRoot = path.resolve(input.rootPath);
-            const relativeToAllowed = path.relative(config.paths.workspace_dir, resolvedRoot);
-            if (relativeToAllowed.startsWith("..") || path.isAbsolute(relativeToAllowed)) {
-              throw new AppError(
-                403,
-                "workspace_path_not_allowed",
-                `rootPath "${input.rootPath}" resolves outside the allowed directory. ` +
-                  "Workspace imports must target paths within the configured workspace_dir."
-              );
-            }
+          ...(!remoteSandboxProvider
+            ? {
+                async importWorkspace(input) {
+                  const resolvedRoot = path.resolve(input.rootPath);
+                  const relativeToAllowed = path.relative(config.paths.workspace_dir, resolvedRoot);
+                  if (relativeToAllowed.startsWith("..") || path.isAbsolute(relativeToAllowed)) {
+                    throw new AppError(
+                      403,
+                      "workspace_path_not_allowed",
+                      `rootPath "${input.rootPath}" resolves outside the allowed directory. ` +
+                        "Workspace imports must target paths within the configured workspace_dir."
+                    );
+                  }
 
-            const discovered = await discoverWorkspace(input.rootPath, "project", {
-              platformModels: models,
-              platformAgents,
-              platformSkillDir: config.paths.skill_dir,
-              platformToolDir: toolDir
-            } as Parameters<typeof discoverWorkspace>[2]);
-            const existing = await workspaceRepository.getById(discovered.id);
-            const inferredExternalRef = objectStorageMirror?.managedWorkspaceExternalRef(input.rootPath, "project", config.paths);
-            const persisted = await workspaceRepository.upsert({
-              ...discovered,
-              name: input.name ?? existing?.name ?? discovered.name,
-              createdAt: existing?.createdAt ?? discovered.createdAt,
-              externalRef: input.externalRef ?? existing?.externalRef ?? inferredExternalRef,
-              ...(input.serviceName ? { serviceName: input.serviceName } : existing?.serviceName ? { serviceName: existing.serviceName } : {})
-            });
-            return runtimeService.getWorkspace(persisted.id);
-          }
+                  const discovered = await discoverWorkspace(input.rootPath, "project", {
+                    platformModels: models,
+                    platformAgents,
+                    platformSkillDir: config.paths.skill_dir,
+                    platformToolDir: toolDir
+                  } as Parameters<typeof discoverWorkspace>[2]);
+                  const existing = await workspaceRepository.getById(discovered.id);
+                  const inferredExternalRef = objectStorageMirror?.managedWorkspaceExternalRef(input.rootPath, "project", config.paths);
+                  const persisted = await workspaceRepository.upsert({
+                    ...discovered,
+                    name: input.name ?? existing?.name ?? discovered.name,
+                    createdAt: existing?.createdAt ?? discovered.createdAt,
+                    externalRef: input.externalRef ?? existing?.externalRef ?? inferredExternalRef,
+                    ...(input.ownerId
+                      ? { ownerId: input.ownerId }
+                      : existing?.ownerId
+                        ? { ownerId: existing.ownerId }
+                        : {}),
+                    ...(input.serviceName
+                      ? { serviceName: input.serviceName }
+                      : existing?.serviceName
+                        ? { serviceName: existing.serviceName }
+                        : {})
+                  });
+                  return runtimeService.getWorkspace(persisted.id);
+                }
+              }
+            : {})
         }
       : {}),
     ...(redisWorkspacePlacementRegistry
@@ -1284,6 +1326,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           runQueue: redisRunQueue ? "redis" : "in_process"
         },
         process: runtimeProcess,
+        sandbox: describeSandboxTopology(sandboxHost?.providerKind),
         checks,
         worker: {
           ...workerStatus,

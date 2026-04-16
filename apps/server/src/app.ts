@@ -9,6 +9,7 @@ import { registerInternalSandboxRoutes, registerSandboxRoutes } from "./http/rou
 import { registerSessionRoutes } from "./http/routes/sessions.js";
 import { registerInternalModelRoutes } from "./http/routes/internal-models.js";
 import type { AppDependencies } from "./http/types.js";
+import { describeSandboxTopology } from "./sandbox-topology.js";
 
 export type { AppDependencies } from "./http/types.js";
 
@@ -139,6 +140,7 @@ export function createApp(dependencies: AppDependencies, options: CreateAppOptio
               label: "standalone worker",
               execution: "redis_queue"
             },
+            sandbox: describeSandboxTopology(dependencies.sandboxHostProviderKind),
             checks: {
               postgres: "not_configured",
               redisEvents: "not_configured",

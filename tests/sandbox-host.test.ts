@@ -108,7 +108,7 @@ describe("materialization sandbox host", () => {
       } as never
     });
 
-    expect(host.providerKind).toBe("self_hosted");
+    expect(host.providerKind).toBe("embedded");
     expect(host.workspaceCommandExecutor).toBeDefined();
     expect(host.workspaceFileSystem).toBeDefined();
     expect(host.workspaceExecutionProvider).toBeDefined();
@@ -335,7 +335,9 @@ describe("materialization sandbox host", () => {
     await host.close();
 
     expect(host.diagnostics()).toEqual({
-      provider: "fake-e2b"
+      provider: "fake-e2b",
+      executionModel: "sandbox_hosted",
+      workerPlacement: "inside_sandbox"
     });
     expect(operations).toEqual(
       expect.arrayContaining([

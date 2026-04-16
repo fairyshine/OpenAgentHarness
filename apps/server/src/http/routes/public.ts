@@ -31,6 +31,7 @@ import { SUPPORTED_MODEL_PROVIDERS } from "@oah/model-gateway";
 import { AppError } from "@oah/runtime-core";
 
 import { createParamsSchema, writeSseEvent } from "../context.js";
+import { describeSandboxTopology } from "../../sandbox-topology.js";
 import {
   buildApiIndex,
   buildDeveloperDocsHtml,
@@ -137,6 +138,7 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
               label: "API only",
               execution: "none"
             },
+            sandbox: describeSandboxTopology(dependencies.sandboxHostProviderKind),
             checks: {
               postgres: "not_configured",
               redisEvents: "not_configured",

@@ -55,11 +55,21 @@ services:
       timeout: 5s
       retries: 20
 
-  oah:
+  oah-api:
     build:
       context: .
       dockerfile: Dockerfile.dev
     restart: unless-stopped
+    command:
+      - pnpm
+      - exec
+      - tsx
+      - --tsconfig
+      - ./apps/server/tsconfig.json
+      - ./apps/server/src/index.ts
+      - --config
+      - /config/server.docker.yaml
+      - --api-only
     environment:
       OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES: "true"
     depends_on:
@@ -72,8 +82,68 @@ services:
     ports:
       - "8787:8787"
     volumes:
-      - ${OAH_TEST_ROOT:?set OAH_TEST_ROOT}/server.docker.yaml:/config/server.docker.yaml:ro
-      - oah-workspaces:/data/workspaces
+      - ${OAH_DOCKER_API_CONFIG:?set OAH_DOCKER_API_CONFIG}:/config/server.docker.yaml:ro
+      - oah-api-workspaces:/data/workspaces
+      - oah-blueprints:/data/blueprints:ro
+      - oah-models:/data/models:ro
+      - oah-tools:/data/tools:ro
+      - oah-skills:/data/skills:ro
+      - oah-archives:/data/archives:ro
+
+  oah-controller:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    command:
+      - pnpm
+      - exec
+      - tsx
+      - --tsconfig
+      - ./apps/controller/tsconfig.json
+      - ./apps/controller/src/index.ts
+      - --config
+      - /config/server.docker.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8789:8788"
+    volumes:
+      - ${OAH_DOCKER_CONTROLLER_CONFIG:?set OAH_DOCKER_CONTROLLER_CONFIG}:/config/server.docker.yaml:ro
+
+  oah-sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    command:
+      - pnpm
+      - exec
+      - tsx
+      - --tsconfig
+      - ./apps/server/tsconfig.json
+      - ./apps/server/src/worker.ts
+      - --config
+      - /config/server.docker.yaml
+    environment:
+      OAH_ALLOW_PRIVATE_INTERNAL_ROUTES: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8788:8787"
+    volumes:
+      - ${OAH_DOCKER_SANDBOX_CONFIG:?set OAH_DOCKER_SANDBOX_CONFIG}:/config/server.docker.yaml:ro
+      - oah-sandbox-workspaces:/data/workspaces
       - oah-blueprints:/data/blueprints:ro
       - oah-models:/data/models:ro
       - oah-tools:/data/tools:ro
@@ -84,7 +154,8 @@ volumes:
   pgdata:
   redisdata:
   minio-data:
-  oah-workspaces:
+  oah-api-workspaces:
+  oah-sandbox-workspaces:
   oah-blueprints:
     driver: rclone
     driver_opts:

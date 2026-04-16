@@ -172,7 +172,7 @@ describe("server runtime process modes", () => {
         activeWorkers: 1,
         busyWorkers: 0,
         idleWorkers: 1,
-        readySessionsPerWorker: 1,
+        readySessionsPerCapacityUnit: 1,
         scaleIntervalMs: 5_000,
         scaleUpCooldownMs: 1_000,
         scaleDownCooldownMs: 15_000,
@@ -283,7 +283,7 @@ describe("server runtime process modes", () => {
       minWorkers: 2,
       maxWorkers: 6,
       scaleIntervalMs: 1_500,
-      readySessionsPerWorker: 1,
+      readySessionsPerCapacityUnit: 1,
       reservedSubagentCapacity: 2,
       scaleUpCooldownMs: 2_500,
       scaleDownCooldownMs: 2_500,
@@ -302,7 +302,7 @@ describe("server runtime process modes", () => {
     vi.stubEnv("OAH_EMBEDDED_WORKER_SCALE_DOWN_COOLDOWN_MS", "1900");
     vi.stubEnv("OAH_EMBEDDED_WORKER_SCALE_UP_SAMPLE_SIZE", "5");
     vi.stubEnv("OAH_EMBEDDED_WORKER_SCALE_DOWN_SAMPLE_SIZE", "6");
-    vi.stubEnv("OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_WORKER", "2");
+    vi.stubEnv("OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_CAPACITY_UNIT", "2");
     vi.stubEnv("OAH_EMBEDDED_WORKER_RESERVED_CAPACITY_FOR_SUBAGENT", "3");
     vi.stubEnv("OAH_EMBEDDED_WORKER_SCALE_UP_BUSY_RATIO_PERCENT", "90");
     vi.stubEnv("OAH_EMBEDDED_WORKER_SCALE_UP_MAX_READY_AGE_MS", "3200");
@@ -331,7 +331,7 @@ describe("server runtime process modes", () => {
       minWorkers: 4,
       maxWorkers: 8,
       scaleIntervalMs: 900,
-      readySessionsPerWorker: 2,
+      readySessionsPerCapacityUnit: 2,
       reservedSubagentCapacity: 3,
       scaleUpCooldownMs: 700,
       scaleDownCooldownMs: 1_900,

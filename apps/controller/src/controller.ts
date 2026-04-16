@@ -16,8 +16,7 @@ import type { WorkerReplicaTarget, WorkerReplicaTargetResult } from "./scale-tar
 export interface StandaloneControllerConfig {
   minReplicas: number;
   maxReplicas: number;
-  slotsPerPod: number;
-  readySessionsPerWorker: number;
+  readySessionsPerCapacityUnit: number;
   reservedSubagentCapacity: number;
   scaleIntervalMs: number;
   scaleUpCooldownMs: number;
@@ -28,12 +27,22 @@ export interface StandaloneControllerConfig {
   scaleUpMaxReadyAgeMs: number;
 }
 
+export interface SandboxFleetConfig {
+  providerKind: "embedded" | "self_hosted" | "e2b";
+  managedByController: boolean;
+  minCount: number;
+  maxCount: number;
+  maxWorkspacesPerSandbox: number;
+  ownerlessPool: "shared" | "dedicated";
+}
+
 export interface StandaloneWorkerFleetSummary {
   activeReplicas: number;
   busyReplicas: number;
   activeSlots: number;
   busySlots: number;
   idleSlots: number;
+  effectiveCapacityPerReplica: number;
   healthyWorkers: RedisWorkerRegistryEntry[];
 }
 
@@ -93,7 +102,6 @@ export interface ControllerSnapshot {
   running: boolean;
   minReplicas: number;
   maxReplicas: number;
-  slotsPerPod: number;
   suggestedReplicas: number;
   desiredReplicas: number;
   suggestedWorkers: number;
@@ -102,7 +110,8 @@ export interface ControllerSnapshot {
   activeSlots: number;
   busySlots: number;
   idleSlots: number;
-  readySessionsPerWorker: number;
+  effectiveCapacityPerReplica: number;
+  readySessionsPerCapacityUnit: number;
   reservedSubagentCapacity: number;
   readySessionCount?: number | undefined;
   subagentReadySessionCount?: number | undefined;
@@ -113,6 +122,7 @@ export interface ControllerSnapshot {
   scaleDownPressureStreak: number;
   scaleUpCooldownRemainingMs: number;
   scaleDownCooldownRemainingMs: number;
+  sandboxFleet?: ControllerSandboxFleetSummary | undefined;
   placement?: ControllerPlacementSummary | undefined;
   placementPolicy?: ControllerPlacementPolicySummary | undefined;
   placementRecommendations?: ControllerPlacementRecommendation[] | undefined;
@@ -141,6 +151,25 @@ export interface ControllerPlacementSummary {
   unassigned: number;
 }
 
+export interface ControllerSandboxFleetSummary {
+  providerKind: SandboxFleetConfig["providerKind"];
+  managedByController: boolean;
+  minSandboxes: number;
+  maxSandboxes: number;
+  maxWorkspacesPerSandbox: number;
+  ownerlessPool: SandboxFleetConfig["ownerlessPool"];
+  trackedWorkspaces: number;
+  ownerScopedWorkspaces: number;
+  ownerlessWorkspaces: number;
+  ownerGroups: number;
+  ownerScopedSandboxes: number;
+  ownerlessSandboxes: number;
+  sharedSandboxes: number;
+  logicalSandboxes: number;
+  desiredSandboxes: number;
+  capped: boolean;
+}
+
 export interface ControllerPlacementPolicySummary {
   attentionRequired: boolean;
   unassignedWorkspaces: number;
@@ -149,8 +178,8 @@ export interface ControllerPlacementPolicySummary {
   drainingOwnerWorkspaces: number;
   usersSpanningWorkers: number;
   maxWorkersPerUser: number;
-  workersAboveSoftCapacity: number;
-  maxRefCountPerWorker: number;
+  sandboxesAboveWorkspaceCapacity: number;
+  maxWorkspaceRefsPerSandbox: number;
 }
 
 export interface ControllerPlacementRecommendation {
@@ -160,7 +189,7 @@ export interface ControllerPlacementRecommendation {
     | "reassign_late_owner"
     | "finish_draining_owner"
     | "consolidate_user_affinity"
-    | "rebalance_soft_capacity";
+    | "rebalance_workspace_capacity";
   priority: "high" | "medium";
   workspaceCount: number;
   workerCount?: number | undefined;
@@ -203,7 +232,7 @@ export interface ControllerPlacementExecutionOperation {
     | "worker_draining"
     | "unassigned_workspace"
     | "user_affinity_split"
-    | "soft_capacity_exceeded";
+    | "workspace_capacity_exceeded";
   targetWorkerId?: string | undefined;
   targetWorkerReasons?: string[] | undefined;
 }
@@ -308,6 +337,19 @@ function readRatioEnv(names: string | string[], fallback: number): number {
   return Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : fallback;
 }
 
+function readEnumEnv<TValue extends string>(
+  names: string | string[],
+  allowed: readonly TValue[],
+  fallback: TValue
+): TValue {
+  const raw = readEnv(names);
+  if (!raw) {
+    return fallback;
+  }
+
+  return (allowed as readonly string[]).includes(raw) ? (raw as TValue) : fallback;
+}
+
 function appendDecision(decisions: ControllerDecision[], nextDecision: ControllerDecision, maxEntries = 8) {
   const lastDecision = decisions.at(-1);
   if (
@@ -350,10 +392,9 @@ export function resolveStandaloneControllerConfig(config: ServerConfig): Standal
   return {
     minReplicas,
     maxReplicas,
-    slotsPerPod: readPositiveIntEnv("OAH_STANDALONE_WORKER_SLOTS_PER_POD", standalone?.slots_per_pod ?? 1),
-    readySessionsPerWorker: readPositiveIntEnv(
-      "OAH_STANDALONE_WORKER_READY_SESSIONS_PER_WORKER",
-      standalone?.ready_sessions_per_worker ?? 1
+    readySessionsPerCapacityUnit: readPositiveIntEnv(
+      "OAH_STANDALONE_WORKER_READY_SESSIONS_PER_CAPACITY_UNIT",
+      standalone?.ready_sessions_per_capacity_unit ?? 1
     ),
     reservedSubagentCapacity: readNonNegativeIntEnv(
       "OAH_STANDALONE_WORKER_RESERVED_CAPACITY_FOR_SUBAGENT",
@@ -367,6 +408,51 @@ export function resolveStandaloneControllerConfig(config: ServerConfig): Standal
     scaleUpBusyRatioThreshold: readRatioEnv("OAH_CONTROLLER_SCALE_UP_BUSY_RATIO_THRESHOLD", controller?.scale_up_busy_ratio_threshold ?? 0.75),
     scaleUpMaxReadyAgeMs: readPositiveIntEnv("OAH_CONTROLLER_SCALE_UP_MAX_READY_AGE_MS", controller?.scale_up_max_ready_age_ms ?? 2_000)
   };
+}
+
+function resolveSandboxProviderKind(config: ServerConfig): SandboxFleetConfig["providerKind"] {
+  const provider = config.sandbox?.provider ?? (config.sandbox?.self_hosted?.base_url?.trim() ? "self_hosted" : "embedded");
+  return provider === "self_hosted" || provider === "e2b" ? provider : "embedded";
+}
+
+export function resolveSandboxFleetConfig(config: ServerConfig): SandboxFleetConfig {
+  const providerKind = resolveSandboxProviderKind(config);
+  const managedByController = providerKind !== "embedded";
+  const configuredMinCount = config.sandbox?.fleet?.min_count;
+  const configuredMaxCount = config.sandbox?.fleet?.max_count;
+  const minCount = readNonNegativeIntEnv(
+    "OAH_SANDBOX_FLEET_MIN_COUNT",
+    configuredMinCount ?? (managedByController ? 1 : 0)
+  );
+  const defaultMaxCount = managedByController ? Math.max(minCount, 64) : Math.max(1, minCount);
+  const maxCount = Math.max(
+    minCount,
+    readPositiveIntEnv("OAH_SANDBOX_FLEET_MAX_COUNT", configuredMaxCount ?? defaultMaxCount)
+  );
+
+  return {
+    providerKind,
+    managedByController,
+    minCount,
+    maxCount,
+    maxWorkspacesPerSandbox: readPositiveIntEnv(
+      "OAH_SANDBOX_FLEET_MAX_WORKSPACES_PER_SANDBOX",
+      config.sandbox?.fleet?.max_workspaces_per_sandbox ?? 32
+    ),
+    ownerlessPool: readEnumEnv(
+      "OAH_SANDBOX_FLEET_OWNERLESS_POOL",
+      ["shared", "dedicated"],
+      config.sandbox?.fleet?.ownerless_pool ?? "shared"
+    )
+  };
+}
+
+function effectiveCapacityPerReplica(fleet: Pick<StandaloneWorkerFleetSummary, "activeReplicas" | "activeSlots">): number {
+  if (fleet.activeReplicas <= 0 || fleet.activeSlots <= 0) {
+    return 1;
+  }
+
+  return Math.max(1, Math.ceil(fleet.activeSlots / fleet.activeReplicas));
 }
 
 export function summarizeStandaloneWorkerFleet(activeWorkers: RedisWorkerRegistryEntry[]): StandaloneWorkerFleetSummary {
@@ -393,6 +479,10 @@ export function summarizeStandaloneWorkerFleet(activeWorkers: RedisWorkerRegistr
     activeSlots,
     busySlots,
     idleSlots: Math.max(0, activeSlots - busySlots),
+    effectiveCapacityPerReplica: effectiveCapacityPerReplica({
+      activeReplicas: replicaIds.size,
+      activeSlots
+    }),
     healthyWorkers: healthyStandaloneWorkers
   };
 }
@@ -407,10 +497,12 @@ export function calculateStandaloneWorkerReplicas(input: {
   suggestedReplicas: number;
 } {
   const fleet = summarizeStandaloneWorkerFleet(input.activeWorkers);
+  const capacityPerReplica = fleet.effectiveCapacityPerReplica;
+  const readySessionsPerCapacityUnit = Math.max(1, input.config.readySessionsPerCapacityUnit);
   const sizing = calculateRedisWorkerPoolSuggestion({
-    minWorkers: input.config.minReplicas * input.config.slotsPerPod,
-    maxWorkers: input.config.maxReplicas * input.config.slotsPerPod,
-    readySessionsPerWorker: input.config.readySessionsPerWorker,
+    minWorkers: input.config.minReplicas * capacityPerReplica,
+    maxWorkers: input.config.maxReplicas * capacityPerReplica,
+    readySessionsPerCapacityUnit,
     reservedSubagentCapacity: input.config.reservedSubagentCapacity,
     localActiveWorkers: fleet.activeSlots,
     localBusyWorkers: fleet.busySlots,
@@ -425,7 +517,7 @@ export function calculateStandaloneWorkerReplicas(input: {
     suggestedWorkers,
     suggestedReplicas: Math.max(
       input.config.minReplicas,
-      Math.min(input.config.maxReplicas, Math.ceil(suggestedWorkers / input.config.slotsPerPod))
+      Math.min(input.config.maxReplicas, Math.ceil(suggestedWorkers / capacityPerReplica))
     )
   };
 }
@@ -510,10 +602,63 @@ export function summarizeWorkspacePlacements(
   };
 }
 
+export function summarizeSandboxFleet(input: {
+  placements?: RedisWorkspacePlacementEntry[] | undefined;
+  config: SandboxFleetConfig;
+}): ControllerSandboxFleetSummary {
+  const trackedPlacements = (input.placements ?? []).filter((placement) => placement.state !== "evicted");
+  const ownerWorkspaceCounts = new Map<string, number>();
+  let ownerlessWorkspaces = 0;
+
+  for (const placement of trackedPlacements) {
+    const ownerId = placement.userId?.trim();
+    if (ownerId) {
+      ownerWorkspaceCounts.set(ownerId, (ownerWorkspaceCounts.get(ownerId) ?? 0) + 1);
+    } else {
+      ownerlessWorkspaces += 1;
+    }
+  }
+
+  const ownerScopedWorkspaces = [...ownerWorkspaceCounts.values()].reduce((sum, count) => sum + count, 0);
+  const ownerScopedSandboxes = [...ownerWorkspaceCounts.values()].reduce(
+    (sum, count) => sum + Math.max(1, Math.ceil(count / input.config.maxWorkspacesPerSandbox)),
+    0
+  );
+  const ownerlessSandboxes =
+    ownerlessWorkspaces === 0
+      ? 0
+      : input.config.ownerlessPool === "dedicated"
+        ? ownerlessWorkspaces
+        : Math.ceil(ownerlessWorkspaces / input.config.maxWorkspacesPerSandbox);
+  const logicalSandboxes = ownerScopedSandboxes + ownerlessSandboxes;
+  const desiredSandboxes = input.config.managedByController
+    ? Math.max(input.config.minCount, Math.min(input.config.maxCount, logicalSandboxes))
+    : 0;
+
+  return {
+    providerKind: input.config.providerKind,
+    managedByController: input.config.managedByController,
+    minSandboxes: input.config.minCount,
+    maxSandboxes: input.config.maxCount,
+    maxWorkspacesPerSandbox: input.config.maxWorkspacesPerSandbox,
+    ownerlessPool: input.config.ownerlessPool,
+    trackedWorkspaces: trackedPlacements.length,
+    ownerScopedWorkspaces,
+    ownerlessWorkspaces,
+    ownerGroups: ownerWorkspaceCounts.size,
+    ownerScopedSandboxes,
+    ownerlessSandboxes,
+    sharedSandboxes: input.config.ownerlessPool === "shared" ? ownerlessSandboxes : 0,
+    logicalSandboxes,
+    desiredSandboxes,
+    capped: input.config.managedByController && logicalSandboxes > input.config.maxCount
+  };
+}
+
 export function summarizePlacementPolicy(input: {
   placements: RedisWorkspacePlacementEntry[] | undefined;
   activeWorkers: RedisWorkerRegistryEntry[];
-  slotsPerPod: number;
+  maxWorkspacesPerSandbox: number;
 }): ControllerPlacementPolicySummary | undefined {
   const { placements, activeWorkers } = input;
   if (!placements || placements.length === 0) {
@@ -563,9 +708,9 @@ export function summarizePlacementPolicy(input: {
   const userWorkerCounts = [...userWorkers.values()].map((workers) => workers.size);
   const maxWorkersPerUser = userWorkerCounts.length > 0 ? Math.max(...userWorkerCounts) : 0;
   const usersSpanningWorkers = userWorkerCounts.filter((count) => count > 1).length;
-  const maxRefCountPerWorker = workerRefLoads.size > 0 ? Math.max(...workerRefLoads.values()) : 0;
-  const softCapacity = Math.max(1, input.slotsPerPod);
-  const workersAboveSoftCapacity = [...workerRefLoads.values()].filter((load) => load > softCapacity).length;
+  const maxWorkspaceRefsPerSandbox = workerRefLoads.size > 0 ? Math.max(...workerRefLoads.values()) : 0;
+  const workspaceCapacity = Math.max(1, input.maxWorkspacesPerSandbox);
+  const sandboxesAboveWorkspaceCapacity = [...workerRefLoads.values()].filter((load) => load > workspaceCapacity).length;
 
   return {
     attentionRequired:
@@ -574,15 +719,15 @@ export function summarizePlacementPolicy(input: {
       lateOwnerWorkspaces > 0 ||
       drainingOwnerWorkspaces > 0 ||
       usersSpanningWorkers > 0 ||
-      workersAboveSoftCapacity > 0,
+      sandboxesAboveWorkspaceCapacity > 0,
     unassignedWorkspaces,
     missingOwnerWorkspaces,
     lateOwnerWorkspaces,
     drainingOwnerWorkspaces,
     usersSpanningWorkers,
     maxWorkersPerUser,
-    workersAboveSoftCapacity,
-    maxRefCountPerWorker
+    sandboxesAboveWorkspaceCapacity,
+    maxWorkspaceRefsPerSandbox
   };
 }
 
@@ -591,7 +736,7 @@ export function summarizePlacementRecommendations(input: {
   placementPolicy?: ControllerPlacementPolicySummary | undefined;
   placements?: RedisWorkspacePlacementEntry[] | undefined;
   activeWorkers?: RedisWorkerRegistryEntry[] | undefined;
-  slotsPerPod?: number | undefined;
+  maxWorkspacesPerSandbox?: number | undefined;
 }): ControllerPlacementRecommendation[] | undefined {
   const placementSummary = input.placementSummary;
   const placementPolicy = input.placementPolicy;
@@ -603,7 +748,7 @@ export function summarizePlacementRecommendations(input: {
   const workerHealthById = new Map((input.activeWorkers ?? []).map((worker) => [worker.workerId, worker.health]));
   const userWorkers = new Map<string, Set<string>>();
   const workerRefLoads = new Map<string, number>();
-  const softCapacity = Math.max(1, input.slotsPerPod ?? 1);
+  const workspaceCapacity = Math.max(1, input.maxWorkspacesPerSandbox ?? 1);
 
   for (const placement of placements) {
     if (placement.userId && placement.ownerWorkerId && placement.state !== "evicted" && placement.state !== "unassigned") {
@@ -622,7 +767,7 @@ export function summarizePlacementRecommendations(input: {
     [...userWorkers.entries()].filter(([, workers]) => workers.size > 1).map(([userId]) => userId)
   );
   const overloadedWorkers = new Set(
-    [...workerRefLoads.entries()].filter(([, load]) => load > softCapacity).map(([workerId]) => workerId)
+    [...workerRefLoads.entries()].filter(([, load]) => load > workspaceCapacity).map(([workerId]) => workerId)
   );
   const sampleWorkspaceIds = (filter: (placement: RedisWorkspacePlacementEntry) => boolean) =>
     placements
@@ -704,14 +849,14 @@ export function summarizePlacementRecommendations(input: {
       message: `consider consolidating ${placementPolicy?.usersSpanningWorkers ?? 0} user affinity group(s) that currently span multiple workers`
     });
   }
-  if ((placementPolicy?.workersAboveSoftCapacity ?? 0) > 0) {
+  if ((placementPolicy?.sandboxesAboveWorkspaceCapacity ?? 0) > 0) {
     recommendations.push({
-      kind: "rebalance_soft_capacity",
+      kind: "rebalance_workspace_capacity",
       priority: "medium",
       workspaceCount: 0,
-      workerCount: placementPolicy?.workersAboveSoftCapacity ?? 0,
+      workerCount: placementPolicy?.sandboxesAboveWorkspaceCapacity ?? 0,
       sampleWorkerIds: sampleWorkerIds((placement) => overloadedWorkers.has(placement.ownerWorkerId ?? "")),
-      message: `rebalance placements away from ${placementPolicy?.workersAboveSoftCapacity ?? 0} worker(s) above the soft slots-per-pod capacity`
+      message: `rebalance placements away from ${placementPolicy?.sandboxesAboveWorkspaceCapacity ?? 0} sandbox owner(s) above the workspace capacity limit`
     });
   }
 
@@ -743,8 +888,8 @@ function placementActionBlockers(recommendation: ControllerPlacementRecommendati
       return ["worker_draining"];
     case "consolidate_user_affinity":
       return ["user_affinity_split"];
-    case "rebalance_soft_capacity":
-      return ["soft_capacity_exceeded"];
+    case "rebalance_workspace_capacity":
+      return ["workspace_capacity_exceeded"];
   }
 }
 
@@ -778,7 +923,7 @@ export function summarizePlacementActionPlan(
 export function buildPlacementExecutionOperations(input: {
   placements?: RedisWorkspacePlacementEntry[] | undefined;
   activeWorkers?: RedisWorkerRegistryEntry[] | undefined;
-  slotsPerPod?: number | undefined;
+  maxWorkspacesPerSandbox?: number | undefined;
 }): ControllerPlacementExecutionOperation[] {
   const placements = (input.placements ?? []) as ControllerWorkspacePlacementEntry[];
   if (placements.length === 0) {
@@ -790,7 +935,7 @@ export function buildPlacementExecutionOperations(input: {
   const nonEvictedPlacements = placements.filter((placement) => placement.state !== "evicted");
   const scheduledWorkspaceIds = new Set<string>();
   const operations: ControllerPlacementExecutionOperation[] = [];
-  const softCapacity = Math.max(1, input.slotsPerPod ?? 1);
+  const workspaceCapacity = Math.max(1, input.maxWorkspacesPerSandbox ?? 1);
   const workerRefLoads = new Map<string, number>();
   const userWorkers = new Map<string, Set<string>>();
 
@@ -808,7 +953,7 @@ export function buildPlacementExecutionOperations(input: {
   }
 
   const overloadedWorkers = new Set(
-    [...workerRefLoads.entries()].filter(([, load]) => load > softCapacity).map(([workerId]) => workerId)
+    [...workerRefLoads.entries()].filter(([, load]) => load > workspaceCapacity).map(([workerId]) => workerId)
   );
 
   const selectTargetWorker = (placement: RedisWorkspacePlacementEntry, excludeWorkerIds?: Iterable<string>) => {
@@ -995,13 +1140,13 @@ export function buildPlacementExecutionOperations(input: {
     }
 
     operations.push({
-      id: `rebalance_soft_capacity:${placement.workspaceId}`,
-      kind: "rebalance_soft_capacity",
+      id: `rebalance_workspace_capacity:${placement.workspaceId}`,
+      kind: "rebalance_workspace_capacity",
       workspaceId: placement.workspaceId,
       ownerWorkerId: placement.ownerWorkerId,
       state: placement.state,
       action: "set_preferred_worker",
-      reason: "soft_capacity_exceeded",
+      reason: "workspace_capacity_exceeded",
       targetWorkerId: target.workerId,
       targetWorkerReasons: target.reasons
     });
@@ -1012,7 +1157,7 @@ export function buildPlacementExecutionOperations(input: {
 
 export function createPlacementRegistryActionExecutor(options: {
   placementRegistry: ControllerPlacementOwnershipRegistry;
-  slotsPerPod?: number | undefined;
+  maxWorkspacesPerSandbox?: number | undefined;
   logger?: ControllerLogger | undefined;
 }): ControllerPlacementExecutor {
   return {
@@ -1020,7 +1165,7 @@ export function createPlacementRegistryActionExecutor(options: {
       const operations = buildPlacementExecutionOperations({
         placements: input.placements,
         activeWorkers: input.activeWorkers,
-        slotsPerPod: options.slotsPerPod
+        maxWorkspacesPerSandbox: options.maxWorkspacesPerSandbox
       });
       if (operations.length === 0) {
         return undefined;
@@ -1098,6 +1243,7 @@ export class RedisController {
   readonly #placementRegistry?: WorkspacePlacementRegistry | undefined;
   readonly #placementExecutor?: ControllerPlacementExecutor | undefined;
   readonly #config: StandaloneControllerConfig;
+  readonly #sandboxConfig: SandboxFleetConfig;
   readonly #scaleTarget?: WorkerReplicaTarget | undefined;
   readonly #logger?: ControllerLogger | undefined;
   readonly #healthProbe: ControllerHealthProbe;
@@ -1115,6 +1261,7 @@ export class RedisController {
     placementRegistry?: WorkspacePlacementRegistry | undefined;
     placementExecutor?: ControllerPlacementExecutor | undefined;
     config: StandaloneControllerConfig;
+    sandboxConfig?: SandboxFleetConfig | undefined;
     scaleTarget?: WorkerReplicaTarget | undefined;
     logger?: ControllerLogger | undefined;
     healthProbe?: ControllerHealthProbe | undefined;
@@ -1124,6 +1271,14 @@ export class RedisController {
     this.#placementRegistry = options.placementRegistry;
     this.#placementExecutor = options.placementExecutor;
     this.#config = options.config;
+    this.#sandboxConfig = options.sandboxConfig ?? {
+      providerKind: "embedded",
+      managedByController: false,
+      minCount: 0,
+      maxCount: 1,
+      maxWorkspacesPerSandbox: 32,
+      ownerlessPool: "shared"
+    };
     this.#scaleTarget = options.scaleTarget;
     this.#logger = options.logger;
     this.#healthProbe = options.healthProbe ?? defaultControllerHealthProbe;
@@ -1131,16 +1286,16 @@ export class RedisController {
       running: false,
       minReplicas: options.config.minReplicas,
       maxReplicas: options.config.maxReplicas,
-      slotsPerPod: options.config.slotsPerPod,
       suggestedReplicas: options.config.minReplicas,
       desiredReplicas: options.config.minReplicas,
-      suggestedWorkers: options.config.minReplicas * options.config.slotsPerPod,
+      suggestedWorkers: options.config.minReplicas,
       activeReplicas: 0,
       busyReplicas: 0,
       activeSlots: 0,
       busySlots: 0,
       idleSlots: 0,
-      readySessionsPerWorker: options.config.readySessionsPerWorker,
+      effectiveCapacityPerReplica: 1,
+      readySessionsPerCapacityUnit: options.config.readySessionsPerCapacityUnit,
       reservedSubagentCapacity: options.config.reservedSubagentCapacity,
       scaleUpPressureStreak: 0,
       scaleDownPressureStreak: 0,
@@ -1198,18 +1353,22 @@ export class RedisController {
       activeWorkers,
       schedulingPressure
     });
+    const sandboxFleet = summarizeSandboxFleet({
+      placements: workspacePlacements,
+      config: this.#sandboxConfig
+    });
     let placementSummary = summarizeWorkspacePlacements(workspacePlacements, activeWorkers);
     let placementPolicy = summarizePlacementPolicy({
       placements: workspacePlacements,
       activeWorkers,
-      slotsPerPod: this.#config.slotsPerPod
+      maxWorkspacesPerSandbox: this.#sandboxConfig.maxWorkspacesPerSandbox
     });
     let placementRecommendations = summarizePlacementRecommendations({
       placementSummary,
       placementPolicy,
       placements: workspacePlacements,
       activeWorkers,
-      slotsPerPod: this.#config.slotsPerPod
+      maxWorkspacesPerSandbox: this.#sandboxConfig.maxWorkspacesPerSandbox
     });
     let placementActionPlan = summarizePlacementActionPlan(placementRecommendations);
     const timestamp = new Date().toISOString();
@@ -1227,14 +1386,14 @@ export class RedisController {
       placementPolicy = summarizePlacementPolicy({
         placements: workspacePlacements,
         activeWorkers,
-        slotsPerPod: this.#config.slotsPerPod
+        maxWorkspacesPerSandbox: this.#sandboxConfig.maxWorkspacesPerSandbox
       });
       placementRecommendations = summarizePlacementRecommendations({
         placementSummary,
         placementPolicy,
         placements: workspacePlacements,
         activeWorkers,
-        slotsPerPod: this.#config.slotsPerPod
+        maxWorkspacesPerSandbox: this.#sandboxConfig.maxWorkspacesPerSandbox
       });
       placementActionPlan = summarizePlacementActionPlan(placementRecommendations);
     }
@@ -1277,7 +1436,6 @@ export class RedisController {
       running: this.#running,
       minReplicas: this.#config.minReplicas,
       maxReplicas: this.#config.maxReplicas,
-      slotsPerPod: this.#config.slotsPerPod,
       suggestedReplicas,
       desiredReplicas,
       suggestedWorkers,
@@ -1286,7 +1444,8 @@ export class RedisController {
       activeSlots: fleet.activeSlots,
       busySlots: fleet.busySlots,
       idleSlots: fleet.idleSlots,
-      readySessionsPerWorker: this.#config.readySessionsPerWorker,
+      effectiveCapacityPerReplica: fleet.effectiveCapacityPerReplica,
+      readySessionsPerCapacityUnit: this.#config.readySessionsPerCapacityUnit,
       reservedSubagentCapacity: this.#config.reservedSubagentCapacity,
       ...(typeof schedulingPressure?.readySessionCount === "number" ? { readySessionCount: schedulingPressure.readySessionCount } : {}),
       ...(typeof schedulingPressure?.subagentReadySessionCount === "number"
@@ -1305,6 +1464,7 @@ export class RedisController {
         this.#config.scaleDownCooldownMs,
         nowMs
       ),
+      sandboxFleet,
       ...(placementSummary ? { placement: placementSummary } : {}),
       ...(placementPolicy ? { placementPolicy } : {}),
       ...(placementRecommendations ? { placementRecommendations } : {}),
@@ -1330,7 +1490,7 @@ export class RedisController {
     };
 
     this.#logger?.info?.(
-      `[controller] rebalance=${rebalanceReason} activeReplicas=${fleet.activeReplicas} desiredReplicas=${desiredReplicas} suggestedReplicas=${suggestedReplicas} activeSlots=${fleet.activeSlots} busySlots=${fleet.busySlots} readySessions=${schedulingPressure?.readySessionCount ?? "n/a"} scaleDownAllowed=${scaleDownGate ? (scaleDownGate.allowed ? "yes" : "no") : "n/a"} scaleDownBlockedReplicas=${scaleDownGate?.blockedReplicas ?? 0} placementMissingOwners=${placementSummary?.ownedByMissingWorkers ?? 0} placementLateOwners=${placementSummary?.ownedByLateWorkers ?? 0} placementUsersSpanningWorkers=${placementPolicy?.usersSpanningWorkers ?? 0} placementWorkersAboveSoftCapacity=${placementPolicy?.workersAboveSoftCapacity ?? 0} placementRecommendations=${placementRecommendations?.length ?? 0} placementActionItems=${placementActionPlan?.totalItems ?? 0} target=${scaleTarget?.kind ?? "none"} targetOutcome=${scaleTarget?.outcome ?? "n/a"}`
+      `[controller] rebalance=${rebalanceReason} activeReplicas=${fleet.activeReplicas} desiredReplicas=${desiredReplicas} suggestedReplicas=${suggestedReplicas} activeSlots=${fleet.activeSlots} busySlots=${fleet.busySlots} effectiveCapacityPerReplica=${fleet.effectiveCapacityPerReplica} readySessions=${schedulingPressure?.readySessionCount ?? "n/a"} scaleDownAllowed=${scaleDownGate ? (scaleDownGate.allowed ? "yes" : "no") : "n/a"} scaleDownBlockedReplicas=${scaleDownGate?.blockedReplicas ?? 0} sandboxProvider=${sandboxFleet.providerKind} sandboxDesired=${sandboxFleet.desiredSandboxes} sandboxLogical=${sandboxFleet.logicalSandboxes} sandboxOwnerGroups=${sandboxFleet.ownerGroups} placementMissingOwners=${placementSummary?.ownedByMissingWorkers ?? 0} placementLateOwners=${placementSummary?.ownedByLateWorkers ?? 0} placementUsersSpanningWorkers=${placementPolicy?.usersSpanningWorkers ?? 0} placementSandboxesAboveWorkspaceCapacity=${placementPolicy?.sandboxesAboveWorkspaceCapacity ?? 0} placementRecommendations=${placementRecommendations?.length ?? 0} placementActionItems=${placementActionPlan?.totalItems ?? 0} target=${scaleTarget?.kind ?? "none"} targetOutcome=${scaleTarget?.outcome ?? "n/a"}`
     );
 
     return this.snapshot();

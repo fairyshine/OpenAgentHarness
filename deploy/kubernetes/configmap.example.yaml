@@ -24,7 +24,7 @@ data:
         min_replicas: 2
         max_replicas: 12
         slots_per_pod: 2
-        ready_sessions_per_worker: 1
+        ready_sessions_per_capacity_unit: 1
         reserved_capacity_for_subagent: 1
       controller:
         scale_interval_ms: 2000
@@ -43,7 +43,7 @@ data:
           allow_scale_down: true
           kubernetes:
             namespace: open-agent-harness
-            label_selector: app.kubernetes.io/component=worker
+            label_selector: app.kubernetes.io/component=sandbox
 
     llm:
       default_model: openai-default

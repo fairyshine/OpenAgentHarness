@@ -81,7 +81,7 @@ export interface RedisRunWorkerPoolSnapshotLike {
   globalBusyWorkers?: number | undefined;
   remoteActiveWorkers?: number | undefined;
   remoteBusyWorkers?: number | undefined;
-  readySessionsPerWorker: number;
+  readySessionsPerCapacityUnit: number;
   scaleIntervalMs: number;
   scaleUpCooldownMs: number;
   scaleDownCooldownMs: number;
@@ -272,7 +272,7 @@ export function buildRedisRunWorkerPoolSnapshot(input: {
   globalBusyWorkers?: number | undefined;
   remoteActiveWorkers?: number | undefined;
   remoteBusyWorkers?: number | undefined;
-  readySessionsPerWorker: number;
+  readySessionsPerCapacityUnit: number;
   scaleIntervalMs: number;
   scaleUpCooldownMs: number;
   scaleDownCooldownMs: number;
@@ -327,7 +327,7 @@ export function buildRedisRunWorkerPoolSnapshot(input: {
     ...(typeof input.globalBusyWorkers === "number" ? { globalBusyWorkers: input.globalBusyWorkers } : {}),
     ...(typeof input.remoteActiveWorkers === "number" ? { remoteActiveWorkers: input.remoteActiveWorkers } : {}),
     ...(typeof input.remoteBusyWorkers === "number" ? { remoteBusyWorkers: input.remoteBusyWorkers } : {}),
-    readySessionsPerWorker: input.readySessionsPerWorker,
+    readySessionsPerCapacityUnit: input.readySessionsPerCapacityUnit,
     scaleIntervalMs: input.scaleIntervalMs,
     scaleUpCooldownMs: input.scaleUpCooldownMs,
     scaleDownCooldownMs: input.scaleDownCooldownMs,

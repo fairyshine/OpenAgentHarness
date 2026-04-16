@@ -16,11 +16,16 @@ storage:
   redis_url: ${env.REDIS_URL}         # Redis 连接串（可选）
 
 sandbox:
-  provider: self_hosted               # self_hosted | e2b
+  provider: embedded                  # embedded | self_hosted | e2b
+  # fleet:
+  #   min_count: 1
+  #   max_count: 32
+  #   max_workspaces_per_sandbox: 32
+  #   ownerless_pool: shared          # shared | dedicated
   # self_hosted:
   #   base_url: http://oah-sandbox:8787/internal/v1
   # e2b:
-  #   base_url: https://sandbox-gateway.example.com/internal/v1
+  #   base_url: https://api.e2b.dev
   #   api_key: ${env.E2B_API_KEY}
 
 paths:
@@ -73,15 +78,25 @@ llm:
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `provider` | string | sandbox provider，支持 `self_hosted` 和 `e2b`。默认 `self_hosted` |
-| `self_hosted.base_url` | string | 可选。指向远端 self-hosted sandbox 服务的 `/internal/v1` 根地址；未设置时继续使用本地 materialization-backed sandbox |
+| `provider` | string | sandbox provider，支持 `embedded`、`self_hosted` 和 `e2b`。默认 `embedded`。`embedded` 表示 worker 直接内嵌在 `oah-api`；`self_hosted / e2b` 表示 standalone worker 运行在真实 sandbox 内 |
+| `fleet.min_count` | number | self-hosted / e2b 模式下 controller 保持的最小 sandbox 数。默认远端 provider 为 `1`，embedded 为 `0` |
+| `fleet.max_count` | number | controller 允许的最大 sandbox 数；默认 `64` |
+| `fleet.max_workspaces_per_sandbox` | number | 单个真实 sandbox 内允许承载的 workspace 上限；默认 `32` |
+| `fleet.ownerless_pool` | string | 无 `ownerId` 的 workspace 如何落入 sandbox。`shared` 表示共享池，`dedicated` 表示每个 workspace 独立 sandbox |
+| `self_hosted.base_url` | string | `provider=self_hosted` 时必填。指向 self-hosted sandbox 内 standalone worker 暴露的 `/internal/v1` 根地址 |
 | `self_hosted.headers` | object | 可选。附加到远端 self-hosted sandbox 请求的固定请求头 |
-| `e2b.base_url` | string | `provider=e2b` 时必填。指向 E2B-backed sandbox gateway 的 `/internal/v1` 根地址 |
+| `e2b.base_url` | string | `provider=e2b` 时可选。用于覆盖原生 E2B API 地址；若填写旧的 `/internal/v1` 兼容地址，OAH 也会自动归一化 |
 | `e2b.api_key` | string | 可选。配置后会以 `Authorization: Bearer <key>` 形式附加到 e2b 请求 |
 | `e2b.headers` | object | 可选。附加到 e2b 请求的固定请求头 |
 
 > **tip**
 > OAH 对外仍保持统一的 `/sandboxes` API。切换 `sandbox.provider` 时，Web、OpenAPI 与上层 runtime 调用方式不变，差异只存在于服务端的 sandbox backend 配置。
+
+> **tip**
+> `self_hosted` 和 `e2b` 的共同语义是：`oah-api` 不直接执行业务 run，而是把 workspace 路由到真实 sandbox；standalone worker 在 sandbox 内部持有活跃 workspace、本地文件状态和命令执行上下文。
+
+> **tip**
+> 当前 controller 已经开始把 sandbox fleet 视为一等调度对象：同一 `ownerId` 会优先复用同一真实 sandbox；未提供 `ownerId` 的 workspace 默认进入共享池。`fleet.*` 负责描述这层容量边界，后续可继续接到真实的 sandbox autoscaling target。
 
 ### `paths`
 
@@ -111,6 +126,14 @@ llm:
 | `embedded.scale_down_window` | number | 连续多少个检查周期都确认可回收后才缩容；默认 `2` |
 | `embedded.cooldown_ms` | number | 两次扩缩容动作之间的冷却时间；默认等于 `scale_interval_ms` |
 | `embedded.reserved_capacity_for_subagent` | number | 当 `subagent` backlog 出现时，希望额外保留的最小空闲 worker 容量；默认 `1` |
+| `standalone.min_replicas` | number | controller 允许的最小 sandbox 副本数；默认 `1` |
+| `standalone.max_replicas` | number | controller 允许的最大 sandbox 副本数；默认等于 `min_replicas` |
+| `standalone.ready_sessions_per_capacity_unit` | number | controller 按执行容量单元估算 ready queue 压力时使用的目标密度；默认 `1` |
+| `standalone.reserved_capacity_for_subagent` | number | 预留给 subagent backlog 的最小执行容量；默认 `1` |
+| `standalone.slots_per_pod` | number | legacy 兼容字段。当前 controller 不再按这个静态值计算 sandbox 副本数，而是使用 worker 实时上报的容量聚合结果 |
+
+> **tip**
+> 当前 controller 的职责边界已经固定为“只管理 sandbox fleet”。sandbox 内 worker 要开几个线程、几个 slot、是否多进程，都由 worker 自己决定并通过 registry 上报容量；controller 只消费这些观测值来决定 sandbox 副本数与放置策略。
 
 ---
 
@@ -154,9 +177,9 @@ openai-default:
 
 | 模式 | 启动方式 | 说明 |
 | --- | --- | --- |
-| API + embedded worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml` | 默认模式，一个进程包含 API 和 Worker |
-| API only | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml --api-only` | 只启动 API，需配合独立 Worker |
-| Standalone worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config server.yaml` | 独立 Worker，消费 Redis 队列 |
+| API + embedded worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml` | 最小化部署；一个 `oah-api` 进程内直接包含 embedded worker |
+| API only | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml --api-only` | 只启动 `oah-api`，通常配合 `oah-controller` 与 `oah-sandbox` |
+| Standalone worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config server.yaml` | standalone worker，通常运行在 self-hosted / E2B sandbox 中 |
 
 ---
 
@@ -178,7 +201,7 @@ openai-default:
 | `OAH_EMBEDDED_WORKER_MIN` | Redis 模式下 `2`，否则 `1` | embedded worker 最小实例数；独立 worker 进程固定至少为 `1` |
 | `OAH_EMBEDDED_WORKER_MAX` | 等于 `OAH_EMBEDDED_WORKER_MIN` | embedded worker 最大实例数 |
 | `OAH_EMBEDDED_WORKER_SCALE_INTERVAL_MS` | `5000` | pool 周期性重平衡间隔 |
-| `OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_WORKER` | `1` | 每个 worker 目标承载的可调度 session 数 |
+| `OAH_EMBEDDED_WORKER_READY_SESSIONS_PER_CAPACITY_UNIT` | `1` | 每个执行容量单元目标承载的可调度 session 数 |
 | `OAH_EMBEDDED_WORKER_SCALE_UP_COOLDOWN_MS` | `1000` | 扩容冷却时间 |
 | `OAH_EMBEDDED_WORKER_SCALE_DOWN_COOLDOWN_MS` | `15000` | 缩容冷却时间 |
 | `OAH_EMBEDDED_WORKER_SCALE_UP_SAMPLE_SIZE` | `2` | 触发扩容前需要连续满足压力条件的采样次数 |

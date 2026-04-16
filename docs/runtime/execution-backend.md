@@ -54,6 +54,7 @@ export interface ExecutionBackend {
 
 服务端通过统一的 sandbox backend 适配层屏蔽 provider 差异。当前 provider 词汇统一为：
 
+- `embedded`
 - `self_hosted`
 - `e2b`
 

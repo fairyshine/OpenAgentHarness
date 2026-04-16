@@ -362,7 +362,7 @@ export interface WorkspaceFileAccessProvider {
   }): Promise<WorkspaceFileAccessLease>;
 }
 
-export type SandboxHostProviderKind = "self_hosted" | "e2b";
+export type SandboxHostProviderKind = "embedded" | "self_hosted" | "e2b";
 
 export interface SandboxHostDiagnostics {
   materialization?: Record<string, unknown> | undefined;
@@ -371,9 +371,10 @@ export interface SandboxHostDiagnostics {
 /**
  * Stable host-adapter boundary for worker execution environments.
  *
- * The first backend is the self-hosted materialization-backed worker host.
- * Future E2B-backed adapters should implement the same contract without
- * changing runtime-core's workspace ownership semantics.
+ * `embedded` means the worker executes inside `oah-api`.
+ * `self_hosted` and `e2b` mean a standalone worker executes inside a real sandbox host.
+ * Adapters should preserve runtime-core's workspace ownership semantics while
+ * swapping only the host environment underneath.
  */
 export interface SandboxHost {
   providerKind: SandboxHostProviderKind;
@@ -795,6 +796,7 @@ export function toPublicWorkspace(workspace: WorkspaceRecord): Workspace {
   return {
     id: normalizedWorkspace.id,
     externalRef: normalizedWorkspace.externalRef,
+    ...(normalizedWorkspace.ownerId ? { ownerId: normalizedWorkspace.ownerId } : {}),
     name: normalizedWorkspace.name,
     ...(blueprint ? { blueprint } : {}),
     ...(normalizedWorkspace.serviceName ? { serviceName: normalizedWorkspace.serviceName } : {}),

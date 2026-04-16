@@ -21,21 +21,21 @@ Open Agent Harness is a deployable backend runtime for agent products. It manage
 - **Composable capabilities** — agent / skill / action / tool / hook / context are configured independently per workspace.
 - **One workspace model** — the same directory structure supports conversation, tools, and execution.
 - **REST + SSE API** — Everything exposed under `/api/v1`. Frontend-agnostic.
-- **Flexible deployment** — Run unified locally or split into API + Worker for production.
+- **Flexible deployment** — Use `oah-api` with an embedded worker for the smallest deployment, or split into `oah-api + oah-controller + oah-sandbox`.
 
 ## Quick Start
 
 ```bash
 pnpm install                                        # Install dependencies
 export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
-pnpm local:up                                       # Start PostgreSQL + Redis + MinIO + OAH, then auto-sync once
+pnpm local:up                                       # Start PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox, then auto-sync once
 pnpm dev:web                                        # Start debug console
 ```
 
 After startup:
 
 - :material-monitor-dashboard: **Debug Console** — [http://localhost:5174](http://localhost:5174)
-- :material-api: **Backend API** — [http://localhost:8787](http://localhost:8787)
+- :material-api: **oah-api** — [http://localhost:8787](http://localhost:8787)
 
 [:octicons-arrow-right-24: Full guide](./getting-started.md){ .md-button .md-button--primary }
 

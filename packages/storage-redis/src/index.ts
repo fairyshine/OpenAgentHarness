@@ -284,7 +284,7 @@ export interface RedisRunWorkerPoolOptions extends Omit<RedisRunWorkerOptions, "
   minWorkers?: number | undefined;
   maxWorkers?: number | undefined;
   scaleIntervalMs?: number | undefined;
-  readySessionsPerWorker?: number | undefined;
+  readySessionsPerCapacityUnit?: number | undefined;
   reservedSubagentCapacity?: number | undefined;
   scaleUpCooldownMs?: number | undefined;
   scaleDownCooldownMs?: number | undefined;
@@ -358,7 +358,7 @@ export interface RedisRunWorkerPoolSnapshot {
   globalBusyWorkers?: number | undefined;
   remoteActiveWorkers?: number | undefined;
   remoteBusyWorkers?: number | undefined;
-  readySessionsPerWorker: number;
+  readySessionsPerCapacityUnit: number;
   scaleIntervalMs: number;
   scaleUpCooldownMs: number;
   scaleDownCooldownMs: number;
@@ -1895,7 +1895,7 @@ export class RedisRunWorkerPool {
   readonly #minWorkers: number;
   readonly #maxWorkers: number;
   readonly #scaleIntervalMs: number;
-  readonly #readySessionsPerWorker: number;
+  readonly #readySessionsPerCapacityUnit: number;
   readonly #reservedSubagentCapacity: number;
   readonly #scaleUpCooldownMs: number;
   readonly #scaleDownCooldownMs: number;
@@ -1958,7 +1958,7 @@ export class RedisRunWorkerPool {
     this.#minWorkers = Math.max(1, Math.floor(options.minWorkers ?? 1));
     this.#maxWorkers = Math.max(this.#minWorkers, Math.floor(options.maxWorkers ?? this.#minWorkers));
     this.#scaleIntervalMs = Math.max(1_000, Math.floor(options.scaleIntervalMs ?? 5_000));
-    this.#readySessionsPerWorker = Math.max(1, Math.floor(options.readySessionsPerWorker ?? 1));
+    this.#readySessionsPerCapacityUnit = Math.max(1, Math.floor(options.readySessionsPerCapacityUnit ?? 1));
     this.#reservedSubagentCapacity = Math.max(0, Math.floor(options.reservedSubagentCapacity ?? 1));
     this.#scaleUpCooldownMs = Math.max(0, Math.floor(options.scaleUpCooldownMs ?? 1_000));
     this.#scaleDownCooldownMs = Math.max(0, Math.floor(options.scaleDownCooldownMs ?? 15_000));
@@ -2039,7 +2039,7 @@ export class RedisRunWorkerPool {
       ...(typeof this.#lastGlobalBusyWorkers === "number" ? { globalBusyWorkers: this.#lastGlobalBusyWorkers } : {}),
       ...(typeof this.#lastRemoteActiveWorkers === "number" ? { remoteActiveWorkers: this.#lastRemoteActiveWorkers } : {}),
       ...(typeof this.#lastRemoteBusyWorkers === "number" ? { remoteBusyWorkers: this.#lastRemoteBusyWorkers } : {}),
-      readySessionsPerWorker: this.#readySessionsPerWorker,
+      readySessionsPerCapacityUnit: this.#readySessionsPerCapacityUnit,
       scaleIntervalMs: this.#scaleIntervalMs,
       scaleUpCooldownMs: this.#scaleUpCooldownMs,
       scaleDownCooldownMs: this.#scaleDownCooldownMs,
@@ -2304,7 +2304,7 @@ export class RedisRunWorkerPool {
     const sizing = calculateRedisWorkerPoolSuggestion({
       minWorkers: this.#minWorkers,
       maxWorkers: this.#maxWorkers,
-      readySessionsPerWorker: this.#readySessionsPerWorker,
+      readySessionsPerCapacityUnit: this.#readySessionsPerCapacityUnit,
       reservedSubagentCapacity: this.#reservedSubagentCapacity,
       localActiveWorkers: this.#workers.length,
       localBusyWorkers: this.#busyWorkerCount(),

@@ -25,7 +25,7 @@ apiServer:
         matchLabels:
           app.kubernetes.io/instance: oah
           app.kubernetes.io/name: open-agent-harness
-          app.kubernetes.io/component: api-server
+          app.kubernetes.io/component: api
   resources:
     requests:
       cpu: 500m
@@ -48,7 +48,7 @@ worker:
         matchLabels:
           app.kubernetes.io/instance: oah
           app.kubernetes.io/name: open-agent-harness
-          app.kubernetes.io/component: worker
+          app.kubernetes.io/component: sandbox
   resources:
     requests:
       cpu: "1"

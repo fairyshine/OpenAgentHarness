@@ -52,7 +52,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: OAH_CONTROLLER_TARGET_LABEL_SELECTOR
-              value: app.kubernetes.io/component=worker
+              value: app.kubernetes.io/component=sandbox
           readinessProbe:
             httpGet:
               path: /readyz

@@ -5,7 +5,7 @@
 | Mode | Processes | Dependencies | When to use |
 | --- | --- | --- | --- |
 | **API + Worker combined** | 1 `server` | PostgreSQL; Redis optional | Local dev, PoC, single-node |
-| **API + Worker split** | 1 `server --api-only` + N `worker` | PostgreSQL + Redis | Production, independent scaling |
+| **API + Controller + Sandbox split** | 1 `server --api-only` + 1 `controller` + N sandbox-hosted `worker` | PostgreSQL + Redis | Production, sandbox scaling, dedicated control plane |
 | **Single Workspace** | 1 `server --workspace <path>` | PostgreSQL; Redis optional | Serving one repo |
 
 > **tip**
@@ -18,7 +18,7 @@
 Three terminals, simplest path:
 
 ```bash
-# Terminal 1 — Full local stack (PostgreSQL + Redis + MinIO + OAH)
+# Terminal 1 — Full local stack (PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox)
 export OAH_TEST_ROOT=/absolute/path/to/test_oah_server
 pnpm local:up
 
@@ -41,17 +41,20 @@ For production or production-like environments. Requires Redis.
 # Terminal 1 — Local infrastructure
 docker compose -f docker-compose.local.yml up -d postgres redis minio
 
-# Terminal 2 — API only (no embedded worker)
+# Terminal 2 — API only (`oah-api`)
 pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config ./server.example.yaml --api-only
 
-# Terminal 3 — Worker (can run multiple instances)
+# Terminal 3 — Controller (`oah-controller`)
+pnpm exec tsx --tsconfig ./apps/controller/tsconfig.json ./apps/controller/src/index.ts -- --config ./server.example.yaml
+
+# Terminal 4 — Standalone worker (typically hosted inside `oah-sandbox`, can run multiple instances)
 pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml
 
-# Terminal 4 — Frontend
+# Terminal 5 — Frontend
 pnpm dev:web
 ```
 
-The API process handles HTTP requests only. Worker processes consume the Redis queue and execute runs.
+`oah-api` handles HTTP ingress and owner routing. `oah-controller` handles the control plane. Standalone workers typically run inside `oah-sandbox` or E2B sandboxes, consume the Redis queue, and execute runs.
 
 ### Kubernetes Split Deployment
 
@@ -120,23 +123,23 @@ Notes:
 
 This baseline already includes:
 
-- Separate Deployments for `api-server`, `worker`, and `controller`
+- Separate Deployments for `oah-api`, `oah-sandbox`, and `oah-controller`
 - A dedicated ClusterIP Service for `controller` exposing `/healthz`, `/readyz`, `/snapshot`, and `/metrics`
 - Kubernetes Lease based leader election for `controller`
-- Replica reconciliation through the `Deployment /scale` subresource, with optional target discovery via `label_selector`
+- Replica reconciliation through the `Deployment /scale` subresource for `oah-sandbox`, with optional target discovery via `label_selector`
 - `controller-rbac.yaml` now includes the `leases`, `deployments`, and `deployments/scale` permissions needed for leader election, label-selector discovery, and replica reconciliation
-- Automatic scale-down is now enabled when safety conditions are met; the real scale-down guardrail comes from controller health probes against worker `/healthz`
-- Workers now enter a drain phase on shutdown so readiness drops before the current run is allowed to finish
+- Automatic scale-down is now enabled when safety conditions are met; the real scale-down guardrail comes from controller health probes against standalone worker `/healthz`
+- Standalone workers now enter a drain phase on shutdown so readiness drops before the current run is allowed to finish
 - Drain now also flushes and evicts idle workspace copies and blocks new object-store materialization from starting
-- All three Deployments now declare explicit rollout strategy settings; `api-server` / `worker` use `maxUnavailable: 0`, and `worker` keeps a longer `terminationGracePeriodSeconds` window so drain has time to converge
+- All three Deployments now declare explicit rollout strategy settings; `oah-api` / `oah-sandbox` use `maxUnavailable: 0`, and `oah-sandbox` keeps a longer `terminationGracePeriodSeconds` window so drain has time to converge
 - The `controller` Service ships with basic `prometheus.io/*` scrape annotations; fuller ServiceMonitor / Prometheus Operator integration is still better handled in production overlays or Helm charts
 - The repository also ships [`controller-servicemonitor.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller-servicemonitor.example.yaml) as a Prometheus Operator example; it is intentionally not included in the default `kustomization.yaml`
 - The repository now also ships a directly usable Prometheus Operator kustomization:
   [`deploy/kustomization.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kustomization.yaml)
   It layers [`deploy/controller-servicemonitor.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/controller-servicemonitor.yaml) on top of the base `deploy/kubernetes` skeleton, so Prometheus Operator users can enable the `controller` `ServiceMonitor` with `kubectl apply -k ./deploy`
 - The repository now also ships a minimal Helm chart so the split deployment, RBAC, ConfigMap, and optional `ServiceMonitor` can be managed together by Helm
-- The Helm chart now also supports existing ConfigMaps, worker PVC-backed workspace volumes, and per-component resources / securityContext / envFrom / scheduling settings
-- The Helm chart now also supports `PodDisruptionBudget`, `topologySpreadConstraints`, `priorityClassName`, and direct `api-server` Ingress generation
+- The Helm chart now also supports existing ConfigMaps, PVC-backed workspace volumes for `oah-sandbox`, and per-component resources / securityContext / envFrom / scheduling settings
+- The Helm chart now also supports `PodDisruptionBudget`, `topologySpreadConstraints`, `priorityClassName`, and direct `oah-api` Ingress generation
 - The chart directory now also ships `dev / staging / prod` values examples, so teams can start from environment-specific presets instead of building everything from scratch
 - The repository now also ships a production `Dockerfile` and minimal GHCR publishing workflow, so the K8S manifests/chart are no longer assuming some external image pipeline already exists
 - The GHCR workflow now also emits `sbom/provenance` and performs Cosign keyless signing

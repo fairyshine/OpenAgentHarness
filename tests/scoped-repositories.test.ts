@@ -110,4 +110,19 @@ describe("scoped repositories", () => {
     await expect(repository.getById(workspace.id)).resolves.toEqual(workspace);
     await expect(repository.list(20)).resolves.toEqual([workspace]);
   });
+
+  it("reuses an existing inner workspace on create conflicts and makes it visible", async () => {
+    const workspace = createWorkspace("ws_scoped_existing");
+    const visibleWorkspaceIds = new Set<string>();
+    const inner = new StubWorkspaceRepository();
+    inner.items.set(workspace.id, workspace);
+    inner.failOnCreate = true;
+    const repository = new ScopedWorkspaceRepository(inner, visibleWorkspaceIds);
+
+    await expect(repository.create(workspace)).resolves.toEqual(workspace);
+
+    expect(visibleWorkspaceIds.has(workspace.id)).toBe(true);
+    await expect(repository.getById(workspace.id)).resolves.toEqual(workspace);
+    await expect(repository.list(20)).resolves.toEqual([workspace]);
+  });
 });

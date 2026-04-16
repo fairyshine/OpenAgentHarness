@@ -138,7 +138,7 @@ async function readSseEvents(
   return frames.map(({ event, data }) => ({ event, data }));
 }
 
-async function createStartedApp(options?: { sandboxHostProviderKind?: "self_hosted" | "e2b" }) {
+async function createStartedApp(options?: { sandboxHostProviderKind?: "embedded" | "self_hosted" | "e2b" }) {
   const gateway = new FakeModelGateway(20);
   const persistence = createMemoryRuntimePersistence();
   const runtimeService = new RuntimeService({
@@ -224,7 +224,7 @@ async function createStartedAppWithRuntimeService(
       userId: string;
       overwrite?: boolean | undefined;
     }) => Promise<void>;
-    sandboxHostProviderKind?: "self_hosted" | "e2b";
+    sandboxHostProviderKind?: "embedded" | "self_hosted" | "e2b";
   }
 ) {
   const app = createApp({
@@ -421,6 +421,11 @@ describe("http api", () => {
         mode: "api_only",
         label: "API only",
         execution: "none"
+      },
+      sandbox: {
+        provider: "embedded",
+        executionModel: "local_embedded",
+        workerPlacement: "api_process"
       },
       checks: {
         postgres: "not_configured",
@@ -1833,7 +1838,7 @@ describe("http api", () => {
     expect(createResponse.status).toBe(201);
     const sandbox = await createResponse.json();
     expect(sandbox).toMatchObject({
-      provider: "self_hosted",
+      provider: "embedded",
       rootPath: "/workspace",
       name: "sandbox-demo"
     });
@@ -1891,6 +1896,54 @@ describe("http api", () => {
     });
   });
 
+  it("creates an internal sandbox-backed workspace when a missing workspaceId is supplied with blueprint metadata", async () => {
+    activeApp = await createStartedApp();
+
+    const sandboxId = "ws_internal_sandbox_create";
+    const createResponse = await fetch(`${activeApp.baseUrl}/internal/v1/sandboxes`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        workspaceId: sandboxId,
+        name: "internal-sandbox-create",
+        blueprint: "workspace"
+      })
+    });
+
+    expect(createResponse.status).toBe(201);
+    await expect(createResponse.json()).resolves.toMatchObject({
+      id: sandboxId,
+      workspaceId: sandboxId,
+      name: "internal-sandbox-create",
+      rootPath: "/workspace"
+    });
+
+    const workspaceResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${sandboxId}`);
+    expect(workspaceResponse.status).toBe(200);
+    await expect(workspaceResponse.json()).resolves.toMatchObject({
+      id: sandboxId,
+      name: "internal-sandbox-create"
+    });
+
+    const resolveResponse = await fetch(`${activeApp.baseUrl}/internal/v1/sandboxes`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        workspaceId: sandboxId
+      })
+    });
+
+    expect(resolveResponse.status).toBe(200);
+    await expect(resolveResponse.json()).resolves.toMatchObject({
+      id: sandboxId,
+      workspaceId: sandboxId
+    });
+  });
+
   it("reports the configured e2b sandbox provider on sandbox responses", async () => {
     activeApp = await createStartedApp({
       sandboxHostProviderKind: "e2b"
@@ -1909,7 +1962,9 @@ describe("http api", () => {
 
     expect(createResponse.status).toBe(201);
     await expect(createResponse.json()).resolves.toMatchObject({
-      provider: "e2b"
+      provider: "e2b",
+      executionModel: "sandbox_hosted",
+      workerPlacement: "inside_sandbox"
     });
   });
 

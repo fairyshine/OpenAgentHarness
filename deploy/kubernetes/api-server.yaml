@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: oah-api-server
+  name: oah-api
   labels:
-    app.kubernetes.io/name: oah-api-server
-    app.kubernetes.io/component: api-server
+    app.kubernetes.io/name: oah-api
+    app.kubernetes.io/component: api
     app.kubernetes.io/part-of: open-agent-harness
 spec:
   replicas: 1
@@ -16,17 +16,17 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: oah-api-server
+      app.kubernetes.io/name: oah-api
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: oah-api-server
-        app.kubernetes.io/component: api-server
+        app.kubernetes.io/name: oah-api
+        app.kubernetes.io/component: api
         app.kubernetes.io/part-of: open-agent-harness
     spec:
       terminationGracePeriodSeconds: 30
       containers:
-        - name: api-server
+        - name: api
           image: ghcr.io/open-agent-harness/open-agent-harness:latest
           imagePullPolicy: IfNotPresent
           command: ["node", "apps/server/dist/index.js", "--config", "/etc/oah/server.yaml", "--api-only"]
@@ -56,10 +56,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: oah-api-server
+  name: oah-api
 spec:
   selector:
-    app.kubernetes.io/name: oah-api-server
+    app.kubernetes.io/name: oah-api
   ports:
     - name: http
       port: 8787

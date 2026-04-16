@@ -25,7 +25,7 @@ Open Agent Harness 是一个 headless Agent Runtime。不提供 UI，通过 Open
 - **Identity Externalized** -- 不维护用户系统，只消费外部身份与访问上下文。
 - **Auditable by Default** -- 所有 run、tool call、action run、hook run 均有结构化记录。
 - **Central Truth, Local Runtime State** -- PostgreSQL 是中心事实源；workspace 下 `history.db` 仅保存本地运行时数据，不参与跨进程同步。
-- **Embedded by Default, Controlled in Production** -- 默认 API + embedded worker 单进程运行；生产环境采用 `API Server + Worker + Controller` 拆分部署。
+- **Embedded by Default, Controlled in Production** -- 默认可用 `oah-api` 内嵌 embedded worker；生产环境采用 `oah-api + oah-controller + oah-sandbox` 拆分部署。
 
 ## 3. 正式术语
 
@@ -52,13 +52,16 @@ Open Agent Harness 是一个 headless Agent Runtime。不提供 UI，通过 Open
 - Worker 所运行的隔离宿主环境
 - 可以是本地进程、独立 Pod、容器或后续 VM / 远程执行器
 - `Sandbox` 描述执行环境，不替代 `Worker`
+- `embedded` provider 下没有独立 sandbox 进程，worker 直接内嵌在 `oah-api`
+- `self_hosted / e2b` provider 下，standalone worker 必须运行在真实 sandbox 内
 
 ### Sandbox Host API
 
 - Worker 与宿主环境之间的稳定适配边界
 - 首个实现应是 OAH 自己的 sandbox pod
-- 对外 provider 统一为 `self_hosted | e2b`，目标是只改服务端配置即可切换 backend
+- 对外 provider 统一为 `embedded | self_hosted | e2b`，目标是只改服务端配置即可切换 backend
 - 只承载宿主生命周期、文件访问、进程执行等能力，不改变 OAH 的 ownership 与控制面语义
+- 当前 `e2b` 路线也以“真实 sandbox 内承载 standalone worker”为正式语义，而不是外部 worker 间接驱动 E2B
 
 ### Workspace Ownership
 
@@ -119,6 +122,7 @@ flowchart TD
 
 - 负责 workspace placement 与 worker 生命周期治理
 - 将 `user affinity + workspace ownership + worker health + capacity` 组合为放置决策
+- 在 `self_hosted / e2b` provider 下进一步推导 sandbox fleet 需求：同 `ownerId` 复用 sandbox，无 owner 默认进入共享池
 - 负责 drain、rebalance、recovery 与扩缩容
 - 不直接执行业务 run
 
@@ -163,10 +167,10 @@ flowchart TD
 
 | 模式 | 说明 |
 |------|------|
-| API + embedded worker | 默认。单进程完整执行。配置 Redis 时消费 Redis queue，否则 in-process 执行。 |
-| API only + standalone worker + controller | 生产主模式。API Server 负责入口与 owner 路由，Worker 负责执行，Controller 负责控制面。 |
-| Standalone worker in sandbox | Worker 的一种部署形态。worker 运行在独立 worker Pod / sandbox Pod 中。 |
-| API only + controller + sandbox-hosted worker | 推荐的演进方向。先使用自家 sandbox pod 承载 worker，再把宿主接口收敛到可在 `self_hosted` / `e2b` provider 间切换的边界。 |
+| `oah-api` + embedded worker | 最小化部署。一个 API 进程内直接承载 embedded worker。 |
+| `oah-api` + `oah-controller` + `oah-sandbox` | 推荐主模式。`oah-api` 负责入口，`oah-controller` 负责控制面，`oah-sandbox` 内承载 standalone worker。 |
+| Standalone worker in sandbox | standalone worker 的典型部署形态。worker 运行在 self-hosted sandbox 或 E2B sandbox 中。 |
+| `oah-api` + `oah-controller` + E2B sandbox | 远端 sandbox 形态。standalone worker 运行在真实 E2B sandbox 内，但 API 与控制面语义不变。 |
 
 ## 7. 请求链路
 
@@ -223,6 +227,7 @@ sequenceDiagram
 - `Worker` 是统一执行角色；`sandbox` 只是 worker 的宿主环境，不作为主术语替代 worker
 - `Sandbox Host API` 是宿主兼容边界；首个实现应是自家 sandbox pod，E2B 适合作为后续可插拔后端，而不是先改写 OAH 的主语义
 - `Controller` 是统一控制面角色；负责 placement、lifecycle 与 capacity，不直接执行业务 run
+- 对远端 sandbox provider 而言，controller 现在还承担“逻辑 sandbox fleet”计算职责，为后续真实 sandbox autoscaling target 做准备
 - `workspace -> owner worker` 是运行与文件访问的路由真值；`userId` 只用于亲和调度，不作为 ownership 真值
 - 活跃 workspace 以 owner worker 本地副本为读写真值；flush / evict 后回到 OSS / 外部存储真值
 - 默认可信内网环境，不做强隔离容器执行；若面向更开放环境，应优先加强 sandbox backend

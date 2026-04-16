@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: oah-worker
+  name: oah-sandbox
   labels:
-    app.kubernetes.io/name: oah-worker
-    app.kubernetes.io/component: worker
+    app.kubernetes.io/name: oah-sandbox
+    app.kubernetes.io/component: sandbox
     app.kubernetes.io/part-of: open-agent-harness
 spec:
   replicas: 2
@@ -16,17 +16,17 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: oah-worker
+      app.kubernetes.io/name: oah-sandbox
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: oah-worker
-        app.kubernetes.io/component: worker
+        app.kubernetes.io/name: oah-sandbox
+        app.kubernetes.io/component: sandbox
         app.kubernetes.io/part-of: open-agent-harness
     spec:
       terminationGracePeriodSeconds: 120
       containers:
-        - name: worker
+        - name: sandbox
           image: ghcr.io/open-agent-harness/open-agent-harness:latest
           imagePullPolicy: IfNotPresent
           command: ["node", "apps/server/dist/worker.js", "--config", "/etc/oah/server.yaml"]
@@ -34,7 +34,7 @@ spec:
             - name: OAH_CONFIG
               value: /etc/oah/server.yaml
             - name: OAH_INTERNAL_BASE_URL
-              value: http://$(HOSTNAME).oah-worker-internal.open-agent-harness.svc.cluster.local:8787
+              value: http://$(HOSTNAME).oah-sandbox-internal.open-agent-harness.svc.cluster.local:8787
           ports:
             - containerPort: 8787
               name: http
@@ -62,12 +62,12 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: oah-worker-internal
+  name: oah-sandbox-internal
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
   selector:
-    app.kubernetes.io/name: oah-worker
+    app.kubernetes.io/name: oah-sandbox
   ports:
     - name: http
       port: 8787

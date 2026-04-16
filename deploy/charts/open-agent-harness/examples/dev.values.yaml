@@ -23,7 +23,7 @@ config:
         min_replicas: {{ .Values.worker.replicaCount }}
         max_replicas: 4
         slots_per_pod: 1
-        ready_sessions_per_worker: 1
+        ready_sessions_per_capacity_unit: 1
         reserved_capacity_for_subagent: 0
       controller:
         scale_interval_ms: 3000
@@ -42,7 +42,7 @@ config:
           allow_scale_down: true
           kubernetes:
             namespace: {{ .Release.Namespace }}
-            label_selector: app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=worker
+            label_selector: app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=sandbox
 
     llm:
       default_model: openai-default

@@ -1,4 +1,6 @@
 import type {
+  Run,
+  Session,
   WorkspaceExecutionLease,
   WorkspaceFileAccessLease,
   WorkspaceRecord
@@ -13,6 +15,9 @@ import type {
 import { WorkspaceMaterializationDrainingError } from "./workspace-materialization.js";
 
 export interface SandboxHostDiagnostics {
+  provider?: "embedded" | "self_hosted" | "e2b" | undefined;
+  executionModel?: "local_embedded" | "sandbox_hosted" | undefined;
+  workerPlacement?: "api_process" | "inside_sandbox" | undefined;
   materialization?: WorkspaceMaterializationDiagnostics | undefined;
 }
 
@@ -23,14 +28,18 @@ export interface SandboxHostDiagnostics {
  * workspace incrementally adopts the shared contract surface.
  */
 export interface SandboxHost {
-  providerKind: "self_hosted" | "e2b";
+  providerKind: "embedded" | "self_hosted" | "e2b";
   workspaceCommandExecutor: ReturnType<typeof createLocalWorkspaceCommandExecutor>;
   workspaceFileSystem: ReturnType<typeof createLocalWorkspaceFileSystem>;
   workspaceExecutionProvider: {
-    acquire(input: { workspace: WorkspaceRecord }): Promise<WorkspaceExecutionLease>;
+    acquire(input: { workspace: WorkspaceRecord; run: Run; session?: Session | undefined }): Promise<WorkspaceExecutionLease>;
   };
   workspaceFileAccessProvider: {
-    acquire(input: { workspace: WorkspaceRecord }): Promise<WorkspaceFileAccessLease>;
+    acquire(input: {
+      workspace: WorkspaceRecord;
+      access: "read" | "write";
+      path?: string | undefined;
+    }): Promise<WorkspaceFileAccessLease>;
   };
   diagnostics(): SandboxHostDiagnostics;
   maintain(options: { idleBefore: string }): Promise<void>;
@@ -93,21 +102,30 @@ export function createMaterializationSandboxHost(options: {
 }): SandboxHost {
   const manager = options.materializationManager;
   return {
-    providerKind: "self_hosted",
+    providerKind: "embedded",
     workspaceCommandExecutor: createLocalWorkspaceCommandExecutor(),
     workspaceFileSystem: createLocalWorkspaceFileSystem(),
     workspaceExecutionProvider: {
-      async acquire({ workspace }: { workspace: WorkspaceRecord }) {
+      async acquire({ workspace }: { workspace: WorkspaceRecord; run: Run; session?: Session | undefined }) {
         return materializedExecutionLease(manager, workspace);
       }
     },
     workspaceFileAccessProvider: {
-      async acquire({ workspace }: { workspace: WorkspaceRecord }) {
+      async acquire({
+        workspace
+      }: {
+        workspace: WorkspaceRecord;
+        access: "read" | "write";
+        path?: string | undefined;
+      }) {
         return materializedFileAccessLease(manager, workspace);
       }
     },
     diagnostics() {
       return {
+        provider: "embedded",
+        executionModel: "local_embedded",
+        workerPlacement: "api_process",
         materialization: manager.diagnostics()
       } satisfies SandboxHostDiagnostics;
     },

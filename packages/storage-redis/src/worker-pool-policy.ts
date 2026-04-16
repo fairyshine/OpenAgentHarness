@@ -9,7 +9,7 @@ export interface RedisWorkerLoadSummary {
 export interface RedisRunWorkerPoolSizingInput {
   minWorkers: number;
   maxWorkers: number;
-  readySessionsPerWorker: number;
+  readySessionsPerCapacityUnit: number;
   reservedSubagentCapacity: number;
   localActiveWorkers: number;
   localBusyWorkers: number;
@@ -69,10 +69,13 @@ export function calculateRedisWorkerPoolSuggestion(
   const subagentReadySessionCount = input.schedulingPressure?.subagentReadySessionCount;
   const busyWorkers = input.globalWorkerLoad?.globalBusyWorkers ?? input.localBusyWorkers;
   const activeWorkers = input.globalWorkerLoad?.globalActiveWorkers ?? input.localActiveWorkers;
+  const readySessionsPerCapacityUnit = Math.max(1, input.readySessionsPerCapacityUnit);
   const pressureWorkers =
-    typeof readySessionCount === "number" ? Math.ceil(readySessionCount / input.readySessionsPerWorker) : input.minWorkers;
+    typeof readySessionCount === "number" ? Math.ceil(readySessionCount / readySessionsPerCapacityUnit) : input.minWorkers;
   const saturatedWorkers =
-    typeof readySessionCount === "number" ? Math.ceil((readySessionCount + busyWorkers) / input.readySessionsPerWorker) : busyWorkers;
+    typeof readySessionCount === "number"
+      ? Math.ceil((readySessionCount + busyWorkers) / readySessionsPerCapacityUnit)
+      : busyWorkers;
   const reservedWorkers =
     typeof subagentReadySessionCount === "number" && subagentReadySessionCount > 0
       ? busyWorkers + input.reservedSubagentCapacity

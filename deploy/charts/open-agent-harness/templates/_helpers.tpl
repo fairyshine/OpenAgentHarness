@@ -23,15 +23,15 @@
 {{- end -}}
 
 {{- define "open-agent-harness.apiServerName" -}}
-{{- printf "%s-api-server" (include "open-agent-harness.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-api" (include "open-agent-harness.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "open-agent-harness.workerName" -}}
-{{- printf "%s-worker" (include "open-agent-harness.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-sandbox" (include "open-agent-harness.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "open-agent-harness.workerInternalServiceName" -}}
-{{- printf "%s-worker-internal" (include "open-agent-harness.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-sandbox-internal" (include "open-agent-harness.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "open-agent-harness.controllerName" -}}

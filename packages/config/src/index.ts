@@ -69,7 +69,15 @@ export interface ServerConfig {
       | undefined;
   };
   sandbox?: {
-    provider?: "self_hosted" | "e2b" | undefined;
+    provider?: "embedded" | "self_hosted" | "e2b" | undefined;
+    fleet?:
+      | {
+          min_count?: number | undefined;
+          max_count?: number | undefined;
+          max_workspaces_per_sandbox?: number | undefined;
+          ownerless_pool?: "shared" | "dedicated" | undefined;
+        }
+      | undefined;
     self_hosted?:
       | {
           base_url?: string | undefined;
@@ -109,8 +117,12 @@ export interface ServerConfig {
     standalone?: {
       min_replicas?: number | undefined;
       max_replicas?: number | undefined;
+      /**
+       * @deprecated Kept only for legacy config compatibility. Controller sizing now uses
+       * observed worker-reported capacity instead of a static slots-per-pod assumption.
+       */
       slots_per_pod?: number | undefined;
-      ready_sessions_per_worker?: number | undefined;
+      ready_sessions_per_capacity_unit?: number | undefined;
       reserved_capacity_for_subagent?: number | undefined;
     } | undefined;
     controller?: {
@@ -426,6 +438,19 @@ function resolveConfigPaths(config: ServerConfig, configPath: string): ServerCon
       skill_dir: path.resolve(configDir, config.paths.skill_dir)
     }
   };
+}
+
+function emitConfigDeprecationWarnings(config: ServerConfig, configPath: string) {
+  if (typeof config.workers?.standalone?.slots_per_pod === "number") {
+    process.emitWarning(
+      `workers.standalone.slots_per_pod is deprecated in ${configPath} and ignored by controller sizing; ` +
+        "sandbox replica decisions now use observed worker-reported capacity.",
+      {
+        type: "DeprecationWarning",
+        code: "OAH_CONFIG_DEPRECATED_SLOTS_PER_POD"
+      }
+    );
+  }
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -767,7 +792,7 @@ export async function loadServerConfig(configPath: string): Promise<ServerConfig
     throw new Error(`Invalid server config: ${validationMessage(validate.errors)}`);
   }
 
-  return resolveConfigPaths(
+  const resolvedConfig = resolveConfigPaths(
     {
       ...expanded,
       server: expanded.server as ServerConfig["server"],
@@ -786,6 +811,9 @@ export async function loadServerConfig(configPath: string): Promise<ServerConfig
     } as ServerConfig,
     configPath
   );
+
+  emitConfigDeprecationWarnings(resolvedConfig, configPath);
+  return resolvedConfig;
 }
 
 export async function loadPlatformModels(

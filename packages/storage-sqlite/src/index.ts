@@ -257,6 +257,25 @@ function shadowDbPath(shadowRoot: string, workspaceId: string): string {
   return path.join(shadowRoot, workspaceId, "history.db");
 }
 
+function shouldPersistProjectDbInsideWorkspace(
+  workspace: Pick<WorkspaceRecord, "kind" | "readOnly" | "rootPath">
+): boolean {
+  if (workspace.kind !== "project" || workspace.readOnly) {
+    return false;
+  }
+
+  const normalizedRootPath = workspace.rootPath.replaceAll("\\", "/");
+  if (normalizedRootPath === "/workspace" || normalizedRootPath.startsWith("/workspace/")) {
+    return false;
+  }
+
+  if (normalizedRootPath === "/__oah_sandbox__" || normalizedRootPath.startsWith("/__oah_sandbox__/")) {
+    return false;
+  }
+
+  return true;
+}
+
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
@@ -992,7 +1011,7 @@ class SQLitePersistenceCoordinator {
   }
 
   dbPathForWorkspace(workspace: Pick<WorkspaceRecord, "id" | "kind" | "readOnly" | "rootPath">): string {
-    if (workspace.kind === "project" && !workspace.readOnly) {
+    if (shouldPersistProjectDbInsideWorkspace(workspace)) {
       return defaultProjectDbPath(workspace);
     }
 
@@ -2086,7 +2105,7 @@ export function sqliteWorkspaceHistoryDbPath(
   workspace: Pick<WorkspaceRecord, "id" | "kind" | "readOnly" | "rootPath">,
   options: CreateSQLiteRuntimePersistenceOptions
 ): string {
-  if (workspace.kind === "project" && !workspace.readOnly) {
+  if (shouldPersistProjectDbInsideWorkspace(workspace)) {
     return defaultProjectDbPath(workspace);
   }
 

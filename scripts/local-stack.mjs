@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import YAML from "../packages/config/node_modules/yaml/dist/index.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const composeFile = path.join(repoRoot, "docker-compose.local.yml");
@@ -102,6 +104,63 @@ function ensureTestRoot() {
   }
 }
 
+function prepareDockerServerConfigs() {
+  const testRoot = process.env.OAH_TEST_ROOT;
+  if (!testRoot) {
+    throw new Error("OAH_TEST_ROOT is required.");
+  }
+
+  const sourceConfigPath = path.join(testRoot, "server.docker.yaml");
+  const generatedDir = path.join(testRoot, ".oah-local");
+  const generatedApiConfigPath = path.join(generatedDir, "api.generated.yaml");
+  const generatedControllerConfigPath = path.join(generatedDir, "controller.generated.yaml");
+  const generatedSandboxConfigPath = path.join(generatedDir, "sandbox.generated.yaml");
+  const sourceConfig = YAML.parse(readFileSync(sourceConfigPath, "utf8")) ?? {};
+
+  const apiServerConfig = {
+    ...sourceConfig,
+    server: {
+      ...(sourceConfig.server ?? {}),
+      host: "0.0.0.0",
+      port: 8787
+    },
+    sandbox: {
+      ...(sourceConfig.sandbox ?? {}),
+      provider: "self_hosted",
+      self_hosted: {
+        ...(sourceConfig.sandbox?.self_hosted ?? {}),
+        base_url: "http://oah-sandbox:8787/internal/v1"
+      }
+    }
+  };
+
+  const controllerConfig = {
+    ...apiServerConfig
+  };
+
+  const sandboxServerConfig = {
+    ...sourceConfig,
+    server: {
+      ...(sourceConfig.server ?? {}),
+      host: "0.0.0.0",
+      port: 8787
+    },
+    sandbox: {
+      ...(sourceConfig.sandbox ?? {}),
+      provider: "embedded"
+    }
+  };
+
+  mkdirSync(generatedDir, { recursive: true });
+  writeFileSync(generatedApiConfigPath, YAML.stringify(apiServerConfig), "utf8");
+  writeFileSync(generatedControllerConfigPath, YAML.stringify(controllerConfig), "utf8");
+  writeFileSync(generatedSandboxConfigPath, YAML.stringify(sandboxServerConfig), "utf8");
+
+  process.env.OAH_DOCKER_API_CONFIG = generatedApiConfigPath;
+  process.env.OAH_DOCKER_CONTROLLER_CONFIG = generatedControllerConfigPath;
+  process.env.OAH_DOCKER_SANDBOX_CONFIG = generatedSandboxConfigPath;
+}
+
 function ensureRclonePlugin() {
   const pluginList = runCapture("docker", ["plugin", "ls", "--format", "{{.Name}}\t{{.Enabled}}"]);
   const pluginLine = pluginList
@@ -153,7 +212,7 @@ function recreateReadonlyObjectStorageVolumes() {
     "Recreating readonly object-storage volumes to avoid rclone plugin path restore drift after docker/plugin restarts."
   );
 
-  runMaybe("docker", ["compose", "-f", composeFile, "rm", "-sf", "oah"]);
+  runMaybe("docker", ["compose", "-f", composeFile, "rm", "-sf", "oah-sandbox", "oah-controller", "oah-api"]);
 
   for (const volumeKey of readonlyObjectStorageVolumeKeys) {
     const volumeName = composeVolumeName(volumeKey);
@@ -191,6 +250,7 @@ function hasLocalOahImage() {
 
 async function up() {
   ensureTestRoot();
+  prepareDockerServerConfigs();
   ensureRclonePlugin();
   ensureRcloneVolumeDriverResponsive();
 
@@ -201,11 +261,21 @@ async function up() {
 
   if (["1", "true", "yes"].includes((process.env.OAH_SKIP_BUILD || "").toLowerCase())) {
     console.warn("OAH_SKIP_BUILD is set. Starting OAH with --no-build.");
-    run("docker", ["compose", "-f", composeFile, "up", "-d", "--no-build", "oah"]);
+    run("docker", ["compose", "-f", composeFile, "up", "-d", "--no-build", "oah-sandbox", "oah-controller", "oah-api"]);
     return;
   }
 
-  const buildResult = runMaybe("docker", ["compose", "-f", composeFile, "up", "-d", "--build", "oah"]);
+  const buildResult = runMaybe("docker", [
+    "compose",
+    "-f",
+    composeFile,
+    "up",
+    "-d",
+    "--build",
+    "oah-sandbox",
+    "oah-controller",
+    "oah-api"
+  ]);
   if (buildResult.status === 0) {
     return;
   }
@@ -215,10 +285,12 @@ async function up() {
   }
 
   console.warn("Build failed, but a local openagentharness-oah image exists. Falling back to --no-build.");
-  run("docker", ["compose", "-f", composeFile, "up", "-d", "--no-build", "oah"]);
+  run("docker", ["compose", "-f", composeFile, "up", "-d", "--no-build", "oah-sandbox", "oah-controller", "oah-api"]);
 }
 
 function down() {
+  ensureTestRoot();
+  prepareDockerServerConfigs();
   run("docker", ["compose", "-f", composeFile, "down"]);
 }
 

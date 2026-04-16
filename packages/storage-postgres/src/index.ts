@@ -102,6 +102,7 @@ function createMessage(input: {
 const workspaces = pgTable("workspaces", {
   id: text("id").primaryKey(),
   externalRef: text("external_ref"),
+  ownerId: text("owner_id"),
   serviceName: text("service_name"),
   name: text("name").notNull(),
   rootPath: text("root_path").notNull(),
@@ -342,6 +343,7 @@ function buildWorkspaceRow(input: WorkspaceRecord) {
   return {
     id: input.id,
     externalRef: input.externalRef ?? null,
+    ownerId: input.ownerId ?? null,
     serviceName: input.serviceName ?? null,
     name: input.name,
     rootPath: input.rootPath,
@@ -371,6 +373,7 @@ function toWorkspaceRecord(row: typeof workspaces.$inferSelect): WorkspaceRecord
   return {
     id: row.id,
     ...(row.externalRef ? { externalRef: row.externalRef } : {}),
+    ...(row.ownerId ? { ownerId: row.ownerId } : {}),
     ...(row.serviceName ? { serviceName: row.serviceName } : {}),
     name: row.name,
     rootPath: row.rootPath,
@@ -1563,6 +1566,7 @@ const schemaStatements = [
   `create table if not exists workspaces (
     id text primary key,
     external_ref text,
+    owner_id text,
     service_name text,
     name text not null,
     root_path text not null,
@@ -1586,7 +1590,73 @@ const schemaStatements = [
   )`,
   `create index if not exists workspaces_root_path_idx on workspaces (root_path)`,
   `create index if not exists workspaces_external_ref_idx on workspaces (external_ref)`,
+  `alter table workspaces add column if not exists external_ref text`,
+  `alter table workspaces add column if not exists owner_id text`,
   `alter table workspaces add column if not exists service_name text`,
+  `alter table workspaces add column if not exists name text`,
+  `alter table workspaces add column if not exists root_path text`,
+  `alter table workspaces add column if not exists execution_policy text`,
+  `alter table workspaces add column if not exists status text`,
+  `alter table workspaces add column if not exists kind text`,
+  `alter table workspaces add column if not exists read_only boolean`,
+  `alter table workspaces add column if not exists history_mirror_enabled boolean`,
+  `alter table workspaces add column if not exists default_agent text`,
+  `alter table workspaces add column if not exists project_agents_md text`,
+  `alter table workspaces add column if not exists settings jsonb`,
+  `alter table workspaces add column if not exists workspace_models jsonb`,
+  `alter table workspaces add column if not exists agents jsonb`,
+  `alter table workspaces add column if not exists actions jsonb`,
+  `alter table workspaces add column if not exists skills jsonb`,
+  `alter table workspaces add column if not exists mcp_servers jsonb`,
+  `alter table workspaces add column if not exists hooks jsonb`,
+  `alter table workspaces add column if not exists catalog jsonb`,
+  `alter table workspaces add column if not exists created_at timestamptz`,
+  `alter table workspaces add column if not exists updated_at timestamptz`,
+  `do $$
+   begin
+     if exists (
+       select 1
+       from information_schema.columns
+       where table_schema = current_schema()
+         and table_name = 'workspaces'
+         and column_name = 'tool_servers'
+     ) then
+       update workspaces
+       set mcp_servers = coalesce(mcp_servers, tool_servers)
+       where mcp_servers is null;
+     end if;
+   end
+   $$;`,
+  `update workspaces set kind = 'project' where kind is null`,
+  `update workspaces set read_only = false where read_only is null`,
+  `update workspaces set history_mirror_enabled = true where history_mirror_enabled is null`,
+  `update workspaces set settings = '{}'::jsonb where settings is null`,
+  `update workspaces set workspace_models = '{}'::jsonb where workspace_models is null`,
+  `update workspaces set agents = '{}'::jsonb where agents is null`,
+  `update workspaces set actions = '{}'::jsonb where actions is null`,
+  `update workspaces set skills = '{}'::jsonb where skills is null`,
+  `update workspaces set mcp_servers = '{}'::jsonb where mcp_servers is null`,
+  `update workspaces set hooks = '{}'::jsonb where hooks is null`,
+  `update workspaces set catalog = '{}'::jsonb where catalog is null`,
+  `update workspaces set created_at = now() where created_at is null`,
+  `update workspaces set updated_at = coalesce(updated_at, created_at, now()) where updated_at is null`,
+  `alter table workspaces alter column name set not null`,
+  `alter table workspaces alter column root_path set not null`,
+  `alter table workspaces alter column execution_policy set not null`,
+  `alter table workspaces alter column status set not null`,
+  `alter table workspaces alter column kind set not null`,
+  `alter table workspaces alter column read_only set not null`,
+  `alter table workspaces alter column history_mirror_enabled set not null`,
+  `alter table workspaces alter column settings set not null`,
+  `alter table workspaces alter column workspace_models set not null`,
+  `alter table workspaces alter column agents set not null`,
+  `alter table workspaces alter column actions set not null`,
+  `alter table workspaces alter column skills set not null`,
+  `alter table workspaces alter column mcp_servers set not null`,
+  `alter table workspaces alter column hooks set not null`,
+  `alter table workspaces alter column catalog set not null`,
+  `alter table workspaces alter column created_at set not null`,
+  `alter table workspaces alter column updated_at set not null`,
   `create table if not exists sessions (
     id text primary key,
     workspace_id text not null references workspaces(id) on delete cascade,

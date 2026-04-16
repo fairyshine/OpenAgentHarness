@@ -27,16 +27,22 @@ storage: {}
 #     skill: skill
 
 # sandbox:
-#   provider: self_hosted
+#   provider: embedded
+#   fleet:
+#     min_count: 1
+#     max_count: 32
+#     max_workspaces_per_sandbox: 32
+#     ownerless_pool: shared
+#   # embedded: local materialization-backed sandbox host for single-node development
 #   self_hosted:
-#     # Optional. When omitted, OAH uses the local materialization-backed sandbox host.
-#     # Set this to route sandbox requests to a remote self-hosted sandbox service.
+#     # Required when provider=self_hosted.
+#     # Route sandbox requests to the standalone worker running inside a self-hosted sandbox.
 #     # base_url: http://oah-sandbox:8787/internal/v1
 #     # headers:
 #     #   x-oah-cluster: local
 #   e2b:
-#     # Point this at an E2B-backed sandbox gateway exposing the OAH sandbox API.
-#     # base_url: https://sandbox-gateway.example.com/internal/v1
+#     # Point this at the native E2B API; OAH will place the standalone worker inside the real E2B sandbox.
+#     # base_url: https://api.e2b.dev
 #     # api_key: ${env.E2B_API_KEY}
 #     # headers:
 #     #   x-oah-provider: e2b
@@ -61,8 +67,8 @@ workers:
   # standalone:
   #   min_replicas: 2
   #   max_replicas: 12
-  #   slots_per_pod: 2
-  #   ready_sessions_per_worker: 1
+  #   ready_sessions_per_capacity_unit: 1   # controller 用它估算队列压力；worker 内部线程/slot 由 sandbox 内 worker 自己决定
+  #   slots_per_pod: 2               # legacy 兼容项；controller 不再据此决定 sandbox 副本数
   #   reserved_capacity_for_subagent: 1
   # controller:
   #   scale_interval_ms: 2000

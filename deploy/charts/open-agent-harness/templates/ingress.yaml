@@ -4,7 +4,7 @@ kind: Ingress
 metadata:
   name: {{ include "open-agent-harness.apiServerName" . }}
   labels:
-    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "api-server") | nindent 4 }}
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
   {{- with .Values.apiServer.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}

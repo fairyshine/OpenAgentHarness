@@ -9,6 +9,7 @@ export const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
 export const workspaceSchema = z.object({
   id: z.string(),
   externalRef: z.string().optional(),
+  ownerId: z.string().optional(),
   name: z.string(),
   blueprint: z.string().min(1).optional(),
   serviceName: z.string().optional(),
@@ -310,12 +311,21 @@ export function createSandboxHttpClient(transport: SandboxHttpTransport) {
   };
 }
 
-export const sandboxProviderKindSchema = z.enum(["self_hosted", "e2b"]);
+export const sandboxProviderKindSchema = z.enum(["embedded", "self_hosted", "e2b"]);
+export const sandboxExecutionModelSchema = z.enum(["local_embedded", "sandbox_hosted"]);
+export const sandboxWorkerPlacementSchema = z.enum(["api_process", "inside_sandbox"]);
+export const sandboxTopologySchema = z.object({
+  provider: sandboxProviderKindSchema,
+  executionModel: sandboxExecutionModelSchema,
+  workerPlacement: sandboxWorkerPlacementSchema
+});
 
 export const sandboxSchema = z.object({
   id: z.string(),
   workspaceId: z.string(),
   provider: sandboxProviderKindSchema,
+  executionModel: sandboxExecutionModelSchema,
+  workerPlacement: sandboxWorkerPlacementSchema,
   rootPath: z.string(),
   name: z.string(),
   kind: z.literal("project"),
@@ -1422,7 +1432,7 @@ export const workerPoolSchema = z.object({
   globalBusyWorkers: z.number().int().min(0).optional(),
   remoteActiveWorkers: z.number().int().min(0).optional(),
   remoteBusyWorkers: z.number().int().min(0).optional(),
-  readySessionsPerWorker: z.number().int().min(1),
+  readySessionsPerCapacityUnit: z.number().int().min(1).describe("Primary queue-density target per observed capacity unit."),
   scaleIntervalMs: z.number().int().min(0),
   scaleUpCooldownMs: z.number().int().min(0),
   scaleDownCooldownMs: z.number().int().min(0),
@@ -1497,6 +1507,7 @@ export const healthReportSchema = z.object({
   status: healthStatusSchema,
   storage: healthStorageSchema,
   process: runtimeProcessSchema,
+  sandbox: sandboxTopologySchema,
   checks: healthChecksSchema,
   worker: healthWorkerSchema
 });
@@ -1546,6 +1557,9 @@ export type WorkspaceEntryPage = z.infer<typeof workspaceEntryPageSchema>;
 export type WorkspaceFileContent = z.infer<typeof workspaceFileContentSchema>;
 export type WorkspaceDeleteResult = z.infer<typeof workspaceDeleteResultSchema>;
 export type SandboxProviderKind = z.infer<typeof sandboxProviderKindSchema>;
+export type SandboxExecutionModel = z.infer<typeof sandboxExecutionModelSchema>;
+export type SandboxWorkerPlacement = z.infer<typeof sandboxWorkerPlacementSchema>;
+export type SandboxTopology = z.infer<typeof sandboxTopologySchema>;
 export type Sandbox = z.infer<typeof sandboxSchema>;
 export type WorkspaceCatalog = z.infer<typeof workspaceCatalogSchema>;
 export type AgentCatalogItem = z.infer<typeof agentCatalogItemSchema>;

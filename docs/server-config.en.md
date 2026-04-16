@@ -16,11 +16,16 @@ storage:
   redis_url: ${env.REDIS_URL}         # Redis connection string (optional)
 
 sandbox:
-  provider: self_hosted               # self_hosted | e2b
+  provider: embedded                  # embedded | self_hosted | e2b
+  # fleet:
+  #   min_count: 1
+  #   max_count: 32
+  #   max_workspaces_per_sandbox: 32
+  #   ownerless_pool: shared          # shared | dedicated
   # self_hosted:
   #   base_url: http://oah-sandbox:8787/internal/v1
   # e2b:
-  #   base_url: https://sandbox-gateway.example.com/internal/v1
+  #   base_url: https://api.e2b.dev
   #   api_key: ${env.E2B_API_KEY}
 
 paths:
@@ -62,15 +67,25 @@ llm:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `provider` | string | Sandbox provider. Supports `self_hosted` and `e2b`. Defaults to `self_hosted`. |
-| `self_hosted.base_url` | string | Optional. Base `/internal/v1` URL for a remote self-hosted sandbox service. When omitted, OAH keeps using the local materialization-backed sandbox. |
+| `provider` | string | Sandbox provider. Supports `embedded`, `self_hosted`, and `e2b`. Defaults to `embedded`. `embedded` means the worker is hosted inside `oah-api`; `self_hosted / e2b` mean a standalone worker runs inside a real sandbox. |
+| `fleet.min_count` | number | Minimum sandbox count the controller should maintain for self-hosted / e2b providers. Defaults to `1` for remote providers and `0` for embedded. |
+| `fleet.max_count` | number | Maximum sandbox count the controller may target. Defaults to `64`. |
+| `fleet.max_workspaces_per_sandbox` | number | Capacity limit for how many workspaces a single real sandbox should carry. Defaults to `32`. |
+| `fleet.ownerless_pool` | string | How workspaces without `ownerId` are grouped into sandboxes. `shared` uses a shared pool; `dedicated` gives each workspace its own sandbox. |
+| `self_hosted.base_url` | string | Required when `provider=self_hosted`. Base `/internal/v1` URL exposed by the sandbox-resident standalone worker. |
 | `self_hosted.headers` | object | Optional static headers attached to remote self-hosted sandbox requests. |
-| `e2b.base_url` | string | Required when `provider=e2b`. Base `/internal/v1` URL for an E2B-backed sandbox gateway. |
+| `e2b.base_url` | string | Optional when `provider=e2b`. Overrides the native E2B API base URL; legacy `/internal/v1`-style URLs are normalized automatically. |
 | `e2b.api_key` | string | Optional. When set, OAH sends it as `Authorization: Bearer <key>` on e2b requests. |
 | `e2b.headers` | object | Optional static headers attached to e2b requests. |
 
 > **tip**
 > OAH keeps the external `/sandboxes` API stable. Switching `sandbox.provider` changes only the server-side sandbox backend wiring; the Web app, OpenAPI clients, and runtime callers do not need to change their request shape.
+
+> **tip**
+> `self_hosted` and `e2b` share the same execution semantics: `oah-api` routes workspaces into a real sandbox, while the standalone worker inside that sandbox owns the live workspace copy, local file state, and command execution context.
+
+> **tip**
+> The controller now treats sandbox fleet demand as a first-class signal: the same `ownerId` prefers the same real sandbox, while ownerless workspaces fall into a shared pool by default. `fleet.*` defines that capacity boundary and is the contract we can later wire into real sandbox autoscaling targets.
 
 ### `paths`
 
@@ -87,6 +102,27 @@ llm:
 | Field | Type | Description |
 | --- | --- | --- |
 | `default_model` | string | Default model name. Must exist in `model_dir`. Resolved to `platform/<name>` at runtime. |
+
+### `workers`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `embedded.min_count` | number | Minimum always-on worker count in `API + embedded worker` mode. |
+| `embedded.max_count` | number | Maximum embedded worker count under queue pressure. |
+| `embedded.scale_interval_ms` | number | Rebalance interval for the embedded worker pool. |
+| `embedded.idle_ttl_ms` | number | How long surplus embedded workers may stay idle before cleanup. |
+| `embedded.scale_up_window` | number | Consecutive high-pressure samples required before scaling up. |
+| `embedded.scale_down_window` | number | Consecutive low-pressure samples required before scaling down. |
+| `embedded.cooldown_ms` | number | Cooldown between embedded worker scaling actions. |
+| `embedded.reserved_capacity_for_subagent` | number | Minimum spare embedded capacity reserved for subagent backlog. |
+| `standalone.min_replicas` | number | Minimum sandbox replicas the controller may keep for standalone workers. |
+| `standalone.max_replicas` | number | Maximum sandbox replicas the controller may target for standalone workers. |
+| `standalone.ready_sessions_per_capacity_unit` | number | Queue-density target used by the controller when translating observed worker capacity into sandbox replica demand. |
+| `standalone.reserved_capacity_for_subagent` | number | Minimum observed execution capacity reserved for subagent backlog. |
+| `standalone.slots_per_pod` | number | Legacy compatibility field. The controller no longer uses this static value to size sandbox replicas and instead relies on worker-reported observed capacity. |
+
+> **tip**
+> The controller boundary is now explicitly sandbox-only. How many threads, slots, or processes run inside a sandbox is owned by the worker runtime itself; the controller only consumes the observed capacity those workers publish and turns it into sandbox replica and placement decisions.
 
 ---
 
@@ -130,9 +166,9 @@ Platform-level skill definitions. Merged with workspace `.openharness/skills` to
 
 | Mode | Command | Description |
 | --- | --- | --- |
-| API + embedded worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml` | Default. One process runs both API and worker. |
-| API only | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml --api-only` | API only. Pair with standalone worker(s). |
-| Standalone worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config server.yaml` | Independent worker. Consumes Redis queue. |
+| API + embedded worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml` | Smallest deployment. One `oah-api` process directly hosts the embedded worker. |
+| API only | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml --api-only` | Starts `oah-api` only. Typically paired with `oah-controller` and `oah-sandbox`. |
+| Standalone worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config server.yaml` | Standalone worker, typically running inside a self-hosted or E2B sandbox. |
 
 ---
 

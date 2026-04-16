@@ -31,6 +31,7 @@ import {
 import { AppError } from "@oah/runtime-core";
 
 import { assertWorkspaceAccess, createParamsSchema, sendError, toCallerContext } from "../context.js";
+import { describeSandboxTopology } from "../../sandbox-topology.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
 
 const DEFAULT_BACKGROUND_SESSION_PREFIX = "sandbox";
@@ -222,7 +223,7 @@ async function buildSandboxResponse(dependencies: AppDependencies, workspaceId: 
   return sandboxSchema.parse({
     id: workspace.id,
     workspaceId: workspace.id,
-    provider: dependencies.sandboxHostProviderKind ?? "self_hosted",
+    ...describeSandboxTopology(dependencies.sandboxHostProviderKind),
     rootPath: SANDBOX_ROOT_PATH,
     name: workspace.name,
     kind: workspace.kind,
@@ -523,14 +524,53 @@ function registerSandboxCoreRoutes(
       if (isPublicApi) {
         assertWorkspaceAccess(toCallerContext(request), input.workspaceId);
       }
+
+      try {
+        const existing = await dependencies.runtimeService.getWorkspace(input.workspaceId);
+        if (ownerId) {
+          await dependencies.assignWorkspacePlacementUser?.({
+            workspaceId: input.workspaceId,
+            userId: ownerId,
+            overwrite: false
+          });
+        }
+        return reply.status(200).send(await buildSandboxResponse(dependencies, existing.id));
+      } catch (error) {
+        if (!(error instanceof AppError) || error.code !== "workspace_not_found") {
+          throw error;
+        }
+      }
+
+      if (!input.name || !input.blueprint) {
+        throw new AppError(404, "workspace_not_found", `Workspace ${input.workspaceId} was not found.`);
+      }
+
+      if (workspaceMode === "single") {
+        throw new AppError(501, "sandbox_creation_unavailable", "Sandbox creation is not available in single-workspace mode.");
+      }
+
+      const createWorkspaceInput = {
+        name: input.name,
+        blueprint: input.blueprint,
+        executionPolicy: input.executionPolicy,
+        ...(input.externalRef ? { externalRef: input.externalRef } : {}),
+        ...(ownerId ? { ownerId } : {}),
+        ...(input.serviceName ? { serviceName: input.serviceName } : {}),
+        workspaceId: input.workspaceId
+      };
+      const workspace = await dependencies.runtimeService.createWorkspace({
+        input: createWorkspaceInput as typeof createWorkspaceInput & {
+          workspaceId: string;
+        }
+      });
       if (ownerId) {
         await dependencies.assignWorkspacePlacementUser?.({
-          workspaceId: input.workspaceId,
+          workspaceId: workspace.id,
           userId: ownerId,
-          overwrite: false
+          overwrite: true
         });
       }
-      return reply.status(200).send(await buildSandboxResponse(dependencies, input.workspaceId));
+      return reply.status(201).send(await buildSandboxResponse(dependencies, workspace.id));
     }
 
     if (input.rootPath) {
