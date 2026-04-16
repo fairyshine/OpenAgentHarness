@@ -362,6 +362,31 @@ export interface WorkspaceFileAccessProvider {
   }): Promise<WorkspaceFileAccessLease>;
 }
 
+export type SandboxHostProviderKind = "self_hosted" | "e2b_compatible";
+
+export interface SandboxHostDiagnostics {
+  materialization?: Record<string, unknown> | undefined;
+}
+
+/**
+ * Stable host-adapter boundary for worker execution environments.
+ *
+ * The first backend is the self-hosted materialization-backed worker host.
+ * Future E2B-compatible adapters should implement the same contract without
+ * changing runtime-core's workspace ownership semantics.
+ */
+export interface SandboxHost {
+  providerKind: SandboxHostProviderKind;
+  workspaceCommandExecutor: WorkspaceCommandExecutor;
+  workspaceFileSystem: WorkspaceFileSystem;
+  workspaceExecutionProvider: WorkspaceExecutionProvider;
+  workspaceFileAccessProvider: WorkspaceFileAccessProvider;
+  diagnostics(): SandboxHostDiagnostics;
+  maintain(options: { idleBefore: string }): Promise<void>;
+  beginDrain(): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface WorkspaceForegroundCommandExecutionResult {
   stdout: string;
   stderr: string;
@@ -588,7 +613,14 @@ export interface RuntimeServiceOptions {
 export type RunQueuePriority = "normal" | "subagent";
 
 export interface RunQueue {
-  enqueue(sessionId: string, runId: string, options?: { priority?: RunQueuePriority | undefined }): Promise<void>;
+  enqueue(
+    sessionId: string,
+    runId: string,
+    options?: {
+      priority?: RunQueuePriority | undefined;
+      preferredWorkerId?: string | undefined;
+    }
+  ): Promise<void>;
 }
 
 export interface WorkspaceRepository {

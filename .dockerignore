@@ -3,6 +3,9 @@ node_modules
 .github
 deploy
 docs
+!docs/
+!docs/schemas/
+!docs/schemas/**
 dist
 .vite
 site

@@ -1,14 +1,9 @@
-import { AppError } from "@oah/runtime-core";
 import type {
-  WorkspaceCommandExecutor,
   WorkspaceExecutionLease,
-  WorkspaceExecutionProvider,
   WorkspaceFileAccessLease,
-  WorkspaceFileAccessProvider,
-  WorkspaceFileSystem,
   WorkspaceRecord
 } from "@oah/runtime-core";
-import { createLocalWorkspaceCommandExecutor, createLocalWorkspaceFileSystem } from "@oah/runtime-core";
+import { AppError, createLocalWorkspaceCommandExecutor, createLocalWorkspaceFileSystem } from "@oah/runtime-core";
 
 import type {
   WorkspaceMaterializationDiagnostics,
@@ -21,11 +16,22 @@ export interface SandboxHostDiagnostics {
   materialization?: WorkspaceMaterializationDiagnostics | undefined;
 }
 
+/**
+ * Local mirror of the runtime-core SandboxHost contract.
+ *
+ * This keeps the server package on a stable type-check path while the broader
+ * workspace incrementally adopts the shared contract surface.
+ */
 export interface SandboxHost {
-  workspaceCommandExecutor: WorkspaceCommandExecutor;
-  workspaceFileSystem: WorkspaceFileSystem;
-  workspaceExecutionProvider: WorkspaceExecutionProvider;
-  workspaceFileAccessProvider: WorkspaceFileAccessProvider;
+  providerKind: "self_hosted" | "e2b_compatible";
+  workspaceCommandExecutor: ReturnType<typeof createLocalWorkspaceCommandExecutor>;
+  workspaceFileSystem: ReturnType<typeof createLocalWorkspaceFileSystem>;
+  workspaceExecutionProvider: {
+    acquire(input: { workspace: WorkspaceRecord }): Promise<WorkspaceExecutionLease>;
+  };
+  workspaceFileAccessProvider: {
+    acquire(input: { workspace: WorkspaceRecord }): Promise<WorkspaceFileAccessLease>;
+  };
   diagnostics(): SandboxHostDiagnostics;
   maintain(options: { idleBefore: string }): Promise<void>;
   beginDrain(): Promise<void>;
@@ -87,24 +93,25 @@ export function createMaterializationSandboxHost(options: {
 }): SandboxHost {
   const manager = options.materializationManager;
   return {
+    providerKind: "self_hosted",
     workspaceCommandExecutor: createLocalWorkspaceCommandExecutor(),
     workspaceFileSystem: createLocalWorkspaceFileSystem(),
     workspaceExecutionProvider: {
-      async acquire({ workspace }) {
+      async acquire({ workspace }: { workspace: WorkspaceRecord }) {
         return materializedExecutionLease(manager, workspace);
       }
     },
     workspaceFileAccessProvider: {
-      async acquire({ workspace }) {
+      async acquire({ workspace }: { workspace: WorkspaceRecord }) {
         return materializedFileAccessLease(manager, workspace);
       }
     },
     diagnostics() {
       return {
         materialization: manager.diagnostics()
-      };
+      } satisfies SandboxHostDiagnostics;
     },
-    async maintain({ idleBefore }) {
+    async maintain({ idleBefore }: { idleBefore: string }) {
       await manager.refreshLeases();
       await manager.flushIdleCopies({ idleBefore });
       await manager.evictIdleCopies({ idleBefore });

@@ -225,8 +225,6 @@ export function createWorkerHost(options: {
     config: options.config,
     processKind: options.processKind
   });
-  const getRun = options.runtimeService.getRun;
-  const recoverStaleRuns = options.runtimeService.recoverStaleRuns;
   const poolOptions: ConstructorParameters<typeof RedisRunWorkerPool>[0] = {
     queue: options.redisRunQueue,
     queueFactory: () =>
@@ -235,18 +233,18 @@ export function createWorkerHost(options: {
       }),
     runtimeService: {
       processQueuedRun: (runId) => options.runtimeService.processQueuedRun(runId),
-      ...(getRun
+      ...(options.runtimeService.getRun
         ? {
             describeQueuedRun: async (runId: string) => {
-              const run = await getRun(runId);
+              const run = await options.runtimeService.getRun!(runId);
               return run ? { workspaceId: run.workspaceId } : undefined;
             }
           }
         : {}),
-      ...(recoverStaleRuns
+      ...(options.runtimeService.recoverStaleRuns
         ? {
             recoverStaleRuns: (input?: { staleBefore?: string | undefined; limit?: number | undefined }) =>
-              recoverStaleRuns(input)
+              options.runtimeService.recoverStaleRuns!(input)
           }
         : {})
     },

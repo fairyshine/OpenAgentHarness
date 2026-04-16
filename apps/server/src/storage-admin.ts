@@ -325,6 +325,9 @@ export function createStorageAdmin(options: {
   workerRegistry?: WorkerRegistryInspector | undefined;
   workspacePlacementRegistry?: WorkspacePlacementRegistry | undefined;
 }): StorageAdmin {
+  type PlacementEntry = Awaited<ReturnType<NonNullable<typeof options.workspacePlacementRegistry>["getByWorkspaceId"]>> & {
+    preferredWorkerId?: string | undefined;
+  };
   const keyPrefix = options.keyPrefix ?? "oah";
   const postgresPool = options.postgresPool;
   const postgresConfigured = Boolean(postgresPool);
@@ -769,6 +772,7 @@ export function createStorageAdmin(options: {
       const normalizedWorkspaceId = input.workspaceId?.trim();
       let normalizedUserId = input.userId?.trim();
       let normalizedOwnerWorkerId = input.ownerWorkerId?.trim();
+      let normalizedPreferredWorkerId: string | undefined;
       let workerUserAffinities:
         | Array<{
             workerId: string;
@@ -778,11 +782,12 @@ export function createStorageAdmin(options: {
 
       if (options.workspacePlacementRegistry) {
         const targetPlacement = normalizedWorkspaceId
-          ? await options.workspacePlacementRegistry.getByWorkspaceId(normalizedWorkspaceId)
+          ? ((await options.workspacePlacementRegistry.getByWorkspaceId(normalizedWorkspaceId)) as PlacementEntry)
           : undefined;
 
         normalizedUserId ||= targetPlacement?.userId?.trim();
         normalizedOwnerWorkerId ||= targetPlacement?.ownerWorkerId?.trim();
+        normalizedPreferredWorkerId ||= targetPlacement?.preferredWorkerId?.trim();
 
         if (normalizedUserId) {
           const workerCounts = new Map<string, number>();
@@ -819,6 +824,7 @@ export function createStorageAdmin(options: {
         ...(normalizedWorkspaceId ? { workspaceId: normalizedWorkspaceId } : {}),
         ...(normalizedUserId ? { userId: normalizedUserId } : {}),
         ...(workerUserAffinities ? { workerUserAffinities } : {}),
+        ...(normalizedPreferredWorkerId ? { preferredWorkerId: normalizedPreferredWorkerId } : {}),
         ...(normalizedOwnerWorkerId ? { ownerWorkerId: normalizedOwnerWorkerId } : {})
       });
     },

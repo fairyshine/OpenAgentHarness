@@ -224,8 +224,48 @@ Status:
 
 Status:
 
-- design accepted
-- implementation pending
+- done
+
+Implemented so far:
+
+- controller snapshots now expose first-class placement summaries rather than only replica counts
+- controller now distinguishes placement ownership on healthy / late / missing workers
+- controller scale-down is blocked while placement ownership is still unstable
+- controller now emits placement policy signals covering:
+  - unassigned workspaces
+  - missing / late / draining owner workers
+  - users spanning multiple workers
+  - workers whose placement ref-load exceeds the soft slots-per-pod capacity
+- controller can now surface `placement_attention` even when replica count stays steady, so placement governance is no longer invisible behind scale-only reasons
+- controller snapshots now also emit structured placement recommendations such as:
+  - assign unassigned workspaces
+  - recover missing owners
+  - reassign late owners
+  - finish draining owners
+  - consolidate user affinity
+  - rebalance workers above soft placement capacity
+- placement recommendations now include representative workspace / worker / user samples so the control plane output can feed concrete rebalance and recovery workflows later
+- controller now emits a placement action-plan shape on top of recommendations, including:
+  - execution phase (`stabilize` / `handoff` / `optimize`)
+  - blocker type
+  - next suggested item
+  - concrete workspace / worker / user scopes for follow-up
+- controller now also derives machine-actionable placement execution operations from live placement state, rather than stopping at descriptive recommendations
+- an optional placement executor can now perform the first safe ownership-handoff actions:
+  - release placements that still point to missing owners
+  - release placements on draining / stopping owners
+  - release idle placements on late owners while skipping still-active workspaces
+- controller snapshots and metrics now expose placement execution results (`attempted` / `applied` / `skipped` / `failed`) so remediation is observable
+- controller runtime wiring now supports enabling these placement actions explicitly via `OAH_CONTROLLER_PLACEMENT_ACTIONS_ENABLED`
+- controller placement execution now also selects concrete target workers using the same core inputs the rest of OAH uses:
+  - worker health
+  - drain state
+  - workspace affinity
+  - user affinity
+  - soft-capacity pressure
+- placement state can now persist controller handoff hints via `preferredWorkerId`, so reassignment is no longer just "drop ownership and hope"
+- unassigned workspaces, late owners, user-affinity splits, and soft-capacity hot spots can now all produce target-worker hints instead of only descriptive recommendations
+- Redis worker affinity summaries and storage admin inspection now surface controller-target reasons directly, making placement handoff visible outside the controller loop
 
 ### Phase C: Workspace Placement State
 
@@ -261,7 +301,24 @@ Implemented so far:
 
 Status:
 
-- in planning
+- done
+
+Implemented so far:
+
+- `runtime-core` now carries a first-class `SandboxHost` contract alongside the existing execution / file-access provider seam
+- the shared host contract now includes:
+  - provider kind (`self_hosted` / `e2b_compatible`)
+  - workspace command execution
+  - workspace file access
+  - workspace execution lease acquisition
+  - host diagnostics
+  - host maintenance / drain / close lifecycle
+- the materialization-backed worker host is now the first concrete implementation of that contract
+- `api-server` bootstrap now treats sandbox host bindings as a single host surface instead of an ad-hoc group of separate runtime injections
+- worker execution semantics remain unchanged:
+  - `workspace -> owner worker` is still the truth boundary
+  - materialization-backed local copies are still the active read/write truth while mounted on the owner worker
+  - drain / idle flush / idle eviction semantics are unchanged
 
 ### Phase E: E2B-Compatible Host Adapter
 
@@ -271,15 +328,37 @@ Status:
 
 Status:
 
-- future
+- done
 
-## 6. Immediate Next Tasks
+Implemented so far:
 
-1. Implement placement-aware controller logic on top of the new unified naming.
-2. Keep worker ownership and sticky routing unchanged while controller scope expands.
-3. Define a minimal `Sandbox Host API` around the existing worker execution / file-access seam.
-4. Keep the self-hosted sandbox pod as the first concrete backend for that API.
-5. Delay a real E2B host adapter until the host API and placement semantics are stable.
+- server bootstrap now accepts an injected sandbox host factory, so non-self-hosted backends can plug in without rewriting runtime bootstrap
+- a first `createE2BCompatibleSandboxHost(...)` adapter now exists for bridging an E2B-style remote sandbox service into OAH's `SandboxHost` contract
+- that adapter now covers the OAH subset we actually need:
+  - execution lease acquisition
+  - file-access lease acquisition
+  - foreground / process / background command execution
+  - file stat / read / readdir / mkdir / write / rm / rename
+  - diagnostics / maintain / beginDrain / close lifecycle
+- the adapter uses a virtual sandbox path boundary so runtime-core and server code can keep using normal workspace path semantics while the backend remains remote
+- E2B compatibility remains optional and adapter-scoped:
+  - self-hosted materialization remains the default backend
+  - bootstrap injection is the extension point
+  - ownership truth and OSS semantics remain unchanged
+
+## 6. Completion Audit
+
+Current state:
+
+- `Phase A-E` are implemented at the architecture / contract layer.
+- placement hints already feed real runtime queueing paths via `preferredWorkerId`, not only storage/admin inspection.
+- worker ownership, sticky routing, self-hosted default backend, and adapter-scoped E2B compatibility remain intact.
+
+The main remaining follow-up is:
+
+1. Add a production-grade remote sandbox backend behind the existing `createE2BCompatibleSandboxHost(...)` adapter, instead of stopping at the adapter contract plus test/dummy bridge surface.
+
+That means this roadmap is largely complete, but not fully closed if the goal is "remote sandbox backend ready for real production traffic".
 
 ## 7. Non-Goals Right Now
 

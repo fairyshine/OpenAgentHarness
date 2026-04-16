@@ -231,6 +231,12 @@ describe("workspace materialization", () => {
         async assignUser() {
           return undefined;
         },
+        async setPreferredWorker() {
+          return undefined;
+        },
+        async releaseOwnership() {
+          return undefined;
+        },
         async listAll() {
           return [];
         },

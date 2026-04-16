@@ -317,6 +317,12 @@ describe("storage admin", () => {
         async assignUser() {
           return undefined;
         },
+        async setPreferredWorker() {
+          return undefined;
+        },
+        async releaseOwnership() {
+          return undefined;
+        },
         async listAll() {
           return [
             {
@@ -373,6 +379,89 @@ describe("storage admin", () => {
     await storageAdmin.close();
   });
 
+  it("surfaces controller-target worker hints in worker affinity summaries", async () => {
+    const storageAdmin = createStorageAdmin({
+      redisAvailable: true,
+      redisEventBusEnabled: true,
+      redisRunQueueEnabled: true,
+      workerRegistry: {
+        async listActive() {
+          return [
+            {
+              workerId: "worker_1",
+              processKind: "standalone",
+              state: "idle",
+              health: "healthy",
+              lastSeenAt: "2026-04-15T00:00:00.000Z",
+              leaseTtlMs: 15_000,
+              expiresAt: "2026-04-15T00:00:15.000Z",
+              lastSeenAgeMs: 250
+            },
+            {
+              workerId: "worker_2",
+              processKind: "standalone",
+              state: "idle",
+              health: "healthy",
+              lastSeenAt: "2026-04-15T00:00:01.000Z",
+              leaseTtlMs: 15_000,
+              expiresAt: "2026-04-15T00:00:16.000Z",
+              lastSeenAgeMs: 150
+            }
+          ];
+        },
+        async close() {}
+      },
+      workspacePlacementRegistry: {
+        async upsert() {
+          return undefined;
+        },
+        async assignUser() {
+          return undefined;
+        },
+        async setPreferredWorker() {
+          return undefined;
+        },
+        async releaseOwnership() {
+          return undefined;
+        },
+        async listAll() {
+          return [
+            {
+              workspaceId: "ws_targeted",
+              version: "live",
+              preferredWorkerId: "worker_2",
+              preferredWorkerReason: "controller_target" as const,
+              state: "unassigned" as const,
+              updatedAt: "2026-04-15T00:00:02.000Z"
+            }
+          ];
+        },
+        async getByWorkspaceId(workspaceId) {
+          return workspaceId === "ws_targeted"
+            ? {
+                workspaceId,
+                version: "live",
+                preferredWorkerId: "worker_2",
+                preferredWorkerReason: "controller_target" as const,
+                state: "unassigned" as const,
+                updatedAt: "2026-04-15T00:00:02.000Z"
+              }
+            : undefined;
+        }
+      }
+    });
+
+    const affinity = await storageAdmin.redisWorkerAffinity({
+      workspaceId: "ws_targeted"
+    });
+
+    expect(affinity.controllerTargetWorkerId).toBe("worker_2");
+    expect(affinity.preferredWorkerId).toBe("worker_2");
+    expect(affinity.candidates[0]?.reasons).toContain("controller_target");
+
+    await storageAdmin.close();
+  });
+
   it("lists workspace placement state from the placement registry", async () => {
     const storageAdmin = createStorageAdmin({
       redisAvailable: true,
@@ -383,6 +472,12 @@ describe("storage admin", () => {
           return undefined;
         },
         async assignUser() {
+          return undefined;
+        },
+        async setPreferredWorker() {
+          return undefined;
+        },
+        async releaseOwnership() {
           return undefined;
         },
         async listAll() {

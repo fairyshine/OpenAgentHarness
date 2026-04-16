@@ -1,4 +1,5 @@
 export type RedisWorkerAffinityReason =
+  | "controller_target"
   | "owner_worker"
   | "same_session"
   | "same_workspace"
@@ -45,6 +46,7 @@ export interface RedisWorkerAffinityCandidate {
 
 export interface RedisWorkerAffinitySummary {
   preferredWorkerId?: string | undefined;
+  controllerTargetWorkerId?: string | undefined;
   sessionAffinityWorkerId?: string | undefined;
   workspaceAffinityWorkerId?: string | undefined;
   userAffinityWorkerId?: string | undefined;
@@ -73,6 +75,7 @@ export function buildRedisWorkerAffinitySummary(input: {
       }>
     | undefined;
   ownerWorkerId?: string | undefined;
+  preferredWorkerId?: string | undefined;
 }): RedisWorkerAffinitySummary {
   const workerUserAffinityCounts = new Map<string, number>(
     (input.workerUserAffinities ?? []).map((entry) => [entry.workerId, entry.workspaceCount])
@@ -87,12 +90,14 @@ export function buildRedisWorkerAffinitySummary(input: {
   const sessionAffinityWorkerId = candidates.find((candidate) => candidate.matchingSessionSlots > 0)?.workerId;
   const workspaceAffinityWorkerId = candidates.find((candidate) => candidate.matchingWorkspaceSlots > 0)?.workerId;
   const userAffinityWorkerId = candidates.find((candidate) => candidate.matchingUserWorkspaces > 0)?.workerId;
+  const controllerTargetWorkerId = candidates.find((candidate) => candidate.reasons.includes("controller_target"))?.workerId;
   const preferredWorkerId =
     candidates.find((candidate) => candidate.health === "healthy" && candidate.state !== "stopping")?.workerId ??
     candidates[0]?.workerId;
 
   return {
     ...(preferredWorkerId ? { preferredWorkerId } : {}),
+    ...(controllerTargetWorkerId ? { controllerTargetWorkerId } : {}),
     ...(sessionAffinityWorkerId ? { sessionAffinityWorkerId } : {}),
     ...(workspaceAffinityWorkerId ? { workspaceAffinityWorkerId } : {}),
     ...(userAffinityWorkerId ? { userAffinityWorkerId } : {}),
@@ -110,10 +115,16 @@ function buildRedisWorkerAffinityCandidate(
     workspaceId?: string | undefined;
     userId?: string | undefined;
     ownerWorkerId?: string | undefined;
+    preferredWorkerId?: string | undefined;
   }
 ): RedisWorkerAffinityCandidate {
   const reasons: RedisWorkerAffinityReason[] = [];
   let score = 0;
+
+  if (input.preferredWorkerId && worker.workerId === input.preferredWorkerId) {
+    reasons.push("controller_target");
+    score += 320;
+  }
 
   if (input.ownerWorkerId && worker.workerId === input.ownerWorkerId) {
     reasons.push("owner_worker");

@@ -654,6 +654,8 @@ export const storageRedisWorkspacePlacementSchema = z.object({
   userId: z.string().optional(),
   ownerWorkerId: z.string().optional(),
   ownerBaseUrl: z.string().optional(),
+  preferredWorkerId: z.string().optional(),
+  preferredWorkerReason: z.enum(["controller_target"]).optional(),
   state: storageRedisWorkspacePlacementStateSchema,
   sourceKind: z.enum(["object_store", "local_directory"]).optional(),
   localPath: z.string().optional(),
@@ -922,6 +924,7 @@ export const workerStateSchema = z.enum(["starting", "idle", "busy", "stopping"]
 export const workerHealthSchema = z.enum(["healthy", "late"]);
 export const sessionSerialBoundarySchema = z.literal("session");
 export const storageRedisWorkerAffinityReasonSchema = z.enum([
+  "controller_target",
   "owner_worker",
   "same_session",
   "same_workspace",
@@ -951,6 +954,7 @@ export const storageRedisWorkerAffinityCandidateSchema = z.object({
 });
 export const storageRedisWorkerAffinitySchema = z.object({
   preferredWorkerId: z.string().optional(),
+  controllerTargetWorkerId: z.string().optional(),
   sessionAffinityWorkerId: z.string().optional(),
   workspaceAffinityWorkerId: z.string().optional(),
   userAffinityWorkerId: z.string().optional(),

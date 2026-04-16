@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { AppError, type WorkspaceRecord } from "@oah/runtime-core";
+import {
+  AppError,
+  type WorkspaceRecord
+} from "@oah/runtime-core";
 
+import { createE2BCompatibleSandboxHost } from "../apps/server/src/bootstrap/e2b-compatible-sandbox-host.ts";
 import { createMaterializationSandboxHost } from "../apps/server/src/bootstrap/sandbox-host.ts";
 import { WorkspaceMaterializationDrainingError } from "../apps/server/src/bootstrap/workspace-materialization.ts";
 
@@ -67,6 +71,12 @@ describe("materialization sandbox host", () => {
       } as never
     });
 
+    expect(host.providerKind).toBe("self_hosted");
+    expect(host.workspaceCommandExecutor).toBeDefined();
+    expect(host.workspaceFileSystem).toBeDefined();
+    expect(host.workspaceExecutionProvider).toBeDefined();
+    expect(host.workspaceFileAccessProvider).toBeDefined();
+
     const lease = await host.workspaceExecutionProvider.acquire({
       workspace: buildWorkspace(),
       run: {
@@ -126,5 +136,190 @@ describe("materialization sandbox host", () => {
       code: "workspace_materialization_draining",
       message: "draining"
     });
+  });
+
+  it("adapts an e2b-compatible sandbox service into the sandbox host contract", async () => {
+    const operations: Array<Record<string, unknown>> = [];
+    const host = createE2BCompatibleSandboxHost({
+      service: {
+        async acquireExecution() {
+          operations.push({ kind: "acquire_execution" });
+          return {
+            sandboxId: "sandbox-1",
+            rootPath: "/workspace/ws_test",
+            async release(options) {
+              operations.push({ kind: "release_execution", dirty: options?.dirty ?? false });
+            }
+          };
+        },
+        async acquireFileAccess() {
+          operations.push({ kind: "acquire_file_access" });
+          return {
+            sandboxId: "sandbox-1",
+            rootPath: "/workspace/ws_test",
+            async release(options) {
+              operations.push({ kind: "release_file_access", dirty: options?.dirty ?? false });
+            }
+          };
+        },
+        async runCommand(input) {
+          operations.push({ kind: "run_command", sandboxId: input.sandboxId, cwd: input.cwd, command: input.command });
+          return {
+            stdout: "ok",
+            stderr: "",
+            exitCode: 0
+          };
+        },
+        async runProcess(input) {
+          operations.push({
+            kind: "run_process",
+            sandboxId: input.sandboxId,
+            cwd: input.cwd,
+            executable: input.executable,
+            args: input.args
+          });
+          return {
+            stdout: "process",
+            stderr: "",
+            exitCode: 0
+          };
+        },
+        async runBackground(input) {
+          operations.push({ kind: "run_background", sandboxId: input.sandboxId, command: input.command });
+          return {
+            outputPath: "/tmp/log",
+            taskId: "task-1",
+            pid: 123
+          };
+        },
+        async stat(input) {
+          operations.push({ kind: "stat", path: input.path });
+          return {
+            kind: "directory",
+            size: 0,
+            mtimeMs: 1,
+            birthtimeMs: 1
+          };
+        },
+        async readFile(input) {
+          operations.push({ kind: "read_file", path: input.path });
+          return Buffer.from("hello");
+        },
+        async readdir(input) {
+          operations.push({ kind: "readdir", path: input.path });
+          return [{ name: "README.md", kind: "file" }];
+        },
+        async mkdir(input) {
+          operations.push({ kind: "mkdir", path: input.path, recursive: input.recursive ?? false });
+        },
+        async writeFile(input) {
+          operations.push({ kind: "write_file", path: input.path, size: input.data.length });
+        },
+        async rm(input) {
+          operations.push({ kind: "rm", path: input.path, recursive: input.recursive ?? false });
+        },
+        async rename(input) {
+          operations.push({ kind: "rename", sourcePath: input.sourcePath, targetPath: input.targetPath });
+        },
+        async realpath(input) {
+          operations.push({ kind: "realpath", path: input.path });
+          return input.path;
+        },
+        diagnostics() {
+          return {
+            provider: "fake-e2b"
+          };
+        },
+        async maintain(options) {
+          operations.push({ kind: "maintain", idleBefore: options.idleBefore });
+        },
+        async beginDrain() {
+          operations.push({ kind: "begin_drain" });
+        },
+        async close() {
+          operations.push({ kind: "close" });
+        }
+      }
+    });
+
+    const executionLease = await host.workspaceExecutionProvider.acquire({
+      workspace: buildWorkspace(),
+      run: {
+        id: "run_1",
+        sessionId: "ses_1",
+        workspaceId: "ws_test",
+        status: "queued",
+        triggerType: "message",
+        effectiveAgentName: "main",
+        createdAt: "2026-04-15T00:00:00.000Z",
+        updatedAt: "2026-04-15T00:00:00.000Z"
+      }
+    });
+    expect(host.providerKind).toBe("e2b_compatible");
+    expect(executionLease.workspace.rootPath).toBe("/__oah_sandbox__/sandbox-1/workspace/ws_test");
+
+    await host.workspaceCommandExecutor.runForeground({
+      workspace: executionLease.workspace,
+      command: "pwd"
+    });
+    await host.workspaceCommandExecutor.runProcess({
+      workspace: executionLease.workspace,
+      executable: "node",
+      args: ["-v"]
+    });
+    await host.workspaceCommandExecutor.runBackground({
+      workspace: executionLease.workspace,
+      command: "npm test",
+      sessionId: "ses_1"
+    });
+    await host.workspaceFileSystem.realpath("/__oah_sandbox__/sandbox-1/workspace/ws_test");
+    await host.workspaceFileSystem.stat("/__oah_sandbox__/sandbox-1/workspace/ws_test");
+    await host.workspaceFileSystem.readFile("/__oah_sandbox__/sandbox-1/workspace/ws_test/README.md");
+    await host.workspaceFileSystem.readdir("/__oah_sandbox__/sandbox-1/workspace/ws_test");
+    await host.workspaceFileSystem.mkdir("/__oah_sandbox__/sandbox-1/workspace/ws_test/tmp", { recursive: true });
+    await host.workspaceFileSystem.writeFile("/__oah_sandbox__/sandbox-1/workspace/ws_test/README.md", Buffer.from("x"));
+    await host.workspaceFileSystem.rm("/__oah_sandbox__/sandbox-1/workspace/ws_test/tmp", { recursive: true, force: true });
+    await host.workspaceFileSystem.rename(
+      "/__oah_sandbox__/sandbox-1/workspace/ws_test/a.txt",
+      "/__oah_sandbox__/sandbox-1/workspace/ws_test/b.txt"
+    );
+    await host.maintain({
+      idleBefore: "2026-04-15T00:00:00.000Z"
+    });
+    await host.beginDrain();
+    await executionLease.release({ dirty: true });
+
+    const fileLease = await host.workspaceFileAccessProvider.acquire({
+      workspace: buildWorkspace(),
+      access: "write",
+      path: "README.md"
+    });
+    await fileLease.release();
+    await host.close();
+
+    expect(host.diagnostics()).toEqual({
+      provider: "fake-e2b"
+    });
+    expect(operations).toEqual(
+      expect.arrayContaining([
+        { kind: "acquire_execution" },
+        { kind: "run_command", sandboxId: "sandbox-1", cwd: "/workspace/ws_test", command: "pwd" },
+        { kind: "run_process", sandboxId: "sandbox-1", cwd: "/workspace/ws_test", executable: "node", args: ["-v"] },
+        { kind: "run_background", sandboxId: "sandbox-1", command: "npm test" },
+        { kind: "stat", path: "/workspace/ws_test" },
+        { kind: "read_file", path: "/workspace/ws_test/README.md" },
+        { kind: "readdir", path: "/workspace/ws_test" },
+        { kind: "mkdir", path: "/workspace/ws_test/tmp", recursive: true },
+        { kind: "write_file", path: "/workspace/ws_test/README.md", size: 1 },
+        { kind: "rm", path: "/workspace/ws_test/tmp", recursive: true },
+        { kind: "rename", sourcePath: "/workspace/ws_test/a.txt", targetPath: "/workspace/ws_test/b.txt" },
+        { kind: "maintain", idleBefore: "2026-04-15T00:00:00.000Z" },
+        { kind: "begin_drain" },
+        { kind: "release_execution", dirty: true },
+        { kind: "acquire_file_access" },
+        { kind: "release_file_access", dirty: false },
+        { kind: "close" }
+      ])
+    );
   });
 });

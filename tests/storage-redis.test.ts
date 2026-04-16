@@ -12,6 +12,7 @@ import {
   buildRedisRunWorkerPoolDecision,
   buildRedisRunWorkerPoolSnapshot,
   calculateRedisWorkerPoolSuggestion,
+  createRedisSessionRunQueue,
   formatRedisRunWorkerPoolRebalanceLog,
   summarizeRedisRunWorkerPoolPressure,
   shouldLogRedisRunWorkerPoolRebalance,
@@ -171,6 +172,124 @@ function createQueueStub(overrides: Record<string, unknown> = {}) {
       return undefined;
     },
     ...overrides
+  };
+}
+
+function createInMemoryQueueRedisClients() {
+  const lists = new Map<string, string[]>();
+  const strings = new Map<string, string>();
+
+  const commands = {
+    isOpen: true,
+    duplicate() {
+      return blocking as never;
+    },
+    async connect() {
+      return undefined;
+    },
+    async quit() {
+      commands.isOpen = false;
+      return undefined;
+    },
+    async ping() {
+      return "PONG";
+    },
+    async lLen(key: string) {
+      return lists.get(key)?.length ?? 0;
+    },
+    async lRange(key: string, start: number, end: number) {
+      const values = lists.get(key) ?? [];
+      const normalizedEnd = end < 0 ? values.length - 1 : end;
+      return values.slice(start, normalizedEnd + 1);
+    },
+    async mGet(keys: string[]) {
+      return keys.map((key) => strings.get(key) ?? null);
+    },
+    async eval(_script: string, input: { keys: string[]; arguments?: string[] }) {
+      const args = input.arguments ?? [];
+
+      if (input.keys.length === 5 && args.length === 5) {
+        const [sessionQueueKey, readyQueueKey, readyAtKey, readyPriorityKey, preferredWorkerKey] = input.keys;
+        const [runId, sessionId, readyAtMs, priority, preferredWorkerId] = args;
+        const sessionQueue = lists.get(sessionQueueKey) ?? [];
+        sessionQueue.push(runId);
+        lists.set(sessionQueueKey, sessionQueue);
+
+        if (preferredWorkerId) {
+          strings.set(preferredWorkerKey, preferredWorkerId);
+        } else {
+          strings.delete(preferredWorkerKey);
+        }
+
+        if (sessionQueue.length === 1) {
+          if (!strings.has(readyAtKey)) {
+            strings.set(readyAtKey, readyAtMs);
+          }
+          strings.set(readyPriorityKey, priority);
+          const readyQueue = lists.get(readyQueueKey) ?? [];
+          if (!readyQueue.includes(sessionId)) {
+            if (priority === "subagent") {
+              readyQueue.unshift(sessionId);
+            } else {
+              readyQueue.push(sessionId);
+            }
+            lists.set(readyQueueKey, readyQueue);
+          }
+        }
+
+        return sessionQueue.length;
+      }
+
+      if (input.keys.length === 1 && args.length === 3) {
+        const [readyQueueKey] = input.keys;
+        const [sessionPrefix, preferredSuffix, workerId] = args;
+        const readyQueue = lists.get(readyQueueKey) ?? [];
+
+        for (const sessionId of readyQueue) {
+          const preferredWorkerId = strings.get(`${sessionPrefix}${sessionId}${preferredSuffix}`);
+          if (!workerId || !preferredWorkerId || preferredWorkerId === workerId) {
+            const index = readyQueue.indexOf(sessionId);
+            readyQueue.splice(index, 1);
+            lists.set(readyQueueKey, readyQueue);
+            return sessionId;
+          }
+        }
+
+        return null;
+      }
+
+      if (input.keys.length === 4 && args.length === 0) {
+        const [sessionQueueKey, readyAtKey, readyPriorityKey, preferredWorkerKey] = input.keys;
+        const sessionQueue = lists.get(sessionQueueKey) ?? [];
+        const runId = sessionQueue.shift();
+        lists.set(sessionQueueKey, sessionQueue);
+        if (!runId) {
+          return null;
+        }
+
+        if (sessionQueue.length === 0) {
+          strings.delete(readyAtKey);
+          strings.delete(readyPriorityKey);
+          strings.delete(preferredWorkerKey);
+        }
+
+        return runId;
+      }
+
+      throw new Error(`Unsupported eval invocation: keys=${input.keys.length} args=${args.length}`);
+    }
+  };
+
+  const blocking = {
+    ...commands,
+    async quit() {
+      return undefined;
+    }
+  };
+
+  return {
+    commands: commands as never,
+    blocking: blocking as never
   };
 }
 
@@ -541,6 +660,85 @@ describe("storage redis", () => {
     await expect(registry.listAll()).resolves.toEqual([entry]);
   });
 
+  it("can release workspace ownership while preserving placement affinity metadata", async () => {
+    const redis = createInMemoryRedisCommands();
+    const registry = new RedisWorkspacePlacementRegistry({
+      url: "redis://unused",
+      keyPrefix: "test",
+      commands: redis.commands
+    });
+
+    await registry.assignUser("ws_2", "user_2", {
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+    await registry.upsert({
+      workspaceId: "ws_2",
+      version: "live",
+      ownerWorkerId: "worker_2",
+      ownerBaseUrl: "http://worker-2.internal:8787",
+      state: "draining",
+      sourceKind: "object_store",
+      localPath: "/tmp/materialized/ws_2",
+      remotePrefix: "workspace/demo-2",
+      dirty: true,
+      refCount: 3,
+      lastActivityAt: "2026-04-01T00:00:03.000Z",
+      materializedAt: "2026-04-01T00:00:01.000Z",
+      updatedAt: "2026-04-01T00:00:04.000Z"
+    });
+
+    await registry.releaseOwnership("ws_2", {
+      state: "unassigned",
+      preferredWorkerId: "worker_2",
+      preferredWorkerReason: "controller_target",
+      updatedAt: "2026-04-01T00:00:05.000Z"
+    });
+
+    await expect(registry.getByWorkspaceId("ws_2")).resolves.toEqual({
+      workspaceId: "ws_2",
+      version: "live",
+      userId: "user_2",
+      preferredWorkerId: "worker_2",
+      preferredWorkerReason: "controller_target",
+      state: "unassigned",
+      sourceKind: "object_store",
+      remotePrefix: "workspace/demo-2",
+      dirty: false,
+      refCount: 0,
+      lastActivityAt: "2026-04-01T00:00:03.000Z",
+      updatedAt: "2026-04-01T00:00:05.000Z"
+    });
+  });
+
+  it("can set a preferred worker hint without changing ownership truth", async () => {
+    const redis = createInMemoryRedisCommands();
+    const registry = new RedisWorkspacePlacementRegistry({
+      url: "redis://unused",
+      keyPrefix: "test",
+      commands: redis.commands
+    });
+
+    await registry.upsert({
+      workspaceId: "ws_hint",
+      version: "live",
+      state: "unassigned",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+    await registry.setPreferredWorker("ws_hint", "worker_hint", {
+      overwrite: true,
+      updatedAt: "2026-04-01T00:00:01.000Z"
+    });
+
+    await expect(registry.getByWorkspaceId("ws_hint")).resolves.toEqual({
+      workspaceId: "ws_hint",
+      version: "live",
+      preferredWorkerId: "worker_hint",
+      preferredWorkerReason: "controller_target",
+      state: "unassigned",
+      updatedAt: "2026-04-01T00:00:01.000Z"
+    });
+  });
+
   it("prefers a workspace-affine worker when it still has idle slot capacity", () => {
     const affinity = buildRedisWorkerAffinitySummary({
       workspaceId: "ws_1",
@@ -645,6 +843,50 @@ describe("storage redis", () => {
       matchingUserWorkspaces: 2
     });
     expect(affinity.candidates[0]?.reasons).toContain("same_user");
+  });
+
+  it("prefers a controller-target worker hint over generic idle capacity", () => {
+    const affinity = buildRedisWorkerAffinitySummary({
+      workspaceId: "ws_4",
+      preferredWorkerId: "worker_2",
+      activeWorkers: [
+        {
+          workerId: "worker_1",
+          processKind: "standalone",
+          state: "idle",
+          health: "healthy"
+        },
+        {
+          workerId: "worker_2",
+          processKind: "standalone",
+          state: "idle",
+          health: "healthy"
+        }
+      ]
+    });
+
+    expect(affinity.controllerTargetWorkerId).toBe("worker_2");
+    expect(affinity.preferredWorkerId).toBe("worker_2");
+    expect(affinity.candidates[0]?.reasons).toContain("controller_target");
+  });
+
+  it("claims only sessions compatible with the current worker hint", async () => {
+    const clients = createInMemoryQueueRedisClients();
+    const queue = await createRedisSessionRunQueue({
+      url: "redis://memory/0",
+      commands: clients.commands,
+      blocking: clients.blocking
+    });
+
+    await queue.enqueue("ses_targeted", "run_targeted", {
+      preferredWorkerId: "worker_1"
+    });
+    await queue.enqueue("ses_shared", "run_shared");
+
+    await expect(queue.claimNextSession(20, { workerId: "worker_2" })).resolves.toBe("ses_shared");
+    await expect(queue.dequeueRun("ses_shared")).resolves.toBe("run_shared");
+    await expect(queue.claimNextSession(20, { workerId: "worker_1" })).resolves.toBe("ses_targeted");
+    await expect(queue.dequeueRun("ses_targeted")).resolves.toBe("run_targeted");
   });
 
   it("publishes worker leases and removes them on shutdown", async () => {

@@ -7,7 +7,13 @@ import {
   createRedisWorkspacePlacementRegistry
 } from "@oah/storage-redis";
 
-import { RedisController, resolveStandaloneControllerConfig } from "./controller.js";
+import {
+  type ControllerPlacementOwnershipRegistry,
+  createPlacementRegistryActionExecutor,
+  RedisController,
+  resolveStandaloneControllerConfig,
+  type ControllerLogger
+} from "./controller.js";
 import { createControllerLeaderElector, resolveControllerLeaderElectionConfig } from "./leader-election.js";
 import { createControllerObservabilityServer, resolveControllerObservabilityConfig } from "./observability.js";
 import { createWorkerReplicaTarget, resolveWorkerReplicaTargetConfig } from "./scale-target.js";
@@ -40,6 +46,15 @@ function parseConfigPath(argv: string[]): { path: string; explicit: boolean } {
   };
 }
 
+function isTruthyEnvValue(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 async function main() {
   const configPath = parseConfigPath(process.argv.slice(2));
   const config = await loadServerConfig(configPath.path);
@@ -58,31 +73,33 @@ async function main() {
       url: config.storage.redis_url
     })
   ]);
+  const controllerConfig = resolveStandaloneControllerConfig(config);
 
+  const logger: ControllerLogger = {
+    info(message) {
+      console.info(message);
+    },
+    warn(message, error) {
+      console.warn(message, error);
+    }
+  };
   const controller = new RedisController({
     queue,
     registry,
     placementRegistry,
-    config: resolveStandaloneControllerConfig(config),
+    placementExecutor: isTruthyEnvValue(process.env.OAH_CONTROLLER_PLACEMENT_ACTIONS_ENABLED)
+      ? createPlacementRegistryActionExecutor({
+          placementRegistry: placementRegistry as unknown as ControllerPlacementOwnershipRegistry,
+          slotsPerPod: controllerConfig.slotsPerPod,
+          logger
+        })
+      : undefined,
+    config: controllerConfig,
     scaleTarget: createWorkerReplicaTarget(resolveWorkerReplicaTargetConfig(config)),
-    logger: {
-      info(message) {
-        console.info(message);
-      },
-      warn(message, error) {
-        console.warn(message, error);
-      }
-    }
+    logger
   });
   const leaderElector = createControllerLeaderElector(resolveControllerLeaderElectionConfig(config), {
-    logger: {
-      info(message) {
-        console.info(message);
-      },
-      warn(message, error) {
-        console.warn(message, error);
-      }
-    },
+    logger,
     async onGainedLeadership() {
       controller.start({
         skipInitialEvaluation: true
@@ -101,14 +118,7 @@ async function main() {
     config: resolveControllerObservabilityConfig(),
     getLeaderElection: () => leaderElector.snapshot(),
     getController: () => controller.snapshot(),
-    logger: {
-      info(message) {
-        console.info(message);
-      },
-      warn(message, error) {
-        console.warn(message, error);
-      }
-    }
+    logger
   });
 
   const close = async () => {

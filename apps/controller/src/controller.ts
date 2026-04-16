@@ -1,5 +1,6 @@
 import type { ServerConfig } from "@oah/config";
 import {
+  buildRedisWorkerAffinitySummary,
   calculateRedisWorkerPoolSuggestion,
   type RedisWorkspacePlacementEntry,
   type RedisRunWorkerPoolRebalanceReason,
@@ -38,7 +39,8 @@ export interface StandaloneWorkerFleetSummary {
 
 export type ControllerRebalanceReason =
   | Exclude<RedisRunWorkerPoolRebalanceReason, "shutdown">
-  | "scale_down_blocked";
+  | "scale_down_blocked"
+  | "placement_attention";
 
 export interface ControllerScaleDownBlocker {
   replicaId: string;
@@ -112,6 +114,10 @@ export interface ControllerSnapshot {
   scaleUpCooldownRemainingMs: number;
   scaleDownCooldownRemainingMs: number;
   placement?: ControllerPlacementSummary | undefined;
+  placementPolicy?: ControllerPlacementPolicySummary | undefined;
+  placementRecommendations?: ControllerPlacementRecommendation[] | undefined;
+  placementActionPlan?: ControllerPlacementActionPlan | undefined;
+  placementExecution?: ControllerPlacementExecutionReport | undefined;
   scaleDownGate?: ControllerScaleDownGate | undefined;
   scaleTarget?: WorkerReplicaTargetResult | undefined;
   recentDecisions: ControllerDecision[];
@@ -135,6 +141,86 @@ export interface ControllerPlacementSummary {
   unassigned: number;
 }
 
+export interface ControllerPlacementPolicySummary {
+  attentionRequired: boolean;
+  unassignedWorkspaces: number;
+  missingOwnerWorkspaces: number;
+  lateOwnerWorkspaces: number;
+  drainingOwnerWorkspaces: number;
+  usersSpanningWorkers: number;
+  maxWorkersPerUser: number;
+  workersAboveSoftCapacity: number;
+  maxRefCountPerWorker: number;
+}
+
+export interface ControllerPlacementRecommendation {
+  kind:
+    | "assign_unassigned"
+    | "recover_missing_owner"
+    | "reassign_late_owner"
+    | "finish_draining_owner"
+    | "consolidate_user_affinity"
+    | "rebalance_soft_capacity";
+  priority: "high" | "medium";
+  workspaceCount: number;
+  workerCount?: number | undefined;
+  userCount?: number | undefined;
+  sampleWorkspaceIds?: string[] | undefined;
+  sampleWorkerIds?: string[] | undefined;
+  sampleUserIds?: string[] | undefined;
+  message: string;
+}
+
+export interface ControllerPlacementActionItem {
+  id: string;
+  phase: "stabilize" | "handoff" | "optimize";
+  kind: ControllerPlacementRecommendation["kind"];
+  priority: ControllerPlacementRecommendation["priority"];
+  blockers: string[];
+  workspaceIds?: string[] | undefined;
+  workerIds?: string[] | undefined;
+  userIds?: string[] | undefined;
+  summary: string;
+}
+
+export interface ControllerPlacementActionPlan {
+  totalItems: number;
+  highPriorityItems: number;
+  nextItem?: ControllerPlacementActionItem | undefined;
+  items: ControllerPlacementActionItem[];
+}
+
+export interface ControllerPlacementExecutionOperation {
+  id: string;
+  kind: ControllerPlacementRecommendation["kind"];
+  workspaceId: string;
+  ownerWorkerId?: string | undefined;
+  state: RedisWorkspacePlacementEntry["state"];
+  action: "release_ownership" | "set_preferred_worker";
+  reason:
+    | "owner_missing"
+    | "owner_late"
+    | "worker_draining"
+    | "unassigned_workspace"
+    | "user_affinity_split"
+    | "soft_capacity_exceeded";
+  targetWorkerId?: string | undefined;
+  targetWorkerReasons?: string[] | undefined;
+}
+
+export interface ControllerPlacementExecutionResult extends ControllerPlacementExecutionOperation {
+  status: "applied" | "skipped" | "failed";
+  message: string;
+}
+
+export interface ControllerPlacementExecutionReport {
+  attempted: number;
+  applied: number;
+  skipped: number;
+  failed: number;
+  operations: ControllerPlacementExecutionResult[];
+}
+
 export interface ControllerLogger {
   info?(message: string): void;
   warn(message: string, error?: unknown): void;
@@ -145,6 +231,41 @@ export type ControllerHealthProbe = (input: {
   ownerBaseUrl: string;
   workers: RedisWorkerRegistryEntry[];
 }) => Promise<ControllerWorkerHealth>;
+
+export interface ControllerPlacementExecutor {
+  execute(input: {
+    timestamp: string;
+    placements: RedisWorkspacePlacementEntry[];
+    activeWorkers: RedisWorkerRegistryEntry[];
+  }): Promise<ControllerPlacementExecutionReport | undefined>;
+  close?(): Promise<void>;
+}
+
+export interface ControllerPlacementOwnershipRegistry extends WorkspacePlacementRegistry {
+  setPreferredWorker(
+    workspaceId: string,
+    preferredWorkerId: string,
+    options?: {
+      reason?: "controller_target" | undefined;
+      overwrite?: boolean | undefined;
+      updatedAt?: string | undefined;
+    }
+  ): Promise<void>;
+  releaseOwnership(
+    workspaceId: string,
+    options?: {
+      state?: RedisWorkspacePlacementEntry["state"] | undefined;
+      preferredWorkerId?: string | undefined;
+      preferredWorkerReason?: "controller_target" | undefined;
+      updatedAt?: string | undefined;
+    }
+  ): Promise<void>;
+}
+
+interface ControllerWorkspacePlacementEntry extends RedisWorkspacePlacementEntry {
+  preferredWorkerId?: string | undefined;
+  preferredWorkerReason?: "controller_target" | undefined;
+}
 
 function readEnv(names: string | string[]): string | undefined {
   for (const name of Array.isArray(names) ? names : [names]) {
@@ -389,10 +510,593 @@ export function summarizeWorkspacePlacements(
   };
 }
 
+export function summarizePlacementPolicy(input: {
+  placements: RedisWorkspacePlacementEntry[] | undefined;
+  activeWorkers: RedisWorkerRegistryEntry[];
+  slotsPerPod: number;
+}): ControllerPlacementPolicySummary | undefined {
+  const { placements, activeWorkers } = input;
+  if (!placements || placements.length === 0) {
+    return undefined;
+  }
+
+  const workerStateById = new Map(activeWorkers.map((worker) => [worker.workerId, worker.state]));
+  const workerHealthById = new Map(activeWorkers.map((worker) => [worker.workerId, worker.health]));
+  const userWorkers = new Map<string, Set<string>>();
+  const workerRefLoads = new Map<string, number>();
+  let unassignedWorkspaces = 0;
+  let missingOwnerWorkspaces = 0;
+  let lateOwnerWorkspaces = 0;
+  let drainingOwnerWorkspaces = 0;
+
+  for (const placement of placements) {
+    if (placement.state === "unassigned" || !placement.ownerWorkerId) {
+      unassignedWorkspaces += 1;
+      continue;
+    }
+
+    const workerHealth = workerHealthById.get(placement.ownerWorkerId);
+    if (!workerHealth) {
+      missingOwnerWorkspaces += 1;
+      continue;
+    }
+    if (workerHealth === "late") {
+      lateOwnerWorkspaces += 1;
+    }
+    if (workerStateById.get(placement.ownerWorkerId) === "stopping" || placement.state === "draining") {
+      drainingOwnerWorkspaces += 1;
+    }
+
+    if (placement.userId && placement.state !== "evicted") {
+      const workers = userWorkers.get(placement.userId) ?? new Set<string>();
+      workers.add(placement.ownerWorkerId);
+      userWorkers.set(placement.userId, workers);
+    }
+
+    if (placement.state !== "evicted") {
+      const refLoad =
+        typeof placement.refCount === "number" ? Math.max(0, placement.refCount) : placement.state === "active" ? 1 : 0;
+      workerRefLoads.set(placement.ownerWorkerId, (workerRefLoads.get(placement.ownerWorkerId) ?? 0) + refLoad);
+    }
+  }
+
+  const userWorkerCounts = [...userWorkers.values()].map((workers) => workers.size);
+  const maxWorkersPerUser = userWorkerCounts.length > 0 ? Math.max(...userWorkerCounts) : 0;
+  const usersSpanningWorkers = userWorkerCounts.filter((count) => count > 1).length;
+  const maxRefCountPerWorker = workerRefLoads.size > 0 ? Math.max(...workerRefLoads.values()) : 0;
+  const softCapacity = Math.max(1, input.slotsPerPod);
+  const workersAboveSoftCapacity = [...workerRefLoads.values()].filter((load) => load > softCapacity).length;
+
+  return {
+    attentionRequired:
+      unassignedWorkspaces > 0 ||
+      missingOwnerWorkspaces > 0 ||
+      lateOwnerWorkspaces > 0 ||
+      drainingOwnerWorkspaces > 0 ||
+      usersSpanningWorkers > 0 ||
+      workersAboveSoftCapacity > 0,
+    unassignedWorkspaces,
+    missingOwnerWorkspaces,
+    lateOwnerWorkspaces,
+    drainingOwnerWorkspaces,
+    usersSpanningWorkers,
+    maxWorkersPerUser,
+    workersAboveSoftCapacity,
+    maxRefCountPerWorker
+  };
+}
+
+export function summarizePlacementRecommendations(input: {
+  placementSummary?: ControllerPlacementSummary | undefined;
+  placementPolicy?: ControllerPlacementPolicySummary | undefined;
+  placements?: RedisWorkspacePlacementEntry[] | undefined;
+  activeWorkers?: RedisWorkerRegistryEntry[] | undefined;
+  slotsPerPod?: number | undefined;
+}): ControllerPlacementRecommendation[] | undefined {
+  const placementSummary = input.placementSummary;
+  const placementPolicy = input.placementPolicy;
+  if (!placementSummary && !placementPolicy) {
+    return undefined;
+  }
+
+  const placements = input.placements ?? [];
+  const workerHealthById = new Map((input.activeWorkers ?? []).map((worker) => [worker.workerId, worker.health]));
+  const userWorkers = new Map<string, Set<string>>();
+  const workerRefLoads = new Map<string, number>();
+  const softCapacity = Math.max(1, input.slotsPerPod ?? 1);
+
+  for (const placement of placements) {
+    if (placement.userId && placement.ownerWorkerId && placement.state !== "evicted" && placement.state !== "unassigned") {
+      const workers = userWorkers.get(placement.userId) ?? new Set<string>();
+      workers.add(placement.ownerWorkerId);
+      userWorkers.set(placement.userId, workers);
+    }
+    if (placement.ownerWorkerId && placement.state !== "evicted" && placement.state !== "unassigned") {
+      const refLoad =
+        typeof placement.refCount === "number" ? Math.max(0, placement.refCount) : placement.state === "active" ? 1 : 0;
+      workerRefLoads.set(placement.ownerWorkerId, (workerRefLoads.get(placement.ownerWorkerId) ?? 0) + refLoad);
+    }
+  }
+
+  const spanningUsers = new Set(
+    [...userWorkers.entries()].filter(([, workers]) => workers.size > 1).map(([userId]) => userId)
+  );
+  const overloadedWorkers = new Set(
+    [...workerRefLoads.entries()].filter(([, load]) => load > softCapacity).map(([workerId]) => workerId)
+  );
+  const sampleWorkspaceIds = (filter: (placement: RedisWorkspacePlacementEntry) => boolean) =>
+    placements
+      .filter(filter)
+      .map((placement) => placement.workspaceId)
+      .filter((value, index, items) => items.indexOf(value) === index)
+      .slice(0, 5);
+  const sampleWorkerIds = (filter: (placement: RedisWorkspacePlacementEntry) => boolean) =>
+    placements
+      .filter(filter)
+      .map((placement) => placement.ownerWorkerId)
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+      .filter((value, index, items) => items.indexOf(value) === index)
+      .slice(0, 5);
+  const sampleUserIds = (filter: (placement: RedisWorkspacePlacementEntry) => boolean) =>
+    placements
+      .filter(filter)
+      .map((placement) => placement.userId)
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+      .filter((value, index, items) => items.indexOf(value) === index)
+      .slice(0, 5);
+  const recommendations: ControllerPlacementRecommendation[] = [];
+  if ((placementPolicy?.unassignedWorkspaces ?? 0) > 0) {
+    recommendations.push({
+      kind: "assign_unassigned",
+      priority: "high",
+      workspaceCount: placementPolicy?.unassignedWorkspaces ?? 0,
+      sampleWorkspaceIds: sampleWorkspaceIds((placement) => placement.state === "unassigned" || !placement.ownerWorkerId),
+      message: `assign ${placementPolicy?.unassignedWorkspaces ?? 0} unassigned workspace(s) to healthy workers before new locality assumptions form`
+    });
+  }
+  if ((placementPolicy?.missingOwnerWorkspaces ?? 0) > 0) {
+    recommendations.push({
+      kind: "recover_missing_owner",
+      priority: "high",
+      workspaceCount: placementPolicy?.missingOwnerWorkspaces ?? 0,
+      ...(typeof placementSummary?.workersWithMissingPlacements === "number"
+        ? { workerCount: placementSummary.workersWithMissingPlacements }
+        : {}),
+      sampleWorkspaceIds: sampleWorkspaceIds(
+        (placement) => Boolean(placement.ownerWorkerId) && !workerHealthById.has(placement.ownerWorkerId!)
+      ),
+      sampleWorkerIds: sampleWorkerIds(
+        (placement) => Boolean(placement.ownerWorkerId) && !workerHealthById.has(placement.ownerWorkerId!)
+      ),
+      message: `recover or reassign ${placementPolicy?.missingOwnerWorkspaces ?? 0} workspace(s) still pointing at missing owners`
+    });
+  }
+  if ((placementPolicy?.lateOwnerWorkspaces ?? 0) > 0) {
+    recommendations.push({
+      kind: "reassign_late_owner",
+      priority: "high",
+      workspaceCount: placementPolicy?.lateOwnerWorkspaces ?? 0,
+      ...(typeof placementSummary?.workersWithLatePlacements === "number"
+        ? { workerCount: placementSummary.workersWithLatePlacements }
+        : {}),
+      sampleWorkspaceIds: sampleWorkspaceIds((placement) => workerHealthById.get(placement.ownerWorkerId ?? "") === "late"),
+      sampleWorkerIds: sampleWorkerIds((placement) => workerHealthById.get(placement.ownerWorkerId ?? "") === "late"),
+      message: `stabilize or reassign ${placementPolicy?.lateOwnerWorkspaces ?? 0} workspace(s) currently attached to late owners`
+    });
+  }
+  if ((placementPolicy?.drainingOwnerWorkspaces ?? 0) > 0) {
+    recommendations.push({
+      kind: "finish_draining_owner",
+      priority: "medium",
+      workspaceCount: placementPolicy?.drainingOwnerWorkspaces ?? 0,
+      sampleWorkspaceIds: sampleWorkspaceIds((placement) => placement.state === "draining"),
+      sampleWorkerIds: sampleWorkerIds((placement) => placement.state === "draining"),
+      message: `finish draining or hand off ${placementPolicy?.drainingOwnerWorkspaces ?? 0} workspace(s) on workers that are stopping`
+    });
+  }
+  if ((placementPolicy?.usersSpanningWorkers ?? 0) > 0) {
+    recommendations.push({
+      kind: "consolidate_user_affinity",
+      priority: "medium",
+      workspaceCount: 0,
+      userCount: placementPolicy?.usersSpanningWorkers ?? 0,
+      sampleUserIds: sampleUserIds((placement) => Boolean(placement.userId) && spanningUsers.has(placement.userId!)),
+      message: `consider consolidating ${placementPolicy?.usersSpanningWorkers ?? 0} user affinity group(s) that currently span multiple workers`
+    });
+  }
+  if ((placementPolicy?.workersAboveSoftCapacity ?? 0) > 0) {
+    recommendations.push({
+      kind: "rebalance_soft_capacity",
+      priority: "medium",
+      workspaceCount: 0,
+      workerCount: placementPolicy?.workersAboveSoftCapacity ?? 0,
+      sampleWorkerIds: sampleWorkerIds((placement) => overloadedWorkers.has(placement.ownerWorkerId ?? "")),
+      message: `rebalance placements away from ${placementPolicy?.workersAboveSoftCapacity ?? 0} worker(s) above the soft slots-per-pod capacity`
+    });
+  }
+
+  return recommendations.length > 0 ? recommendations : undefined;
+}
+
+function placementActionPhase(kind: ControllerPlacementRecommendation["kind"]): ControllerPlacementActionItem["phase"] {
+  switch (kind) {
+    case "assign_unassigned":
+    case "recover_missing_owner":
+    case "reassign_late_owner":
+      return "stabilize";
+    case "finish_draining_owner":
+      return "handoff";
+    default:
+      return "optimize";
+  }
+}
+
+function placementActionBlockers(recommendation: ControllerPlacementRecommendation): string[] {
+  switch (recommendation.kind) {
+    case "assign_unassigned":
+      return ["owner_unassigned"];
+    case "recover_missing_owner":
+      return ["owner_missing"];
+    case "reassign_late_owner":
+      return ["owner_late"];
+    case "finish_draining_owner":
+      return ["worker_draining"];
+    case "consolidate_user_affinity":
+      return ["user_affinity_split"];
+    case "rebalance_soft_capacity":
+      return ["soft_capacity_exceeded"];
+  }
+}
+
+export function summarizePlacementActionPlan(
+  recommendations: ControllerPlacementRecommendation[] | undefined
+): ControllerPlacementActionPlan | undefined {
+  if (!recommendations || recommendations.length === 0) {
+    return undefined;
+  }
+
+  const items = recommendations.map<ControllerPlacementActionItem>((recommendation, index) => ({
+    id: `${recommendation.kind}:${index + 1}`,
+    phase: placementActionPhase(recommendation.kind),
+    kind: recommendation.kind,
+    priority: recommendation.priority,
+    blockers: placementActionBlockers(recommendation),
+    ...(recommendation.sampleWorkspaceIds ? { workspaceIds: recommendation.sampleWorkspaceIds } : {}),
+    ...(recommendation.sampleWorkerIds ? { workerIds: recommendation.sampleWorkerIds } : {}),
+    ...(recommendation.sampleUserIds ? { userIds: recommendation.sampleUserIds } : {}),
+    summary: recommendation.message
+  }));
+
+  return {
+    totalItems: items.length,
+    highPriorityItems: items.filter((item) => item.priority === "high").length,
+    nextItem: items[0],
+    items
+  };
+}
+
+export function buildPlacementExecutionOperations(input: {
+  placements?: RedisWorkspacePlacementEntry[] | undefined;
+  activeWorkers?: RedisWorkerRegistryEntry[] | undefined;
+  slotsPerPod?: number | undefined;
+}): ControllerPlacementExecutionOperation[] {
+  const placements = (input.placements ?? []) as ControllerWorkspacePlacementEntry[];
+  if (placements.length === 0) {
+    return [];
+  }
+
+  const workerHealthById = new Map((input.activeWorkers ?? []).map((worker) => [worker.workerId, worker.health]));
+  const workerStateById = new Map((input.activeWorkers ?? []).map((worker) => [worker.workerId, worker.state]));
+  const nonEvictedPlacements = placements.filter((placement) => placement.state !== "evicted");
+  const scheduledWorkspaceIds = new Set<string>();
+  const operations: ControllerPlacementExecutionOperation[] = [];
+  const softCapacity = Math.max(1, input.slotsPerPod ?? 1);
+  const workerRefLoads = new Map<string, number>();
+  const userWorkers = new Map<string, Set<string>>();
+
+  for (const placement of nonEvictedPlacements) {
+    if (placement.userId && placement.ownerWorkerId && placement.state !== "unassigned") {
+      const workers = userWorkers.get(placement.userId) ?? new Set<string>();
+      workers.add(placement.ownerWorkerId);
+      userWorkers.set(placement.userId, workers);
+    }
+    if (placement.ownerWorkerId && placement.state !== "unassigned") {
+      const refLoad =
+        typeof placement.refCount === "number" ? Math.max(0, placement.refCount) : placement.state === "active" ? 1 : 0;
+      workerRefLoads.set(placement.ownerWorkerId, (workerRefLoads.get(placement.ownerWorkerId) ?? 0) + refLoad);
+    }
+  }
+
+  const overloadedWorkers = new Set(
+    [...workerRefLoads.entries()].filter(([, load]) => load > softCapacity).map(([workerId]) => workerId)
+  );
+
+  const selectTargetWorker = (placement: RedisWorkspacePlacementEntry, excludeWorkerIds?: Iterable<string>) => {
+    const excluded = new Set(excludeWorkerIds ?? []);
+    const candidateWorkers = (input.activeWorkers ?? []).filter(
+      (worker) => worker.health === "healthy" && worker.state !== "stopping" && !excluded.has(worker.workerId)
+    );
+    if (candidateWorkers.length === 0) {
+      return undefined;
+    }
+
+    const workerUserAffinities = placement.userId
+      ? candidateWorkers
+          .map((worker) => ({
+            workerId: worker.workerId,
+            workspaceCount: nonEvictedPlacements.filter(
+              (item) =>
+                item.userId === placement.userId &&
+                item.workspaceId !== placement.workspaceId &&
+                item.ownerWorkerId === worker.workerId &&
+                item.state !== "unassigned"
+            ).length
+          }))
+          .filter((entry) => entry.workspaceCount > 0)
+      : undefined;
+    const affinity = buildRedisWorkerAffinitySummary({
+      activeWorkers: candidateWorkers.map((worker) => ({
+        workerId: worker.workerId,
+        processKind: worker.processKind,
+        state: worker.state,
+        health: worker.health,
+        ...(worker.currentSessionId ? { currentSessionId: worker.currentSessionId } : {}),
+        ...(worker.currentWorkspaceId ? { currentWorkspaceId: worker.currentWorkspaceId } : {})
+      })),
+      slots: candidateWorkers.map((worker) => ({
+        workerId: worker.workerId,
+        state: worker.state,
+        ...(worker.currentSessionId ? { currentSessionId: worker.currentSessionId } : {}),
+        ...(worker.currentWorkspaceId ? { currentWorkspaceId: worker.currentWorkspaceId } : {})
+      })),
+      workspaceId: placement.workspaceId,
+      ...(placement.userId ? { userId: placement.userId } : {}),
+      ...(workerUserAffinities && workerUserAffinities.length > 0 ? { workerUserAffinities } : {})
+    });
+    const preferredCandidate = affinity.candidates.find(
+      (candidate) => candidate.health === "healthy" && candidate.state !== "stopping"
+    );
+    return preferredCandidate
+      ? {
+          workerId: preferredCandidate.workerId,
+          reasons: preferredCandidate.reasons
+        }
+      : undefined;
+  };
+
+  for (const placement of placements) {
+    if (placement.state === "evicted") {
+      continue;
+    }
+
+    if (!placement.ownerWorkerId || placement.state === "unassigned") {
+      const target = selectTargetWorker(placement);
+      if (target && target.workerId !== placement.preferredWorkerId) {
+        operations.push({
+          id: `assign_unassigned:${placement.workspaceId}`,
+          kind: "assign_unassigned",
+          workspaceId: placement.workspaceId,
+          state: placement.state,
+          action: "set_preferred_worker",
+          reason: "unassigned_workspace",
+          targetWorkerId: target.workerId,
+          targetWorkerReasons: target.reasons
+        });
+        scheduledWorkspaceIds.add(placement.workspaceId);
+      }
+      continue;
+    }
+
+    const workerHealth = workerHealthById.get(placement.ownerWorkerId);
+    const workerState = workerStateById.get(placement.ownerWorkerId);
+    const target = selectTargetWorker(placement, [placement.ownerWorkerId]);
+    let operation: ControllerPlacementExecutionOperation | undefined;
+
+    if (!workerHealth) {
+      operation = {
+        id: `recover_missing_owner:${placement.workspaceId}`,
+        kind: "recover_missing_owner",
+        workspaceId: placement.workspaceId,
+        ownerWorkerId: placement.ownerWorkerId,
+        state: placement.state,
+        action: "release_ownership",
+        reason: "owner_missing",
+        ...(target ? { targetWorkerId: target.workerId, targetWorkerReasons: target.reasons } : {})
+      };
+    } else if (placement.state === "draining" || workerState === "stopping") {
+      operation = {
+        id: `finish_draining_owner:${placement.workspaceId}`,
+        kind: "finish_draining_owner",
+        workspaceId: placement.workspaceId,
+        ownerWorkerId: placement.ownerWorkerId,
+        state: placement.state,
+        action: "release_ownership",
+        reason: "worker_draining",
+        ...(target ? { targetWorkerId: target.workerId, targetWorkerReasons: target.reasons } : {})
+      };
+    } else if (workerHealth === "late") {
+      operation =
+        placement.state === "active"
+          ? target && target.workerId !== placement.preferredWorkerId
+            ? {
+                id: `reassign_late_owner:${placement.workspaceId}`,
+                kind: "reassign_late_owner",
+                workspaceId: placement.workspaceId,
+                ownerWorkerId: placement.ownerWorkerId,
+                state: placement.state,
+                action: "set_preferred_worker",
+                reason: "owner_late",
+                targetWorkerId: target.workerId,
+                targetWorkerReasons: target.reasons
+              }
+            : undefined
+          : {
+              id: `reassign_late_owner:${placement.workspaceId}`,
+              kind: "reassign_late_owner",
+              workspaceId: placement.workspaceId,
+              ownerWorkerId: placement.ownerWorkerId,
+              state: placement.state,
+              action: "release_ownership",
+              reason: "owner_late",
+              ...(target ? { targetWorkerId: target.workerId, targetWorkerReasons: target.reasons } : {})
+            };
+    }
+
+    if (!operation) {
+      continue;
+    }
+
+    operations.push(operation);
+    scheduledWorkspaceIds.add(placement.workspaceId);
+  }
+
+  for (const placement of nonEvictedPlacements) {
+    if (
+      scheduledWorkspaceIds.has(placement.workspaceId) ||
+      !placement.userId ||
+      (userWorkers.get(placement.userId)?.size ?? 0) <= 1 ||
+      (placement.state !== "idle" && placement.state !== "unassigned")
+    ) {
+      continue;
+    }
+
+    const target = selectTargetWorker(placement);
+    if (!target || target.workerId === placement.ownerWorkerId || target.workerId === placement.preferredWorkerId) {
+      continue;
+    }
+
+    operations.push({
+      id: `consolidate_user_affinity:${placement.workspaceId}`,
+      kind: "consolidate_user_affinity",
+      workspaceId: placement.workspaceId,
+      ...(placement.ownerWorkerId ? { ownerWorkerId: placement.ownerWorkerId } : {}),
+      state: placement.state,
+      action: "set_preferred_worker",
+      reason: "user_affinity_split",
+      targetWorkerId: target.workerId,
+      targetWorkerReasons: target.reasons
+    });
+    scheduledWorkspaceIds.add(placement.workspaceId);
+  }
+
+  for (const placement of nonEvictedPlacements) {
+    if (
+      scheduledWorkspaceIds.has(placement.workspaceId) ||
+      !placement.ownerWorkerId ||
+      !overloadedWorkers.has(placement.ownerWorkerId) ||
+      placement.state !== "idle"
+    ) {
+      continue;
+    }
+
+    const target = selectTargetWorker(placement, new Set([...overloadedWorkers, placement.ownerWorkerId]));
+    if (!target || target.workerId === placement.preferredWorkerId) {
+      continue;
+    }
+
+    operations.push({
+      id: `rebalance_soft_capacity:${placement.workspaceId}`,
+      kind: "rebalance_soft_capacity",
+      workspaceId: placement.workspaceId,
+      ownerWorkerId: placement.ownerWorkerId,
+      state: placement.state,
+      action: "set_preferred_worker",
+      reason: "soft_capacity_exceeded",
+      targetWorkerId: target.workerId,
+      targetWorkerReasons: target.reasons
+    });
+  }
+
+  return operations.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function createPlacementRegistryActionExecutor(options: {
+  placementRegistry: ControllerPlacementOwnershipRegistry;
+  slotsPerPod?: number | undefined;
+  logger?: ControllerLogger | undefined;
+}): ControllerPlacementExecutor {
+  return {
+    async execute(input) {
+      const operations = buildPlacementExecutionOperations({
+        placements: input.placements,
+        activeWorkers: input.activeWorkers,
+        slotsPerPod: options.slotsPerPod
+      });
+      if (operations.length === 0) {
+        return undefined;
+      }
+
+      const results: ControllerPlacementExecutionResult[] = [];
+      for (const operation of operations) {
+        try {
+          if (operation.action === "set_preferred_worker" && !operation.targetWorkerId) {
+            results.push({
+              ...operation,
+              status: "skipped",
+              message: "no healthy target worker was available for the requested placement hint update"
+            });
+            continue;
+          }
+
+          if (operation.action === "set_preferred_worker" && operation.targetWorkerId) {
+            await options.placementRegistry.setPreferredWorker(operation.workspaceId, operation.targetWorkerId, {
+              reason: "controller_target",
+              overwrite: true,
+              updatedAt: input.timestamp
+            });
+            results.push({
+              ...operation,
+              status: "applied",
+              message: `controller preferred worker hint was updated to ${operation.targetWorkerId}`
+            });
+          } else {
+            await options.placementRegistry.releaseOwnership(operation.workspaceId, {
+              state: "unassigned",
+              ...(operation.targetWorkerId
+                ? {
+                    preferredWorkerId: operation.targetWorkerId,
+                    preferredWorkerReason: "controller_target" as const
+                  }
+                : {}),
+              updatedAt: input.timestamp
+            });
+            results.push({
+              ...operation,
+              status: "applied",
+              message: operation.targetWorkerId
+                ? `workspace ownership was released for controller-driven reassignment toward ${operation.targetWorkerId}`
+                : "workspace ownership was released for controller-driven reassignment"
+            });
+          }
+        } catch (error) {
+          options.logger?.warn?.(
+            `[controller] failed to execute placement action ${operation.kind} for workspace ${operation.workspaceId}`,
+            error
+          );
+          results.push({
+            ...operation,
+            status: "failed",
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+
+      return {
+        attempted: results.length,
+        applied: results.filter((result) => result.status === "applied").length,
+        skipped: results.filter((result) => result.status === "skipped").length,
+        failed: results.filter((result) => result.status === "failed").length,
+        operations: results
+      };
+    }
+  };
+}
+
 export class RedisController {
   readonly #queue: SessionRunQueue;
   readonly #registry: WorkerRegistry;
   readonly #placementRegistry?: WorkspacePlacementRegistry | undefined;
+  readonly #placementExecutor?: ControllerPlacementExecutor | undefined;
   readonly #config: StandaloneControllerConfig;
   readonly #scaleTarget?: WorkerReplicaTarget | undefined;
   readonly #logger?: ControllerLogger | undefined;
@@ -409,6 +1113,7 @@ export class RedisController {
     queue: SessionRunQueue;
     registry: WorkerRegistry;
     placementRegistry?: WorkspacePlacementRegistry | undefined;
+    placementExecutor?: ControllerPlacementExecutor | undefined;
     config: StandaloneControllerConfig;
     scaleTarget?: WorkerReplicaTarget | undefined;
     logger?: ControllerLogger | undefined;
@@ -417,6 +1122,7 @@ export class RedisController {
     this.#queue = options.queue;
     this.#registry = options.registry;
     this.#placementRegistry = options.placementRegistry;
+    this.#placementExecutor = options.placementExecutor;
     this.#config = options.config;
     this.#scaleTarget = options.scaleTarget;
     this.#logger = options.logger;
@@ -469,6 +1175,7 @@ export class RedisController {
 
   async close(): Promise<void> {
     this.stop();
+    await this.#placementExecutor?.close?.();
     await this.#scaleTarget?.close?.();
   }
 
@@ -480,17 +1187,57 @@ export class RedisController {
   }
 
   async evaluateNow(reason: "startup" | "interval" = "interval"): Promise<ControllerSnapshot> {
-    const [activeWorkers, schedulingPressure, workspacePlacements] = await Promise.all([
+    const [activeWorkers, schedulingPressure, listedWorkspacePlacements] = await Promise.all([
       this.#registry.listActive ? this.#registry.listActive(Date.now()) : Promise.resolve([]),
       this.#readSchedulingPressure(),
       this.#placementRegistry?.listAll() ?? Promise.resolve(undefined)
     ]);
+    let workspacePlacements = listedWorkspacePlacements;
     const { fleet, suggestedWorkers, suggestedReplicas } = calculateStandaloneWorkerReplicas({
       config: this.#config,
       activeWorkers,
       schedulingPressure
     });
-    const placementSummary = summarizeWorkspacePlacements(workspacePlacements, activeWorkers);
+    let placementSummary = summarizeWorkspacePlacements(workspacePlacements, activeWorkers);
+    let placementPolicy = summarizePlacementPolicy({
+      placements: workspacePlacements,
+      activeWorkers,
+      slotsPerPod: this.#config.slotsPerPod
+    });
+    let placementRecommendations = summarizePlacementRecommendations({
+      placementSummary,
+      placementPolicy,
+      placements: workspacePlacements,
+      activeWorkers,
+      slotsPerPod: this.#config.slotsPerPod
+    });
+    let placementActionPlan = summarizePlacementActionPlan(placementRecommendations);
+    const timestamp = new Date().toISOString();
+    const placementExecution =
+      this.#placementExecutor && workspacePlacements
+        ? await this.#placementExecutor.execute({
+            timestamp,
+            placements: workspacePlacements,
+            activeWorkers
+          })
+        : undefined;
+    if ((placementExecution?.applied ?? 0) > 0 && this.#placementRegistry) {
+      workspacePlacements = await this.#placementRegistry.listAll();
+      placementSummary = summarizeWorkspacePlacements(workspacePlacements, activeWorkers);
+      placementPolicy = summarizePlacementPolicy({
+        placements: workspacePlacements,
+        activeWorkers,
+        slotsPerPod: this.#config.slotsPerPod
+      });
+      placementRecommendations = summarizePlacementRecommendations({
+        placementSummary,
+        placementPolicy,
+        placements: workspacePlacements,
+        activeWorkers,
+        slotsPerPod: this.#config.slotsPerPod
+      });
+      placementActionPlan = summarizePlacementActionPlan(placementRecommendations);
+    }
     const scaleDownTargetReplicas = this.#scaleDownTargetReplicas(suggestedReplicas, fleet.activeReplicas);
     const scaleDownGate =
       scaleDownTargetReplicas < fleet.activeReplicas
@@ -508,10 +1255,10 @@ export class RedisController {
       desiredReplicas,
       suggestedReplicas,
       activeReplicas: fleet.activeReplicas,
-      scaleDownGate
+      scaleDownGate,
+      placementPolicy
     });
     const nowMs = Date.now();
-    const timestamp = new Date(nowMs).toISOString();
     const scaleTarget = await this.#reconcileScaleTarget({
       timestamp,
       reason: rebalanceReason,
@@ -559,6 +1306,10 @@ export class RedisController {
         nowMs
       ),
       ...(placementSummary ? { placement: placementSummary } : {}),
+      ...(placementPolicy ? { placementPolicy } : {}),
+      ...(placementRecommendations ? { placementRecommendations } : {}),
+      ...(placementActionPlan ? { placementActionPlan } : {}),
+      ...(placementExecution ? { placementExecution } : {}),
       ...(scaleDownGate ? { scaleDownGate } : {}),
       ...(scaleTarget ? { scaleTarget } : {}),
       recentDecisions: appendDecision(this.#snapshot.recentDecisions, {
@@ -579,7 +1330,7 @@ export class RedisController {
     };
 
     this.#logger?.info?.(
-      `[controller] rebalance=${rebalanceReason} activeReplicas=${fleet.activeReplicas} desiredReplicas=${desiredReplicas} suggestedReplicas=${suggestedReplicas} activeSlots=${fleet.activeSlots} busySlots=${fleet.busySlots} readySessions=${schedulingPressure?.readySessionCount ?? "n/a"} scaleDownAllowed=${scaleDownGate ? (scaleDownGate.allowed ? "yes" : "no") : "n/a"} scaleDownBlockedReplicas=${scaleDownGate?.blockedReplicas ?? 0} placementMissingOwners=${placementSummary?.ownedByMissingWorkers ?? 0} placementLateOwners=${placementSummary?.ownedByLateWorkers ?? 0} target=${scaleTarget?.kind ?? "none"} targetOutcome=${scaleTarget?.outcome ?? "n/a"}`
+      `[controller] rebalance=${rebalanceReason} activeReplicas=${fleet.activeReplicas} desiredReplicas=${desiredReplicas} suggestedReplicas=${suggestedReplicas} activeSlots=${fleet.activeSlots} busySlots=${fleet.busySlots} readySessions=${schedulingPressure?.readySessionCount ?? "n/a"} scaleDownAllowed=${scaleDownGate ? (scaleDownGate.allowed ? "yes" : "no") : "n/a"} scaleDownBlockedReplicas=${scaleDownGate?.blockedReplicas ?? 0} placementMissingOwners=${placementSummary?.ownedByMissingWorkers ?? 0} placementLateOwners=${placementSummary?.ownedByLateWorkers ?? 0} placementUsersSpanningWorkers=${placementPolicy?.usersSpanningWorkers ?? 0} placementWorkersAboveSoftCapacity=${placementPolicy?.workersAboveSoftCapacity ?? 0} placementRecommendations=${placementRecommendations?.length ?? 0} placementActionItems=${placementActionPlan?.totalItems ?? 0} target=${scaleTarget?.kind ?? "none"} targetOutcome=${scaleTarget?.outcome ?? "n/a"}`
     );
 
     return this.snapshot();
@@ -674,6 +1425,7 @@ export class RedisController {
     suggestedReplicas: number;
     activeReplicas: number;
     scaleDownGate?: ControllerScaleDownGate | undefined;
+    placementPolicy?: ControllerPlacementPolicySummary | undefined;
   }): ControllerRebalanceReason {
     if (input.reason === "startup") {
       if (input.suggestedReplicas < input.activeReplicas && input.scaleDownGate && !input.scaleDownGate.allowed) {
@@ -696,6 +1448,10 @@ export class RedisController {
 
     if (input.desiredReplicas !== input.suggestedReplicas) {
       return "cooldown_hold";
+    }
+
+    if (input.placementPolicy?.attentionRequired) {
+      return "placement_attention";
     }
 
     return "steady";

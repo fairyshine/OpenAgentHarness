@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createPlacementAwareSessionRunQueue,
   describeRuntimeProcess,
   parseSingleWorkspaceOptions,
   resolveEmbeddedWorkerPoolConfig,
@@ -452,6 +453,130 @@ describe("server runtime process modes", () => {
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(recoverRunAfterDrainTimeout).not.toHaveBeenCalled();
+  });
+
+  it("keeps runtime service method bindings when worker host builds redis worker adapters", async () => {
+    const describeQueuedRun = vi.fn(async (_runId: string) => ({
+      workspaceId: "ws_bound"
+    }));
+    const recoverStaleRuns = vi.fn(async (_input?: { staleBefore?: string; limit?: number }) => ({
+      recoveredRunIds: [],
+      requeuedRunIds: []
+    }));
+    const runtimeService = {
+      marker: "runtime-service",
+      async processQueuedRun() {
+        return undefined;
+      },
+      async getRun(this: { marker: string }, runId: string) {
+        expect(this.marker).toBe("runtime-service");
+        return describeQueuedRun(runId);
+      },
+      async recoverStaleRuns(this: { marker: string }, input?: { staleBefore?: string; limit?: number }) {
+        expect(this.marker).toBe("runtime-service");
+        return recoverStaleRuns(input);
+      }
+    };
+
+    let capturedRuntimeService:
+      | {
+          describeQueuedRun?: ((runId: string) => Promise<{ workspaceId: string } | undefined>) | undefined;
+          recoverStaleRuns?:
+            | ((input?: { staleBefore?: string | undefined; limit?: number | undefined }) => Promise<{
+                recoveredRunIds: string[];
+                requeuedRunIds?: string[];
+              }>)
+            | undefined;
+        }
+      | undefined;
+
+    const host = createWorkerHost({
+      startWorker: true,
+      processKind: "worker",
+      config: {
+        storage: {
+          redis_url: "redis://local/0"
+        }
+      },
+      redisRunQueue: {} as never,
+      runtimeService,
+      poolFactory: (input) => {
+        capturedRuntimeService = input.runtimeService;
+        return {
+          start() {
+            return undefined;
+          },
+          snapshot() {
+            return null;
+          },
+          async close() {
+            return undefined;
+          }
+        };
+      }
+    });
+
+    host.start();
+
+    await expect(capturedRuntimeService?.describeQueuedRun?.("run_1")).resolves.toEqual({
+      workspaceId: "ws_bound"
+    });
+    await expect(capturedRuntimeService?.recoverStaleRuns?.()).resolves.toEqual({
+      recoveredRunIds: [],
+      requeuedRunIds: []
+    });
+    expect(describeQueuedRun).toHaveBeenCalledWith("run_1");
+    expect(recoverStaleRuns).toHaveBeenCalled();
+  });
+
+  it("injects workspace placement worker hints into queue enqueue requests", async () => {
+    const enqueues: Array<{
+      sessionId: string;
+      runId: string;
+      priority?: "normal" | "subagent";
+      preferredWorkerId?: string;
+    }> = [];
+
+    const queue = createPlacementAwareSessionRunQueue({
+      queue: {
+        async enqueue(sessionId, runId, input) {
+          enqueues.push({
+            sessionId,
+            runId,
+            ...(input?.priority ? { priority: input.priority } : {}),
+            ...(input?.preferredWorkerId ? { preferredWorkerId: input.preferredWorkerId } : {})
+          });
+        }
+      },
+      runRepository: {
+        async getById() {
+          return {
+            workspaceId: "ws_placement"
+          };
+        }
+      },
+      workspacePlacementRegistry: {
+        async getByWorkspaceId() {
+          return {
+            ownerWorkerId: "worker_owner",
+            preferredWorkerId: "worker_hint"
+          };
+        }
+      }
+    });
+
+    await queue.enqueue("ses_1", "run_1", {
+      priority: "subagent"
+    });
+
+    expect(enqueues).toEqual([
+      {
+        sessionId: "ses_1",
+        runId: "run_1",
+        priority: "subagent",
+        preferredWorkerId: "worker_owner"
+      }
+    ]);
   });
 
   it("parses single-workspace startup flags", () => {

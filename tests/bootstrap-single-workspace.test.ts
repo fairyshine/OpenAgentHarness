@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildWorkspaceId } from "@oah/config";
+import { createE2BCompatibleSandboxHost } from "../apps/server/src/bootstrap/e2b-compatible-sandbox-host.ts";
 
 import {
   bootstrapRuntime,
@@ -428,6 +429,113 @@ openai-default:
     } finally {
       await runtime.close();
     }
+  });
+
+  it("accepts an injected e2b-compatible sandbox host factory", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-single-workspace-e2b-host-"));
+    tempDirs.push(tempDir);
+
+    const workspaceRoot = path.join(tempDir, "repo");
+    const modelsDir = path.join(tempDir, "models");
+    const hostOperations: string[] = [];
+    await Promise.all([
+      mkdir(path.join(workspaceRoot, ".openharness"), { recursive: true }),
+      mkdir(modelsDir, { recursive: true })
+    ]);
+
+    await writeFile(path.join(workspaceRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(
+      path.join(modelsDir, "openai.yaml"),
+      `
+openai-default:
+  provider: openai
+  name: gpt-4o-mini
+`,
+      "utf8"
+    );
+
+    const runtime = await bootstrapRuntime({
+      argv: ["--workspace", workspaceRoot, "--model-dir", modelsDir, "--default-model", "openai-default"],
+      startWorker: false,
+      processKind: "api",
+      sandboxHostFactory: async () =>
+        createE2BCompatibleSandboxHost({
+          service: {
+            async acquireExecution(input) {
+              return {
+                sandboxId: "sandbox-1",
+                rootPath: `/workspace/${input.workspace.id}`,
+                async release() {}
+              };
+            },
+            async acquireFileAccess(input) {
+              return {
+                sandboxId: "sandbox-1",
+                rootPath: `/workspace/${input.workspace.id}`,
+                async release() {}
+              };
+            },
+            async runCommand() {
+              return { stdout: "", stderr: "", exitCode: 0 };
+            },
+            async runProcess() {
+              return { stdout: "", stderr: "", exitCode: 0 };
+            },
+            async runBackground() {
+              return { outputPath: "/tmp/log", taskId: "task-1", pid: 1 };
+            },
+            async stat() {
+              return { kind: "directory" as const, size: 0, mtimeMs: 0, birthtimeMs: 0 };
+            },
+            async readFile() {
+              return Buffer.from("");
+            },
+            async readdir() {
+              return [];
+            },
+            async mkdir() {
+              return undefined;
+            },
+            async writeFile() {
+              return undefined;
+            },
+            async rm() {
+              return undefined;
+            },
+            async rename() {
+              return undefined;
+            },
+            diagnostics() {
+              return {
+                provider: "fake-e2b"
+              };
+            },
+            async maintain() {
+              hostOperations.push("maintain");
+            },
+            async beginDrain() {
+              hostOperations.push("beginDrain");
+            },
+            async close() {
+              hostOperations.push("close");
+            }
+          }
+        })
+    });
+
+    try {
+      await runtime.beginDrain();
+      await expect(runtime.healthReport()).resolves.toMatchObject({
+        worker: {
+          mode: "disabled"
+        }
+      });
+    } finally {
+      await runtime.close();
+    }
+
+    expect(hostOperations).toContain("beginDrain");
+    expect(hostOperations).toContain("close");
   });
 
   it("skips invalid platform model files during multi-workspace bootstrap and logs the failure", async () => {

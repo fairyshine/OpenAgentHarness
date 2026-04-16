@@ -106,6 +106,66 @@ export function renderControllerMetrics(input: {
       value: input.controller.placement?.ownedByMissingWorkers ?? 0
     },
     {
+      name: "placement_policy_attention_required",
+      help: "Whether placement policy signals currently require controller attention.",
+      value: input.controller.placementPolicy?.attentionRequired ? 1 : 0
+    },
+    {
+      name: "placement_policy_unassigned_workspaces",
+      help: "Number of unassigned workspaces currently tracked in placement policy signals.",
+      value: input.controller.placementPolicy?.unassignedWorkspaces ?? 0
+    },
+    {
+      name: "placement_policy_users_spanning_workers",
+      help: "Number of users whose workspaces currently span multiple workers.",
+      value: input.controller.placementPolicy?.usersSpanningWorkers ?? 0
+    },
+    {
+      name: "placement_policy_workers_above_soft_capacity",
+      help: "Number of workers whose placement ref-load currently exceeds the soft slots-per-pod capacity.",
+      value: input.controller.placementPolicy?.workersAboveSoftCapacity ?? 0
+    },
+    {
+      name: "placement_recommendations_total",
+      help: "Number of current placement recommendations emitted by the controller.",
+      value: input.controller.placementRecommendations?.length ?? 0
+    },
+    {
+      name: "placement_recommendations_high_priority",
+      help: "Number of high-priority placement recommendations emitted by the controller.",
+      value: input.controller.placementRecommendations?.filter((item) => item.priority === "high").length ?? 0
+    },
+    {
+      name: "placement_action_items_total",
+      help: "Number of placement action items currently emitted by the controller.",
+      value: input.controller.placementActionPlan?.totalItems ?? 0
+    },
+    {
+      name: "placement_action_items_high_priority",
+      help: "Number of high-priority placement action items currently emitted by the controller.",
+      value: input.controller.placementActionPlan?.highPriorityItems ?? 0
+    },
+    {
+      name: "placement_execution_attempted",
+      help: "Number of placement execution operations attempted by the controller in the latest reconcile.",
+      value: input.controller.placementExecution?.attempted ?? 0
+    },
+    {
+      name: "placement_execution_applied",
+      help: "Number of placement execution operations applied by the controller in the latest reconcile.",
+      value: input.controller.placementExecution?.applied ?? 0
+    },
+    {
+      name: "placement_execution_skipped",
+      help: "Number of placement execution operations skipped by the controller in the latest reconcile.",
+      value: input.controller.placementExecution?.skipped ?? 0
+    },
+    {
+      name: "placement_execution_failed",
+      help: "Number of placement execution operations failed by the controller in the latest reconcile.",
+      value: input.controller.placementExecution?.failed ?? 0
+    },
+    {
       name: "placement_active",
       help: "Number of workspace placement records currently in active state.",
       value: input.controller.placement?.active ?? 0

@@ -52,7 +52,7 @@ export interface SessionEventBus {
 }
 
 export interface SessionRunQueue extends RunQueue {
-  claimNextSession(timeoutMs?: number): Promise<string | undefined>;
+  claimNextSession(timeoutMs?: number, options?: { workerId?: string | undefined }): Promise<string | undefined>;
   readyQueueLength(): Promise<number>;
   inspectReadyQueue(nowMs?: number): Promise<{
     length: number;
@@ -176,6 +176,8 @@ export interface RedisWorkspacePlacementInput {
   userId?: string | undefined;
   ownerWorkerId?: string | undefined;
   ownerBaseUrl?: string | undefined;
+  preferredWorkerId?: string | undefined;
+  preferredWorkerReason?: "controller_target" | undefined;
   state: RedisWorkspacePlacementState;
   sourceKind?: "object_store" | "local_directory" | undefined;
   localPath?: string | undefined;
@@ -193,6 +195,8 @@ export interface RedisWorkspacePlacementEntry {
   userId?: string | undefined;
   ownerWorkerId?: string | undefined;
   ownerBaseUrl?: string | undefined;
+  preferredWorkerId?: string | undefined;
+  preferredWorkerReason?: "controller_target" | undefined;
   state: RedisWorkspacePlacementState;
   sourceKind?: "object_store" | "local_directory" | undefined;
   localPath?: string | undefined;
@@ -217,6 +221,24 @@ export interface WorkspacePlacementRegistry {
     workspaceId: string,
     userId: string,
     options?: { overwrite?: boolean | undefined; updatedAt?: string | undefined }
+  ): Promise<void>;
+  setPreferredWorker(
+    workspaceId: string,
+    preferredWorkerId: string,
+    options?: {
+      reason?: "controller_target" | undefined;
+      overwrite?: boolean | undefined;
+      updatedAt?: string | undefined;
+    }
+  ): Promise<void>;
+  releaseOwnership(
+    workspaceId: string,
+    options?: {
+      state?: RedisWorkspacePlacementState | undefined;
+      preferredWorkerId?: string | undefined;
+      preferredWorkerReason?: "controller_target" | undefined;
+      updatedAt?: string | undefined;
+    }
   ): Promise<void>;
   listAll(): Promise<RedisWorkspacePlacementEntry[]>;
   getByWorkspaceId(workspaceId: string): Promise<RedisWorkspacePlacementEntry | undefined>;
@@ -374,6 +396,11 @@ return 0
 
 const enqueueSessionRunScript = `
 local queueLength = redis.call("rpush", KEYS[1], ARGV[1])
+if ARGV[5] ~= "" then
+  redis.call("set", KEYS[5], ARGV[5])
+else
+  redis.call("del", KEYS[5])
+end
 if queueLength == 1 then
   redis.call("set", KEYS[3], ARGV[3], "NX")
   redis.call("set", KEYS[4], ARGV[4])
@@ -394,6 +421,21 @@ if queueLength == 1 then
   end
 end
 return queueLength
+`;
+
+const claimCompatibleSessionScript = `
+local workerId = ARGV[3]
+local readyEntries = redis.call("lrange", KEYS[1], 0, -1)
+
+for _, sessionId in ipairs(readyEntries) do
+  local preferredWorkerId = redis.call("get", ARGV[1] .. sessionId .. ARGV[2])
+  if workerId == "" or preferredWorkerId == false or preferredWorkerId == "" or preferredWorkerId == workerId then
+    redis.call("lrem", KEYS[1], 1, sessionId)
+    return sessionId
+  end
+end
+
+return false
 `;
 
 const DEFAULT_WORKER_LEASE_TTL_MS = 5_000;
@@ -827,6 +869,10 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
       ...(existing.userId ? { userId: existing.userId } : {}),
       ...(existing.ownerWorkerId ? { ownerWorkerId: existing.ownerWorkerId } : {}),
       ...(existing.ownerBaseUrl ? { ownerBaseUrl: existing.ownerBaseUrl } : {}),
+      ...(existing.preferredWorkerId ? { preferredWorkerId: existing.preferredWorkerId } : {}),
+      ...(existing.preferredWorkerReason === "controller_target"
+        ? { preferredWorkerReason: existing.preferredWorkerReason }
+        : {}),
       state: entry.state,
       ...(existing.sourceKind === "object_store" || existing.sourceKind === "local_directory"
         ? { sourceKind: existing.sourceKind }
@@ -849,6 +895,12 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
     if (entry.ownerBaseUrl?.trim()) {
       next.ownerBaseUrl = entry.ownerBaseUrl.trim();
     }
+    if (entry.preferredWorkerId?.trim()) {
+      next.preferredWorkerId = entry.preferredWorkerId.trim();
+    }
+    if (entry.preferredWorkerReason === "controller_target") {
+      next.preferredWorkerReason = entry.preferredWorkerReason;
+    }
     if (entry.sourceKind) {
       next.sourceKind = entry.sourceKind;
     }
@@ -870,6 +922,10 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
     if (entry.materializedAt?.trim()) {
       next.materializedAt = entry.materializedAt;
     }
+    if (entry.ownerWorkerId?.trim() && !entry.preferredWorkerId?.trim()) {
+      delete next.preferredWorkerId;
+      delete next.preferredWorkerReason;
+    }
 
     const transaction = this.#commands.multi().sAdd(this.#registrySetKey(), entry.workspaceId).hSet(key, {
       workspaceId: next.workspaceId,
@@ -877,6 +933,8 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
       ...(next.userId ? { userId: next.userId } : {}),
       ...(next.ownerWorkerId ? { ownerWorkerId: next.ownerWorkerId } : {}),
       ...(next.ownerBaseUrl ? { ownerBaseUrl: next.ownerBaseUrl } : {}),
+      ...(next.preferredWorkerId ? { preferredWorkerId: next.preferredWorkerId } : {}),
+      ...(next.preferredWorkerReason ? { preferredWorkerReason: next.preferredWorkerReason } : {}),
       state: next.state,
       ...(next.sourceKind ? { sourceKind: next.sourceKind } : {}),
       ...(next.localPath ? { localPath: next.localPath } : {}),
@@ -896,6 +954,12 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
     }
     if (!next.ownerBaseUrl) {
       transaction.hDel(key, "ownerBaseUrl");
+    }
+    if (!next.preferredWorkerId) {
+      transaction.hDel(key, "preferredWorkerId");
+    }
+    if (!next.preferredWorkerReason) {
+      transaction.hDel(key, "preferredWorkerReason");
     }
     if (!next.sourceKind) {
       transaction.hDel(key, "sourceKind");
@@ -946,6 +1010,90 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
     });
   }
 
+  async setPreferredWorker(
+    workspaceId: string,
+    preferredWorkerId: string,
+    options?: {
+      reason?: "controller_target" | undefined;
+      overwrite?: boolean | undefined;
+      updatedAt?: string | undefined;
+    }
+  ): Promise<void> {
+    const normalizedWorkspaceId = workspaceId.trim();
+    const normalizedPreferredWorkerId = preferredWorkerId.trim();
+    if (normalizedWorkspaceId.length === 0 || normalizedPreferredWorkerId.length === 0) {
+      return;
+    }
+
+    const existing = await this.getByWorkspaceId(normalizedWorkspaceId);
+    if (!existing) {
+      return;
+    }
+    if (existing.preferredWorkerId && !options?.overwrite) {
+      return;
+    }
+
+    await this.upsert({
+      workspaceId: normalizedWorkspaceId,
+      state: existing.state,
+      preferredWorkerId: normalizedPreferredWorkerId,
+      preferredWorkerReason: options?.reason ?? "controller_target",
+      updatedAt: options?.updatedAt ?? new Date().toISOString()
+    });
+  }
+
+  async releaseOwnership(
+    workspaceId: string,
+    options?: {
+      state?: RedisWorkspacePlacementState | undefined;
+      preferredWorkerId?: string | undefined;
+      preferredWorkerReason?: "controller_target" | undefined;
+      updatedAt?: string | undefined;
+    }
+  ): Promise<void> {
+    const normalizedWorkspaceId = workspaceId.trim();
+    if (normalizedWorkspaceId.length === 0) {
+      return;
+    }
+
+    const existing = await this.getByWorkspaceId(normalizedWorkspaceId);
+    if (!existing) {
+      return;
+    }
+
+    const key = this.#placementKey(normalizedWorkspaceId);
+    const nextState = options?.state ?? "unassigned";
+    const updatedAt = options?.updatedAt ?? new Date().toISOString();
+    const transaction = this.#commands.multi().sAdd(this.#registrySetKey(), normalizedWorkspaceId).hSet(key, {
+      workspaceId: existing.workspaceId,
+      version: existing.version,
+      ...(existing.userId ? { userId: existing.userId } : {}),
+      ...(options?.preferredWorkerId?.trim()
+        ? { preferredWorkerId: options.preferredWorkerId.trim() }
+        : existing.preferredWorkerId
+          ? { preferredWorkerId: existing.preferredWorkerId }
+          : {}),
+      ...((options?.preferredWorkerId?.trim() || existing.preferredWorkerId) &&
+      (options?.preferredWorkerReason === "controller_target" || existing.preferredWorkerReason === "controller_target")
+        ? { preferredWorkerReason: options?.preferredWorkerReason ?? existing.preferredWorkerReason ?? "controller_target" }
+        : {}),
+      state: nextState,
+      ...(existing.sourceKind ? { sourceKind: existing.sourceKind } : {}),
+      ...(existing.remotePrefix ? { remotePrefix: existing.remotePrefix } : {}),
+      dirty: "0",
+      refCount: "0",
+      ...(existing.lastActivityAt ? { lastActivityAt: existing.lastActivityAt } : {}),
+      updatedAt
+    });
+
+    transaction.hDel(key, "ownerWorkerId");
+    transaction.hDel(key, "ownerBaseUrl");
+    transaction.hDel(key, "localPath");
+    transaction.hDel(key, "materializedAt");
+
+    await transaction.exec();
+  }
+
   async listAll(): Promise<RedisWorkspacePlacementEntry[]> {
     const workspaceIds = await this.#commands.sMembers(this.#registrySetKey());
     if (workspaceIds.length === 0) {
@@ -974,6 +1122,10 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
         ...(record.fields.userId ? { userId: record.fields.userId } : {}),
         ...(record.fields.ownerWorkerId ? { ownerWorkerId: record.fields.ownerWorkerId } : {}),
         ...(record.fields.ownerBaseUrl ? { ownerBaseUrl: record.fields.ownerBaseUrl } : {}),
+        ...(record.fields.preferredWorkerId ? { preferredWorkerId: record.fields.preferredWorkerId } : {}),
+        ...(record.fields.preferredWorkerReason === "controller_target"
+          ? { preferredWorkerReason: record.fields.preferredWorkerReason }
+          : {}),
         state:
           record.fields.state === "active" ||
           record.fields.state === "idle" ||
@@ -1013,6 +1165,10 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
       ...(fields.userId ? { userId: fields.userId } : {}),
       ...(fields.ownerWorkerId ? { ownerWorkerId: fields.ownerWorkerId } : {}),
       ...(fields.ownerBaseUrl ? { ownerBaseUrl: fields.ownerBaseUrl } : {}),
+      ...(fields.preferredWorkerId ? { preferredWorkerId: fields.preferredWorkerId } : {}),
+      ...(fields.preferredWorkerReason === "controller_target"
+        ? { preferredWorkerReason: fields.preferredWorkerReason }
+        : {}),
       state:
         fields.state === "active" ||
         fields.state === "idle" ||
@@ -1136,7 +1292,7 @@ if not runId then
   return false
 end
 if redis.call("llen", KEYS[1]) == 0 then
-  redis.call("del", KEYS[2], KEYS[3])
+  redis.call("del", KEYS[2], KEYS[3], KEYS[4])
 end
 return runId
 `;
@@ -1248,17 +1404,23 @@ export class RedisSessionRunQueue implements SessionRunQueue {
     }
   }
 
-  async enqueue(sessionId: string, runId: string, options?: { priority?: RunQueuePriority | undefined }): Promise<void> {
+  async enqueue(
+    sessionId: string,
+    runId: string,
+    options?: { priority?: RunQueuePriority | undefined; preferredWorkerId?: string | undefined }
+  ): Promise<void> {
     const priority = options?.priority ?? "normal";
+    const preferredWorkerId = options?.preferredWorkerId?.trim() ?? "";
     const queueLength = Number(
       await this.#commands.eval(enqueueSessionRunScript, {
         keys: [
           this.#sessionQueueKey(sessionId),
           this.#readyQueueKey(),
           this.#readyAtKey(sessionId),
-          this.#readyPriorityKey(sessionId)
+          this.#readyPriorityKey(sessionId),
+          this.#preferredWorkerKey(sessionId)
         ],
-        arguments: [runId, sessionId, String(Date.now()), priority]
+        arguments: [runId, sessionId, String(Date.now()), priority, preferredWorkerId]
       })
     );
     if (queueLength === 1) {
@@ -1266,10 +1428,31 @@ export class RedisSessionRunQueue implements SessionRunQueue {
     }
   }
 
-  async claimNextSession(timeoutMs = 1_000): Promise<string | undefined> {
-    const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1_000));
-    const entry = await this.#blocking.blPop(this.#readyQueueKey(), timeoutSeconds);
-    return entry?.element;
+  async claimNextSession(
+    timeoutMs = 1_000,
+    options?: { workerId?: string | undefined }
+  ): Promise<string | undefined> {
+    const workerId = options?.workerId?.trim() ?? "";
+    const deadline = Date.now() + Math.max(1, timeoutMs);
+
+    while (Date.now() < deadline) {
+      const claimed = await this.#commands.eval(claimCompatibleSessionScript, {
+        keys: [this.#readyQueueKey()],
+        arguments: [`${this.#keyPrefix}:session:`, ":preferred-worker", workerId]
+      });
+      if (typeof claimed === "string" && claimed.length > 0) {
+        return claimed;
+      }
+
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, Math.min(250, remainingMs)));
+    }
+
+    return undefined;
   }
 
   async readyQueueLength(): Promise<number> {
@@ -1354,7 +1537,12 @@ export class RedisSessionRunQueue implements SessionRunQueue {
 
   async dequeueRun(sessionId: string): Promise<string | undefined> {
     const runId = await this.#commands.eval(dequeueSessionRunScript, {
-      keys: [this.#sessionQueueKey(sessionId), this.#readyAtKey(sessionId), this.#readyPriorityKey(sessionId)]
+      keys: [
+        this.#sessionQueueKey(sessionId),
+        this.#readyAtKey(sessionId),
+        this.#readyPriorityKey(sessionId),
+        this.#preferredWorkerKey(sessionId)
+      ]
     });
 
     return typeof runId === "string" ? runId : undefined;
@@ -1438,6 +1626,10 @@ export class RedisSessionRunQueue implements SessionRunQueue {
 
   #readyAtKey(sessionId: string): string {
     return `${this.#keyPrefix}:session:${sessionId}:ready_at`;
+  }
+
+  #preferredWorkerKey(sessionId: string): string {
+    return `${this.#keyPrefix}:session:${sessionId}:preferred-worker`;
   }
 }
 
@@ -1529,7 +1721,9 @@ export class RedisRunWorker {
       while (this.#active) {
         let sessionId: string | undefined;
         try {
-          sessionId = await this.#queue.claimNextSession(this.#pollTimeoutMs);
+          sessionId = await this.#queue.claimNextSession(this.#pollTimeoutMs, {
+            workerId: this.#workerId
+          });
         } catch (error) {
           this.#logger?.warn("Failed to claim next Redis run queue item.", error);
           continue;
