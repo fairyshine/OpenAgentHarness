@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, memo } from "react";
 
 import { MessageSquareText, Sparkles } from "lucide-react";
 
@@ -6,6 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import { useSessionAgentStore } from "../stores/session-agent-store";
+import { useStreamStore } from "../stores/stream-store";
+import { useUiStore } from "../stores/ui-store";
 import type { useAppController } from "../use-app-controller";
 
 type RuntimeProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"];
@@ -21,12 +24,19 @@ function sessionAgentLabel(agent: { name: string; mode: "primary" | "subagent" |
   return `${agent.name} · ${agent.mode}`;
 }
 
-export function RuntimeWorkspace(props: RuntimeProps) {
+function RuntimeWorkspaceImpl(props: RuntimeProps) {
+  const mainViewMode = useUiStore((state) => state.mainViewMode);
+  const setMainViewMode = useUiStore((state) => state.setMainViewMode);
+  const messages = useStreamStore((state) => state.messages);
+  const run = useStreamStore((state) => state.run);
+  const runSteps = useStreamStore((state) => state.runSteps);
+  const pendingSessionAgentName = useSessionAgentStore((state) => state.pendingSessionAgentName);
+  const pendingSessionModelRef = useSessionAgentStore((state) => state.pendingSessionModelRef);
   const sessionWorkspaceCatalog =
     props.session && (props.workspace?.id === props.session.workspaceId || props.workspaceId === props.session.workspaceId)
       ? props.catalog
       : null;
-  const selectedAgentName = props.pendingSessionAgentName ?? props.session?.activeAgentName ?? props.run?.effectiveAgentName ?? "";
+  const selectedAgentName = pendingSessionAgentName ?? props.session?.activeAgentName ?? run?.effectiveAgentName ?? "";
   const visibleSessionAgents = [...new Map(
     (sessionWorkspaceCatalog?.agents ?? [])
       .filter((agent) => agent.mode === "primary" || agent.mode === "all")
@@ -70,16 +80,16 @@ export function RuntimeWorkspace(props: RuntimeProps) {
 
     return left.source === "workspace" ? -1 : 1;
   });
-  const selectedSessionModelValue = props.pendingSessionModelRef ?? props.session?.modelRef ?? AUTO_SESSION_MODEL_VALUE;
+  const selectedSessionModelValue = pendingSessionModelRef ?? props.session?.modelRef ?? AUTO_SESSION_MODEL_VALUE;
   const sessionModelLocked =
-    props.messages.length > 0 ||
+    messages.length > 0 ||
     props.sessionRuns.length > 0 ||
-    (props.run?.sessionId != null && props.run.sessionId === props.session?.id) ||
+    (run?.sessionId != null && run.sessionId === props.session?.id) ||
     props.isRunning;
   const runtimePanelFallback = (
     <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8">
       <div className="rounded-2xl border border-border/70 bg-background/80 px-4 py-3 text-sm text-muted-foreground shadow-[0_10px_30px_-24px_rgba(17,17,17,0.35)]">
-        {props.mainViewMode === "conversation" ? "Loading conversation..." : "Loading inspector..."}
+        {mainViewMode === "conversation" ? "Loading conversation..." : "Loading inspector..."}
       </div>
     </div>
   );
@@ -87,7 +97,7 @@ export function RuntimeWorkspace(props: RuntimeProps) {
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="app-toolbar-strip flex flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-5">
-        <Tabs value={props.mainViewMode} onValueChange={(value) => props.setMainViewMode(value as RuntimeProps["mainViewMode"])}>
+        <Tabs value={mainViewMode} onValueChange={(value) => setMainViewMode(value as RuntimeProps["mainViewMode"])}>
           <TabsList className="h-9 rounded-2xl p-1">
             <TabsTrigger value="conversation" className="h-7 rounded-xl px-3 text-xs">
               <MessageSquareText className="h-4 w-4" />
@@ -101,10 +111,10 @@ export function RuntimeWorkspace(props: RuntimeProps) {
         </Tabs>
 
         <div className="flex flex-wrap items-center gap-2">
-          {props.mainViewMode === "conversation" ? (
+          {mainViewMode === "conversation" ? (
             props.hasActiveSession ? (
               <>
-                <span className="text-xs text-muted-foreground">{props.messages.length} messages</span>
+                <span className="text-xs text-muted-foreground">{messages.length} messages</span>
                 {agentSelectorSession ? (
                   <div className="flex items-center gap-2">
                     <Select
@@ -245,9 +255,9 @@ export function RuntimeWorkspace(props: RuntimeProps) {
               <Badge variant="secondary">{selectedAgentName || "no agent"}</Badge>
             )
           ) : null}
-          {props.mainViewMode === "inspector" ? (
+          {mainViewMode === "inspector" ? (
             <>
-              <Badge variant="secondary">{props.runSteps.length} steps</Badge>
+              <Badge variant="secondary">{runSteps.length} steps</Badge>
               <Badge variant="secondary">{props.deferredEvents.length} events</Badge>
             </>
           ) : null}
@@ -255,7 +265,7 @@ export function RuntimeWorkspace(props: RuntimeProps) {
       </div>
 
       <Suspense fallback={runtimePanelFallback}>
-        {props.mainViewMode === "conversation" ? (
+        {mainViewMode === "conversation" ? (
           <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
             <ConversationWorkspace {...props} />
           </div>
@@ -268,3 +278,5 @@ export function RuntimeWorkspace(props: RuntimeProps) {
     </section>
   );
 }
+
+export const RuntimeWorkspace = memo(RuntimeWorkspaceImpl);
