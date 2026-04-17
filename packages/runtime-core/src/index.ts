@@ -1,5 +1,6 @@
 export * from "./action-dispatch.js";
 export * from "./agent-control.js";
+export * from "./coordination.js";
 export * from "./errors.js";
 export * from "./native-tools.js";
 export * from "./persisted-history-normalization.js";

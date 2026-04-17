@@ -1,6 +1,24 @@
 import { createClient, type RedisClientType } from "redis";
 
-import { createId, type RunQueue, type SessionEvent, type SessionEventStore } from "@oah/runtime-core";
+import {
+  createId,
+  type RunQueue,
+  type SessionEvent,
+  type SessionEventBus,
+  type SessionEventStore,
+  type SessionRunQueue,
+  type SessionRunQueuePressure,
+  type WorkerLeaseInput,
+  type WorkerRegistry,
+  type WorkerRegistryEntry,
+  type WorkspaceLeaseEntry,
+  type WorkspaceLeaseInput,
+  type WorkspaceLeaseRegistry,
+  type WorkspacePlacementEntry,
+  type WorkspacePlacementInput,
+  type WorkspacePlacementRegistry,
+  type WorkspacePlacementState
+} from "@oah/runtime-core";
 import { calculateRedisWorkerPoolSuggestion, summarizeRedisWorkerLoad } from "./worker-pool-policy.js";
 import { summarizeRedisRunWorkerPoolPressure } from "./worker-pool-pressure.js";
 import {
@@ -44,46 +62,30 @@ export type {
 
 type RunQueuePriority = "normal" | "subagent";
 
-export interface SessionEventBus {
-  publish(event: SessionEvent): Promise<void>;
-  subscribe(sessionId: string, listener: (event: SessionEvent) => void): Promise<() => Promise<void> | void>;
-  ping(): Promise<boolean>;
-  close(): Promise<void>;
-}
+export type {
+  SessionEventBus,
+  SessionRunQueue,
+  SessionRunQueuePressure,
+  WorkerLeaseInput,
+  WorkerRegistry,
+  WorkerRegistryEntry,
+  WorkspaceLeaseEntry,
+  WorkspaceLeaseInput,
+  WorkspaceLeaseRegistry,
+  WorkspacePlacementEntry,
+  WorkspacePlacementInput,
+  WorkspacePlacementRegistry,
+  WorkspacePlacementState
+} from "@oah/runtime-core";
 
-export interface SessionRunQueue extends RunQueue {
-  claimNextSession(
-    timeoutMs?: number,
-    options?: { workerId?: string | undefined; runtimeInstanceId?: string | undefined }
-  ): Promise<string | undefined>;
-  readyQueueLength(): Promise<number>;
-  inspectReadyQueue(nowMs?: number): Promise<{
-    length: number;
-    subagentLength: number;
-    oldestReadyAgeMs: number;
-    averageReadyAgeMs: number;
-  }>;
-  tryAcquireSessionLock(sessionId: string, token: string, ttlMs: number): Promise<boolean>;
-  renewSessionLock(sessionId: string, token: string, ttlMs: number): Promise<boolean>;
-  releaseSessionLock(sessionId: string, token: string): Promise<boolean>;
-  dequeueRun(sessionId: string): Promise<string | undefined>;
-  requeueSessionIfPending?(sessionId: string): Promise<boolean>;
-  getSchedulingPressure?(): Promise<SessionRunQueuePressure>;
-  getReadySessionCount?(): Promise<number>;
-  ping(): Promise<boolean>;
-  close(): Promise<void>;
-}
-
-export interface SessionRunQueuePressure {
-  readySessionCount: number;
-  readyQueueDepth?: number | undefined;
-  uniqueReadySessionCount?: number | undefined;
-  subagentReadySessionCount?: number | undefined;
-  subagentReadyQueueDepth?: number | undefined;
-  lockedReadySessionCount?: number | undefined;
-  staleReadySessionCount?: number | undefined;
-  oldestSchedulableReadyAgeMs?: number | undefined;
-}
+// Back-compat aliases for external consumers that import Redis*-prefixed names.
+export type RedisWorkerLeaseInput = WorkerLeaseInput;
+export type RedisWorkerRegistryEntry = WorkerRegistryEntry;
+export type RedisWorkspaceLeaseInput = WorkspaceLeaseInput;
+export type RedisWorkspaceLeaseEntry = WorkspaceLeaseEntry;
+export type RedisWorkspacePlacementState = WorkspacePlacementState;
+export type RedisWorkspacePlacementInput = WorkspacePlacementInput;
+export type RedisWorkspacePlacementEntry = WorkspacePlacementEntry;
 
 export interface CreateRedisSessionEventBusOptions {
   url: string;
@@ -122,129 +124,6 @@ export interface RedisRunWorkerLogger {
   info?(message: string): void;
   warn(message: string, error?: unknown): void;
   error(message: string, error?: unknown): void;
-}
-
-export interface RedisWorkerLeaseInput {
-  workerId: string;
-  runtimeInstanceId?: string | undefined;
-  ownerBaseUrl?: string | undefined;
-  processKind: "embedded" | "standalone";
-  state: "starting" | "idle" | "busy" | "stopping";
-  lastSeenAt: string;
-  currentSessionId?: string | undefined;
-  currentRunId?: string | undefined;
-  currentWorkspaceId?: string | undefined;
-}
-
-export interface RedisWorkerRegistryEntry extends RedisWorkerLeaseInput {
-  leaseTtlMs: number;
-  expiresAt: string;
-  lastSeenAgeMs: number;
-  health: "healthy" | "late";
-}
-
-export interface WorkerRegistry {
-  heartbeat(entry: RedisWorkerLeaseInput, ttlMs: number): Promise<void>;
-  remove(workerId: string): Promise<void>;
-  listActive?(nowMs?: number): Promise<RedisWorkerRegistryEntry[]>;
-}
-
-export interface RedisWorkspaceLeaseInput {
-  workspaceId: string;
-  version: string;
-  ownerWorkerId: string;
-  ownerBaseUrl?: string | undefined;
-  sourceKind: "object_store" | "local_directory";
-  localPath: string;
-  remotePrefix?: string | undefined;
-  dirty: boolean;
-  refCount: number;
-  lastActivityAt: string;
-  materializedAt?: string | undefined;
-  lastSeenAt: string;
-}
-
-export interface RedisWorkspaceLeaseEntry extends RedisWorkspaceLeaseInput {
-  leaseTtlMs: number;
-  expiresAt: string;
-  lastSeenAgeMs: number;
-  health: "healthy" | "late";
-}
-
-export type RedisWorkspacePlacementState = "unassigned" | "active" | "idle" | "draining" | "evicted";
-
-export interface RedisWorkspacePlacementInput {
-  workspaceId: string;
-  version?: string | undefined;
-  userId?: string | undefined;
-  ownerWorkerId?: string | undefined;
-  ownerBaseUrl?: string | undefined;
-  preferredWorkerId?: string | undefined;
-  preferredWorkerReason?: "controller_target" | undefined;
-  state: RedisWorkspacePlacementState;
-  sourceKind?: "object_store" | "local_directory" | undefined;
-  localPath?: string | undefined;
-  remotePrefix?: string | undefined;
-  dirty?: boolean | undefined;
-  refCount?: number | undefined;
-  lastActivityAt?: string | undefined;
-  materializedAt?: string | undefined;
-  updatedAt: string;
-}
-
-export interface RedisWorkspacePlacementEntry {
-  workspaceId: string;
-  version: string;
-  userId?: string | undefined;
-  ownerWorkerId?: string | undefined;
-  ownerBaseUrl?: string | undefined;
-  preferredWorkerId?: string | undefined;
-  preferredWorkerReason?: "controller_target" | undefined;
-  state: RedisWorkspacePlacementState;
-  sourceKind?: "object_store" | "local_directory" | undefined;
-  localPath?: string | undefined;
-  remotePrefix?: string | undefined;
-  dirty?: boolean | undefined;
-  refCount?: number | undefined;
-  lastActivityAt?: string | undefined;
-  materializedAt?: string | undefined;
-  updatedAt: string;
-}
-
-export interface WorkspaceLeaseRegistry {
-  heartbeat(entry: RedisWorkspaceLeaseInput, ttlMs: number): Promise<void>;
-  remove(workspaceId: string, version: string, ownerWorkerId: string): Promise<void>;
-  listActive?(nowMs?: number): Promise<RedisWorkspaceLeaseEntry[]>;
-  getByWorkspaceId?(workspaceId: string, nowMs?: number): Promise<RedisWorkspaceLeaseEntry | undefined>;
-}
-
-export interface WorkspacePlacementRegistry {
-  upsert(entry: RedisWorkspacePlacementInput): Promise<void>;
-  assignUser(
-    workspaceId: string,
-    userId: string,
-    options?: { overwrite?: boolean | undefined; updatedAt?: string | undefined }
-  ): Promise<void>;
-  setPreferredWorker(
-    workspaceId: string,
-    preferredWorkerId: string,
-    options?: {
-      reason?: "controller_target" | undefined;
-      overwrite?: boolean | undefined;
-      updatedAt?: string | undefined;
-    }
-  ): Promise<void>;
-  releaseOwnership(
-    workspaceId: string,
-    options?: {
-      state?: RedisWorkspacePlacementState | undefined;
-      preferredWorkerId?: string | undefined;
-      preferredWorkerReason?: "controller_target" | undefined;
-      updatedAt?: string | undefined;
-    }
-  ): Promise<void>;
-  listAll(): Promise<RedisWorkspacePlacementEntry[]>;
-  getByWorkspaceId(workspaceId: string): Promise<RedisWorkspacePlacementEntry | undefined>;
 }
 
 export interface RedisRunWorkerOptions {
