@@ -2,6 +2,7 @@ import { Suspense, lazy } from "react";
 
 import { AppHeader } from "./layout/AppHeader";
 import { AppSidebar } from "./layout/AppSidebar";
+import { useUiStore } from "./stores/ui-store";
 import { toneBadgeClass } from "./support";
 import type { AppThemeName } from "./theme";
 import { useAppController } from "./use-app-controller";
@@ -36,6 +37,7 @@ function SurfaceFallback(props: { label: string }) {
 
 export function AppScreen({ theme, onThemeChange }: AppScreenProps) {
   const controller = useAppController();
+  const setSurfaceMode = useUiStore((state) => state.setSurfaceMode);
 
   return (
     <div className="app-shell h-screen flex flex-col overflow-x-hidden">
@@ -52,7 +54,7 @@ export function AppScreen({ theme, onThemeChange }: AppScreenProps) {
                 <button
                   type="button"
                   onClick={() => {
-                    controller.headerProps.onSurfaceModeChange("runtime");
+                    setSurfaceMode("runtime");
                     controller.consolePanelProps.openErrors();
                   }}
                   className={`rounded-full border px-3 py-1 text-xs font-medium transition ${toneBadgeClass("rose")} bg-background/86 hover:bg-background`}

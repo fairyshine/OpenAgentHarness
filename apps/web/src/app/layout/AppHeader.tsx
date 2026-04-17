@@ -1,9 +1,15 @@
+import { memo } from "react";
+
 import { Layers3, Network, Orbit, Palette, SquareTerminal } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { probeTone, streamTone, toneBadgeClass, type StatusSemanticTone } from "../support";
+import { useHealthStore } from "../stores/health-store";
+import { useSettingsStore } from "../stores/settings-store";
+import { useStreamStore } from "../stores/stream-store";
+import { useUiStore } from "../stores/ui-store";
 import { appThemeOptions, isAppThemeName } from "../theme";
 import type { AppThemeName } from "../theme";
 import type { useAppController } from "../use-app-controller";
@@ -25,7 +31,16 @@ function StatusPill(props: { label: string; value: string; tone: StatusSemanticT
   );
 }
 
-export function AppHeader(props: AppHeaderProps) {
+function AppHeaderImpl(props: AppHeaderProps) {
+  const healthStatus = useHealthStore((state) => state.healthStatus);
+  const streamState = useStreamStore((state) => state.streamState);
+  const surfaceMode = useUiStore((state) => state.surfaceMode);
+  const setSurfaceMode = useUiStore((state) => state.setSurfaceMode);
+  const consoleOpen = useUiStore((state) => state.consoleOpen);
+  const setConsoleOpen = useUiStore((state) => state.setConsoleOpen);
+  const serviceScope = useSettingsStore((state) => state.serviceScope);
+  const setServiceScope = useSettingsStore((state) => state.setServiceScope);
+
   return (
     <header className="app-topbar h-[60px] flex items-center justify-between gap-4 px-4 sm:px-6 overflow-hidden min-w-0">
       <div className="flex min-w-0 items-center gap-3">
@@ -41,8 +56,8 @@ export function AppHeader(props: AppHeaderProps) {
             </span>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <StatusPill icon={Network} label="Health" value={props.healthStatus} tone={probeTone(props.healthStatus)} />
-            <StatusPill icon={Orbit} label="Stream" value={props.streamState} tone={streamTone(props.streamState)} />
+            <StatusPill icon={Network} label="Health" value={healthStatus} tone={probeTone(healthStatus)} />
+            <StatusPill icon={Orbit} label="Stream" value={streamState} tone={streamTone(streamState)} />
           </div>
         </div>
       </div>
@@ -80,7 +95,7 @@ export function AppHeader(props: AppHeaderProps) {
             <Layers3 className="h-3.5 w-3.5 text-foreground/48" />
             <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-foreground/46">Service</span>
           </div>
-          <Select value={props.serviceScope} onValueChange={props.onServiceScopeChange}>
+          <Select value={serviceScope} onValueChange={setServiceScope}>
             <SelectTrigger
               size="sm"
               className="topbar-chip-hoverable h-7 min-w-[132px] border-none bg-transparent px-2 text-xs text-foreground shadow-none focus-visible:ring-2 focus-visible:ring-black/10 sm:min-w-[156px]"
@@ -96,7 +111,7 @@ export function AppHeader(props: AppHeaderProps) {
             </SelectContent>
           </Select>
         </div>
-        <Tabs value={props.surfaceMode} onValueChange={(value) => props.onSurfaceModeChange(value as HeaderProps["surfaceMode"])}>
+        <Tabs value={surfaceMode} onValueChange={(value) => setSurfaceMode(value as HeaderProps["surfaceMode"])}>
           <TabsList className="topbar-chip h-9 rounded-2xl p-1">
             <TabsTrigger value="runtime" className="topbar-tabs-trigger h-7 rounded-xl px-3 text-xs">
               Runtime
@@ -111,9 +126,9 @@ export function AppHeader(props: AppHeaderProps) {
         </Tabs>
         <button
           type="button"
-          onClick={props.toggleConsole}
+          onClick={() => setConsoleOpen((current) => !current)}
           className={`inline-flex h-9 items-center gap-2 rounded-2xl border px-3 text-xs transition ${
-            props.consoleOpen
+            consoleOpen
               ? "topbar-control-active text-foreground"
               : "topbar-control-idle"
           }`}
@@ -125,3 +140,5 @@ export function AppHeader(props: AppHeaderProps) {
     </header>
   );
 }
+
+export const AppHeader = memo(AppHeaderImpl);
