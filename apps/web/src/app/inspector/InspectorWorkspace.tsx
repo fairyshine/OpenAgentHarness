@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -6,15 +8,30 @@ import {
   TimelineWorkbench,
   WorkspaceWorkbench
 } from "../inspector-panels";
+import { useStreamStore } from "../stores/stream-store";
+import { useUiStore } from "../stores/ui-store";
 import { statusTone } from "../support";
 import type { useAppController } from "../use-app-controller";
 
 type RuntimeProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"];
 
-export function InspectorWorkspace(props: RuntimeProps) {
+function InspectorWorkspaceImpl(props: RuntimeProps) {
+  const inspectorTab = useUiStore((state) => state.inspectorTab);
+  const setInspectorTab = useUiStore((state) => state.setInspectorTab);
+  const timelineInspectorMode = useUiStore((state) => state.timelineInspectorMode);
+  const setTimelineInspectorMode = useUiStore((state) => state.setTimelineInspectorMode);
+  const setSelectedTraceId = useUiStore((state) => state.setSelectedTraceId);
+  const setSelectedMessageId = useUiStore((state) => state.setSelectedMessageId);
+  const setSelectedStepId = useUiStore((state) => state.setSelectedStepId);
+  const setSelectedEventId = useUiStore((state) => state.setSelectedEventId);
+  const messages = useStreamStore((state) => state.messages);
+  const run = useStreamStore((state) => state.run);
+  const runSteps = useStreamStore((state) => state.runSteps);
+  const selectedRunId = useStreamStore((state) => state.selectedRunId);
+  const setSelectedRunId = useStreamStore((state) => state.setSelectedRunId);
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <Tabs value={props.inspectorTab} onValueChange={(value) => props.setInspectorTab(value as RuntimeProps["inspectorTab"])} className="flex min-h-0 flex-1 flex-col">
+      <Tabs value={inspectorTab} onValueChange={(value) => setInspectorTab(value as RuntimeProps["inspectorTab"])} className="flex min-h-0 flex-1 flex-col">
         <div className="app-toolbar-strip px-5 py-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <TabsList variant="line" className="gap-1 p-0">
@@ -24,15 +41,15 @@ export function InspectorWorkspace(props: RuntimeProps) {
             </TabsList>
             <div className="flex flex-wrap gap-2">
               {props.session?.id ? <Badge variant="outline">{props.session.id}</Badge> : null}
-              {props.selectedRunId || props.run?.id ? <Badge variant="outline">{props.selectedRunId || props.run?.id}</Badge> : null}
-              {props.run?.status ? <Badge className={statusTone(props.run.status)}>{props.run.status}</Badge> : null}
+              {selectedRunId || run?.id ? <Badge variant="outline">{selectedRunId || run?.id}</Badge> : null}
+              {run?.status ? <Badge className={statusTone(run.status)}>{run.status}</Badge> : null}
             </div>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <Badge variant="secondary">messages {props.messages.length}</Badge>
+            <Badge variant="secondary">messages {messages.length}</Badge>
             <Badge variant="secondary">calls {props.modelCallTraces.length}</Badge>
-            <Badge variant="secondary">steps {props.runSteps.length}</Badge>
+            <Badge variant="secondary">steps {runSteps.length}</Badge>
             <Badge variant="secondary">events {props.deferredEvents.length}</Badge>
             <span className="self-center text-xs text-muted-foreground">{props.inspectorSubtitle}</span>
           </div>
@@ -42,13 +59,13 @@ export function InspectorWorkspace(props: RuntimeProps) {
             <TabsContent value="overview">
               <OverviewWorkbench
                 session={props.session}
-                run={props.run}
+                run={run}
                 workspace={props.workspace}
                 sessionName={props.currentSessionName}
                 workspaceName={props.currentWorkspaceName}
-                selectedRunId={props.selectedRunId}
+                selectedRunId={selectedRunId}
                 sessionRuns={props.sessionRuns}
-                onSelectedRunIdChange={props.setSelectedRunId}
+                onSelectedRunIdChange={setSelectedRunId}
                 onRefreshSessionRuns={props.refreshSessionRuns}
                 onRefreshRun={props.refreshRun}
                 onRefreshRunSteps={props.refreshRunSteps}
@@ -56,31 +73,31 @@ export function InspectorWorkspace(props: RuntimeProps) {
                 onLoadRunStepsById={props.refreshRunStepsById}
                 onCancelRun={props.cancelCurrentRun}
                 modelCallCount={props.modelCallTraces.length}
-                stepCount={props.runSteps.length}
+                stepCount={runSteps.length}
                 eventCount={props.deferredEvents.length}
-                messageCount={props.messages.length}
+                messageCount={messages.length}
                 latestEvent={props.latestEvent}
                 events={props.deferredEvents}
-                runSteps={props.runSteps}
-                messages={props.messages}
+                runSteps={runSteps}
+                messages={messages}
                 latestTrace={props.latestModelCallTrace}
-                onOpenTimeline={() => props.setInspectorTab("timeline")}
+                onOpenTimeline={() => setInspectorTab("timeline")}
               />
             </TabsContent>
 
             <TabsContent value="timeline">
               <TimelineWorkbench
-                mode={props.timelineInspectorMode}
-                onModeChange={props.setTimelineInspectorMode}
+                mode={timelineInspectorMode}
+                onModeChange={setTimelineInspectorMode}
                 systemMessages={props.composedSystemMessages}
                 selectedMessageSystemMessages={props.selectedMessageSystemMessages}
                 firstTrace={props.firstModelCallTrace}
-                messages={props.messages}
+                messages={messages}
                 selectedMessage={props.selectedSessionMessage}
-                onSelectMessage={props.setSelectedMessageId}
+                onSelectMessage={setSelectedMessageId}
                 traces={props.modelCallTraces}
                 selectedTrace={props.selectedModelCallTrace}
-                onSelectTrace={props.setSelectedTraceId}
+                onSelectTrace={setSelectedTraceId}
                 latestTrace={props.latestModelCallTrace}
                 latestModelMessageCounts={props.latestModelMessageCounts}
                 resolvedModelNames={props.resolvedModelNames}
@@ -90,12 +107,12 @@ export function InspectorWorkspace(props: RuntimeProps) {
                 activeToolNames={props.allAdvertisedToolNames}
                 toolServers={props.allToolServers}
                 onDownload={props.downloadSessionTrace}
-                steps={props.runSteps}
+                steps={runSteps}
                 selectedStep={props.selectedRunStep}
-                onSelectStep={props.setSelectedStepId}
+                onSelectStep={setSelectedStepId}
                 events={props.deferredEvents}
                 selectedEvent={props.selectedSessionEvent}
-                onSelectEvent={props.setSelectedEventId}
+                onSelectEvent={setSelectedEventId}
               />
             </TabsContent>
 
@@ -103,7 +120,7 @@ export function InspectorWorkspace(props: RuntimeProps) {
               <WorkspaceWorkbench
                 workspace={props.workspace}
                 session={props.session}
-                run={props.run}
+                run={run}
                 catalog={props.catalog}
                 runtimeTools={props.allRuntimeTools}
                 runtimeToolNames={props.allRuntimeToolNames}
@@ -118,3 +135,5 @@ export function InspectorWorkspace(props: RuntimeProps) {
     </div>
   );
 }
+
+export const InspectorWorkspace = memo(InspectorWorkspaceImpl);

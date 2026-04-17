@@ -1,15 +1,19 @@
+import { memo } from "react";
+
 import { StorageWorkbench } from "./StorageWorkbench";
+import { useHealthStore } from "../stores/health-store";
 import type { useAppController } from "../use-app-controller";
 
 type StorageProps = ReturnType<typeof useAppController>["storageSurfaceProps"];
 
-export function StorageWorkspace(props: StorageProps) {
+function StorageWorkspaceImpl(props: StorageProps) {
+  const healthReport = useHealthStore((state) => state.healthReport);
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 h-full flex-1 overflow-hidden px-5 py-5">
         <StorageWorkbench
           browserTab={props.storageBrowserTab}
-          healthReport={props.healthReport}
+          healthReport={healthReport}
           overview={props.storageOverview}
           tablePage={props.storageTablePage}
           selectedTable={props.selectedStorageTable}
@@ -41,3 +45,5 @@ export function StorageWorkspace(props: StorageProps) {
     </section>
   );
 }
+
+export const StorageWorkspace = memo(StorageWorkspaceImpl);
