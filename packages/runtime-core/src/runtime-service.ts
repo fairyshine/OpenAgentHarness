@@ -113,105 +113,17 @@ import type { RuntimeMessage } from "./runtime/runtime-messages.js";
 import { createLocalWorkspaceCommandExecutor } from "./workspace-command-executor.js";
 import { createLocalWorkspaceFileSystem } from "./workspace-file-system.js";
 import { resolveWorkspacePath } from "./native-tools/paths.js";
-
-interface RunExecutionContext {
-  currentAgentName: string;
-  injectSystemReminder: boolean;
-  delegatedRunIds: string[];
-}
-
-function timeoutMsFromSeconds(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-
-  return Math.floor(value * 1000);
-}
-
-function isAbortError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === "AbortError" ||
-      error.message === "aborted" ||
-      error.message === "This operation was aborted")
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function resolveArchiveTimeZone(): string {
-  return process.env.OAH_ARCHIVE_TIMEZONE?.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-}
-
-function formatArchiveDate(timestamp: string, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(new Date(timestamp));
-}
-
-function buildArchiveMetadata() {
-  const deletedAt = nowIso();
-  const timezone = resolveArchiveTimeZone();
-
-  return {
-    archiveDate: formatArchiveDate(deletedAt, timezone),
-    archivedAt: deletedAt,
-    deletedAt,
-    timezone
-  };
-}
-
-async function withTimeout<T>(
-  operation: (signal: AbortSignal | undefined) => Promise<T>,
-  timeoutMs: number | undefined,
-  timeoutMessage: string
-): Promise<T> {
-  if (timeoutMs === undefined) {
-    return operation(undefined);
-  }
-
-  const abortController = new AbortController();
-  const timeout = setTimeout(() => {
-    abortController.abort();
-  }, timeoutMs);
-
-  try {
-    return await Promise.race([
-      operation(abortController.signal),
-      new Promise<T>((_resolve, reject) => {
-        abortController.signal.addEventListener(
-          "abort",
-          () => {
-            reject(new Error(timeoutMessage));
-          },
-          { once: true }
-        );
-      })
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function createAbortError(): Error {
-  const error = new Error("aborted");
-  error.name = "AbortError";
-  return error;
-}
-
-type AutomaticRecoveryStrategy = "fail" | "requeue_running" | "requeue_all";
-
-type RecoveryActor =
-  | "worker_startup"
-  | "worker_startup_requeue"
-  | "worker_drain_timeout"
-  | "worker_drain_timeout_requeue"
-  | "manual_operator_requeue";
+import {
+  buildArchiveMetadata,
+  createAbortError,
+  isAbortError,
+  isRecord,
+  timeoutMsFromSeconds,
+  withTimeout,
+  type AutomaticRecoveryStrategy,
+  type RecoveryActor,
+  type RunExecutionContext
+} from "./runtime/internal-helpers.js";
 
 export class RuntimeService {
   readonly #defaultModel: string;
