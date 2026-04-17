@@ -277,6 +277,79 @@ describe("native tools", () => {
     expect(await readFile(path.join(workspaceRoot, "notes.txt"), "utf8")).toBe("two\n");
   });
 
+  it("accepts todos when no item is marked in progress", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-todo-no-progress-"));
+    tempDirs.push(workspaceRoot);
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["TodoWrite"], {
+      sessionId: "session-todo-no-progress"
+    });
+
+    const result = String(
+      await tools.TodoWrite.execute(
+        {
+          todos: [
+            { content: "Inspect files", activeForm: "Inspecting files", status: "completed" },
+            { content: "Ship fix", activeForm: "Shipping fix", status: "pending" },
+            { content: "Write tests", activeForm: "Writing tests", status: "pending" }
+          ]
+        },
+        {}
+      )
+    );
+
+    expect(result).toContain("remaining: 2");
+    expect(result).toContain("pending: Ship fix");
+    expect(result).toContain("pending: Write tests");
+
+    const todoFile = await readFile(
+      path.join(workspaceRoot, ".openharness", "state", "todos", "session-todo-no-progress.json"),
+      "utf8"
+    );
+    expect(JSON.parse(todoFile)).toEqual([
+      { content: "Inspect files", activeForm: "Inspecting files", status: "completed" },
+      { content: "Ship fix", activeForm: "Shipping fix", status: "pending" },
+      { content: "Write tests", activeForm: "Writing tests", status: "pending" }
+    ]);
+  });
+
+  it("accepts multiple in-progress todos without failing", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-todo-multi-progress-"));
+    tempDirs.push(workspaceRoot);
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["TodoWrite"], {
+      sessionId: "session-todo-multi-progress"
+    });
+
+    const result = String(
+      await tools.TodoWrite.execute(
+        {
+          todos: [
+            { content: "Inspect files", activeForm: "Inspecting files", status: "in_progress" },
+            { content: "Ship fix", activeForm: "Shipping fix", status: "in_progress" },
+            { content: "Write tests", activeForm: "Writing tests", status: "pending" }
+          ]
+        },
+        {}
+      )
+    );
+
+    expect(result).toContain("remaining: 3");
+    expect(result).toContain("in_progress: Inspect files");
+    expect(result).toContain("in_progress: Ship fix");
+    expect(result).toContain("pending: Write tests");
+
+    const todoFile = await readFile(
+      path.join(workspaceRoot, ".openharness", "state", "todos", "session-todo-multi-progress.json"),
+      "utf8"
+    );
+    expect(JSON.parse(todoFile)).toEqual([
+      { content: "Inspect files", activeForm: "Inspecting files", status: "in_progress" },
+      { content: "Ship fix", activeForm: "Shipping fix", status: "in_progress" },
+      { content: "Write tests", activeForm: "Writing tests", status: "pending" }
+    ]);
+  });
+
   it("fetches and searches the web with Title Case tools", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-web-"));
     tempDirs.push(workspaceRoot);

@@ -71,6 +71,10 @@ export interface RuntimeLogger {
   error?(message: string, details?: Record<string, unknown>): void;
 }
 
+export interface WorkspaceActivityTracker {
+  touchWorkspace(workspaceId: string): Promise<void> | void;
+}
+
 export interface ModelDefinition {
   provider: string;
   key?: string;
@@ -582,6 +586,8 @@ export interface RuntimeServiceOptions {
   defaultModel: string;
   modelGateway: ModelGateway;
   logger?: RuntimeLogger | undefined;
+  workspaceActivityTracker?: WorkspaceActivityTracker | undefined;
+  executionServicesMode?: "eager" | "lazy" | undefined;
   runHeartbeatIntervalMs?: number | undefined;
   staleRunRecovery?:
     | {

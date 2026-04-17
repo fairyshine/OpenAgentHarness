@@ -1,5 +1,3 @@
-import { Readable } from "node:stream";
-
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
@@ -26,9 +24,23 @@ import {
 import { AppError } from "@oah/runtime-core";
 
 import { assertWorkspaceAccess, createParamsSchema, sendError, toCallerContext } from "../context.js";
+import {
+  buildOwnerProxyUrl,
+  buildProxyBody,
+  buildProxyHeaders,
+  resolveOwnerId,
+  sendProxyResponse
+} from "../proxy-utils.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
 
 type WorkspaceOwnership = Awaited<ReturnType<NonNullable<AppDependencies["resolveWorkspaceOwnership"]>>>;
+
+function resolveWorkspaceOwnerBaseUrl(
+  dependencies: Pick<AppDependencies, "sandboxOwnerFallbackBaseUrl">,
+  ownership: NonNullable<WorkspaceOwnership>
+): string | undefined {
+  return ownership.ownerBaseUrl ?? dependencies.sandboxOwnerFallbackBaseUrl;
+}
 
 function projectWorkspaceForPublicApi(
   dependencies: Pick<AppDependencies, "sandboxHostProviderKind">,
@@ -57,77 +69,14 @@ function projectWorkspacePageForPublicApi(
   };
 }
 
-function resolveWorkspaceOwnerId(input: { ownerId?: string | undefined; userId?: string | undefined }): string | undefined {
-  const ownerId = input.ownerId?.trim();
-  if (ownerId) {
-    return ownerId;
-  }
-
-  const userId = input.userId?.trim();
-  return userId && userId.length > 0 ? userId : undefined;
-}
-
-function copyProxyResponseHeaders(reply: FastifyReply, headers: Headers): void {
-  for (const [name, value] of headers.entries()) {
-    if (name === "transfer-encoding" || name === "connection" || name === "keep-alive") {
-      continue;
-    }
-
-    reply.header(name, value);
-  }
-}
-
-function buildOwnerWorkspaceProxyUrl(ownerBaseUrl: string, request: FastifyRequest): string {
-  const targetPath = (request.raw.url ?? request.url).replace(/^\/api\/v1\/workspaces/u, "/internal/v1/workspaces");
-  return `${ownerBaseUrl.replace(/\/+$/u, "")}${targetPath}`;
-}
-
-function buildOwnerWorkspaceProxyHeaders(request: FastifyRequest): Headers {
-  const headers = new Headers();
-  const contentType = request.headers["content-type"];
-  if (typeof contentType === "string" && contentType.length > 0) {
-    headers.set("content-type", contentType);
-  }
-
-  const accept = request.headers.accept;
-  if (typeof accept === "string" && accept.length > 0) {
-    headers.set("accept", accept);
-  }
-
-  const ifMatch = request.headers["if-match"];
-  if (typeof ifMatch === "string" && ifMatch.length > 0) {
-    headers.set("if-match", ifMatch);
-  }
-
-  return headers;
-}
-
-function buildOwnerWorkspaceProxyBody(request: FastifyRequest): Buffer | string | undefined {
-  if (request.method === "GET" || request.method === "HEAD") {
-    return undefined;
-  }
-
-  if (Buffer.isBuffer(request.body)) {
-    return request.body;
-  }
-
-  if (typeof request.body === "string") {
-    return request.body;
-  }
-
-  if (request.body === undefined || request.body === null) {
-    return undefined;
-  }
-
-  return JSON.stringify(request.body);
-}
-
 async function proxyWorkspaceRequestToOwner(
   request: FastifyRequest,
   reply: FastifyReply,
+  dependencies: Pick<AppDependencies, "sandboxOwnerFallbackBaseUrl">,
   ownership: NonNullable<WorkspaceOwnership>
 ): Promise<void> {
-  if (!ownership.ownerBaseUrl) {
+  const ownerBaseUrl = resolveWorkspaceOwnerBaseUrl(dependencies, ownership);
+  if (!ownerBaseUrl) {
     await sendError(
       reply,
       409,
@@ -148,27 +97,17 @@ async function proxyWorkspaceRequestToOwner(
   }
 
   try {
-    const body = buildOwnerWorkspaceProxyBody(request);
-    const response = await fetch(buildOwnerWorkspaceProxyUrl(ownership.ownerBaseUrl, request), {
-      method: request.method,
-      headers: buildOwnerWorkspaceProxyHeaders(request),
-      ...(body !== undefined ? { body } : {})
-    });
+    const body = buildProxyBody(request);
+    const response = await fetch(
+      buildOwnerProxyUrl(ownerBaseUrl, request, /^\/api\/v1\/workspaces/u, "/internal/v1/workspaces"),
+      {
+        method: request.method,
+        headers: buildProxyHeaders(request),
+        ...(body !== undefined ? { body } : {})
+      }
+    );
 
-    reply.status(response.status);
-    copyProxyResponseHeaders(reply, response.headers);
-    if (!response.body) {
-      await reply.send();
-      return;
-    }
-
-    const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
-      await reply.send(await response.text());
-      return;
-    }
-
-    await reply.send(Readable.fromWeb(response.body as never));
+    await sendProxyResponse(reply, response);
   } catch (error) {
     await sendError(
       reply,
@@ -196,7 +135,12 @@ async function guardWorkspaceOwnership(
   }
 
   if (ownership.ownerBaseUrl) {
-    await proxyWorkspaceRequestToOwner(request, reply, ownership);
+    await proxyWorkspaceRequestToOwner(request, reply, dependencies, ownership);
+    return "proxied";
+  }
+
+  if (dependencies.sandboxOwnerFallbackBaseUrl) {
+    await proxyWorkspaceRequestToOwner(request, reply, dependencies, ownership);
     return "proxied";
   }
 
@@ -355,7 +299,21 @@ async function handleMoveWorkspaceEntry(
   return reply.send(workspaceEntrySchema.parse(entry));
 }
 
+async function handleDeleteWorkspace(
+  dependencies: AppDependencies,
+  workspaceId: string,
+  reply: FastifyReply
+) {
+  await dependencies.runtimeService.deleteWorkspace(workspaceId);
+  return reply.status(204).send();
+}
+
 export function registerInternalWorkspaceRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
+  app.delete("/internal/v1/workspaces/:workspaceId", async (request, reply) => {
+    const params = createParamsSchema("workspaceId").parse(request.params);
+    return handleDeleteWorkspace(dependencies, params.workspaceId, reply);
+  });
+
   app.get("/internal/v1/workspaces/:workspaceId/entries", async (request, reply) => {
     const params = createParamsSchema("workspaceId").parse(request.params);
     return handleListWorkspaceEntries(dependencies, params.workspaceId, request, reply);
@@ -409,7 +367,7 @@ export function registerWorkspaceRoutes(
 
     const input = createWorkspaceRequestSchema.parse(request.body);
     const workspace = await dependencies.runtimeService.createWorkspace({ input });
-    const ownerId = resolveWorkspaceOwnerId(input);
+    const ownerId = resolveOwnerId(input);
     if (ownerId) {
       await dependencies.assignWorkspacePlacementUser?.({
         workspaceId: workspace.id,
@@ -433,7 +391,7 @@ export function registerWorkspaceRoutes(
 
     const name = typeof body?.name === "string" ? body.name : undefined;
     const externalRef = typeof body?.externalRef === "string" ? body.externalRef : undefined;
-    const ownerId = resolveWorkspaceOwnerId({
+    const ownerId = resolveOwnerId({
       ownerId: typeof body?.ownerId === "string" ? body.ownerId : undefined,
       userId: typeof body?.userId === "string" ? body.userId : undefined
     });
@@ -479,8 +437,10 @@ export function registerWorkspaceRoutes(
 
     const params = createParamsSchema("workspaceId").parse(request.params);
     assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
-    await dependencies.runtimeService.deleteWorkspace(params.workspaceId);
-    return reply.status(204).send();
+    if ((await guardWorkspaceOwnership(request, reply, dependencies, params.workspaceId)) !== "local") {
+      return reply;
+    }
+    return handleDeleteWorkspace(dependencies, params.workspaceId, reply);
   });
 
   app.get("/api/v1/workspaces/:workspaceId/catalog", async (request, reply) => {

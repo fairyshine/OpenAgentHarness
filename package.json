@@ -17,7 +17,7 @@
     "start:server": "pnpm --filter @oah/server start:api-only",
     "start:worker": "pnpm --filter @oah/worker start",
     "start:controller": "pnpm --filter @oah/controller start",
-    "storage:sync": "python3 ${OAH_TEST_ROOT:?set OAH_TEST_ROOT}/scripts/sync_to_minio.py --root ${OAH_TEST_ROOT:?set OAH_TEST_ROOT} --delete",
+    "storage:sync": "node ./scripts/storage-sync.mjs --delete",
     "local:up": "node ./scripts/local-stack.mjs up",
     "local:down": "node ./scripts/local-stack.mjs down",
     "version:sync": "node ./scripts/sync-root-version.mjs",

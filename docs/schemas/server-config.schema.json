@@ -77,11 +77,74 @@
         "force_path_style": {
           "type": "boolean"
         },
+        "workspace_backing_store": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "key_prefix": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "mirrors": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "paths": {
+              "type": "array",
+              "description": "Readonly prefixes mirrored from object storage into local directories.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "blueprint",
+                  "model",
+                  "tool",
+                  "skill"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "sync_on_boot": {
+              "type": "boolean"
+            },
+            "sync_on_change": {
+              "type": "boolean",
+              "description": "Poll mirrored readonly prefixes for changes. Active workspace writes are not live-synced through this path."
+            },
+            "poll_interval_ms": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "key_prefixes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "blueprint": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                },
+                "skill": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "sync_on_boot": {
           "type": "boolean"
         },
         "sync_on_change": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Poll mirrored readonly prefixes for changes. Active workspace writes are not live-synced through this path."
         },
         "poll_interval_ms": {
           "type": "integer",
@@ -89,6 +152,7 @@
         },
         "managed_paths": {
           "type": "array",
+          "description": "Prefixes managed by object-storage integration. 'workspace' only enables workspace backing-store / externalRef semantics; it is not mirrored on every change.",
           "items": {
             "type": "string",
             "enum": [
@@ -229,6 +293,10 @@
         "workspace_dir": {
           "type": "string"
         },
+        "runtime_state_dir": {
+          "type": "string",
+          "description": "Runtime-private state root for SQLite shadow data, archives, and legacy materialization state."
+        },
         "blueprint_dir": {
           "type": "string"
         },
@@ -244,6 +312,26 @@
           "type": "string"
         }
         
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "materialization": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "idle_ttl_ms": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "maintenance_interval_ms": {
+              "type": "integer",
+              "minimum": 1000
+            }
+          }
+        }
       }
     },
     "workers": {

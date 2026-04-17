@@ -5,11 +5,11 @@ server:
 storage: {}
 
 paths:
-  workspace_dir: ./apps/web/tests/e2e/.runtime/workspaces
-  blueprint_dir: ./apps/web/tests/e2e/.runtime/blueprints
-  model_dir: ./apps/web/tests/e2e/fixtures/models
-  tool_dir: ./apps/web/tests/e2e/.runtime/tools
-  skill_dir: ./apps/web/tests/e2e/.runtime/skills
+  workspace_dir: ../.runtime/workspaces
+  blueprint_dir: ../.runtime/blueprints
+  model_dir: ./models
+  tool_dir: ../.runtime/tools
+  skill_dir: ../.runtime/skills
 
 workers:
   embedded:

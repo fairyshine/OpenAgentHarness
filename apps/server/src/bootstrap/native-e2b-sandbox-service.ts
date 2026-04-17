@@ -21,6 +21,7 @@ import type {
 } from "@oah/runtime-core";
 
 import type { E2BCompatibleSandboxLease, E2BCompatibleSandboxService } from "./e2b-compatible-sandbox-host.js";
+import { trimToUndefined } from "./string-utils.js";
 
 const DEFAULT_E2B_TIMEOUT_MS = 300_000;
 const DEFAULT_E2B_WORKSPACE_ROOT = "/workspace";
@@ -51,11 +52,6 @@ export interface NativeE2BSandboxServiceOptions {
   template?: string | undefined;
   timeoutMs?: number | undefined;
   sdk?: NativeE2BSandboxSdk | undefined;
-}
-
-function trimToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
 function buildSandboxGroupKey(workspace: WorkspaceRecord): string {

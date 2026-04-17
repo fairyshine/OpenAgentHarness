@@ -1,11 +1,20 @@
 import type { FastifyInstance } from "fastify";
 
-import { modelGenerateRequestSchema, modelGenerateResponseSchema } from "@oah/api-contracts";
+import { modelGenerateRequestSchema, modelGenerateResponseSchema, platformModelSnapshotSchema } from "@oah/api-contracts";
+import { AppError } from "@oah/runtime-core";
 
 import { writeSseEvent } from "../context.js";
 import type { AppDependencies } from "../types.js";
 
 export function registerInternalModelRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
+  app.post("/internal/v1/platform-models/refresh", async (_request, reply) => {
+    if (!dependencies.refreshPlatformModels) {
+      throw new AppError(404, "platform_models_unavailable", "Platform model refresh is not available.");
+    }
+
+    return reply.send(platformModelSnapshotSchema.parse(await dependencies.refreshPlatformModels()));
+  });
+
   app.post("/internal/v1/models/generate", async (request, reply) => {
     const input = modelGenerateRequestSchema.parse(request.body);
     const response = await dependencies.modelGateway.generate(

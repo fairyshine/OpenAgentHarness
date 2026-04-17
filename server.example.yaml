@@ -14,17 +14,23 @@ storage: {}
 #   access_key: ${env.OSS_ACCESS_KEY_ID}
 #   secret_key: ${env.OSS_ACCESS_KEY_SECRET}
 #   force_path_style: false
-#   sync_on_boot: true
-#   sync_on_change: true
-#   poll_interval_ms: 5000
-#   managed_paths:
-#     - workspace
-#   key_prefixes:
-#     workspace: workspace
-#     blueprint: blueprint
-#     model: model
-#     tool: tool
-#     skill: skill
+#   workspace_backing_store:
+#     enabled: true
+#     key_prefix: workspace
+#   mirrors:
+#     paths:
+#       - blueprint
+#       - model
+#       - tool
+#       - skill
+#     sync_on_boot: true
+#     sync_on_change: true
+#     poll_interval_ms: 5000
+#     key_prefixes:
+#       blueprint: blueprint
+#       model: model
+#       tool: tool
+#       skill: skill
 
 # sandbox:
 #   provider: embedded
@@ -49,6 +55,8 @@ storage: {}
 
 paths:
   workspace_dir: ./tmp/workspaces
+  # runtime_state_dir defaults to a sibling ./.openharness directory when omitted.
+  # runtime_state_dir: ./tmp/.openharness
   blueprint_dir: ./tmp/blueprints
   model_dir: ./tests/fixtures/models
   tool_dir: ./tmp/tools

@@ -30,6 +30,7 @@ sandbox:
 
 paths:
   workspace_dir: /srv/openharness/workspaces       # project workspace 根目录
+  runtime_state_dir: /srv/openharness/.openharness  # 运行时私有状态目录
   blueprint_dir: /srv/openharness/blueprints        # workspace blueprint 目录
   model_dir: /srv/openharness/models               # 平台模型目录
   tool_dir: /srv/openharness/tools                 # 公共 tool 目录
@@ -74,6 +75,33 @@ llm:
 > **tip**
 > 不配置 Redis 时，Run 会在 API 进程内直接执行（适合本地开发）。配置 Redis 后支持多实例 Worker 消费队列。
 
+### `object_storage`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `provider` | string | 当前仅支持 `s3` 兼容对象存储 |
+| `bucket` | string | 目标 bucket |
+| `region` | string | 对象存储 region |
+| `endpoint` | string | 可选，自定义 S3/OSS/MinIO endpoint |
+| `access_key` | string | 可选，访问凭证 |
+| `secret_key` | string | 可选，访问凭证 |
+| `session_token` | string | 可选，临时凭证 |
+| `force_path_style` | boolean | 是否强制 path-style URL |
+| `workspace_backing_store.enabled` | boolean | 是否启用受管 workspace 的对象存储 backing store；启用后 active workspace 只在 idle / drain / delete 时 flush 回对象存储 |
+| `workspace_backing_store.key_prefix` | string | workspace backing store 对应的对象存储 key prefix |
+| `mirrors.paths` | string[] | 只读镜像前缀列表，支持 `blueprint / model / tool / skill` |
+| `mirrors.sync_on_boot` | boolean | 是否在启动时把 mirrors 管理的前缀从对象存储拉到本地 |
+| `mirrors.sync_on_change` | boolean | 是否轮询同步 mirrors 管理的只读前缀。不会对 active workspace 做实时回写 |
+| `mirrors.poll_interval_ms` | number | mirrors 轮询周期 |
+| `mirrors.key_prefixes.*` | object | 各只读镜像前缀对应的对象存储 key prefix |
+| `managed_paths` / `key_prefixes.*` / `sync_on_*` | legacy | 兼容旧配置；建议迁移到 `workspace_backing_store` 和 `mirrors`，加载时会发出弃用告警 |
+
+> **tip**
+> `mirrors.paths` 里的 `blueprint / model / tool / skill` 仍由 `ObjectStorageMirrorController` 做启动同步和变更轮询。
+
+> **tip**
+> `workspace_backing_store` 只负责受管 workspace 的 `externalRef` / backing store 语义。active workspace 的本地改动不会按 `mirrors.sync_on_change` 实时回写，而是走 workspace materialization 的 idle / drain flush。
+
 ### `sandbox`
 
 | 字段 | 类型 | 说明 |
@@ -103,6 +131,7 @@ llm:
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `workspace_dir` | string | project workspace 根目录 |
+| `runtime_state_dir` | string | 运行时私有状态目录；用于 SQLite shadow 数据、归档导出和遗留 materialization 状态。默认是 `dirname(workspace_dir)/.openharness` |
 | `blueprint_dir` | string | workspace blueprint 目录 |
 | `model_dir` | string | 平台模型定义目录 |
 | `tool_dir` | string | 公共 MCP tool server 定义目录 |
@@ -141,7 +170,17 @@ llm:
 
 ### `workspace_dir`
 
-每个直接子目录视为一个 `project` workspace。仅扫描一级子目录。
+每个直接子目录视为一个 `project` workspace。仅扫描一级子目录。这里应只承载 live workspace 本体，不建议再混放 runtime 内部状态目录。
+
+### `runtime_state_dir`
+
+用于放置运行时私有状态，包括：
+
+- SQLite shadow `history.db`
+- 归档导出目录
+- 遗留 object-store materialization 状态目录
+
+默认值为 `dirname(workspace_dir)/.openharness`，这样可以把 live workspace 根与内部状态根拆开；如果你希望这些状态持久化，请显式把它挂到可写持久卷。
 
 ### `blueprint_dir`
 

@@ -76,7 +76,8 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 | 命令 | 作用 |
 | --- | --- |
 | `pnpm install` | 安装依赖 |
-| `OAH_TEST_ROOT=/absolute/path pnpm storage:sync` | 同步测试数据到 MinIO |
+| `OAH_TEST_ROOT=/absolute/path pnpm storage:sync` | 同步只读测试数据到 MinIO（默认不含 `source/workspaces`） |
+| `OAH_TEST_ROOT=/absolute/path pnpm storage:sync -- --include-workspaces` | 连同 `source/workspaces` 一起同步到 MinIO |
 | `OAH_TEST_ROOT=/absolute/path pnpm local:up` | 启动本地整套服务（`oah-api` / `oah-controller` / `oah-sandbox`） |
 | `OAH_TEST_ROOT=/absolute/path OAH_SKIP_BUILD=1 pnpm local:up` | 复用本地已有 OAH 镜像，跳过 Docker 构建 |
 | `pnpm local:down` | 停止本地整套服务 |

@@ -4,7 +4,9 @@ import {
   createPlacementAwareSessionRunQueue,
   describeRuntimeProcess,
   parseSingleWorkspaceOptions,
+  resolveRuntimeAssemblyProfile,
   resolveEmbeddedWorkerPoolConfig,
+  resolveWorkspaceMaterializationConfig,
   resolveWorkerMode,
   shouldStartEmbeddedWorker
 } from "../apps/server/src/bootstrap.ts";
@@ -99,6 +101,49 @@ describe("server runtime process modes", () => {
         hasRedisRunQueue: true
       })
     ).toBe("external");
+  });
+
+  it("uses a lighter assembly profile for api-only remote sandbox control planes", () => {
+    expect(
+      resolveRuntimeAssemblyProfile({
+        processKind: "api",
+        startWorker: false,
+        remoteSandboxProvider: true
+      })
+    ).toEqual({
+      id: "api_control_plane",
+      executionServicesMode: "lazy",
+      enablePlatformModelLiveReload: false,
+      enableWorkerRuntime: false
+    });
+  });
+
+  it("keeps eager execution services for embedded api runtimes and workers", () => {
+    expect(
+      resolveRuntimeAssemblyProfile({
+        processKind: "api",
+        startWorker: true,
+        remoteSandboxProvider: false
+      })
+    ).toEqual({
+      id: "api_embedded_runtime",
+      executionServicesMode: "eager",
+      enablePlatformModelLiveReload: false,
+      enableWorkerRuntime: true
+    });
+
+    expect(
+      resolveRuntimeAssemblyProfile({
+        processKind: "worker",
+        startWorker: true,
+        remoteSandboxProvider: true
+      })
+    ).toEqual({
+      id: "worker_executor",
+      executionServicesMode: "eager",
+      enablePlatformModelLiveReload: false,
+      enableWorkerRuntime: true
+    });
   });
 
   it("summarizes worker runtime status from registry entries", () => {
@@ -339,6 +384,41 @@ describe("server runtime process modes", () => {
       scaleDownSampleSize: 6,
       scaleUpBusyRatioThreshold: 0.9,
       scaleUpMaxReadyAgeMs: 3_200
+    });
+  });
+
+  it("reads workspace materialization timings from server config", () => {
+    expect(
+      resolveWorkspaceMaterializationConfig({
+        workspace: {
+          materialization: {
+            idle_ttl_ms: 1_800_000,
+            maintenance_interval_ms: 7_500
+          }
+        }
+      })
+    ).toEqual({
+      idleTtlMs: 1_800_000,
+      maintenanceIntervalMs: 7_500
+    });
+  });
+
+  it("lets env vars override workspace materialization timings", () => {
+    vi.stubEnv("OAH_WORKSPACE_MATERIALIZATION_IDLE_TTL_MS", "900000");
+    vi.stubEnv("OAH_WORKSPACE_MATERIALIZATION_MAINTENANCE_INTERVAL_MS", "12000");
+
+    expect(
+      resolveWorkspaceMaterializationConfig({
+        workspace: {
+          materialization: {
+            idle_ttl_ms: 1_800_000,
+            maintenance_interval_ms: 7_500
+          }
+        }
+      })
+    ).toEqual({
+      idleTtlMs: 900_000,
+      maintenanceIntervalMs: 12_000
     });
   });
 

@@ -68,8 +68,10 @@ standalone worker 当前默认承担这些职责：
 worker Pod 侧至少需要保证这些目录可用：
 
 - `paths.workspace_dir`
-  - managed workspace 根目录
-  - 也承载 materialization cache 和 sqlite shadow state
+  - managed live workspace 根目录
+- `paths.runtime_state_dir`
+  - worker 运行时私有状态根目录
+  - 放置 sqlite shadow state、archives 和遗留 materialization 状态
 
 当 workspace externalRef 指向对象存储时，还需要：
 

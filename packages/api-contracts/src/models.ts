@@ -33,6 +33,25 @@ export const platformModelSnapshotSchema = z.object({
   items: z.array(platformModelSchema)
 });
 
+export const distributedPlatformModelRefreshTargetSchema = z.object({
+  workerId: z.string(),
+  runtimeInstanceId: z.string().optional(),
+  ownerBaseUrl: z.string(),
+  status: z.enum(["refreshed", "failed"]),
+  snapshot: platformModelSnapshotSchema.optional(),
+  error: z.string().optional()
+});
+
+export const distributedPlatformModelRefreshResultSchema = z.object({
+  snapshot: platformModelSnapshotSchema,
+  summary: z.object({
+    attempted: z.number().int().min(0),
+    succeeded: z.number().int().min(0),
+    failed: z.number().int().min(0)
+  }),
+  targets: z.array(distributedPlatformModelRefreshTargetSchema)
+});
+
 export const usageSchema = z.object({
   inputTokens: z.number().int().min(0).optional(),
   outputTokens: z.number().int().min(0).optional(),
@@ -71,6 +90,8 @@ export const modelGenerateResponseSchema = z.object({
 export type PlatformModel = z.infer<typeof platformModelSchema>;
 export type PlatformModelList = z.infer<typeof platformModelListSchema>;
 export type PlatformModelSnapshot = z.infer<typeof platformModelSnapshotSchema>;
+export type DistributedPlatformModelRefreshTarget = z.infer<typeof distributedPlatformModelRefreshTargetSchema>;
+export type DistributedPlatformModelRefreshResult = z.infer<typeof distributedPlatformModelRefreshResultSchema>;
 export type Usage = z.infer<typeof usageSchema>;
 export type ModelGenerateRequest = z.infer<typeof modelGenerateRequestSchema>;
 export type ModelStreamRequest = z.infer<typeof modelStreamRequestSchema>;

@@ -29,6 +29,11 @@ interface LocalDirectorySnapshot {
   emptyDirectories: Set<string>;
 }
 
+interface DirectorySyncOptions {
+  excludeRelativePath?: ((relativePath: string) => boolean) | undefined;
+  preserveTopLevelNames?: string[] | undefined;
+}
+
 interface ManagedPathMapping {
   key: ManagedPathKey;
   localDir: string;
@@ -94,7 +99,7 @@ function shouldIgnoreRelativePath(relativePath: string): boolean {
   );
 }
 
-async function collectLocalDirectorySnapshot(rootDir: string): Promise<LocalDirectorySnapshot> {
+async function collectLocalDirectorySnapshot(rootDir: string, options?: DirectorySyncOptions): Promise<LocalDirectorySnapshot> {
   const files = new Map<string, { absolutePath: string; size: number; mtimeMs: number }>();
   const emptyDirectories = new Set<string>();
   const rootExists = await stat(rootDir).catch(() => null);
@@ -111,6 +116,9 @@ async function collectLocalDirectorySnapshot(rootDir: string): Promise<LocalDire
       const absolutePath = path.join(directory, entry.name);
       const relativePath = normalizeRelativePath(path.relative(rootDir, absolutePath));
       if (shouldIgnoreRelativePath(relativePath)) {
+        continue;
+      }
+      if (options?.excludeRelativePath?.(relativePath)) {
         continue;
       }
 
@@ -155,7 +163,7 @@ export async function computeLocalDirectoryFingerprint(rootDir: string): Promise
   return createDirectoryFingerprint(await collectLocalDirectorySnapshot(rootDir));
 }
 
-async function removeDirectoryContents(rootDir: string): Promise<void> {
+async function removeDirectoryContents(rootDir: string, options?: DirectorySyncOptions): Promise<void> {
   const rootExists = await stat(rootDir).catch(() => null);
   if (!rootExists?.isDirectory()) {
     await mkdir(rootDir, { recursive: true });
@@ -165,9 +173,16 @@ async function removeDirectoryContents(rootDir: string): Promise<void> {
   const entries = await readdir(rootDir, { withFileTypes: true });
   await Promise.all(
     entries.map(async (entry) => {
+      if (options?.preserveTopLevelNames?.includes(entry.name)) {
+        return;
+      }
       await rm(path.join(rootDir, entry.name), { recursive: true, force: true });
     })
   );
+}
+
+function shouldExcludeWorkspaceMirrorRelativePath(relativePath: string): boolean {
+  return relativePath === ".openharness" || relativePath.startsWith(".openharness/");
 }
 
 async function pruneEmptyDirectories(rootDir: string): Promise<void> {
@@ -435,15 +450,45 @@ export class ObjectStorageMirrorController {
   }
 
   async #captureFingerprint(directory: string): Promise<string> {
-    return createDirectoryFingerprint(await collectLocalDirectorySnapshot(directory));
+    const mapping = this.#mappings.find((candidate) => candidate.localDir === directory);
+    return createDirectoryFingerprint(
+      await collectLocalDirectorySnapshot(directory, mapping?.key === "workspace"
+        ? {
+            excludeRelativePath: shouldExcludeWorkspaceMirrorRelativePath
+          }
+        : undefined)
+    );
   }
 
   async #syncRemoteToLocal(mapping: ManagedPathMapping): Promise<void> {
-    await syncRemotePrefixToLocal(this.#store, mapping.remotePrefix, mapping.localDir, this.#logger, mapping.key);
+    await syncRemotePrefixToLocal(
+      this.#store,
+      mapping.remotePrefix,
+      mapping.localDir,
+      this.#logger,
+      mapping.key,
+      mapping.key === "workspace"
+        ? {
+            excludeRelativePath: shouldExcludeWorkspaceMirrorRelativePath,
+            preserveTopLevelNames: [".openharness"]
+          }
+        : undefined
+    );
   }
 
   async #syncLocalToRemote(mapping: ManagedPathMapping): Promise<void> {
-    await syncLocalDirectoryToRemote(this.#store, mapping.remotePrefix, mapping.localDir, this.#logger, mapping.key);
+    await syncLocalDirectoryToRemote(
+      this.#store,
+      mapping.remotePrefix,
+      mapping.localDir,
+      this.#logger,
+      mapping.key,
+      mapping.key === "workspace"
+        ? {
+            excludeRelativePath: shouldExcludeWorkspaceMirrorRelativePath
+          }
+        : undefined
+    );
   }
 }
 
@@ -452,16 +497,20 @@ export async function syncRemotePrefixToLocal(
   remotePrefix: string,
   localDir: string,
   logger?: (message: string) => void,
-  label?: string
+  label?: string,
+  options?: DirectorySyncOptions
 ): Promise<void> {
   logger?.(`syncing ${(label ?? remotePrefix) || "."} from object storage into ${localDir}`);
   const entries = await store.listEntries(remotePrefix);
-  await removeDirectoryContents(localDir);
+  await removeDirectoryContents(localDir, options);
   await mkdir(localDir, { recursive: true });
 
   for (const entry of entries) {
     const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
     if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
+      continue;
+    }
+    if (options?.excludeRelativePath?.(relativePath)) {
       continue;
     }
 
@@ -486,10 +535,11 @@ export async function syncLocalDirectoryToRemote(
   remotePrefix: string,
   localDir: string,
   logger?: (message: string) => void,
-  label?: string
+  label?: string,
+  options?: DirectorySyncOptions
 ): Promise<void> {
   logger?.(`syncing local changes in ${localDir} back to object storage (${(label ?? remotePrefix) || "."})`);
-  const [snapshot, remoteEntries] = await Promise.all([collectLocalDirectorySnapshot(localDir), store.listEntries(remotePrefix)]);
+  const [snapshot, remoteEntries] = await Promise.all([collectLocalDirectorySnapshot(localDir, options), store.listEntries(remotePrefix)]);
 
   const remoteByRelativePath = new Map<string, ObjectStorageEntry>();
   for (const entry of remoteEntries) {

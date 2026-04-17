@@ -128,6 +128,11 @@ function prepareDockerServerConfigs() {
   const generatedControllerConfigPath = path.join(generatedDir, "controller.generated.yaml");
   const generatedSandboxConfigPath = path.join(generatedDir, "sandbox.generated.yaml");
   const sourceConfig = YAML.parse(readFileSync(sourceConfigPath, "utf8")) ?? {};
+  if (objectStorageBacksManagedWorkspaces(sourceConfig.object_storage)) {
+    console.log(
+      "Object storage workspace backing is enabled. Active workspace writes will flush on idle/drain, not via sync_on_change polling."
+    );
+  }
 
   const apiServerConfig = {
     ...sourceConfig,
@@ -171,6 +176,26 @@ function prepareDockerServerConfigs() {
   process.env.OAH_DOCKER_API_CONFIG = generatedApiConfigPath;
   process.env.OAH_DOCKER_CONTROLLER_CONFIG = generatedControllerConfigPath;
   process.env.OAH_DOCKER_SANDBOX_CONFIG = generatedSandboxConfigPath;
+}
+
+function objectStorageBacksManagedWorkspaces(objectStorage) {
+  if (!objectStorage) {
+    return false;
+  }
+
+  if (objectStorage.workspace_backing_store) {
+    return objectStorage.workspace_backing_store.enabled ?? true;
+  }
+
+  if (Array.isArray(objectStorage.managed_paths)) {
+    return objectStorage.managed_paths.includes("workspace");
+  }
+
+  if (objectStorage.mirrors) {
+    return false;
+  }
+
+  return true;
 }
 
 function ensureRclonePlugin() {
@@ -268,12 +293,6 @@ async function up() {
 
   run("docker", ["compose", "-f", composeFile, "up", "-d", "postgres", "redis", "minio"]);
   await waitForMinioHealthy();
-
-  const syncScript = path.join(process.env.OAH_TEST_ROOT || "", "scripts", "sync_to_minio.py");
-  if (!existsSync(syncScript)) {
-    console.error(`Missing ${syncScript}. OAH_TEST_ROOT must contain scripts/sync_to_minio.py (used to seed MinIO with blueprint/model/tool/skill/archive content before the OAH services start).`);
-    process.exit(1);
-  }
 
   run("pnpm", ["storage:sync"]);
   recreateReadonlyObjectStorageVolumes();

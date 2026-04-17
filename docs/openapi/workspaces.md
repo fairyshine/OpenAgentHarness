@@ -46,7 +46,7 @@
 
 ### `DELETE /workspaces/{workspaceId}`
 
-删除中心记录。受管目录（`paths.workspace_dir` 下）可额外清理文件夹。
+删除中心记录。split / self-hosted 部署下会先路由到 owner worker 清理 live 本地副本，再删除中心记录；受管目录（`paths.workspace_dir` 下）和运行时 shadow 状态也会一并清理。
 
 ### `GET /workspaces/{workspaceId}/catalog`
 

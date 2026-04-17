@@ -684,4 +684,40 @@ describe("buildRuntimeViewModel", () => {
       }
     });
   });
+
+  it("keeps an optimistic user message ahead of a live assistant reply", () => {
+    const viewModel = buildRuntimeViewModel({
+      messages: [],
+      runSteps: [createModelCallStep()],
+      deferredEvents: [],
+      liveMessagesByKey: {
+        "pending-user:msg_user_1": {
+          persistedMessageId: "msg_user_1",
+          runId: "",
+          sessionId: "ses_1",
+          role: "user",
+          content: "hello there",
+          createdAt: "2026-04-07T00:00:01.000Z"
+        },
+        "message:msg_assistant_1": {
+          persistedMessageId: "msg_assistant_1",
+          runId: "run_1",
+          sessionId: "ses_1",
+          role: "assistant",
+          content: "hi back",
+          createdAt: "2026-04-07T00:00:02.000Z"
+        }
+      },
+      selectedTraceId: "",
+      selectedMessageId: "",
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(viewModel.messageFeed.map((message) => `${message.role}:${message.id}`)).toEqual([
+      "user:live:msg_user_1",
+      "assistant:live:msg_assistant_1"
+    ]);
+  });
 });

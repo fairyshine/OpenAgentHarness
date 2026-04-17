@@ -686,11 +686,11 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
       </div>
 
       {props.hasActiveSession ? (
-        <div className="flex-shrink-0">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
           <div className="p-4 md:p-6">
             <div className="max-w-4xl mx-auto">
               <div
-                className="relative flex items-end gap-2 rounded-xl p-2 shadow-lg"
+                className="pointer-events-auto relative flex items-end gap-2 rounded-xl p-2 shadow-lg"
                 style={{
                   background: "color-mix(in srgb, var(--background) 80%, transparent)",
                   backdropFilter: "blur(12px)",

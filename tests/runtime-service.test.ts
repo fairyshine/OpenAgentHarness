@@ -2,10 +2,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { RuntimeService, createLocalWorkspaceFileSystem } from "@oah/runtime-core";
-import type { HookRunAuditRecord, ToolCallAuditRecord, WorkspaceArchiveRecord, WorkspaceFileSystem } from "@oah/runtime-core";
+import type {
+  HookRunAuditRecord,
+  ToolCallAuditRecord,
+  WorkspaceActivityTracker,
+  WorkspaceArchiveRecord,
+  WorkspaceFileSystem
+} from "@oah/runtime-core";
 import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 import type { Message } from "@oah/api-contracts";
 
@@ -101,12 +107,18 @@ function hasToolResultPart(message: Pick<Message, "content"> | undefined, toolNa
   );
 }
 
-async function createRuntime(delayMs = 0) {
+async function createRuntime(
+  delayMs = 0,
+  options?: {
+    workspaceActivityTracker?: WorkspaceActivityTracker | undefined;
+  }
+) {
   const gateway = new FakeModelGateway(delayMs);
   const persistence = createMemoryRuntimePersistence();
   const runtimeService = new RuntimeService({
     defaultModel: "openai-default",
     modelGateway: gateway,
+    ...(options?.workspaceActivityTracker ? { workspaceActivityTracker: options.workspaceActivityTracker } : {}),
     ...persistence,
     workspaceInitializer: {
       async initialize(input) {
@@ -1273,6 +1285,40 @@ describe("runtime service", () => {
         expect.objectContaining({ role: "assistant" })
       ])
     );
+  });
+
+  it("touches workspace activity on queued, started, and completed run lifecycle events", async () => {
+    const touchWorkspace = vi.fn(async () => undefined);
+    const { runtimeService, workspace } = await createRuntime(0, {
+      workspaceActivityTracker: {
+        touchWorkspace
+      }
+    });
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "test",
+      scopes: [],
+      workspaceAccess: []
+    };
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "hello" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    expect(touchWorkspace).toHaveBeenCalledWith(workspace.id);
+    expect(touchWorkspace.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 
   it("persists AI SDK step request, response, and provider metadata snapshots", async () => {

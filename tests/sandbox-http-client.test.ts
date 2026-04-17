@@ -10,6 +10,8 @@ describe("sandbox http client", () => {
         id: "ws_test",
         workspaceId: "ws_test",
         provider: "self_hosted",
+        executionModel: "sandbox_hosted",
+        workerPlacement: "api_process",
         rootPath: "/workspace",
         name: "Test",
         kind: "project",
@@ -44,14 +46,14 @@ describe("sandbox http client", () => {
     expect(page.nextCursor).toBe("cursor-1");
     expect(requestJson).toHaveBeenNthCalledWith(
       1,
-      "/sandboxes",
+      "/api/v1/sandboxes",
       expect.objectContaining({
         method: "POST"
       })
     );
     expect(requestJson).toHaveBeenNthCalledWith(
       2,
-      "/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=100&sortBy=name&sortOrder=asc"
+      "/api/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=100&sortBy=name&sortOrder=asc"
     );
     expect(requestBytes).not.toHaveBeenCalled();
   });
@@ -82,13 +84,13 @@ describe("sandbox http client", () => {
 
     expect(downloaded).toEqual(new Uint8Array([7, 8, 9]));
     expect(requestJson).toHaveBeenCalledWith(
-      "/sandboxes/ws_test/files/upload?path=%2Fworkspace%2Fhello.bin&overwrite=true",
+      "/api/v1/sandboxes/ws_test/files/upload?path=%2Fworkspace%2Fhello.bin&overwrite=true",
       expect.objectContaining({
         method: "PUT",
         body: payload
       })
     );
-    expect(requestBytes).toHaveBeenCalledWith("/sandboxes/ws_test/files/download?path=%2Fworkspace%2Fhello.bin");
+    expect(requestBytes).toHaveBeenCalledWith("/api/v1/sandboxes/ws_test/files/download?path=%2Fworkspace%2Fhello.bin");
   });
 
   it("serializes command execution through the shared transport", async () => {
@@ -123,14 +125,14 @@ describe("sandbox http client", () => {
     expect(background.pid).toBe(42);
     expect(requestJson).toHaveBeenNthCalledWith(
       1,
-      "/sandboxes/ws_test/commands/foreground",
+      "/api/v1/sandboxes/ws_test/commands/foreground",
       expect.objectContaining({
         method: "POST"
       })
     );
     expect(requestJson).toHaveBeenNthCalledWith(
       2,
-      "/sandboxes/ws_test/commands/background",
+      "/api/v1/sandboxes/ws_test/commands/background",
       expect.objectContaining({
         method: "POST"
       })

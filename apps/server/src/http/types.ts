@@ -1,14 +1,18 @@
-import type { Readable } from "node:stream";
 import type { FastifyRequest } from "fastify";
 
 import type {
   CallerContext,
+  ControlPlaneRuntimeOperations,
   ModelGateway,
-  RuntimeService,
-  SandboxHostProviderKind,
-  WorkspaceRecord
+  SandboxHostProviderKind
 } from "@oah/runtime-core";
-import type { HealthReport, ReadinessReport, RuntimeLogEventContext } from "@oah/api-contracts";
+import type {
+  DistributedPlatformModelRefreshResult,
+  HealthReport,
+  PlatformModelSnapshot,
+  ReadinessReport,
+  RuntimeLogEventContext
+} from "@oah/api-contracts";
 import type { StorageAdmin } from "../storage-admin.js";
 
 declare module "fastify" {
@@ -18,160 +22,7 @@ declare module "fastify" {
 }
 
 export interface AppDependencies {
-  runtimeService: {
-    createWorkspace: RuntimeService["createWorkspace"];
-    listWorkspaces: RuntimeService["listWorkspaces"];
-    getWorkspace: RuntimeService["getWorkspace"];
-    getWorkspaceRecord: RuntimeService["getWorkspaceRecord"];
-    getWorkspaceCatalog: RuntimeService["getWorkspaceCatalog"];
-    listWorkspaceEntries: (
-      workspaceId: string,
-      input: {
-        path?: string | undefined;
-        pageSize: number;
-        cursor?: string | undefined;
-        sortBy: "name" | "updatedAt" | "sizeBytes" | "type";
-        sortOrder: "asc" | "desc";
-      }
-    ) => Promise<unknown>;
-    getWorkspaceFileContent: (
-      workspaceId: string,
-      input: { path: string; encoding: "utf8" | "base64"; maxBytes?: number | undefined }
-    ) => Promise<unknown>;
-    putWorkspaceFileContent: (
-      workspaceId: string,
-      input: {
-        path: string;
-        content: string;
-        encoding: "utf8" | "base64";
-        overwrite?: boolean | undefined;
-        ifMatch?: string | undefined;
-      }
-    ) => Promise<unknown>;
-    uploadWorkspaceFile: (
-      workspaceId: string,
-      input: {
-        path: string;
-        data: Buffer;
-        overwrite?: boolean | undefined;
-        ifMatch?: string | undefined;
-      }
-    ) => Promise<unknown>;
-    getWorkspaceFileDownload: (
-      workspaceId: string,
-      targetPath: string
-    ) => Promise<{
-      name: string;
-      sizeBytes: number;
-      mimeType?: string | undefined;
-      etag: string;
-      updatedAt: string;
-      openReadStream(): Readable;
-    }>;
-    openWorkspaceFileDownload?: (
-      workspaceId: string,
-      targetPath: string
-    ) => Promise<{
-      file: {
-        name: string;
-        sizeBytes: number;
-        mimeType?: string | undefined;
-        etag: string;
-        updatedAt: string;
-        openReadStream(): Readable;
-      };
-      release(options?: { dirty?: boolean | undefined }): Promise<void>;
-    }>;
-    getWorkspaceFileStat?: (
-      workspaceId: string,
-      targetPath: string
-    ) => Promise<{
-      kind: "file" | "directory";
-      size: number;
-      mtimeMs: number;
-      birthtimeMs: number;
-      path: string;
-    }>;
-    runWorkspaceCommandForeground?: (
-      workspaceId: string,
-      input: {
-        command: string;
-        cwd?: string | undefined;
-        env?: Record<string, string> | undefined;
-        timeoutMs?: number | undefined;
-        stdinText?: string | undefined;
-        access?: "read" | "write" | undefined;
-      }
-    ) => Promise<{
-      stdout: string;
-      stderr: string;
-      exitCode: number;
-    }>;
-    runWorkspaceCommandProcess?: (
-      workspaceId: string,
-      input: {
-        executable: string;
-        args: string[];
-        cwd?: string | undefined;
-        env?: Record<string, string> | undefined;
-        timeoutMs?: number | undefined;
-        stdinText?: string | undefined;
-        access?: "read" | "write" | undefined;
-      }
-    ) => Promise<{
-      stdout: string;
-      stderr: string;
-      exitCode: number;
-    }>;
-    runWorkspaceCommandBackground?: (
-      workspaceId: string,
-      input: {
-        command: string;
-        sessionId: string;
-        description?: string | undefined;
-        cwd?: string | undefined;
-        env?: Record<string, string> | undefined;
-        access?: "read" | "write" | undefined;
-      }
-    ) => Promise<{
-      outputPath: string;
-      taskId: string;
-      pid: number;
-    }>;
-    createWorkspaceDirectory: (
-      workspaceId: string,
-      input: { path: string; createParents: boolean }
-    ) => Promise<unknown>;
-    deleteWorkspaceEntry: (workspaceId: string, input: { path: string; recursive: boolean }) => Promise<unknown>;
-    moveWorkspaceEntry: (
-      workspaceId: string,
-      input: { sourcePath: string; targetPath: string; overwrite: boolean }
-    ) => Promise<unknown>;
-    deleteWorkspace: RuntimeService["deleteWorkspace"];
-    createSession: RuntimeService["createSession"];
-    listWorkspaceSessions: RuntimeService["listWorkspaceSessions"];
-    triggerActionRun: (input: {
-      workspaceId: string;
-      caller: CallerContext;
-      actionName: string;
-      sessionId?: string | undefined;
-      agentName?: string | undefined;
-      input?: unknown;
-      triggerSource?: "api" | "user" | undefined;
-    }) => ReturnType<RuntimeService["triggerActionRun"]>;
-    getSession: RuntimeService["getSession"];
-    updateSession: RuntimeService["updateSession"];
-    deleteSession: RuntimeService["deleteSession"];
-    listSessionMessages: RuntimeService["listSessionMessages"];
-    listSessionRuns: RuntimeService["listSessionRuns"];
-    createSessionMessage: RuntimeService["createSessionMessage"];
-    listSessionEvents: RuntimeService["listSessionEvents"];
-    subscribeSessionEvents: RuntimeService["subscribeSessionEvents"];
-    getRun: RuntimeService["getRun"];
-    listRunSteps: RuntimeService["listRunSteps"];
-    cancelRun: RuntimeService["cancelRun"];
-    requeueRun: RuntimeService["requeueRun"];
-  };
+  runtimeService: ControlPlaneRuntimeOperations;
   modelGateway: ModelGateway;
   defaultModel: string;
   logger?: boolean;
@@ -208,30 +59,10 @@ export interface AppDependencies {
       isDefault: boolean;
     }>
   >) | undefined;
-  getPlatformModelSnapshot?: (() => Promise<{
-    revision: number;
-    items: Array<{
-      id: string;
-      provider: string;
-      modelName: string;
-      url?: string;
-      hasKey: boolean;
-      metadata?: Record<string, unknown>;
-      isDefault: boolean;
-    }>;
-  }>) | undefined;
-  subscribePlatformModelSnapshot?: ((listener: (snapshot: {
-    revision: number;
-    items: Array<{
-      id: string;
-      provider: string;
-      modelName: string;
-      url?: string;
-      hasKey: boolean;
-      metadata?: Record<string, unknown>;
-      isDefault: boolean;
-    }>;
-  }) => void) => (() => void)) | undefined;
+  getPlatformModelSnapshot?: (() => Promise<PlatformModelSnapshot>) | undefined;
+  refreshPlatformModels?: (() => Promise<PlatformModelSnapshot>) | undefined;
+  refreshDistributedPlatformModels?: (() => Promise<DistributedPlatformModelRefreshResult>) | undefined;
+  subscribePlatformModelSnapshot?: ((listener: (snapshot: PlatformModelSnapshot) => void) => (() => void)) | undefined;
   importWorkspace?: (input: {
     rootPath: string;
     kind?: "project";
@@ -258,6 +89,7 @@ export interface AppDependencies {
     context?: RuntimeLogEventContext | undefined;
   }) => Promise<void>;
   sandboxHostProviderKind?: SandboxHostProviderKind | undefined;
+  sandboxOwnerFallbackBaseUrl?: string | undefined;
 }
 
 export interface AppRouteOptions {

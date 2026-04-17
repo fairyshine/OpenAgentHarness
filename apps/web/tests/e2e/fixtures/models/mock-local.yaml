@@ -1,5 +1,5 @@
 mock-local:
   provider: openai-compatible
-  base_url: http://127.0.0.1:8798/v1
+  url: http://127.0.0.1:8798/v1
   key: test-key-not-used
   name: mock-local

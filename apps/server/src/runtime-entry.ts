@@ -1,21 +1,44 @@
 import { createApp, type AppDependencies } from "./app.js";
 import { bootstrapRuntime, installSignalHandlers, shouldStartEmbeddedWorker, type BootstrappedRuntime } from "./bootstrap.js";
 
+function normalizeOwnerProxyBaseUrl(input: string | undefined): string | undefined {
+  const trimmed = input?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const normalizedPath = url.pathname.replace(/\/(?:api|internal)\/v1\/?$/u, "").replace(/\/+$/u, "");
+    return `${url.origin}${normalizedPath}`;
+  } catch {
+    return trimmed.replace(/\/(?:api|internal)\/v1\/?$/u, "").replace(/\/+$/u, "");
+  }
+}
+
 function buildAppDependencies(runtime: BootstrappedRuntime): AppDependencies {
-  const runtimeService = runtime.runtimeService as unknown as AppDependencies["runtimeService"];
+  const sandboxOwnerFallbackBaseUrl =
+    runtime.sandboxHostProviderKind === "self_hosted"
+      ? normalizeOwnerProxyBaseUrl(runtime.config.sandbox?.self_hosted?.base_url)
+      : undefined;
 
   return {
-    runtimeService,
+    runtimeService: runtime.controlPlaneRuntimeService,
     modelGateway: runtime.modelGateway,
     defaultModel: runtime.config.llm.default_model,
     workspaceMode: runtime.workspaceMode.kind,
     healthCheck: () => runtime.healthReport(),
     readinessCheck: () => runtime.readinessReport(),
-    storageAdmin: runtime.storageAdmin,
+    storageAdmin: runtime.adminCapabilities.storageAdmin,
     appendRuntimeLog: runtime.appendRuntimeLog,
     ...(runtime.sandboxHostProviderKind ? { sandboxHostProviderKind: runtime.sandboxHostProviderKind } : {}),
+    ...(sandboxOwnerFallbackBaseUrl ? { sandboxOwnerFallbackBaseUrl } : {}),
     ...(runtime.listPlatformModels ? { listPlatformModels: runtime.listPlatformModels } : {}),
     ...(runtime.getPlatformModelSnapshot ? { getPlatformModelSnapshot: runtime.getPlatformModelSnapshot } : {}),
+    ...(runtime.refreshPlatformModels ? { refreshPlatformModels: runtime.refreshPlatformModels } : {}),
+    ...(runtime.refreshDistributedPlatformModels
+      ? { refreshDistributedPlatformModels: runtime.refreshDistributedPlatformModels }
+      : {}),
     ...(runtime.subscribePlatformModelSnapshot
       ? { subscribePlatformModelSnapshot: runtime.subscribePlatformModelSnapshot }
       : {}),

@@ -127,7 +127,7 @@ interface LiveConversationMessageRecord {
   toolCallId?: string;
   runId: string;
   sessionId: string;
-  role?: "assistant" | "tool";
+  role?: "user" | "assistant" | "tool";
   content: Message["content"];
   metadata?: Record<string, unknown>;
   createdAt: string;

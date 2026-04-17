@@ -115,6 +115,33 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   return JSON.parse(raw) as T;
 }
 
+function parseSandboxHttpBaseUrl(input: string): { baseUrl: string; routePrefix: "/api/v1" | "/internal/v1" | "" } {
+  const trimmed = input.trim();
+  try {
+    const url = new URL(trimmed);
+    const routePrefix = url.pathname.endsWith("/internal/v1")
+      ? "/internal/v1"
+      : url.pathname.endsWith("/api/v1")
+        ? "/api/v1"
+        : "";
+    const normalizedPath = routePrefix ? url.pathname.slice(0, -routePrefix.length).replace(/\/+$/u, "") : url.pathname.replace(/\/+$/u, "");
+    return {
+      baseUrl: `${url.origin}${normalizedPath}`,
+      routePrefix
+    };
+  } catch {
+    const routePrefix = trimmed.endsWith("/internal/v1")
+      ? "/internal/v1"
+      : trimmed.endsWith("/api/v1")
+        ? "/api/v1"
+        : "";
+    return {
+      baseUrl: routePrefix ? trimmed.slice(0, -routePrefix.length).replace(/\/+$/u, "") : trimmed.replace(/\/+$/u, ""),
+      routePrefix
+    };
+  }
+}
+
 function normalizeHttpSandboxPath(rootPath: string, targetPath: string): string {
   const normalizedRoot = path.posix.normalize(rootPath);
   const normalizedTarget = path.posix.normalize(targetPath);
@@ -132,7 +159,9 @@ function normalizeHttpSandboxPath(rootPath: string, targetPath: string): string 
 export function createHttpE2BCompatibleSandboxService(
   options: HttpE2BCompatibleSandboxServiceOptions
 ): E2BCompatibleSandboxService {
-  const baseUrl = options.baseUrl.replace(/\/+$/u, "");
+  const { baseUrl, routePrefix } = parseSandboxHttpBaseUrl(options.baseUrl);
+  const mapRequestPath = (requestPath: string) =>
+    routePrefix ? requestPath.replace(/^\/api\/v1(?=\/|$)/u, routePrefix) : requestPath;
 
   const transport: SandboxHttpTransport = {
     async requestJson<T>(requestPath: string, init?: RequestInit) {
@@ -142,7 +171,7 @@ export function createHttpE2BCompatibleSandboxService(
         headers.set(name, value);
       }
 
-      const response = await fetch(`${baseUrl}${requestPath}`, {
+      const response = await fetch(`${baseUrl}${mapRequestPath(requestPath)}`, {
         ...init,
         headers
       });
@@ -155,7 +184,7 @@ export function createHttpE2BCompatibleSandboxService(
         headers.set(name, value);
       }
 
-      const response = await fetch(`${baseUrl}${requestPath}`, {
+      const response = await fetch(`${baseUrl}${mapRequestPath(requestPath)}`, {
         ...init,
         headers
       });

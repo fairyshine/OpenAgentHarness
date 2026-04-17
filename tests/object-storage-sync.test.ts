@@ -147,4 +147,30 @@ describe("object storage sync", () => {
       })
     ).toBeUndefined();
   });
+
+  it("ignores workspace_dir top-level runtime internals while still syncing real workspace contents", async () => {
+    const workspaceDir = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-workspaces-"));
+    tempDirs.push(workspaceDir);
+    const store = new FakeDirectoryObjectStore();
+
+    await mkdir(path.join(workspaceDir, ".openharness", "__materialized__", "ws_1"), { recursive: true });
+    await writeFile(path.join(workspaceDir, ".openharness", "__materialized__", "ws_1", "ghost.txt"), "ghost\n", "utf8");
+    await syncLocalDirectoryToRemote(store, "workspace", workspaceDir, undefined, undefined, {
+      excludeRelativePath: (relativePath) => relativePath === ".openharness" || relativePath.startsWith(".openharness/")
+    });
+    expect([...store.objects.keys()]).toEqual([]);
+
+    await mkdir(path.join(workspaceDir, "ws_1", ".openharness"), { recursive: true });
+    await writeFile(path.join(workspaceDir, "ws_1", "README.md"), "# demo\n", "utf8");
+    await writeFile(path.join(workspaceDir, "ws_1", ".openharness", "settings.yaml"), "default_agent: builder\n", "utf8");
+
+    await syncLocalDirectoryToRemote(store, "workspace", workspaceDir, undefined, undefined, {
+      excludeRelativePath: (relativePath) => relativePath === ".openharness" || relativePath.startsWith(".openharness/")
+    });
+
+    expect([...store.objects.keys()].sort()).toEqual([
+      "workspace/ws_1/.openharness/settings.yaml",
+      "workspace/ws_1/README.md"
+    ]);
+  });
 });

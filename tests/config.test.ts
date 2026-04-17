@@ -63,10 +63,45 @@ llm:
     const config = await loadServerConfig(configPath);
     expect(config.storage.postgres_url).toBe("postgres://local/test");
     expect(config.paths.model_dir).toBe(path.join(tempDir, "models"));
+    expect(config.paths.runtime_state_dir).toBe(path.join(tempDir, ".openharness"));
     expect(config.llm.default_model).toBe("openai-default");
   });
 
-  it("loads optional object storage settings for S3-compatible backends", async () => {
+  it("resolves an explicit runtime state directory separately from workspace_dir", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-runtime-state-"));
+    tempDirs.push(tempDir);
+
+    for (const dirName of ["workspaces", "runtime", "blueprints", "models", "tools", "skills"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+paths:
+  workspace_dir: ./workspaces
+  runtime_state_dir: ./runtime
+  blueprint_dir: ./blueprints
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const config = await loadServerConfig(configPath);
+    expect(config.paths.workspace_dir).toBe(path.join(tempDir, "workspaces"));
+    expect(config.paths.runtime_state_dir).toBe(path.join(tempDir, "runtime"));
+  });
+
+  it("loads explicit object storage backing and mirror settings for S3-compatible backends", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-object-storage-"));
     tempDirs.push(tempDir);
 
@@ -92,13 +127,19 @@ object_storage:
   access_key: \${env.OAH_OBJECT_ACCESS_KEY}
   secret_key: \${env.OAH_OBJECT_SECRET_KEY}
   force_path_style: true
-  sync_on_boot: true
-  sync_on_change: true
-  poll_interval_ms: 4000
-  managed_paths:
-    - workspace
-  key_prefixes:
-    workspace: workspace
+  workspace_backing_store:
+    enabled: true
+    key_prefix: workspace-live
+  mirrors:
+    paths:
+      - blueprint
+      - model
+    sync_on_boot: true
+    sync_on_change: true
+    poll_interval_ms: 4000
+    key_prefixes:
+      blueprint: blueprint
+      model: model
 paths:
   workspace_dir: ./workspaces
   blueprint_dir: ./blueprints
@@ -120,14 +161,96 @@ llm:
       access_key: "demo-key",
       secret_key: "demo-secret",
       force_path_style: true,
-      sync_on_boot: true,
-      sync_on_change: true,
-      poll_interval_ms: 4000,
-      managed_paths: ["workspace"],
-      key_prefixes: {
-        workspace: "workspace"
+      workspace_backing_store: {
+        enabled: true,
+        key_prefix: "workspace-live"
+      },
+      mirrors: {
+        paths: ["blueprint", "model"],
+        sync_on_boot: true,
+        sync_on_change: true,
+        poll_interval_ms: 4000,
+        key_prefixes: {
+          blueprint: "blueprint",
+          model: "model",
+          tool: "tool",
+          skill: "skill"
+        }
       }
     });
+  });
+
+  it("keeps loading legacy managed_paths object storage config for compatibility", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-object-storage-legacy-"));
+    tempDirs.push(tempDir);
+    const emitWarningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+object_storage:
+  provider: s3
+  bucket: open-agent-harness
+  region: us-east-1
+  managed_paths:
+    - workspace
+    - tool
+  key_prefixes:
+    workspace: workspace
+    tool: tool
+paths:
+  workspace_dir: ./workspaces
+  blueprint_dir: ./blueprints
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const config = await loadServerConfig(configPath);
+    expect(config.object_storage).toMatchObject({
+      workspace_backing_store: {
+        enabled: true,
+        key_prefix: "workspace"
+      },
+      mirrors: {
+        paths: ["tool"],
+        sync_on_boot: true,
+        sync_on_change: true,
+        poll_interval_ms: 5000,
+        key_prefixes: {
+          blueprint: "blueprint",
+          model: "model",
+          tool: "tool",
+          skill: "skill"
+        }
+      },
+      managed_paths: ["workspace", "tool"],
+      key_prefixes: {
+        workspace: "workspace",
+        tool: "tool"
+      }
+    });
+    expect(emitWarningSpy).toHaveBeenCalledWith(
+      expect.stringContaining("object_storage legacy fields are deprecated"),
+      expect.objectContaining({
+        code: "OAH_CONFIG_DEPRECATED_OBJECT_STORAGE_LEGACY_FIELDS",
+        type: "DeprecationWarning"
+      })
+    );
+    emitWarningSpy.mockRestore();
   });
 
   it("loads sandbox provider settings for self-hosted and e2b backends", async () => {
@@ -395,6 +518,44 @@ llm:
           ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
         }
       }
+    });
+  });
+
+  it("loads workspace materialization settings from server config", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-config-workspace-materialization-"));
+    tempDirs.push(tempDir);
+
+    for (const dirName of ["workspaces", "blueprints", "models", "tools", "skills"]) {
+      await mkdir(path.join(tempDir, dirName), { recursive: true });
+    }
+
+    const configPath = path.join(tempDir, "server.yaml");
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+paths:
+  workspace_dir: ./workspaces
+  blueprint_dir: ./blueprints
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+workspace:
+  materialization:
+    idle_ttl_ms: 1800000
+    maintenance_interval_ms: 7500
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const config = await loadServerConfig(configPath);
+    expect(config.workspace?.materialization).toEqual({
+      idle_ttl_ms: 1_800_000,
+      maintenance_interval_ms: 7_500
     });
   });
 

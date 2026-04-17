@@ -54,6 +54,28 @@ export interface ServerConfig {
     secret_key?: string | undefined;
     session_token?: string | undefined;
     force_path_style?: boolean | undefined;
+    workspace_backing_store?:
+      | {
+          enabled?: boolean | undefined;
+          key_prefix?: string | undefined;
+        }
+      | undefined;
+    mirrors?:
+      | {
+          paths?: Array<"blueprint" | "model" | "tool" | "skill"> | undefined;
+          sync_on_boot?: boolean | undefined;
+          sync_on_change?: boolean | undefined;
+          poll_interval_ms?: number | undefined;
+          key_prefixes?:
+            | {
+                blueprint?: string | undefined;
+                model?: string | undefined;
+                tool?: string | undefined;
+                skill?: string | undefined;
+              }
+            | undefined;
+        }
+      | undefined;
     sync_on_boot?: boolean | undefined;
     sync_on_change?: boolean | undefined;
     poll_interval_ms?: number | undefined;
@@ -98,11 +120,18 @@ export interface ServerConfig {
   };
   paths: {
     workspace_dir: string;
+    runtime_state_dir?: string | undefined;
     blueprint_dir: string;
     model_dir: string;
     tool_dir: string;
     skill_dir: string;
   };
+  workspace?: {
+    materialization?: {
+      idle_ttl_ms?: number | undefined;
+      maintenance_interval_ms?: number | undefined;
+    } | undefined;
+  } | undefined;
   workers?: {
     embedded?: {
       min_count?: number | undefined;
@@ -172,6 +201,115 @@ export interface ServerConfig {
   } | undefined;
   llm: {
     default_model: string;
+  };
+}
+
+export type ObjectStorageConfig = NonNullable<ServerConfig["object_storage"]>;
+export type ObjectStorageManagedPath = NonNullable<ObjectStorageConfig["managed_paths"]>[number];
+export type ObjectStorageMirrorPath = Exclude<ObjectStorageManagedPath, "workspace">;
+
+const DEFAULT_OBJECT_STORAGE_MANAGED_PATHS = ["workspace", "blueprint", "model", "tool", "skill"] as const;
+const DEFAULT_OBJECT_STORAGE_MIRROR_PATHS = ["blueprint", "model", "tool", "skill"] as const;
+
+function normalizeObjectStoragePrefix(prefix: string): string {
+  return prefix.replace(/^\/+|\/+$/g, "");
+}
+
+function configuredLegacyObjectStorageManagedPaths(config: ObjectStorageConfig): ObjectStorageManagedPath[] {
+  return [...(config.managed_paths ?? DEFAULT_OBJECT_STORAGE_MANAGED_PATHS)];
+}
+
+export function usesExplicitObjectStorageWorkspaceBackingStore(config: ObjectStorageConfig): boolean {
+  return config.workspace_backing_store !== undefined;
+}
+
+export function usesExplicitObjectStorageMirrors(config: ObjectStorageConfig): boolean {
+  return config.mirrors !== undefined;
+}
+
+export function usesLegacyObjectStorageCompatibilityFields(config: ObjectStorageConfig): boolean {
+  return (
+    config.managed_paths !== undefined ||
+    config.key_prefixes !== undefined ||
+    config.sync_on_boot !== undefined ||
+    config.sync_on_change !== undefined ||
+    config.poll_interval_ms !== undefined
+  );
+}
+
+export function resolveObjectStorageWorkspaceBackingStore(config: ObjectStorageConfig): {
+  enabled: boolean;
+  keyPrefix: string;
+} {
+  if (usesExplicitObjectStorageWorkspaceBackingStore(config)) {
+    return {
+      enabled: config.workspace_backing_store?.enabled ?? true,
+      keyPrefix: normalizeObjectStoragePrefix(config.workspace_backing_store?.key_prefix ?? config.key_prefixes?.workspace ?? "workspace")
+    };
+  }
+
+  if (config.managed_paths) {
+    return {
+      enabled: configuredLegacyObjectStorageManagedPaths(config).includes("workspace"),
+      keyPrefix: normalizeObjectStoragePrefix(config.key_prefixes?.workspace ?? "workspace")
+    };
+  }
+
+  if (usesExplicitObjectStorageMirrors(config)) {
+    return {
+      enabled: false,
+      keyPrefix: normalizeObjectStoragePrefix(config.key_prefixes?.workspace ?? "workspace")
+    };
+  }
+
+  return {
+    enabled: true,
+    keyPrefix: normalizeObjectStoragePrefix(config.key_prefixes?.workspace ?? "workspace")
+  };
+}
+
+export function resolveObjectStorageMirrorPaths(config: ObjectStorageConfig): ObjectStorageMirrorPath[] {
+  if (usesExplicitObjectStorageMirrors(config)) {
+    return [...(config.mirrors?.paths ?? DEFAULT_OBJECT_STORAGE_MIRROR_PATHS)];
+  }
+
+  if (config.managed_paths) {
+    return configuredLegacyObjectStorageManagedPaths(config).filter(
+      (managedPath): managedPath is ObjectStorageMirrorPath => managedPath !== "workspace"
+    );
+  }
+
+  if (usesExplicitObjectStorageWorkspaceBackingStore(config)) {
+    return [];
+  }
+
+  return [...DEFAULT_OBJECT_STORAGE_MIRROR_PATHS];
+}
+
+export function normalizeObjectStorageConfig(config: ObjectStorageConfig): ObjectStorageConfig {
+  const workspaceBackingStore = resolveObjectStorageWorkspaceBackingStore(config);
+  const mirrorPaths = resolveObjectStorageMirrorPaths(config);
+  const legacyKeyPrefixes = config.key_prefixes ?? {};
+  const explicitMirrorKeyPrefixes = config.mirrors?.key_prefixes ?? {};
+
+  return {
+    ...config,
+    workspace_backing_store: {
+      enabled: workspaceBackingStore.enabled,
+      key_prefix: workspaceBackingStore.keyPrefix
+    },
+    mirrors: {
+      paths: mirrorPaths,
+      sync_on_boot: config.mirrors?.sync_on_boot ?? config.sync_on_boot ?? true,
+      sync_on_change: config.mirrors?.sync_on_change ?? config.sync_on_change ?? true,
+      poll_interval_ms: config.mirrors?.poll_interval_ms ?? config.poll_interval_ms ?? 5000,
+      key_prefixes: {
+        blueprint: normalizeObjectStoragePrefix(explicitMirrorKeyPrefixes.blueprint ?? legacyKeyPrefixes.blueprint ?? "blueprint"),
+        model: normalizeObjectStoragePrefix(explicitMirrorKeyPrefixes.model ?? legacyKeyPrefixes.model ?? "model"),
+        tool: normalizeObjectStoragePrefix(explicitMirrorKeyPrefixes.tool ?? legacyKeyPrefixes.tool ?? "tool"),
+        skill: normalizeObjectStoragePrefix(explicitMirrorKeyPrefixes.skill ?? legacyKeyPrefixes.skill ?? "skill")
+      }
+    }
   };
 }
 
@@ -425,6 +563,10 @@ function resolvePathInsideRoot(rootPath: string, relativePath: string, label: st
 function resolveConfigPaths(config: ServerConfig, configPath: string): ServerConfig {
   const configDir = path.dirname(configPath);
   const workspaceDir = path.resolve(configDir, config.paths.workspace_dir);
+  const runtimeStateDir = path.resolve(
+    configDir,
+    config.paths.runtime_state_dir ?? path.join(path.dirname(workspaceDir), ".openharness")
+  );
   return {
     ...config,
     storage: {
@@ -432,6 +574,7 @@ function resolveConfigPaths(config: ServerConfig, configPath: string): ServerCon
     },
     paths: {
       workspace_dir: workspaceDir,
+      runtime_state_dir: runtimeStateDir,
       blueprint_dir: path.resolve(configDir, config.paths.blueprint_dir),
       model_dir: path.resolve(configDir, config.paths.model_dir),
       tool_dir: path.resolve(configDir, config.paths.tool_dir),
@@ -448,6 +591,17 @@ function emitConfigDeprecationWarnings(config: ServerConfig, configPath: string)
       {
         type: "DeprecationWarning",
         code: "OAH_CONFIG_DEPRECATED_SLOTS_PER_POD"
+      }
+    );
+  }
+
+  if (config.object_storage && usesLegacyObjectStorageCompatibilityFields(config.object_storage)) {
+    process.emitWarning(
+      `object_storage legacy fields are deprecated in ${configPath}; ` +
+        "migrate managed_paths/key_prefixes/sync_on_* to workspace_backing_store and mirrors.",
+      {
+        type: "DeprecationWarning",
+        code: "OAH_CONFIG_DEPRECATED_OBJECT_STORAGE_LEGACY_FIELDS"
       }
     );
   }
@@ -802,7 +956,7 @@ export async function loadServerConfig(configPath: string): Promise<ServerConfig
           : {},
       object_storage:
         expanded.object_storage && typeof expanded.object_storage === "object" && !Array.isArray(expanded.object_storage)
-          ? (expanded.object_storage as ServerConfig["object_storage"])
+          ? normalizeObjectStorageConfig(expanded.object_storage as ObjectStorageConfig)
           : undefined,
       sandbox:
         expanded.sandbox && typeof expanded.sandbox === "object" && !Array.isArray(expanded.sandbox)

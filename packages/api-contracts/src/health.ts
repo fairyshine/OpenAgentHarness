@@ -180,7 +180,7 @@ export const healthWorkerSchema = z.object({
           sourceKind: z.enum(["object_store", "local_directory"]),
           localPath: z.string(),
           remotePrefix: z.string().optional(),
-          stage: z.enum(["materialize", "idle_flush", "idle_evict", "drain_evict", "drain_release", "close"]),
+          stage: z.enum(["materialize", "idle_flush", "idle_evict", "drain_evict", "drain_release", "delete", "close"]),
           operation: z.enum(["materialize", "flush", "evict"]),
           at: timestampSchema,
           errorMessage: z.string(),

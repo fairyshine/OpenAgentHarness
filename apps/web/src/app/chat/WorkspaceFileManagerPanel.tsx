@@ -127,11 +127,12 @@ function FileManagerCommandBar(props: {
 }) {
   const selectedEntry = props.fileManager.selectedEntry;
   const readOnly = props.fileManager.workspaceReadOnly;
+  const atWorkspaceRoot = props.fileManager.currentPath.trim() === "" || props.fileManager.currentPath === ".";
 
   return (
     <div className="space-y-3 border-b border-black/8 px-4 py-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" size="sm" onClick={props.fileManager.navigateUp} disabled={props.fileManager.currentPath === "." || props.fileManager.entriesBusy}>
+        <Button variant="outline" size="sm" onClick={props.fileManager.navigateUp} disabled={atWorkspaceRoot || props.fileManager.entriesBusy}>
           <ArrowUp className="h-4 w-4" />
           Up
         </Button>
@@ -250,6 +251,7 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
   const selectedEntry = fileManager.selectedEntry;
   const selectedFile = fileManager.selectedFile;
   const busy = fileManager.entriesBusy || fileManager.fileBusy || fileManager.mutationBusy;
+  const displayPath = fileManager.currentPath.trim() === "" || fileManager.currentPath === "." ? "workspace root" : fileManager.currentPath;
 
   function openCommand(mode: "new-file" | "new-directory" | "move") {
     setCommandMode(mode);
@@ -361,7 +363,7 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                 <div className="flex items-center justify-between px-4 py-3">
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Directory</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{fileManager.currentPath === "." ? "workspace root" : fileManager.currentPath}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{displayPath}</p>
                   </div>
                   {busy ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
                 </div>

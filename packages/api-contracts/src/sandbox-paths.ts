@@ -74,7 +74,7 @@ export function sandboxPathToWorkspaceRelativePath(value: string): string {
 }
 
 export function buildSandboxApiPath(sandboxId: string, suffix?: string): string {
-  const basePath = `/sandboxes/${encodeURIComponent(sandboxId.trim())}`;
+  const basePath = `/api/v1/sandboxes/${encodeURIComponent(sandboxId.trim())}`;
   if (!suffix) {
     return basePath;
   }
@@ -83,5 +83,5 @@ export function buildSandboxApiPath(sandboxId: string, suffix?: string): string 
 }
 
 export function buildSandboxCollectionApiPath(): string {
-  return "/sandboxes";
+  return "/api/v1/sandboxes";
 }

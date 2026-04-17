@@ -628,6 +628,17 @@ export function useAppController() {
       const messagePage = await request<{ items: Message[] }>(`/api/v1/sessions/${sessionId}/messages?pageSize=200`);
       startTransition(() => {
         setMessages(messagePage.items);
+        setLiveMessagesByKey((current) =>
+          Object.fromEntries(
+            Object.entries(current).filter(([, entry]) => {
+              if (entry.role !== "user" || !entry.persistedMessageId) {
+                return true;
+              }
+
+              return !messagePage.items.some((message) => message.id === entry.persistedMessageId);
+            })
+          )
+        );
       });
       if (!quiet) {
         clearActiveError();
@@ -922,6 +933,17 @@ export function useAppController() {
       startTransition(() => {
         setDraftMessage("");
         setSelectedRunId(accepted.runId);
+        setLiveMessagesByKey((current) => ({
+          ...current,
+          [`pending-user:${accepted.messageId}`]: {
+            persistedMessageId: accepted.messageId,
+            runId: "",
+            sessionId,
+            role: "user",
+            content,
+            createdAt: new Date().toISOString()
+          }
+        }));
       });
       if (autoStream) {
         setStreamRevision((current) => current + 1);

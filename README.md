@@ -144,7 +144,8 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 ```bash
 pnpm build          # Build all packages
 pnpm test           # Run tests
-OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync  # Push source to MinIO
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync  # Push readonly source prefixes to MinIO
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync -- --include-workspaces  # Also sync source/workspaces
 OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm local:up      # Start oah-api + oah-controller + oah-sandbox and auto-sync once
 pnpm local:down                                                    # Stop local Docker stack
 pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml  # Advanced: start a standalone worker (typically sandbox-hosted)

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 import type { WorkspaceRecord } from "@oah/runtime-core";
@@ -44,12 +44,23 @@ export class WorkspaceMaterializationDrainingError extends Error {
   }
 }
 
+export class WorkspaceMaterializationUnsupportedVersionError extends Error {
+  constructor(version: string) {
+    super(
+      `Workspace materialization only supports the live version locally. Received "${version}". ` +
+        "Restore the desired object-store state into the live workspace before using it."
+    );
+    this.name = "WorkspaceMaterializationUnsupportedVersionError";
+  }
+}
+
 export type WorkspaceMaterializationFailureStage =
   | "materialize"
   | "idle_flush"
   | "idle_evict"
   | "drain_evict"
   | "drain_release"
+  | "delete"
   | "close";
 
 export interface WorkspaceMaterializationFailureDiagnostic {
@@ -138,6 +149,7 @@ export interface WorkspaceMaterializationLease {
 
 export interface WorkspaceMaterializationManagerOptions {
   cacheRoot: string;
+  workspaceRoot?: string | undefined;
   workerId: string;
   ownerBaseUrl?: string | undefined;
   store: DirectoryObjectStore;
@@ -150,6 +162,11 @@ export interface WorkspaceMaterializationManagerOptions {
 function nowIso(): string {
   return new Date().toISOString();
 }
+
+const BACKGROUND_STATE_DIRECTORY_CANDIDATES = [
+  [".openharness", "state", "background-tasks"],
+  [".openharness", "state", "background"]
+];
 
 function normalizeRemotePrefix(prefix: string): string {
   return prefix.replace(/^\/+|\/+$/g, "");
@@ -196,6 +213,7 @@ function resolveWorkspaceMaterializationSource(
 
 export class WorkspaceMaterializationManager {
   readonly #cacheRoot: string;
+  readonly #workspaceRoot: string;
   readonly #workerId: string;
   readonly #ownerBaseUrl?: string | undefined;
   readonly #store: DirectoryObjectStore;
@@ -210,6 +228,7 @@ export class WorkspaceMaterializationManager {
 
   constructor(options: WorkspaceMaterializationManagerOptions) {
     this.#cacheRoot = options.cacheRoot;
+    this.#workspaceRoot = path.resolve(options.workspaceRoot ?? path.dirname(path.dirname(options.cacheRoot)));
     this.#workerId = options.workerId;
     this.#ownerBaseUrl = options.ownerBaseUrl;
     this.#store = options.store;
@@ -225,6 +244,9 @@ export class WorkspaceMaterializationManager {
   }): Promise<WorkspaceMaterializationLease> {
     const version = input.version?.trim() || "live";
     const source = resolveWorkspaceMaterializationSource(input.workspace);
+    if (source.kind === "object_store" && version !== "live") {
+      throw new WorkspaceMaterializationUnsupportedVersionError(version);
+    }
     if (source.kind === "object_store" && source.bucket && this.#store.bucket && source.bucket !== this.#store.bucket) {
       throw new Error(
         `Workspace ${input.workspace.id} points to bucket ${source.bucket}, but the configured object store is ${this.#store.bucket}.`
@@ -243,7 +265,7 @@ export class WorkspaceMaterializationManager {
         version,
         ownerWorkerId: this.#workerId,
         source,
-        localPath: this.#localPathForEntry(input.workspace.id, version, source),
+        localPath: this.#localPathForEntry(input.workspace.id, version, source, input.workspace.rootPath),
         dirty: false,
         refCount: 0,
         lastActivityAt: nowIso()
@@ -418,10 +440,56 @@ export class WorkspaceMaterializationManager {
     this.#throwIfFailures(failures);
   }
 
+  async deleteWorkspaceCopies(workspaceId: string): Promise<WorkspaceMaterializationSnapshot[]> {
+    const deleted: WorkspaceMaterializationSnapshot[] = [];
+    const failures: WorkspaceMaterializationFailureDiagnostic[] = [];
+
+    for (const entry of [...this.#entries.values()].filter((candidate) => candidate.workspaceId === workspaceId)) {
+      try {
+        await this.#removeEntryLease(entry);
+        if (entry.source.kind === "object_store") {
+          await rm(entry.localPath, { recursive: true, force: true });
+        }
+        this.#entries.delete(entry.cacheKey);
+        this.#failures.delete(entry.cacheKey);
+        deleted.push(this.#toSnapshot(entry));
+      } catch (error) {
+        failures.push(this.#toFailureDiagnostic(error, entry, "delete", "evict"));
+      }
+    }
+
+    this.#throwIfFailures(failures);
+    return deleted;
+  }
+
   async refreshLeases(): Promise<void> {
     for (const entry of this.#entries.values()) {
+      await this.#refreshBackgroundActivity(entry);
       await this.#publishEntry(entry);
     }
+  }
+
+  async touchWorkspaceActivity(
+    workspaceId: string,
+    options?: {
+      version?: string | undefined;
+    }
+  ): Promise<boolean> {
+    const version = options?.version?.trim();
+    const matchingEntries = [...this.#entries.values()].filter(
+      (entry) => entry.workspaceId === workspaceId && (version === undefined || entry.version === version)
+    );
+
+    if (matchingEntries.length === 0) {
+      return false;
+    }
+
+    for (const entry of matchingEntries) {
+      this.#touchEntry(entry);
+      await this.#publishEntry(entry);
+    }
+
+    return true;
   }
 
   async #ensureMaterialized(entry: WorkspaceMaterializationEntry): Promise<void> {
@@ -440,6 +508,15 @@ export class WorkspaceMaterializationManager {
       entry.inFlight = (async () => {
         try {
           await mkdir(path.dirname(entry.localPath), { recursive: true });
+          const adoptedLegacyCopy = await this.#adoptLegacyMaterializedCopy(entry);
+          if (adoptedLegacyCopy) {
+            this.#logger(
+              `[workspace-materialization] adopted legacy materialized workspace ${entry.workspaceId} (${entry.version}) from ${adoptedLegacyCopy} into ${entry.localPath}`
+            );
+            entry.materializedAt = nowIso();
+            this.#failures.delete(entry.cacheKey);
+            return;
+          }
           this.#logger(
             `[workspace-materialization] materializing workspace ${entry.workspaceId} (${entry.version}) from ${source.remotePrefix} into ${entry.localPath}`
           );
@@ -528,6 +605,67 @@ export class WorkspaceMaterializationManager {
     entry.lastActivityAt = nowIso();
   }
 
+  async #refreshBackgroundActivity(entry: WorkspaceMaterializationEntry): Promise<void> {
+    if (entry.refCount > 0) {
+      return;
+    }
+
+    if (!(await this.#hasActiveBackgroundTask(entry.localPath))) {
+      return;
+    }
+
+    this.#touchEntry(entry);
+  }
+
+  async #hasActiveBackgroundTask(workspaceRoot: string): Promise<boolean> {
+    for (const directorySegments of BACKGROUND_STATE_DIRECTORY_CANDIDATES) {
+      const backgroundRoot = path.join(workspaceRoot, ...directorySegments);
+      const sessionEntries = await readdir(backgroundRoot, { withFileTypes: true }).catch(() => []);
+      for (const sessionEntry of sessionEntries) {
+        if (!sessionEntry.isDirectory()) {
+          continue;
+        }
+
+        const sessionRoot = path.join(backgroundRoot, sessionEntry.name);
+        const taskEntries = await readdir(sessionRoot, { withFileTypes: true }).catch(() => []);
+        for (const taskEntry of taskEntries) {
+          if (!taskEntry.isFile() || !taskEntry.name.endsWith(".json")) {
+            continue;
+          }
+
+          const metadata = await readFile(path.join(sessionRoot, taskEntry.name), "utf8").catch(() => undefined);
+          if (!metadata) {
+            continue;
+          }
+
+          try {
+            const parsed = JSON.parse(metadata) as { pid?: unknown };
+            if (this.#isActiveBackgroundPid(parsed.pid)) {
+              return true;
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  #isActiveBackgroundPid(value: unknown): boolean {
+    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+      return false;
+    }
+
+    try {
+      process.kill(value, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async #publishEntry(entry: WorkspaceMaterializationEntry): Promise<void> {
     if (this.#leaseRegistry) {
       await this.#leaseRegistry.heartbeat(
@@ -591,15 +729,119 @@ export class WorkspaceMaterializationManager {
     return `${workspaceId}:${version}:${buildCacheSuffix({ workspaceId, version, source })}`;
   }
 
-  #localPathForEntry(workspaceId: string, version: string, source: WorkspaceMaterializationSource): string {
+  #localPathForEntry(
+    workspaceId: string,
+    version: string,
+    source: WorkspaceMaterializationSource,
+    preferredRootPath: string
+  ): string {
     if (source.kind === "local_directory") {
       return source.rootPath;
     }
 
-    const workspaceSegment = safeSegment(workspaceId);
-    const versionSegment = safeSegment(version);
-    const suffix = buildCacheSuffix({ workspaceId, version, source });
-    return path.join(this.#cacheRoot, workspaceSegment, `${versionSegment}-${suffix}`);
+    return this.#stableLiveWorkspaceRoot(workspaceId, preferredRootPath, version);
+  }
+
+  #stableLiveWorkspaceRoot(workspaceId: string, preferredRootPath: string, version: string): string {
+    const normalizedPreferredRoot = path.resolve(preferredRootPath);
+    const normalizedWorkspaceRoot = path.resolve(this.#workspaceRoot);
+    const canonicalWorkspaceRoot = path.join(normalizedWorkspaceRoot, safeSegment(workspaceId));
+
+    if (version !== "live") {
+      return canonicalWorkspaceRoot;
+    }
+
+    const relativeToWorkspaceRoot = path.relative(normalizedWorkspaceRoot, normalizedPreferredRoot);
+    if (
+      relativeToWorkspaceRoot.startsWith("..") ||
+      path.isAbsolute(relativeToWorkspaceRoot) ||
+      relativeToWorkspaceRoot === "" ||
+      relativeToWorkspaceRoot === "." ||
+      relativeToWorkspaceRoot === ".openharness" ||
+      relativeToWorkspaceRoot.startsWith(`.openharness${path.sep}`)
+    ) {
+      return canonicalWorkspaceRoot;
+    }
+
+    if (normalizedPreferredRoot !== canonicalWorkspaceRoot) {
+      return canonicalWorkspaceRoot;
+    }
+
+    return normalizedPreferredRoot;
+  }
+
+  async #adoptLegacyMaterializedCopy(entry: WorkspaceMaterializationEntry): Promise<string | undefined> {
+    if (entry.source.kind !== "object_store" || !this.#isStableWorkspaceRoot(entry.localPath)) {
+      return undefined;
+    }
+
+    const existingEntries = await readdir(entry.localPath).catch(() => []);
+    if (existingEntries.length > 0) {
+      return undefined;
+    }
+
+    for (const legacyPath of this.#legacyMaterializedPaths(entry)) {
+      if (legacyPath === entry.localPath) {
+        continue;
+      }
+
+      const legacyEntries = await readdir(legacyPath).catch(() => []);
+      if (legacyEntries.length === 0) {
+        continue;
+      }
+
+      await rm(entry.localPath, { recursive: true, force: true });
+      await rename(legacyPath, entry.localPath);
+      await this.#pruneEmptyParents(path.dirname(legacyPath), this.#cacheRoot);
+      return legacyPath;
+    }
+
+    return undefined;
+  }
+
+  #legacyMaterializedPaths(entry: WorkspaceMaterializationEntry): string[] {
+    const workspaceSegment = safeSegment(entry.workspaceId);
+    const versionSegment = safeSegment(entry.version);
+    const suffix = buildCacheSuffix({
+      workspaceId: entry.workspaceId,
+      version: entry.version,
+      source: entry.source
+    });
+    return [
+      path.join(this.#cacheRoot, workspaceSegment),
+      path.join(this.#cacheRoot, workspaceSegment, `${versionSegment}-${suffix}`)
+    ];
+  }
+
+  #isStableWorkspaceRoot(localPath: string): boolean {
+    const normalizedLocalPath = path.resolve(localPath);
+    const normalizedWorkspaceRoot = path.resolve(this.#workspaceRoot);
+    const relativeToWorkspaceRoot = path.relative(normalizedWorkspaceRoot, normalizedLocalPath);
+    return !(
+      relativeToWorkspaceRoot.startsWith("..") ||
+      path.isAbsolute(relativeToWorkspaceRoot) ||
+      relativeToWorkspaceRoot === "" ||
+      relativeToWorkspaceRoot === "." ||
+      relativeToWorkspaceRoot === ".openharness" ||
+      relativeToWorkspaceRoot.startsWith(`.openharness${path.sep}`)
+    );
+  }
+
+  async #pruneEmptyParents(startPath: string, stopPath: string): Promise<void> {
+    const normalizedStopPath = path.resolve(stopPath);
+    let currentPath = path.resolve(startPath);
+    while (currentPath.startsWith(`${normalizedStopPath}${path.sep}`) || currentPath === normalizedStopPath) {
+      const entries = await readdir(currentPath).catch(() => []);
+      if (entries.length > 0) {
+        return;
+      }
+
+      await rm(currentPath, { recursive: false, force: true }).catch(() => undefined);
+      if (currentPath === normalizedStopPath) {
+        return;
+      }
+      currentPath = path.dirname(currentPath);
+    }
   }
 
   #isIdle(entry: WorkspaceMaterializationEntry, thresholdMs: number): boolean {

@@ -27,6 +27,23 @@ interface PlatformModelSnapshot {
   }>;
 }
 
+interface DistributedPlatformModelRefreshResult {
+  snapshot: PlatformModelSnapshot;
+  summary: {
+    attempted: number;
+    succeeded: number;
+    failed: number;
+  };
+  targets: Array<{
+    workerId: string;
+    runtimeInstanceId?: string;
+    ownerBaseUrl: string;
+    status: "refreshed" | "failed";
+    snapshot?: PlatformModelSnapshot;
+    error?: string;
+  }>;
+}
+
 async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -196,6 +213,8 @@ async function createStartedAppWithRuntimeService(
       }>
     >;
     getPlatformModelSnapshot?: () => Promise<PlatformModelSnapshot>;
+    refreshPlatformModels?: () => Promise<PlatformModelSnapshot>;
+    refreshDistributedPlatformModels?: () => Promise<DistributedPlatformModelRefreshResult>;
     subscribePlatformModelSnapshot?: (listener: (snapshot: PlatformModelSnapshot) => void) => (() => void);
     importWorkspace?: (input: {
       rootPath: string;
@@ -225,6 +244,7 @@ async function createStartedAppWithRuntimeService(
       overwrite?: boolean | undefined;
     }) => Promise<void>;
     sandboxHostProviderKind?: "embedded" | "self_hosted" | "e2b";
+    sandboxOwnerFallbackBaseUrl?: string;
   }
 ) {
   const app = createApp({
@@ -235,6 +255,10 @@ async function createStartedAppWithRuntimeService(
     listWorkspaceBlueprints: async () => [{ name: "workspace" }],
     ...(options?.listPlatformModels ? { listPlatformModels: options.listPlatformModels } : {}),
     ...(options?.getPlatformModelSnapshot ? { getPlatformModelSnapshot: options.getPlatformModelSnapshot } : {}),
+    ...(options?.refreshPlatformModels ? { refreshPlatformModels: options.refreshPlatformModels } : {}),
+    ...(options?.refreshDistributedPlatformModels
+      ? { refreshDistributedPlatformModels: options.refreshDistributedPlatformModels }
+      : {}),
     ...(options?.subscribePlatformModelSnapshot
       ? { subscribePlatformModelSnapshot: options.subscribePlatformModelSnapshot }
       : {}),
@@ -246,6 +270,7 @@ async function createStartedAppWithRuntimeService(
       ? { assignWorkspacePlacementUser: options.assignWorkspacePlacementUser }
       : {}),
     ...(options?.sandboxHostProviderKind ? { sandboxHostProviderKind: options.sandboxHostProviderKind } : {}),
+    ...(options?.sandboxOwnerFallbackBaseUrl ? { sandboxOwnerFallbackBaseUrl: options.sandboxOwnerFallbackBaseUrl } : {}),
     ...(options?.importWorkspace ? { importWorkspace: options.importWorkspace } : {})
   });
 
@@ -625,6 +650,181 @@ describe("http api", () => {
         }
       }
     ]);
+  });
+
+  it("refreshes platform model snapshots only when explicitly requested", async () => {
+    let revision = 0;
+    let currentSnapshot: PlatformModelSnapshot = {
+      revision,
+      items: [
+        {
+          id: "openai-default",
+          provider: "openai",
+          modelName: "gpt-5",
+          hasKey: true,
+          isDefault: true
+        }
+      ]
+    };
+    const nextSnapshot: PlatformModelSnapshot = {
+      revision: 1,
+      items: [
+        {
+          id: "openai-default",
+          provider: "openai",
+          modelName: "gpt-5.1",
+          hasKey: true,
+          isDefault: true
+        },
+        {
+          id: "compat-fast",
+          provider: "openai-compatible",
+          modelName: "qwen-max",
+          url: "https://example.test/v1",
+          hasKey: false,
+          isDefault: false
+        }
+      ]
+    };
+    const listeners = new Set<(snapshot: PlatformModelSnapshot) => void>();
+    const refreshPlatformModels = vi.fn(async () => {
+      currentSnapshot = nextSnapshot;
+      revision = nextSnapshot.revision;
+      listeners.forEach((listener) => listener(currentSnapshot));
+      return currentSnapshot;
+    });
+
+    activeApp = await createStartedAppWithRuntimeService(
+      new RuntimeService({
+        defaultModel: "openai-default",
+        modelGateway: new FakeModelGateway(20),
+        ...createMemoryRuntimePersistence()
+      }),
+      new FakeModelGateway(20),
+      {
+        listPlatformModels: async () => currentSnapshot.items,
+        getPlatformModelSnapshot: async () => currentSnapshot,
+        refreshPlatformModels,
+        subscribePlatformModelSnapshot(listener) {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        }
+      }
+    );
+
+    const initialList = await fetch(`${activeApp.baseUrl}/api/v1/platform-models`);
+    await expect(initialList.json()).resolves.toEqual({
+      items: currentSnapshot.items
+    });
+
+    const eventsResponse = await fetch(`${activeApp.baseUrl}/api/v1/platform-models/events`);
+    expect(eventsResponse.status).toBe(200);
+    const framesPromise = readSseFrames(eventsResponse, (events) => events.length >= 2);
+    await waitFor(() => listeners.size === 1);
+
+    const refreshResponse = await fetch(`${activeApp.baseUrl}/api/v1/platform-models/refresh`, {
+      method: "POST"
+    });
+    expect(refreshResponse.status).toBe(200);
+    await expect(refreshResponse.json()).resolves.toEqual(nextSnapshot);
+    expect(refreshPlatformModels).toHaveBeenCalledTimes(1);
+
+    const refreshedList = await fetch(`${activeApp.baseUrl}/api/v1/platform-models`);
+    await expect(refreshedList.json()).resolves.toEqual({
+      items: nextSnapshot.items
+    });
+
+    await expect(framesPromise).resolves.toEqual([
+      {
+        event: "platform-models.snapshot",
+        data: {
+          revision: 0,
+          items: [
+            {
+              id: "openai-default",
+              provider: "openai",
+              modelName: "gpt-5",
+              hasKey: true,
+              isDefault: true
+            }
+          ]
+        }
+      },
+      {
+        event: "platform-models.updated",
+        data: nextSnapshot
+      }
+    ]);
+  });
+
+  it("refreshes platform models across registered workers through one public endpoint", async () => {
+    const distributedRefreshResult: DistributedPlatformModelRefreshResult = {
+      snapshot: {
+        revision: 2,
+        items: [
+          {
+            id: "openai-default",
+            provider: "openai",
+            modelName: "gpt-5.1",
+            hasKey: true,
+            isDefault: true
+          }
+        ]
+      },
+      summary: {
+        attempted: 2,
+        succeeded: 1,
+        failed: 1
+      },
+      targets: [
+        {
+          workerId: "worker-a",
+          runtimeInstanceId: "worker:pod-a",
+          ownerBaseUrl: "http://worker-a.internal:8787",
+          status: "refreshed",
+          snapshot: {
+            revision: 2,
+            items: [
+              {
+                id: "openai-default",
+                provider: "openai",
+                modelName: "gpt-5.1",
+                hasKey: true,
+                isDefault: true
+              }
+            ]
+          }
+        },
+        {
+          workerId: "worker-b",
+          runtimeInstanceId: "worker:pod-b",
+          ownerBaseUrl: "http://worker-b.internal:8787",
+          status: "failed",
+          error: "HTTP 503"
+        }
+      ]
+    };
+
+    activeApp = await createStartedAppWithRuntimeService(
+      new RuntimeService({
+        defaultModel: "openai-default",
+        modelGateway: new FakeModelGateway(20),
+        ...createMemoryRuntimePersistence()
+      }),
+      new FakeModelGateway(20),
+      {
+        refreshDistributedPlatformModels: vi.fn(async () => distributedRefreshResult)
+      }
+    );
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/platform-models/refresh/distributed`, {
+      method: "POST"
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(distributedRefreshResult);
   });
 
   it("exposes storage admin endpoints", async () => {
@@ -2043,6 +2243,67 @@ describe("http api", () => {
     });
   });
 
+  it("proxies workspace deletion to the owner worker", async () => {
+    const ownerGateway = new FakeModelGateway(20);
+    const ownerPersistence = createMemoryRuntimePersistence();
+    const ownerRuntime = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: ownerGateway,
+      ...ownerPersistence
+    });
+    const ownerWorkspace = await createWorkspaceRecord();
+    await ownerPersistence.workspaceRepository.upsert(ownerWorkspace);
+
+    const ownerApp = createApp({
+      runtimeService: ownerRuntime,
+      modelGateway: ownerGateway,
+      defaultModel: "openai-default",
+      logger: false,
+      workspaceMode: "multi"
+    });
+    await ownerApp.listen({ host: "127.0.0.1", port: 0 });
+    activeClosers.push(async () => {
+      await ownerApp.close();
+    });
+    const ownerAddress = ownerApp.server.address() as AddressInfo;
+    const ownerBaseUrl = `http://127.0.0.1:${ownerAddress.port}`;
+
+    const proxyGateway = new FakeModelGateway(20);
+    const proxyPersistence = createMemoryRuntimePersistence();
+    activeApp = await createStartedAppWithRuntimeService(
+      new RuntimeService({
+        defaultModel: "openai-default",
+        modelGateway: proxyGateway,
+        ...proxyPersistence
+      }),
+      proxyGateway,
+      {
+        resolveWorkspaceOwnership: async (workspaceId) => ({
+          workspaceId,
+          version: "live",
+          ownerWorkerId: "worker-owner",
+          ownerBaseUrl,
+          health: "healthy",
+          lastActivityAt: "2026-04-16T00:00:00.000Z",
+          localPath: "/tmp/worker-owner/ws",
+          remotePrefix: "workspace/demo",
+          isLocalOwner: false
+        }),
+        sandboxHostProviderKind: "self_hosted"
+      }
+    );
+
+    const deleteResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${ownerWorkspace.id}`, {
+      method: "DELETE",
+      headers: {
+        authorization: "Bearer token-1"
+      }
+    });
+
+    expect(deleteResponse.status).toBe(204);
+    await expect(ownerPersistence.workspaceRepository.getById(ownerWorkspace.id)).resolves.toBeNull();
+  });
+
   it("proxies sandbox requests to the owner worker", async () => {
     const ownerGateway = new FakeModelGateway(20);
     const ownerPersistence = createMemoryRuntimePersistence();
@@ -2123,6 +2384,66 @@ describe("http api", () => {
     await expect(commandResponse.json()).resolves.toMatchObject({
       stdout: "Hello sandbox owner.\n",
       exitCode: 0
+    });
+  });
+
+  it("falls back to the configured sandbox owner base url for sandbox requests", async () => {
+    const ownerGateway = new FakeModelGateway(20);
+    const ownerPersistence = createMemoryRuntimePersistence();
+    const ownerRuntime = new RuntimeService({
+      defaultModel: "openai-default",
+      modelGateway: ownerGateway,
+      ...ownerPersistence
+    });
+    const ownerWorkspace = await createWorkspaceRecord();
+    await writeFile(path.join(ownerWorkspace.rootPath, "hello.txt"), "Hello fallback owner.\n", "utf8");
+    await ownerPersistence.workspaceRepository.upsert(ownerWorkspace);
+
+    const ownerApp = createApp({
+      runtimeService: ownerRuntime,
+      modelGateway: ownerGateway,
+      defaultModel: "openai-default",
+      logger: false,
+      workspaceMode: "multi"
+    });
+    await ownerApp.listen({ host: "127.0.0.1", port: 0 });
+    activeClosers.push(async () => {
+      await ownerApp.close();
+    });
+    const ownerAddress = ownerApp.server.address() as AddressInfo;
+    const ownerBaseUrl = `http://127.0.0.1:${ownerAddress.port}`;
+
+    const proxyGateway = new FakeModelGateway(20);
+    const proxyPersistence = createMemoryRuntimePersistence();
+    activeApp = await createStartedAppWithRuntimeService(
+      new RuntimeService({
+        defaultModel: "openai-default",
+        modelGateway: proxyGateway,
+        ...proxyPersistence
+      }),
+      proxyGateway,
+      {
+        resolveWorkspaceOwnership: async (workspaceId) => ({
+          workspaceId,
+          version: "live",
+          ownerWorkerId: "worker-owner",
+          health: "healthy",
+          lastActivityAt: "2026-04-16T00:00:00.000Z",
+          localPath: "/tmp/worker-owner/ws",
+          remotePrefix: "workspace/demo",
+          isLocalOwner: false
+        }),
+        sandboxHostProviderKind: "self_hosted",
+        sandboxOwnerFallbackBaseUrl: `${ownerBaseUrl}/internal/v1`
+      }
+    );
+
+    const readResponse = await fetch(
+      `${activeApp.baseUrl}/api/v1/sandboxes/${ownerWorkspace.id}/files/content?path=${encodeURIComponent("/workspace/hello.txt")}`
+    );
+    expect(readResponse.status).toBe(200);
+    await expect(readResponse.json()).resolves.toMatchObject({
+      content: "Hello fallback owner.\n"
     });
   });
 

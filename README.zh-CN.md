@@ -144,7 +144,8 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 ```bash
 pnpm build          # 构建所有包
 pnpm test           # 运行测试
-OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync   # 把 source 发布到 MinIO
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync   # 把只读 source 前缀发布到 MinIO
+OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm storage:sync -- --include-workspaces  # 额外同步 source/workspaces
 OAH_TEST_ROOT=/absolute/path/to/test_oah_server pnpm local:up       # 启动 oah-api + oah-controller + oah-sandbox，并自动同步一次
 pnpm local:down                                                     # 停止本地 Docker 整套服务
 pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml  # 进阶：单独启动 standalone worker（通常跑在 sandbox 里）

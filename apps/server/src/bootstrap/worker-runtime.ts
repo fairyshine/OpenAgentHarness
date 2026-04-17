@@ -5,6 +5,7 @@ import type {
   SessionRunQueue,
   WorkerRegistry
 } from "@oah/storage-redis";
+import type { ExecutionRuntimeOperations } from "@oah/runtime-core";
 
 import { createWorkerHost, resolveWorkerMode, summarizeActiveWorkers, type WorkerHost } from "./worker-host.js";
 
@@ -91,18 +92,7 @@ export function createWorkerRuntimeControl(options: {
   config: WorkerHostConfig;
   redisRunQueue?: SessionRunQueue | undefined;
   redisWorkerRegistry?: WorkerRegistry | undefined;
-  runtimeService: {
-    processQueuedRun(runId: string): Promise<void>;
-    getRun?(runId: string): Promise<{ workspaceId: string }>;
-    recoverRunAfterDrainTimeout?(
-      runId: string,
-      strategy: "fail" | "requeue_running" | "requeue_all"
-    ): Promise<"failed" | "requeued" | "ignored">;
-    recoverStaleRuns?(options?: {
-      staleBefore?: string | undefined;
-      limit?: number | undefined;
-    }): Promise<{ recoveredRunIds: string[]; requeuedRunIds?: string[] }>;
-  };
+  runtimeService: ExecutionRuntimeOperations;
   logger?: RedisRunWorkerLogger | undefined;
   hostFactory?: WorkerHostFactory | undefined;
 }): WorkerRuntimeControl {

@@ -58,20 +58,17 @@ services:
   oah-api:
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     restart: unless-stopped
     command:
-      - pnpm
-      - exec
-      - tsx
-      - --tsconfig
-      - ./apps/server/tsconfig.json
-      - ./apps/server/src/index.ts
+      - node
+      - apps/server/dist/index.js
       - --config
       - /config/server.docker.yaml
       - --api-only
     environment:
       OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES: "true"
+      OAH_INTERNAL_BASE_URL: "http://oah-api:8787"
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,15 +90,11 @@ services:
   oah-controller:
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     restart: unless-stopped
     command:
-      - pnpm
-      - exec
-      - tsx
-      - --tsconfig
-      - ./apps/controller/tsconfig.json
-      - ./apps/controller/src/index.ts
+      - node
+      - apps/controller/dist/index.js
       - --config
       - /config/server.docker.yaml
     depends_on:
@@ -119,19 +112,16 @@ services:
   oah-sandbox:
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     restart: unless-stopped
     command:
-      - pnpm
-      - exec
-      - tsx
-      - --tsconfig
-      - ./apps/server/tsconfig.json
-      - ./apps/server/src/worker.ts
+      - node
+      - apps/server/dist/worker.js
       - --config
       - /config/server.docker.yaml
     environment:
       OAH_ALLOW_PRIVATE_INTERNAL_ROUTES: "true"
+      OAH_INTERNAL_BASE_URL: "http://oah-sandbox:8787"
     depends_on:
       postgres:
         condition: service_healthy

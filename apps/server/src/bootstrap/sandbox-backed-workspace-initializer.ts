@@ -79,6 +79,33 @@ function createSandboxSeedWorkspace(input: {
   };
 }
 
+function parseSandboxHttpBaseUrl(input: string): { baseUrl: string; routePrefix: "/api/v1" | "/internal/v1" | "" } {
+  const trimmed = input.trim();
+  try {
+    const url = new URL(trimmed);
+    const routePrefix = url.pathname.endsWith("/internal/v1")
+      ? "/internal/v1"
+      : url.pathname.endsWith("/api/v1")
+        ? "/api/v1"
+        : "";
+    const normalizedPath = routePrefix ? url.pathname.slice(0, -routePrefix.length).replace(/\/+$/u, "") : url.pathname.replace(/\/+$/u, "");
+    return {
+      baseUrl: `${url.origin}${normalizedPath}`,
+      routePrefix
+    };
+  } catch {
+    const routePrefix = trimmed.endsWith("/internal/v1")
+      ? "/internal/v1"
+      : trimmed.endsWith("/api/v1")
+        ? "/api/v1"
+        : "";
+    return {
+      baseUrl: routePrefix ? trimmed.slice(0, -routePrefix.length).replace(/\/+$/u, "") : trimmed.replace(/\/+$/u, ""),
+      routePrefix
+    };
+  }
+}
+
 export function createSandboxBackedWorkspaceInitializer(options: {
   blueprintDir: string;
   platformToolDir: string;
@@ -122,7 +149,9 @@ export function createSandboxBackedWorkspaceInitializer(options: {
         });
 
         if (options.sandboxHost.providerKind === "self_hosted" && options.selfHosted) {
-          const baseUrl = options.selfHosted.baseUrl.replace(/\/+$/u, "");
+          const { baseUrl, routePrefix } = parseSandboxHttpBaseUrl(options.selfHosted.baseUrl);
+          const mapRequestPath = (requestPath: string) =>
+            routePrefix ? requestPath.replace(/^\/api\/v1(?=\/|$)/u, routePrefix) : requestPath;
           const sandboxClient = createSandboxHttpClient({
             async requestJson<T>(requestPath: string, init?: RequestInit) {
               const headers = new Headers(options.selfHosted?.headers);
@@ -131,7 +160,7 @@ export function createSandboxBackedWorkspaceInitializer(options: {
                 headers.set(name, value);
               }
 
-              const response = await fetch(`${baseUrl}${requestPath}`, {
+              const response = await fetch(`${baseUrl}${mapRequestPath(requestPath)}`, {
                 ...init,
                 headers
               });

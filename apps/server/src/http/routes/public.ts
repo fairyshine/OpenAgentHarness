@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
+  distributedPlatformModelRefreshResultSchema,
   healthReportSchema,
   modelProviderListSchema,
   platformModelListSchema,
+  platformModelSnapshotSchema,
   readinessReportSchema,
   storageOverviewSchema,
   storageOverviewQuerySchema,
@@ -212,6 +214,26 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
         items
       })
     );
+  });
+
+  app.post("/api/v1/platform-models/refresh", async (_request, reply) => {
+    if (!dependencies.refreshPlatformModels) {
+      throw new AppError(404, "platform_models_unavailable", "Platform model refresh is not available.");
+    }
+
+    return reply.send(platformModelSnapshotSchema.parse(await dependencies.refreshPlatformModels()));
+  });
+
+  app.post("/api/v1/platform-models/refresh/distributed", async (_request, reply) => {
+    if (!dependencies.refreshDistributedPlatformModels) {
+      throw new AppError(
+        404,
+        "platform_models_unavailable",
+        "Distributed platform model refresh is not available."
+      );
+    }
+
+    return reply.send(distributedPlatformModelRefreshResultSchema.parse(await dependencies.refreshDistributedPlatformModels()));
   });
 
   app.get(

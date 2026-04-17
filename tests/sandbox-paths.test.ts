@@ -32,7 +32,7 @@ describe("sandbox path helpers", () => {
   });
 
   it("builds sandbox api paths with encoding", () => {
-    expect(buildSandboxApiPath("ws_test")).toBe("/sandboxes/ws_test");
-    expect(buildSandboxApiPath("ws/test", "/files/content")).toBe("/sandboxes/ws%2Ftest/files/content");
+    expect(buildSandboxApiPath("ws_test")).toBe("/api/v1/sandboxes/ws_test");
+    expect(buildSandboxApiPath("ws/test", "/files/content")).toBe("/api/v1/sandboxes/ws%2Ftest/files/content");
   });
 });

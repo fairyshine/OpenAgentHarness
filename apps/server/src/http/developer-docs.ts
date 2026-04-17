@@ -121,7 +121,9 @@ export function buildApiIndex(request: FastifyRequest) {
       description: "Discover model/provider configuration and inspect service diagnostics.",
       routes: [
         "GET /api/v1/model-providers",
-        "GET /api/v1/platform-models"
+        "GET /api/v1/platform-models",
+        "POST /api/v1/platform-models/refresh",
+        "POST /api/v1/platform-models/refresh/distributed"
       ]
     }
   };

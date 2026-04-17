@@ -8,7 +8,8 @@ import type { DirectoryObjectStore } from "../apps/server/src/object-storage.ts"
 import {
   WorkspaceMaterializationAggregateError,
   WorkspaceMaterializationDrainingError,
-  WorkspaceMaterializationManager
+  WorkspaceMaterializationManager,
+  WorkspaceMaterializationUnsupportedVersionError
 } from "../apps/server/src/bootstrap/workspace-materialization.ts";
 
 class FakeDirectoryObjectStore implements DirectoryObjectStore {
@@ -190,6 +191,259 @@ describe("workspace materialization", () => {
     await expect(readFile(path.join(localWorkspace, "README.md"), "utf8")).resolves.toBe("# local\n");
     await manager.close();
     await expect(readFile(path.join(localWorkspace, "README.md"), "utf8")).resolves.toBe("# local\n");
+  });
+
+  it("materializes live object-store workspaces into their stable workspace root when available", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "oah-materialization-stable-root-"));
+    const workspaceDir = path.join(tempRoot, "workspaces");
+    const cacheRoot = path.join(workspaceDir, ".openharness", "__materialized__");
+    const stableWorkspaceRoot = path.join(workspaceDir, "ws_1");
+    tempDirs.push(tempRoot);
+    const store = new FakeDirectoryObjectStore();
+    await store.putObject("workspace/demo/README.md", Buffer.from("# demo\n"));
+    await store.putObject("workspace/demo/docs/guide.md", Buffer.from("hello\n"));
+
+    const manager = new WorkspaceMaterializationManager({
+      cacheRoot,
+      workerId: "worker_1",
+      store
+    });
+
+    const lease = await manager.acquireWorkspace({
+      workspace: {
+        id: "ws_1",
+        rootPath: stableWorkspaceRoot,
+        externalRef: "s3://test-bucket/workspace/demo"
+      } as never
+    });
+
+    expect(lease.localPath).toBe(stableWorkspaceRoot);
+    await expect(readFile(path.join(stableWorkspaceRoot, "README.md"), "utf8")).resolves.toBe("# demo\n");
+    await expect(readFile(path.join(stableWorkspaceRoot, "docs", "guide.md"), "utf8")).resolves.toBe("hello\n");
+
+    await writeFile(path.join(stableWorkspaceRoot, "notes.md"), "stable root\n", "utf8");
+    lease.markDirty();
+    await lease.release();
+
+    const evicted = await manager.evictIdleCopies({
+      idleBefore: new Date(Date.now() + 1_000).toISOString()
+    });
+    expect(evicted).toHaveLength(1);
+    expect(store.objects.get("workspace/demo/notes.md")?.body.toString("utf8")).toBe("stable root\n");
+    await expect(stat(stableWorkspaceRoot)).rejects.toThrow();
+  });
+
+  it("normalizes live object-store workspaces to the canonical workspace-id directory", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "oah-materialization-canonical-root-"));
+    const workspaceDir = path.join(tempRoot, "workspaces");
+    const cacheRoot = path.join(workspaceDir, ".openharness", "__materialized__");
+    const nonCanonicalRoot = path.join(workspaceDir, "custom-name");
+    const canonicalWorkspaceRoot = path.join(workspaceDir, "ws_1");
+    tempDirs.push(tempRoot);
+    const store = new FakeDirectoryObjectStore();
+    await store.putObject("workspace/demo/README.md", Buffer.from("# demo\n"));
+
+    const manager = new WorkspaceMaterializationManager({
+      cacheRoot,
+      workerId: "worker_1",
+      store
+    });
+
+    const lease = await manager.acquireWorkspace({
+      workspace: {
+        id: "ws_1",
+        rootPath: nonCanonicalRoot,
+        externalRef: "s3://test-bucket/workspace/demo"
+      } as never
+    });
+
+    expect(lease.localPath).toBe(canonicalWorkspaceRoot);
+    await expect(readFile(path.join(canonicalWorkspaceRoot, "README.md"), "utf8")).resolves.toBe("# demo\n");
+    await expect(stat(nonCanonicalRoot)).rejects.toThrow();
+  });
+
+  it("rejects non-live object-store workspace materialization", async () => {
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "oah-materialization-cache-"));
+    tempDirs.push(cacheRoot);
+    const store = new FakeDirectoryObjectStore();
+    const manager = new WorkspaceMaterializationManager({
+      cacheRoot,
+      workerId: "worker_1",
+      store
+    });
+
+    await expect(
+      manager.acquireWorkspace({
+        workspace: {
+          id: "ws_1",
+          rootPath: "/unused",
+          externalRef: "s3://test-bucket/workspace/demo"
+        } as never,
+        version: "snapshot-2026-04-17"
+      })
+    ).rejects.toBeInstanceOf(WorkspaceMaterializationUnsupportedVersionError);
+  });
+
+  it("forgets materialized workspace copies during workspace deletion", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "oah-materialization-delete-root-"));
+    const workspaceDir = path.join(tempRoot, "workspaces");
+    const cacheRoot = path.join(workspaceDir, ".openharness", "__materialized__");
+    const stableWorkspaceRoot = path.join(workspaceDir, "ws_1");
+    tempDirs.push(tempRoot);
+    const store = new FakeDirectoryObjectStore();
+    await store.putObject("workspace/demo/README.md", Buffer.from("# demo\n"));
+
+    const manager = new WorkspaceMaterializationManager({
+      cacheRoot,
+      workerId: "worker_1",
+      store
+    });
+
+    const lease = await manager.acquireWorkspace({
+      workspace: {
+        id: "ws_1",
+        rootPath: stableWorkspaceRoot,
+        externalRef: "s3://test-bucket/workspace/demo"
+      } as never
+    });
+    await writeFile(path.join(stableWorkspaceRoot, "dirty.txt"), "dirty\n", "utf8");
+    lease.markDirty();
+    await lease.release();
+
+    const deletedCopies = await manager.deleteWorkspaceCopies("ws_1");
+
+    expect(deletedCopies).toHaveLength(1);
+    expect(deletedCopies[0]?.localPath).toBe(stableWorkspaceRoot);
+    await expect(stat(stableWorkspaceRoot)).rejects.toThrow();
+    expect(manager.snapshot()).toEqual([]);
+    expect(store.objects.has("workspace/demo/dirty.txt")).toBe(false);
+  });
+
+  it("repairs legacy hidden materialized roots back into the stable workspace directory", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "oah-materialization-repair-root-"));
+    const workspaceDir = path.join(tempRoot, "workspaces");
+    const cacheRoot = path.join(workspaceDir, ".openharness", "__materialized__");
+    const stableWorkspaceRoot = path.join(workspaceDir, "ws_1");
+    const legacyHiddenRoot = path.join(cacheRoot, "ws_1");
+    tempDirs.push(tempRoot);
+    const store = new FakeDirectoryObjectStore();
+    await store.putObject("workspace/demo/README.md", Buffer.from("# remote\n"));
+    await mkdir(legacyHiddenRoot, { recursive: true });
+    await writeFile(path.join(legacyHiddenRoot, "README.md"), "# adopted\n", "utf8");
+    await writeFile(path.join(legacyHiddenRoot, "note.txt"), "legacy copy\n", "utf8");
+
+    const manager = new WorkspaceMaterializationManager({
+      cacheRoot,
+      workerId: "worker_1",
+      store
+    });
+
+    const lease = await manager.acquireWorkspace({
+      workspace: {
+        id: "ws_1",
+        rootPath: legacyHiddenRoot,
+        externalRef: "s3://test-bucket/workspace/demo"
+      } as never
+    });
+
+    expect(lease.localPath).toBe(stableWorkspaceRoot);
+    await expect(readFile(path.join(stableWorkspaceRoot, "README.md"), "utf8")).resolves.toBe("# adopted\n");
+    await expect(readFile(path.join(stableWorkspaceRoot, "note.txt"), "utf8")).resolves.toBe("legacy copy\n");
+    await expect(stat(legacyHiddenRoot)).rejects.toThrow();
+  });
+
+  it("keeps an idle materialized workspace alive when control-plane activity refreshes it", async () => {
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "oah-materialization-cache-"));
+    tempDirs.push(cacheRoot);
+    const store = new FakeDirectoryObjectStore();
+    await store.putObject("workspace/demo/README.md", Buffer.from("# demo\n"));
+
+    const manager = new WorkspaceMaterializationManager({
+      cacheRoot,
+      workerId: "worker_1",
+      store
+    });
+
+    const lease = await manager.acquireWorkspace({
+      workspace: {
+        id: "ws_1",
+        rootPath: "/unused",
+        externalRef: "s3://test-bucket/workspace/demo"
+      } as never
+    });
+    await lease.release();
+
+    const staleCutoff = new Date(Date.now() + 5).toISOString();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    await manager.touchWorkspaceActivity("ws_1");
+
+    const firstEvictionAttempt = await manager.evictIdleCopies({ idleBefore: staleCutoff });
+    expect(firstEvictionAttempt).toEqual([]);
+    expect(manager.snapshot()).toHaveLength(1);
+
+    const secondEvictionAttempt = await manager.evictIdleCopies({
+      idleBefore: new Date(Date.now() + 1_000).toISOString()
+    });
+    expect(secondEvictionAttempt).toHaveLength(1);
+    expect(manager.snapshot()).toEqual([]);
+  });
+
+  it("keeps a workspace alive while a background task recorded in state metadata is still running", async () => {
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "oah-materialization-cache-"));
+    tempDirs.push(cacheRoot);
+    const store = new FakeDirectoryObjectStore();
+    await store.putObject("workspace/demo/README.md", Buffer.from("# demo\n"));
+
+    const manager = new WorkspaceMaterializationManager({
+      cacheRoot,
+      workerId: "worker_1",
+      store
+    });
+
+    const lease = await manager.acquireWorkspace({
+      workspace: {
+        id: "ws_1",
+        rootPath: "/unused",
+        externalRef: "s3://test-bucket/workspace/demo"
+      } as never
+    });
+
+    const backgroundStateRoot = path.join(lease.localPath, ".openharness", "state", "background-tasks", "ses_1");
+    await mkdir(backgroundStateRoot, { recursive: true });
+    await writeFile(
+      path.join(backgroundStateRoot, "task_1.json"),
+      JSON.stringify({
+        taskId: "task_1",
+        pid: process.pid,
+        createdAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+    await lease.release();
+
+    const staleCutoff = new Date(Date.now() + 5).toISOString();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    await manager.refreshLeases();
+
+    const firstEvictionAttempt = await manager.evictIdleCopies({ idleBefore: staleCutoff });
+    expect(firstEvictionAttempt).toEqual([]);
+    expect(manager.snapshot()).toHaveLength(1);
+
+    await writeFile(
+      path.join(backgroundStateRoot, "task_1.json"),
+      JSON.stringify({
+        taskId: "task_1",
+        pid: 999_999_999,
+        createdAt: new Date().toISOString()
+      }),
+      "utf8"
+    );
+
+    const secondEvictionAttempt = await manager.evictIdleCopies({
+      idleBefore: new Date(Date.now() + 1_000).toISOString()
+    });
+    expect(secondEvictionAttempt).toHaveLength(1);
+    expect(manager.snapshot()).toEqual([]);
   });
 
   it("publishes workspace ownership leases through the registry lifecycle", async () => {

@@ -6,12 +6,8 @@ import {
 } from "./e2b-compatible-sandbox-host.js";
 import { createNativeE2BSandboxService, normalizeE2BApiUrl } from "./native-e2b-sandbox-service.js";
 import { createMaterializationSandboxHost, type SandboxHost } from "./sandbox-host.js";
+import { trimToUndefined } from "./string-utils.js";
 import type { WorkspaceMaterializationManager } from "./workspace-materialization.js";
-
-function trimToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
 
 function createRemoteSandboxHost(options: {
   providerKind: "self_hosted" | "e2b";

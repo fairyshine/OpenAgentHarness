@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CreateWorkspaceDirectoryRequest,
@@ -139,9 +139,11 @@ export function useWorkspaceFileManager(params: {
   const [entriesBusy, setEntriesBusy] = useState(false);
   const [fileBusy, setFileBusy] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
+  const previousOpenRef = useRef(false);
 
   const workspaceIdValue = params.workspaceId.trim();
   const workspaceReadOnly = params.workspace?.readOnly ?? false;
+  const normalizedCurrentPath = normalizeWorkspaceRelativePath(currentPath);
   const entries = entryPage?.items ?? [];
   const nextCursor = entryPage?.nextCursor;
 
@@ -174,12 +176,11 @@ export function useWorkspaceFileManager(params: {
   const selectedFileDirty = selectedFileEditable && selectedFile !== null && selectedFileDraft !== selectedFile.content;
 
   const breadcrumbs = useMemo(() => {
-    const normalized = normalizeWorkspaceRelativePath(currentPath);
-    if (normalized === ".") {
+    if (normalizedCurrentPath === ".") {
       return [{ label: "workspace", path: "." }];
     }
 
-    const segments = normalized.split("/");
+    const segments = normalizedCurrentPath.split("/");
     return [
       { label: "workspace", path: "." },
       ...segments.map((segment, index) => ({
@@ -187,7 +188,7 @@ export function useWorkspaceFileManager(params: {
         path: segments.slice(0, index + 1).join("/")
       }))
     ];
-  }, [currentPath]);
+  }, [normalizedCurrentPath]);
 
   async function refreshEntries(options?: {
     path?: string;
@@ -213,17 +214,22 @@ export function useWorkspaceFileManager(params: {
           ...(options?.cursor ? { cursor: options.cursor } : {})
         } satisfies WorkspaceEntriesQuery)
       );
-      setCurrentPath(response.path);
+      setCurrentPath(normalizeWorkspaceRelativePath(response.path));
       setEntryPage((current) =>
-        options?.append && current?.path === response.path
+        options?.append && current?.path === normalizeWorkspaceRelativePath(response.path)
           ? {
               ...response,
+              path: normalizeWorkspaceRelativePath(response.path),
               items: [...current.items, ...response.items]
             }
-          : response
+          : {
+              ...response,
+              path: normalizeWorkspaceRelativePath(response.path)
+            }
       );
       if (!options?.quiet) {
-        params.setActivity(`已加载 ${response.path === "." ? "workspace 根目录" : response.path}`);
+        const responsePath = normalizeWorkspaceRelativePath(response.path);
+        params.setActivity(`已加载 ${responsePath === "." ? "workspace 根目录" : responsePath}`);
         params.setErrorMessage("");
       }
       return response;
@@ -275,7 +281,7 @@ export function useWorkspaceFileManager(params: {
     setSelectedEntry(null);
     setSelectedFile(null);
     setSelectedFileDraft("");
-    await refreshEntries({ path, quiet });
+    await refreshEntries({ path: normalizeWorkspaceRelativePath(path), quiet });
   }
 
   async function createDirectory(path: string): Promise<void> {
@@ -495,16 +501,19 @@ export function useWorkspaceFileManager(params: {
   }, [workspaceIdValue]);
 
   useEffect(() => {
+    const wasOpen = previousOpenRef.current;
+    previousOpenRef.current = open;
+
     if (!params.enabled || !open || !workspaceIdValue) {
       return;
     }
 
-    if (entryPage?.workspaceId === workspaceIdValue && entryPage.path === currentPath) {
+    if (wasOpen) {
       return;
     }
 
-    void refreshEntries({ path: currentPath, quiet: true });
-  }, [params.enabled, open, workspaceIdValue, currentPath, entryPage?.workspaceId, entryPage?.path, sandboxClient]);
+    void refreshEntries({ path: normalizedCurrentPath, quiet: true });
+  }, [params.enabled, open, workspaceIdValue, normalizedCurrentPath, sandboxClient]);
 
   return {
     fileManagerSurfaceProps: {
@@ -513,7 +522,7 @@ export function useWorkspaceFileManager(params: {
       workspaceId: workspaceIdValue,
       workspaceName: params.workspace?.name ?? "",
       workspaceReadOnly,
-      currentPath,
+      currentPath: normalizedCurrentPath,
       breadcrumbs,
       entries,
       nextCursor,
@@ -531,13 +540,13 @@ export function useWorkspaceFileManager(params: {
       refreshEntries: () => void refreshEntries(),
       loadMoreEntries: () =>
         void refreshEntries({
-          path: currentPath,
+          path: normalizedCurrentPath,
           ...(nextCursor ? { cursor: nextCursor } : {}),
           append: true,
           quiet: true
         }),
       focusEntry: (entry: WorkspaceEntry) => void focusEntry(entry),
-      navigateUp: () => void openDirectory(parentWorkspaceRelativePath(currentPath)),
+      navigateUp: () => void openDirectory(parentWorkspaceRelativePath(normalizedCurrentPath)),
       closeSelection,
       createDirectory: (path: string) => void createDirectory(path),
       createFile: (path: string) => void createFile(path),

@@ -82,7 +82,8 @@ describe("bootstrap single workspace mode", () => {
     tempDirs.push(tempDir);
 
     const workspaceDir = path.join(tempDir, "workspaces");
-    const shadowRoot = path.join(workspaceDir, ".openharness", "data", "workspace-state");
+    const runtimeStateDir = path.join(tempDir, ".openharness");
+    const shadowRoot = path.join(runtimeStateDir, "data", "workspace-state");
     const externalProjectRoot = path.join(tempDir, "external-project");
     const managedProjectRoot = path.join(workspaceDir, "managed-demo");
     const externalProjectDbPath = path.join(externalProjectRoot, ".openharness", "data", "history.db");
@@ -134,7 +135,8 @@ describe("bootstrap single workspace mode", () => {
         }
       },
       paths: {
-        workspace_dir: workspaceDir
+        workspace_dir: workspaceDir,
+        runtime_state_dir: runtimeStateDir
       },
       sqliteShadowRoot: shadowRoot
     });
@@ -173,7 +175,8 @@ describe("bootstrap single workspace mode", () => {
         }
       },
       paths: {
-        workspace_dir: workspaceDir
+        workspace_dir: workspaceDir,
+        runtime_state_dir: runtimeStateDir
       },
       sqliteShadowRoot: shadowRoot
     });
@@ -212,7 +215,8 @@ describe("bootstrap single workspace mode", () => {
         }
       },
       paths: {
-        workspace_dir: workspaceDir
+        workspace_dir: workspaceDir,
+        runtime_state_dir: runtimeStateDir
       },
       sqliteShadowRoot: shadowRoot
     });
@@ -224,6 +228,83 @@ describe("bootstrap single workspace mode", () => {
     await expect(access(externalProjectDbPath)).rejects.toBeDefined();
     await expect(access(shadowDbPath)).rejects.toBeDefined();
     await expect(access(managedProjectRoot)).rejects.toBeDefined();
+  });
+
+  it("cleans canonical managed workspace directories for object-store workspaces even when rootPath points elsewhere", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-workspace-cleanup-object-store-"));
+    tempDirs.push(tempDir);
+
+    const workspaceDir = path.join(tempDir, "workspaces");
+    const runtimeStateDir = path.join(tempDir, ".openharness");
+    const shadowRoot = path.join(runtimeStateDir, "data", "workspace-state");
+    const canonicalWorkspaceRoot = path.join(workspaceDir, "ws_object_store");
+    const currentMaterializedRoot = path.join(runtimeStateDir, "__materialized__", "ws_object_store");
+    const legacyMaterializedRoot = path.join(workspaceDir, ".openharness", "__materialized__", "ws_object_store");
+    const shadowDbPath = path.join(shadowRoot, "ws_object_store", "history.db");
+
+    await Promise.all([
+      mkdir(canonicalWorkspaceRoot, { recursive: true }),
+      mkdir(currentMaterializedRoot, { recursive: true }),
+      mkdir(legacyMaterializedRoot, { recursive: true }),
+      mkdir(path.dirname(shadowDbPath), { recursive: true })
+    ]);
+    await Promise.all([
+      writeFile(path.join(canonicalWorkspaceRoot, "README.md"), "workspace-root", "utf8"),
+      writeFile(path.join(currentMaterializedRoot, "current-stale.txt"), "current-root", "utf8"),
+      writeFile(path.join(legacyMaterializedRoot, "stale.txt"), "legacy-root", "utf8"),
+      writeFile(shadowDbPath, "shadow-db", "utf8")
+    ]);
+
+    const cleanup = await cleanupWorkspaceLocalArtifacts({
+      workspace: {
+        id: "ws_object_store",
+        name: "object-store",
+        rootPath: "/workspace/ws_object_store",
+        externalRef: "s3://test-bucket/workspace/ws_object_store",
+        executionPolicy: "local",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        kind: "project",
+        readOnly: false,
+        historyMirrorEnabled: true,
+        settings: {
+          defaultAgent: "assistant",
+          skillDirs: []
+        },
+        defaultAgent: "assistant",
+        workspaceModels: {},
+        agents: {},
+        actions: {},
+        skills: {},
+        toolServers: {},
+        hooks: {},
+        catalog: {
+          workspaceId: "ws_object_store",
+          agents: [],
+          models: [],
+          actions: [],
+          skills: [],
+          tools: [],
+          hooks: [],
+          nativeTools: []
+        }
+      },
+      paths: {
+        workspace_dir: workspaceDir,
+        runtime_state_dir: runtimeStateDir
+      },
+      sqliteShadowRoot: shadowRoot
+    });
+
+    expect(cleanup.mode).toBe("workspace_root");
+    expect(cleanup.removedPaths).toEqual(
+      expect.arrayContaining([canonicalWorkspaceRoot, currentMaterializedRoot, legacyMaterializedRoot, shadowDbPath])
+    );
+    await expect(access(canonicalWorkspaceRoot)).rejects.toBeDefined();
+    await expect(access(currentMaterializedRoot)).rejects.toBeDefined();
+    await expect(access(legacyMaterializedRoot)).rejects.toBeDefined();
+    await expect(access(shadowDbPath)).rejects.toBeDefined();
   });
 
   it("reuses persisted workspace ids for rediscovered roots", async () => {
@@ -1097,7 +1178,7 @@ llm:
     }
   });
 
-  it("reloads platform models from model_dir and refreshes workspace catalogs", async () => {
+  it("reloads platform models from model_dir on explicit refresh and updates workspace catalogs", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-platform-model-reload-"));
     tempDirs.push(tempDir);
 
@@ -1177,16 +1258,19 @@ compat-fast:
         "utf8"
       );
 
-      await waitFor(async () => {
-        const items = await runtime.listPlatformModels!();
-        const workspace = await runtime.runtimeService.getWorkspaceRecord(workspaceId);
-        return (
-          items.some((item) => item.id === "compat-fast" && item.modelName === "qwen-max") &&
-          items.some((item) => item.id === "openai-default" && item.modelName === "gpt-4.1-mini") &&
-          workspace.catalog.models.some((model) => model.ref === "platform/compat-fast" && model.modelName === "qwen-max") &&
-          workspace.catalog.models.some((model) => model.ref === "platform/openai-default" && model.modelName === "gpt-4.1-mini")
-        );
-      }, 8_000);
+      await expect(runtime.refreshPlatformModels?.()).resolves.toMatchObject({
+        revision: 1,
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: "compat-fast",
+            modelName: "qwen-max"
+          }),
+          expect.objectContaining({
+            id: "openai-default",
+            modelName: "gpt-4.1-mini"
+          })
+        ])
+      });
 
       const refreshedWorkspace = await runtime.runtimeService.getWorkspaceRecord(workspaceId);
       expect(refreshedWorkspace.catalog.models).toEqual(
@@ -1214,4 +1298,80 @@ compat-fast:
       await runtime.close();
     }
   }, 15_000);
+
+  it("infers managed workspace object-storage refs without enabling workspace mirror polling", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-managed-workspace-external-ref-"));
+    tempDirs.push(tempDir);
+
+    const workspaceDir = path.join(tempDir, "workspaces");
+    const workspaceRoot = path.join(workspaceDir, "demo");
+    const blueprintsDir = path.join(tempDir, "blueprints");
+    const modelsDir = path.join(tempDir, "models");
+    const toolsDir = path.join(tempDir, "tools");
+    const skillsDir = path.join(tempDir, "skills");
+    const configPath = path.join(tempDir, "server.yaml");
+
+    await Promise.all([
+      mkdir(path.join(workspaceRoot, ".openharness"), { recursive: true }),
+      mkdir(blueprintsDir, { recursive: true }),
+      mkdir(modelsDir, { recursive: true }),
+      mkdir(toolsDir, { recursive: true }),
+      mkdir(skillsDir, { recursive: true })
+    ]);
+    await writeFile(path.join(workspaceRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(
+      path.join(modelsDir, "openai.yaml"),
+      `
+openai-default:
+  provider: openai
+  name: gpt-4o-mini
+`,
+      "utf8"
+    );
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+object_storage:
+  provider: s3
+  bucket: test-bucket
+  region: us-east-1
+  endpoint: http://127.0.0.1:9000
+  force_path_style: true
+  workspace_backing_store:
+    enabled: true
+    key_prefix: workspace
+paths:
+  workspace_dir: ./workspaces
+  blueprint_dir: ./blueprints
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const runtime = await bootstrapRuntime({
+      argv: ["--config", configPath],
+      startWorker: false,
+      processKind: "api"
+    });
+
+    try {
+      const workspacePage = await runtime.runtimeService.listWorkspaces(10);
+      expect(workspacePage.items).toEqual([
+        expect.objectContaining({
+          rootPath: workspaceRoot,
+          externalRef: "s3://test-bucket/workspace/demo"
+        })
+      ]);
+    } finally {
+      await runtime.close();
+    }
+  });
 });

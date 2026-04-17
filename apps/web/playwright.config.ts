@@ -29,6 +29,15 @@ export default defineConfig({
   ],
   webServer: [
     {
+      command: "node apps/web/tests/e2e/mock-llm-server.mjs",
+      cwd: repoRoot,
+      url: "http://127.0.0.1:8798/v1/models",
+      reuseExistingServer: false,
+      timeout: 30_000,
+      stdout: "pipe",
+      stderr: "pipe"
+    },
+    {
       command: `pnpm exec tsx --tsconfig apps/server/tsconfig.json apps/server/src/index.ts --config apps/web/tests/e2e/fixtures/test-server.config.yaml`,
       cwd: repoRoot,
       url: `http://127.0.0.1:${SERVER_PORT}/healthz`,

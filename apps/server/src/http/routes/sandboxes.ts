@@ -1,5 +1,3 @@
-import { Readable } from "node:stream";
-
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
@@ -28,9 +26,22 @@ import {
   workspaceFileContentSchema,
   workspaceFileUploadQuerySchema
 } from "@oah/api-contracts";
+import type {
+  WorkspaceDeleteResult,
+  WorkspaceEntry,
+  WorkspaceEntryPage,
+  WorkspaceFileContentResult
+} from "@oah/runtime-core";
 import { AppError } from "@oah/runtime-core";
 
 import { assertWorkspaceAccess, createParamsSchema, sendError, toCallerContext } from "../context.js";
+import {
+  buildOwnerProxyUrl,
+  buildProxyBody,
+  buildProxyHeaders,
+  resolveOwnerId,
+  sendProxyResponse
+} from "../proxy-utils.js";
 import { describeSandboxTopology } from "../../sandbox-topology.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
 
@@ -38,77 +49,21 @@ const DEFAULT_BACKGROUND_SESSION_PREFIX = "sandbox";
 
 type WorkspaceOwnership = Awaited<ReturnType<NonNullable<AppDependencies["resolveWorkspaceOwnership"]>>>;
 
-function resolveSandboxOwnerId(input: { ownerId?: string | undefined; userId?: string | undefined }): string | undefined {
-  const ownerId = input.ownerId?.trim();
-  if (ownerId) {
-    return ownerId;
-  }
-
-  const userId = input.userId?.trim();
-  return userId && userId.length > 0 ? userId : undefined;
-}
-
-function copyProxyResponseHeaders(reply: FastifyReply, headers: Headers): void {
-  for (const [name, value] of headers.entries()) {
-    if (name === "transfer-encoding" || name === "connection" || name === "keep-alive") {
-      continue;
-    }
-
-    reply.header(name, value);
-  }
-}
-
-function buildOwnerSandboxProxyUrl(ownerBaseUrl: string, request: FastifyRequest): string {
-  const targetPath = (request.raw.url ?? request.url).replace(/^\/api\/v1\/sandboxes/u, "/internal/v1/sandboxes");
-  return `${ownerBaseUrl.replace(/\/+$/u, "")}${targetPath}`;
-}
-
-function buildOwnerSandboxProxyHeaders(request: FastifyRequest): Headers {
-  const headers = new Headers();
-  const contentType = request.headers["content-type"];
-  if (typeof contentType === "string" && contentType.length > 0) {
-    headers.set("content-type", contentType);
-  }
-
-  const accept = request.headers.accept;
-  if (typeof accept === "string" && accept.length > 0) {
-    headers.set("accept", accept);
-  }
-
-  const ifMatch = request.headers["if-match"];
-  if (typeof ifMatch === "string" && ifMatch.length > 0) {
-    headers.set("if-match", ifMatch);
-  }
-
-  return headers;
-}
-
-function buildOwnerSandboxProxyBody(request: FastifyRequest): Buffer | string | undefined {
-  if (request.method === "GET" || request.method === "HEAD") {
-    return undefined;
-  }
-
-  if (Buffer.isBuffer(request.body)) {
-    return request.body;
-  }
-
-  if (typeof request.body === "string") {
-    return request.body;
-  }
-
-  if (request.body === undefined || request.body === null) {
-    return undefined;
-  }
-
-  return JSON.stringify(request.body);
+function resolveWorkspaceOwnerBaseUrl(
+  dependencies: Pick<AppDependencies, "sandboxOwnerFallbackBaseUrl">,
+  ownership: NonNullable<WorkspaceOwnership>
+): string | undefined {
+  return ownership.ownerBaseUrl ?? dependencies.sandboxOwnerFallbackBaseUrl;
 }
 
 async function proxySandboxRequestToOwner(
   request: FastifyRequest,
   reply: FastifyReply,
+  dependencies: Pick<AppDependencies, "sandboxOwnerFallbackBaseUrl">,
   ownership: NonNullable<WorkspaceOwnership>
 ): Promise<void> {
-  if (!ownership.ownerBaseUrl) {
+  const ownerBaseUrl = resolveWorkspaceOwnerBaseUrl(dependencies, ownership);
+  if (!ownerBaseUrl) {
     await sendError(
       reply,
       409,
@@ -129,27 +84,17 @@ async function proxySandboxRequestToOwner(
   }
 
   try {
-    const body = buildOwnerSandboxProxyBody(request);
-    const response = await fetch(buildOwnerSandboxProxyUrl(ownership.ownerBaseUrl, request), {
-      method: request.method,
-      headers: buildOwnerSandboxProxyHeaders(request),
-      ...(body !== undefined ? { body } : {})
-    });
+    const body = buildProxyBody(request);
+    const response = await fetch(
+      buildOwnerProxyUrl(ownerBaseUrl, request, /^\/api\/v1\/sandboxes/u, "/internal/v1/sandboxes"),
+      {
+        method: request.method,
+        headers: buildProxyHeaders(request),
+        ...(body !== undefined ? { body } : {})
+      }
+    );
 
-    reply.status(response.status);
-    copyProxyResponseHeaders(reply, response.headers);
-    if (!response.body) {
-      await reply.send();
-      return;
-    }
-
-    const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
-      await reply.send(await response.text());
-      return;
-    }
-
-    await reply.send(Readable.fromWeb(response.body as never));
+    await sendProxyResponse(reply, response);
   } catch {
     await sendError(
       reply,
@@ -177,7 +122,12 @@ async function guardSandboxOwnership(
   }
 
   if (ownership.ownerBaseUrl) {
-    await proxySandboxRequestToOwner(request, reply, ownership);
+    await proxySandboxRequestToOwner(request, reply, dependencies, ownership);
+    return "proxied";
+  }
+
+  if (dependencies.sandboxOwnerFallbackBaseUrl) {
+    await proxySandboxRequestToOwner(request, reply, dependencies, ownership);
     return "proxied";
   }
 
@@ -235,14 +185,14 @@ async function buildSandboxResponse(dependencies: AppDependencies, workspaceId: 
   });
 }
 
-function toSandboxEntry(entry: Record<string, unknown>) {
+function toSandboxEntry(entry: WorkspaceEntry) {
   return {
     ...entry,
     path: workspacePathToSandboxPath(typeof entry.path === "string" ? entry.path : undefined)
   };
 }
 
-function toSandboxEntryPage(page: Record<string, unknown> & { items: Array<Record<string, unknown>> }) {
+function toSandboxEntryPage(page: WorkspaceEntryPage) {
   return {
     ...page,
     path: workspacePathToSandboxPath(typeof page.path === "string" ? page.path : undefined),
@@ -253,14 +203,14 @@ function toSandboxEntryPage(page: Record<string, unknown> & { items: Array<Recor
   };
 }
 
-function toSandboxFileContent(file: Record<string, unknown>) {
+function toSandboxFileContent(file: WorkspaceFileContentResult) {
   return {
     ...file,
     path: workspacePathToSandboxPath(typeof file.path === "string" ? file.path : undefined)
   };
 }
 
-function toSandboxDeleteResult(result: Record<string, unknown>) {
+function toSandboxDeleteResult(result: WorkspaceDeleteResult) {
   return {
     ...result,
     path: workspacePathToSandboxPath(typeof result.path === "string" ? result.path : undefined)
@@ -286,7 +236,7 @@ async function handleListSandboxEntries(
     ...query,
     path: sandboxPathToWorkspacePath(query.path)
   });
-  return reply.send(workspaceEntryPageSchema.parse(toSandboxEntryPage(page as Record<string, unknown> & { items: Array<Record<string, unknown>> })));
+  return reply.send(workspaceEntryPageSchema.parse(toSandboxEntryPage(page)));
 }
 
 async function handleGetSandboxFileStat(
@@ -323,7 +273,7 @@ async function handleGetSandboxFileContent(
     ...query,
     path: sandboxPathToWorkspacePath(query.path) ?? "."
   });
-  return reply.send(workspaceFileContentSchema.parse(toSandboxFileContent(file as Record<string, unknown>)));
+  return reply.send(workspaceFileContentSchema.parse(toSandboxFileContent(file)));
 }
 
 async function handlePutSandboxFileContent(
@@ -337,7 +287,7 @@ async function handlePutSandboxFileContent(
     ...input,
     path: sandboxPathToWorkspacePath(input.path) ?? "."
   });
-  return reply.send(workspaceEntrySchema.parse(toSandboxEntry(entry as Record<string, unknown>)));
+  return reply.send(workspaceEntrySchema.parse(toSandboxEntry(entry)));
 }
 
 async function handleUploadSandboxFile(
@@ -357,7 +307,7 @@ async function handleUploadSandboxFile(
     overwrite: query.overwrite,
     ...(query.ifMatch !== undefined ? { ifMatch: query.ifMatch } : {})
   });
-  return reply.send(workspaceEntrySchema.parse(toSandboxEntry(entry as Record<string, unknown>)));
+  return reply.send(workspaceEntrySchema.parse(toSandboxEntry(entry)));
 }
 
 async function handleDownloadSandboxFile(
@@ -416,7 +366,7 @@ async function handleCreateSandboxDirectory(
     ...input,
     path: sandboxPathToWorkspacePath(input.path) ?? "."
   });
-  return reply.status(201).send(workspaceEntrySchema.parse(toSandboxEntry(entry as Record<string, unknown>)));
+  return reply.status(201).send(workspaceEntrySchema.parse(toSandboxEntry(entry)));
 }
 
 async function handleDeleteSandboxEntry(
@@ -430,7 +380,7 @@ async function handleDeleteSandboxEntry(
     ...query,
     path: sandboxPathToWorkspacePath(query.path) ?? "."
   });
-  return reply.send(workspaceDeleteResultSchema.parse(toSandboxDeleteResult(result as Record<string, unknown>)));
+  return reply.send(workspaceDeleteResultSchema.parse(toSandboxDeleteResult(result)));
 }
 
 async function handleMoveSandboxEntry(
@@ -445,7 +395,7 @@ async function handleMoveSandboxEntry(
     sourcePath: sandboxPathToWorkspacePath(input.sourcePath) ?? ".",
     targetPath: sandboxPathToWorkspacePath(input.targetPath) ?? "."
   });
-  return reply.send(workspaceEntrySchema.parse(toSandboxEntry(entry as Record<string, unknown>)));
+  return reply.send(workspaceEntrySchema.parse(toSandboxEntry(entry)));
 }
 
 async function handleRunSandboxForegroundCommand(
@@ -518,7 +468,7 @@ function registerSandboxCoreRoutes(
 
   app.post(`${prefix}/sandboxes`, async (request, reply) => {
     const input = createSandboxRequestSchema.parse(request.body);
-    const ownerId = resolveSandboxOwnerId(input);
+    const ownerId = resolveOwnerId(input);
 
     if (input.workspaceId) {
       if (isPublicApi) {

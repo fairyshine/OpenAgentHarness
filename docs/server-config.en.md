@@ -30,6 +30,7 @@ sandbox:
 
 paths:
   workspace_dir: /srv/openharness/workspaces       # Project workspace root
+  runtime_state_dir: /srv/openharness/.openharness  # Runtime-private state root
   blueprint_dir: /srv/openharness/blueprints        # Workspace blueprint directory
   model_dir: /srv/openharness/models               # Platform model directory
   tool_dir: /srv/openharness/tools                 # Platform tool directory
@@ -63,6 +64,33 @@ llm:
 > **tip**
 > Without Redis, runs execute in-process on the API server (suitable for local dev). With Redis, multiple worker instances can consume the queue.
 
+### `object_storage`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `provider` | string | Currently only `s3`-compatible object storage is supported |
+| `bucket` | string | Target bucket |
+| `region` | string | Object storage region |
+| `endpoint` | string | Optional custom S3/OSS/MinIO endpoint |
+| `access_key` | string | Optional access credential |
+| `secret_key` | string | Optional access credential |
+| `session_token` | string | Optional temporary credential |
+| `force_path_style` | boolean | Whether to force path-style URLs |
+| `workspace_backing_store.enabled` | boolean | Enables managed workspace object-storage backing. Active workspace writes still flush only on idle / drain / delete |
+| `workspace_backing_store.key_prefix` | string | Object-storage key prefix used for workspace backing |
+| `mirrors.paths` | string[] | Readonly prefixes mirrored locally. Supports `blueprint / model / tool / skill` |
+| `mirrors.sync_on_boot` | boolean | Whether mirrored prefixes should be pulled from object storage on startup |
+| `mirrors.sync_on_change` | boolean | Whether mirrored readonly prefixes are polled for changes. This does not live-sync active workspace writes |
+| `mirrors.poll_interval_ms` | number | Mirror poll interval |
+| `mirrors.key_prefixes.*` | object | Object-storage key prefix mapping for each readonly mirrored path |
+| `managed_paths` / `key_prefixes.*` / `sync_on_*` | legacy | Backward-compatible legacy fields; prefer `workspace_backing_store` and `mirrors` for new configs. Loading them emits a deprecation warning |
+
+> **tip**
+> `blueprint / model / tool / skill` in `mirrors.paths` are still mirrored through `ObjectStorageMirrorController` on boot and on change polling.
+
+> **tip**
+> `workspace_backing_store` only controls managed workspace `externalRef` / backing-store semantics. Active workspace writes do not flush on every change; they flush through the workspace materialization idle / drain lifecycle.
+
 ### `sandbox`
 
 | Field | Type | Description |
@@ -92,6 +120,7 @@ llm:
 | Field | Type | Description |
 | --- | --- | --- |
 | `workspace_dir` | string | Project workspace root directory |
+| `runtime_state_dir` | string | Runtime-private state root for SQLite shadow data, archive exports, and legacy materialization state. Defaults to `dirname(workspace_dir)/.openharness` |
 | `blueprint_dir` | string | Workspace blueprint directory |
 | `model_dir` | string | Platform model definition directory |
 | `tool_dir` | string | Platform MCP tool server definition directory |
@@ -130,7 +159,17 @@ llm:
 
 ### `workspace_dir`
 
-Each direct subdirectory is treated as one `project` workspace. Only first-level subdirectories are scanned.
+Each direct subdirectory is treated as one `project` workspace. Only first-level subdirectories are scanned. This directory should hold live workspaces only and should not be relied on as a runtime-internal state root.
+
+### `runtime_state_dir`
+
+Stores runtime-private state, including:
+
+- SQLite shadow `history.db`
+- Archive export output
+- Legacy object-store materialization state
+
+The default is `dirname(workspace_dir)/.openharness`, which keeps the live workspace root separate from internal runtime state. If you want this state to survive container restarts, mount it to durable writable storage explicitly.
 
 ### `blueprint_dir`
 

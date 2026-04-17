@@ -89,6 +89,7 @@ export function buildSingleWorkspaceConfig(
     },
     paths: {
       workspace_dir: baseConfig?.paths.workspace_dir ?? path.dirname(singleWorkspace.rootPath),
+      runtime_state_dir: baseConfig?.paths.runtime_state_dir ?? path.join(path.dirname(singleWorkspace.rootPath), ".openharness"),
       blueprint_dir: baseConfig?.paths.blueprint_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__blueprints__"),
       model_dir: modelDir,
       tool_dir: singleWorkspace.toolDir ?? baseConfig?.paths.tool_dir ?? path.join(singleWorkspace.rootPath, ".openharness", "__platform_tools__"),
