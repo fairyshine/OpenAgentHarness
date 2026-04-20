@@ -405,8 +405,8 @@ function recreateReadonlyObjectStorageVolumes() {
   }
 }
 
-function hasLocalOahImage() {
-  const result = spawnSync("docker", ["image", "inspect", "openagentharness-oah:latest"], {
+function dockerImageExists(imageName) {
+  const result = spawnSync("docker", ["image", "inspect", imageName], {
     cwd: repoRoot,
     env: process.env,
     stdio: "ignore"
@@ -414,9 +414,67 @@ function hasLocalOahImage() {
   return result.status === 0;
 }
 
+function ensureDockerBuildBaseImages() {
+  if (process.env.OAH_DOCKER_BUILD_BASE_IMAGE && process.env.OAH_DOCKER_RUNTIME_BASE_IMAGE) {
+    console.log(
+      `Using preconfigured Docker base images: build=${process.env.OAH_DOCKER_BUILD_BASE_IMAGE} runtime=${process.env.OAH_DOCKER_RUNTIME_BASE_IMAGE}`
+    );
+    return;
+  }
+
+  const candidatePairs = [
+    {
+      build: "mirror.gcr.io/library/node:24-bookworm",
+      runtime: "mirror.gcr.io/library/node:24-bookworm",
+      description: "mirror.gcr.io Node 24 bookworm"
+    },
+    {
+      build: "node:24-bookworm",
+      runtime: "node:24-bookworm-slim",
+      description: "Docker Hub official Node 24 images"
+    }
+  ];
+
+  for (const candidate of candidatePairs) {
+    const buildReady =
+      dockerImageExists(candidate.build) ||
+      runMaybe("docker", ["pull", candidate.build], { stdio: ["ignore", "inherit", "inherit"] }).status === 0;
+    if (!buildReady) {
+      continue;
+    }
+
+    const runtimeReady =
+      candidate.runtime === candidate.build
+        ? true
+        : dockerImageExists(candidate.runtime) ||
+          runMaybe("docker", ["pull", candidate.runtime], { stdio: ["ignore", "inherit", "inherit"] }).status === 0;
+    if (!runtimeReady) {
+      continue;
+    }
+
+    process.env.OAH_DOCKER_BUILD_BASE_IMAGE = candidate.build;
+    process.env.OAH_DOCKER_RUNTIME_BASE_IMAGE = candidate.runtime;
+    console.log(`Using Docker base image source: ${candidate.description}`);
+    return;
+  }
+
+  console.warn(
+    "Could not prefetch a preferred Node base image pair. Docker build will fall back to the compose defaults and may still need Docker Hub access."
+  );
+}
+
+function hasLocalOahImage(services = []) {
+  if (dockerImageExists("openagentharness-oah:latest")) {
+    return true;
+  }
+
+  return services.every((service) => dockerImageExists(`${composeProjectName}-${service}:latest`));
+}
+
 async function up() {
   ensureDeployRoot();
   prepareDockerServerConfigs();
+  ensureDockerBuildBaseImages();
   ensureRclonePlugin();
   ensureRcloneVolumeDriverResponsive();
 
@@ -463,7 +521,11 @@ async function up() {
     return;
   }
 
-  if (!hasLocalOahImage()) {
+  if (!hasLocalOahImage(appServices)) {
+    console.error("Build failed and no reusable local OAH image was found.");
+    console.error("If this is only a Docker Hub connectivity issue, try one of these:");
+    console.error("  1. Re-run after Docker Desktop networking/DNS recovers");
+    console.error("  2. If you already built the image before, run with OAH_SKIP_BUILD=1");
     process.exit(buildResult.status ?? 1);
   }
 

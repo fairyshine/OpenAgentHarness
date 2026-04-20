@@ -1,4 +1,6 @@
-FROM node:24-bookworm AS build
+ARG BASE_BUILD_IMAGE=node:24-bookworm
+ARG BASE_RUNTIME_IMAGE=node:24-bookworm-slim
+FROM ${BASE_BUILD_IMAGE} AS build
 
 LABEL org.opencontainers.image.title="Open Agent Harness" \
       org.opencontainers.image.description="Production image for split-deployed Open Agent Harness." \
@@ -22,7 +24,8 @@ RUN pnpm install --frozen-lockfile
 
 RUN pnpm build
 
-FROM node:24-bookworm-slim AS runtime
+ARG BASE_RUNTIME_IMAGE
+FROM ${BASE_RUNTIME_IMAGE} AS runtime
 
 ENV NODE_ENV=production
 

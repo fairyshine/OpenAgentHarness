@@ -56,9 +56,13 @@ services:
       retries: 20
 
   oah-api:
+    image: openagentharness-oah:latest
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
+        BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-node:24-bookworm-slim}
     restart: unless-stopped
     command:
       - node
@@ -90,9 +94,13 @@ services:
       - oah-archives:/data/archives:ro
 
   oah-controller:
+    image: openagentharness-oah:latest
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
+        BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-node:24-bookworm-slim}
     restart: unless-stopped
     command:
       - node
@@ -124,9 +132,13 @@ services:
       - ${OAH_LOCAL_DEPLOY_ROOT:?set OAH_LOCAL_DEPLOY_ROOT}:${OAH_LOCAL_DEPLOY_ROOT:?set OAH_LOCAL_DEPLOY_ROOT}:ro
 
   oah-sandbox:
+    image: openagentharness-oah:latest
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
+        BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-node:24-bookworm-slim}
     restart: unless-stopped
     command:
       - sh

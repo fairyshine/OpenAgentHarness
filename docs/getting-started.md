@@ -106,6 +106,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
   ```bash
   OAH_DEPLOY_ROOT=/absolute/path OAH_SKIP_BUILD=1 pnpm local:up
   ```
+- 旧版本本地环境如果已经缓存的是 `openagentharness-oah-api` / `openagentharness-oah-controller` / `openagentharness-oah-sandbox`，`local:up` 现在也会自动识别并回退到 `--no-build`
 - 如果必须重新构建，先确认 Docker Desktop 自身能访问 Docker Hub，再重试。
 
 ### `VolumeDriver.Get ... context deadline exceeded`
