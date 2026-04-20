@@ -15,7 +15,7 @@ function createRemoteSandboxHost(options: {
   providerKind: "self_hosted" | "e2b";
   baseUrl: string;
   headers?: Record<string, string> | undefined;
-  workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignUser"> | undefined;
+  workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignOwnerAffinity"> | undefined;
   workerRegistry?: Pick<WorkerRegistry, "listActive"> | undefined;
 }): SandboxHost {
   return createE2BCompatibleSandboxHost({
@@ -70,7 +70,7 @@ function createNativeE2BSandboxHost(options: {
 export async function createConfiguredSandboxHost(options: {
   config: ServerConfig;
   workspaceMaterializationManager?: WorkspaceMaterializationManager | undefined;
-  workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignUser"> | undefined;
+  workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignOwnerAffinity"> | undefined;
   workerRegistry?: Pick<WorkerRegistry, "listActive"> | undefined;
 }): Promise<SandboxHost | undefined> {
   const provider =

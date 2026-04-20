@@ -84,7 +84,6 @@ export const createSandboxRequestSchema = z
     runtime: z.string().min(1).optional(),
     rootPath: z.string().min(1).optional(),
     ownerId: z.string().trim().min(1).optional(),
-    userId: z.string().trim().min(1).optional(),
     serviceName: z
       .string()
       .trim()

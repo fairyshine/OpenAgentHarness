@@ -2226,10 +2226,6 @@ components:
         ownerId:
           type: string
           minLength: 1
-        userId:
-          type: string
-          minLength: 1
-          deprecated: true
         serviceName:
           type: string
           minLength: 1

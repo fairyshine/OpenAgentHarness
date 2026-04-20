@@ -2,14 +2,9 @@ import { Readable } from "node:stream";
 
 import type { FastifyReply, FastifyRequest } from "fastify";
 
-export function resolveOwnerId(input: { ownerId?: string | undefined; userId?: string | undefined }): string | undefined {
+export function resolveOwnerId(input: { ownerId?: string | undefined }): string | undefined {
   const ownerId = input.ownerId?.trim();
-  if (ownerId) {
-    return ownerId;
-  }
-
-  const userId = input.userId?.trim();
-  return userId && userId.length > 0 ? userId : undefined;
+  return ownerId && ownerId.length > 0 ? ownerId : undefined;
 }
 
 export function copyProxyResponseHeaders(reply: FastifyReply, headers: Headers): void {

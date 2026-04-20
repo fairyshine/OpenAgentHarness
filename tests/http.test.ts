@@ -238,9 +238,9 @@ async function createStartedAppWithEngineService(
       isLocalOwner: boolean;
     } | undefined>;
     storageAdmin?: StorageAdmin;
-    assignWorkspacePlacementUser?: (input: {
+    assignWorkspacePlacementOwnerAffinity?: (input: {
       workspaceId: string;
-      userId: string;
+      ownerId: string;
       overwrite?: boolean | undefined;
     }) => Promise<void>;
     releaseWorkspacePlacement?: (input: {
@@ -272,8 +272,8 @@ async function createStartedAppWithEngineService(
     ...(options?.resolveCallerContext ? { resolveCallerContext: options.resolveCallerContext } : {}),
     ...(options?.resolveWorkspaceOwnership ? { resolveWorkspaceOwnership: options.resolveWorkspaceOwnership } : {}),
     ...(options?.storageAdmin ? { storageAdmin: options.storageAdmin } : {}),
-    ...(options?.assignWorkspacePlacementUser
-      ? { assignWorkspacePlacementUser: options.assignWorkspacePlacementUser }
+    ...(options?.assignWorkspacePlacementOwnerAffinity
+      ? { assignWorkspacePlacementOwnerAffinity: options.assignWorkspacePlacementOwnerAffinity }
       : {}),
     ...(options?.releaseWorkspacePlacement ? { releaseWorkspacePlacement: options.releaseWorkspacePlacement } : {}),
     ...(options?.clearWorkspaceCoordination ? { clearWorkspaceCoordination: options.clearWorkspaceCoordination } : {}),
@@ -965,7 +965,7 @@ describe("http api", () => {
           preferredWorkerId: "worker_1",
           ...(input.workspaceId === "ws_1" ? { workspaceAffinityWorkerId: "worker_1" } : {}),
           ...(input.sessionId === "ses_1" ? { sessionAffinityWorkerId: "worker_2" } : {}),
-          ...(input.userId ? { userAffinityWorkerId: "worker_1" } : {}),
+          ...(input.ownerId ? { ownerAffinityWorkerId: "worker_1" } : {}),
           candidates: [
             {
               workerId: "worker_1",
@@ -978,7 +978,7 @@ describe("http api", () => {
               busySlots: 0,
               matchingSessionSlots: 0,
               matchingWorkspaceSlots: input.workspaceId === "ws_1" ? 1 : 0,
-              matchingUserWorkspaces: input.userId ? 1 : 0,
+              matchingOwnerWorkspaces: input.ownerId ? 1 : 0,
               reasons: ["healthy", "idle_slot_capacity", ...(input.ownerWorkerId === "worker_1" ? ["owner_worker"] : [])]
             },
             {
@@ -992,7 +992,7 @@ describe("http api", () => {
               busySlots: 1,
               matchingSessionSlots: input.sessionId === "ses_1" ? 1 : 0,
               matchingWorkspaceSlots: 0,
-              matchingUserWorkspaces: 0,
+              matchingOwnerWorkspaces: 0,
               reasons: ["healthy", "slot_saturated", ...(input.sessionId === "ses_1" ? ["same_session"] : [])]
             }
           ]
@@ -1000,14 +1000,14 @@ describe("http api", () => {
       },
       async redisWorkspacePlacements(input) {
         const workspaceId = input?.workspaceId;
-        const userId = input?.userId;
+        const ownerId = input?.ownerId;
         const ownerWorkerId = input?.ownerWorkerId;
         const state = input?.state;
         const items = [
           {
             workspaceId: workspaceId ?? "ws_1",
             version: "live",
-            userId: userId ?? "user_1",
+            ownerId: ownerId ?? "user_1",
             ownerWorkerId: ownerWorkerId ?? "worker_1",
             ownerBaseUrl: "http://worker-1.internal:8787",
             state: state ?? "idle",
@@ -1202,7 +1202,7 @@ describe("http api", () => {
       items: [
         {
           workspaceId: "ws_1",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_1",
           state: "idle"
         }
@@ -1246,8 +1246,8 @@ describe("http api", () => {
     expect(response.status).toBe(201);
   });
 
-  it("records workspace owner affinity from workspace creation and session creation", async () => {
-    const assignedUsers: Array<{ workspaceId: string; userId: string; overwrite?: boolean }> = [];
+  it("records workspace owner affinity from workspace creation without rebinding it during session creation", async () => {
+    const assignedOwners: Array<{ workspaceId: string; ownerId: string; overwrite?: boolean }> = [];
     const initializerWorkspaceIds: string[] = [];
     const gateway = new FakeModelGateway(20);
     const persistence = createMemoryRuntimePersistence();
@@ -1289,8 +1289,12 @@ describe("http api", () => {
     });
 
     activeApp = await createStartedAppWithEngineService(runtimeService, gateway, {
-      assignWorkspacePlacementUser: async (input) => {
-        assignedUsers.push(input);
+      assignWorkspacePlacementOwnerAffinity: async (input) => {
+        assignedOwners.push({
+          workspaceId: input.workspaceId,
+          ownerId: input.ownerId,
+          overwrite: input.overwrite
+        });
       },
       sandboxHostProviderKind: "self_hosted"
     });
@@ -1322,19 +1326,165 @@ describe("http api", () => {
     expect(sessionResponse.status).toBe(201);
 
     expect(initializerWorkspaceIds).toHaveLength(1);
-    expect(assignedUsers).toEqual([
+    expect(assignedOwners).toEqual([
       {
         workspaceId: initializerWorkspaceIds[0],
-        userId: "user_explicit",
+        ownerId: "user_explicit",
         overwrite: true
-      },
-      {
-        workspaceId: workspace.id,
-        userId: "standalone:anonymous",
-        overwrite: false
       }
     ]);
     expect(workspace.id).toBe(initializerWorkspaceIds[0]);
+  });
+
+  it("persists owner affinity when creating a sandbox-backed workspace", async () => {
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      workspaceInitializer: {
+        async initialize(input) {
+          const rootPath = input.rootPath ?? (await mkdtemp(path.join(os.tmpdir(), "oah-http-sandbox-create-")));
+          tempWorkspaceRoots.push(rootPath);
+          return {
+            rootPath,
+            settings: {
+              defaultAgent: "default",
+              skillDirs: []
+            },
+            defaultAgent: "default",
+            workspaceModels: {},
+            agents: {},
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "runtime",
+              agents: [],
+              models: [],
+              actions: [],
+              skills: [],
+              tools: [],
+              hooks: [],
+              nativeTools: []
+            }
+          };
+        }
+      }
+    });
+
+    activeApp = await createStartedAppWithEngineService(runtimeService, gateway, {
+      sandboxHostProviderKind: "e2b"
+    });
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        name: "sandbox-owner-workspace",
+        runtime: "workspace",
+        ownerId: "owner_create"
+      })
+    });
+
+    expect(response.status).toBe(201);
+    const sandbox = (await response.json()) as { workspaceId: string };
+    await expect(runtimeService.getWorkspace(sandbox.workspaceId)).resolves.toMatchObject({
+      id: sandbox.workspaceId,
+      ownerId: "owner_create"
+    });
+  });
+
+  it("passes owner affinity through sandbox import requests", async () => {
+    const importedInputs: Array<{
+      rootPath: string;
+      kind?: "project";
+      name?: string;
+      externalRef?: string;
+      ownerId?: string;
+      serviceName?: string;
+    }> = [];
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    activeApp = await createStartedAppWithEngineService(runtimeService, gateway, {
+      sandboxHostProviderKind: "e2b",
+      importWorkspace: async (input) => {
+        importedInputs.push(input);
+        const workspace = await createWorkspaceRecord({
+          name: input.name ?? "imported-owner-workspace",
+          ...(input.ownerId ? { ownerId: input.ownerId } : {})
+        });
+        await persistence.workspaceRepository.upsert(workspace);
+        return workspace;
+      }
+    });
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        rootPath: "/tmp/imported-owner-workspace",
+        name: "imported-owner-workspace",
+        ownerId: "owner_import"
+      })
+    });
+
+    expect(response.status).toBe(201);
+    expect(importedInputs).toEqual([
+      expect.objectContaining({
+        rootPath: "/tmp/imported-owner-workspace",
+        name: "imported-owner-workspace",
+        ownerId: "owner_import"
+      })
+    ]);
+  });
+
+  it("rejects sandbox requests whose owner does not match an existing workspace", async () => {
+    const workspace = await createWorkspaceRecord({
+      ownerId: "owner_existing"
+    });
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    await persistence.workspaceRepository.upsert(workspace);
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    activeApp = await createStartedAppWithEngineService(runtimeService, gateway, {
+      sandboxHostProviderKind: "e2b"
+    });
+
+    const response = await fetch(`${activeApp.baseUrl}/api/v1/sandboxes`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        workspaceId: workspace.id,
+        ownerId: "owner_other"
+      })
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "workspace_owner_mismatch"
+      }
+    });
   });
 
   it("lists workspaces and sessions over HTTP", async () => {

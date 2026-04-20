@@ -636,7 +636,7 @@ describe("storage redis", () => {
     await expect(registry.listActive()).resolves.toEqual([]);
   });
 
-  it("stores first-class workspace placement state and preserves assigned user affinity", async () => {
+  it("stores first-class workspace placement state and preserves assigned owner affinity", async () => {
     const redis = createInMemoryRedisCommands();
     const registry = new RedisWorkspacePlacementRegistry({
       url: "redis://unused",
@@ -644,7 +644,7 @@ describe("storage redis", () => {
       commands: redis.commands
     });
 
-    await registry.assignUser("ws_1", "user_1", {
+    await registry.assignOwnerAffinity("ws_1", "user_1", {
       updatedAt: "2026-04-01T00:00:00.000Z"
     });
     await registry.upsert({
@@ -662,7 +662,7 @@ describe("storage redis", () => {
       materializedAt: "2026-04-01T00:00:01.000Z",
       updatedAt: "2026-04-01T00:00:04.000Z"
     });
-    await registry.assignUser("ws_1", "user_2", {
+    await registry.assignOwnerAffinity("ws_1", "user_2", {
       overwrite: false,
       updatedAt: "2026-04-01T00:00:05.000Z"
     });
@@ -679,7 +679,7 @@ describe("storage redis", () => {
     expect(entry).toMatchObject({
       workspaceId: "ws_1",
       version: "live",
-      userId: "user_1",
+      ownerId: "user_1",
       ownerWorkerId: "worker_1",
       ownerBaseUrl: "http://worker-1.internal:8787",
       state: "evicted",
@@ -694,7 +694,7 @@ describe("storage redis", () => {
     await expect(registry.listAll()).resolves.toEqual([entry]);
   });
 
-  it("does not drop a concurrently assigned placement user during stale placement upserts", async () => {
+  it("does not drop concurrently assigned owner affinity during stale placement upserts", async () => {
     const redis = createInMemoryRedisCommands();
     let registry: RedisWorkspacePlacementRegistry;
     let injectConcurrentAssign = true;
@@ -706,7 +706,7 @@ describe("storage redis", () => {
         transaction.exec = async () => {
           if (injectConcurrentAssign) {
             injectConcurrentAssign = false;
-            await registry.assignUser("ws_race", "user_race", {
+            await registry.assignOwnerAffinity("ws_race", "user_race", {
               updatedAt: "2026-04-01T00:00:01.000Z"
             });
           }
@@ -733,7 +733,7 @@ describe("storage redis", () => {
 
     await expect(registry.getByWorkspaceId("ws_race")).resolves.toMatchObject({
       workspaceId: "ws_race",
-      userId: "user_race",
+      ownerId: "user_race",
       ownerWorkerId: "worker_1",
       state: "idle"
     });
@@ -747,7 +747,7 @@ describe("storage redis", () => {
       commands: redis.commands
     });
 
-    await registry.assignUser("ws_2", "user_2", {
+    await registry.assignOwnerAffinity("ws_2", "user_2", {
       updatedAt: "2026-04-01T00:00:00.000Z"
     });
     await registry.upsert({
@@ -776,7 +776,7 @@ describe("storage redis", () => {
     await expect(registry.getByWorkspaceId("ws_2")).resolves.toEqual({
       workspaceId: "ws_2",
       version: "live",
-      userId: "user_2",
+      ownerId: "user_2",
       preferredWorkerId: "worker_2",
       preferredWorkerReason: "controller_target",
       state: "unassigned",
@@ -911,11 +911,11 @@ describe("storage redis", () => {
     expect(affinity.candidates.map((candidate) => candidate.workerId)).toEqual(["worker_2", "worker_1"]);
   });
 
-  it("prefers a same-user worker when sibling workspaces already live there", () => {
+  it("prefers a same-owner worker when sibling workspaces already live there", () => {
     const affinity = buildRedisWorkerAffinitySummary({
       workspaceId: "ws_3",
-      userId: "user_1",
-      workerUserAffinities: [
+      ownerId: "user_1",
+      workerOwnerAffinities: [
         {
           workerId: "worker_1",
           workspaceCount: 2
@@ -937,13 +937,13 @@ describe("storage redis", () => {
       ]
     });
 
-    expect(affinity.userAffinityWorkerId).toBe("worker_1");
+    expect(affinity.ownerAffinityWorkerId).toBe("worker_1");
     expect(affinity.preferredWorkerId).toBe("worker_1");
     expect(affinity.candidates[0]).toMatchObject({
       workerId: "worker_1",
-      matchingUserWorkspaces: 2
+      matchingOwnerWorkspaces: 2
     });
-    expect(affinity.candidates[0]?.reasons).toContain("same_user");
+    expect(affinity.candidates[0]?.reasons).toContain("same_owner");
   });
 
   it("prefers a controller-target worker hint over generic idle capacity", () => {

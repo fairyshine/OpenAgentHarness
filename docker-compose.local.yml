@@ -78,6 +78,8 @@ services:
         condition: service_healthy
     ports:
       - "8787:8787"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${OAH_DOCKER_API_CONFIG:?set OAH_DOCKER_API_CONFIG}:/config/server.docker.yaml:ro
       - oah-api-workspaces:/data/workspaces
@@ -113,6 +115,8 @@ services:
       OAH_LOCAL_DEPLOY_ROOT: ${OAH_LOCAL_DEPLOY_ROOT}
     ports:
       - "8789:8788"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${OAH_DOCKER_CONTROLLER_CONFIG:?set OAH_DOCKER_CONTROLLER_CONFIG}:/config/server.docker.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock
@@ -139,6 +143,8 @@ services:
         condition: service_healthy
     expose:
       - "8787"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${OAH_DOCKER_SANDBOX_CONFIG:?set OAH_DOCKER_SANDBOX_CONFIG}:/config/server.docker.yaml:ro
       - /data/workspaces

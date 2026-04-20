@@ -210,8 +210,18 @@ curl http://127.0.0.1:8787/readyz
 | `DATABASE_URL` | PostgreSQL 连接串 | `postgres://oah:oah@127.0.0.1:5432/open_agent_harness` |
 | `REDIS_URL` | Redis 连接串 | `redis://127.0.0.1:6379` |
 | `OAH_WEB_PROXY_TARGET` | 前端代理目标（后端地址不是默认时使用） | `http://127.0.0.1:8787` |
+| `OAH_DOCKER_HOST_ALIAS` | 容器内访问宿主机服务时使用的主机名 | `host.docker.internal` |
 
 在 `server.yaml` 中通过 `${env.DATABASE_URL}` 语法引用环境变量。
+
+如果 OAH 本身运行在 Docker 容器里，而 HTTP MCP Server 跑在宿主机本地：
+
+- MCP 配置仍可写 `http://127.0.0.1:PORT/...` 或 `http://localhost:PORT/...`
+- OAH 会在容器内自动改写为宿主机可访问地址
+- 默认使用 `host.docker.internal`
+- 如有需要可通过 `OAH_DOCKER_HOST_ALIAS` 覆盖
+
+本地 `docker-compose.local.yml` 已为 `oah-api`、`oah-controller`、`oah-sandbox` 注入 `host.docker.internal:host-gateway`，因此 Linux 环境下也能直接使用该别名。
 
 本地开发使用 `docker-compose.local.yml` 启动的容器时，默认连接串为：
 

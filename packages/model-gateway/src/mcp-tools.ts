@@ -5,6 +5,7 @@ import type { ToolSet } from "ai";
 import type { ToolServerDefinition } from "@oah/engine-core";
 import { AppError } from "@oah/engine-core";
 import { createCompatibilityHttpClient, resolveCompatibleProtocolVersion } from "./mcp-http-compat.js";
+import { normalizeRemoteMcpUrl } from "./mcp-endpoint-utils.js";
 import type {
   PreparedToolServers,
   PrepareToolServersOptions,
@@ -56,10 +57,12 @@ async function createClient(server: ToolServerDefinition): Promise<ToolServerCli
     throw new AppError(400, "invalid_mcp_server", `Tool server ${server.name} is missing url.`);
   }
 
+  const resolvedUrl = normalizeRemoteMcpUrl(server.url);
+
   return createMCPClient({
     transport: {
       type: "http",
-      url: server.url,
+      url: resolvedUrl,
       ...(server.headers ? { headers: server.headers } : {})
     }
   });

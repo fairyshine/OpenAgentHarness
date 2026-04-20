@@ -353,7 +353,7 @@ describe("storage admin", () => {
     await storageAdmin.close();
   });
 
-  it("derives same-user worker affinity from workspace placement state", async () => {
+  it("derives same-owner worker affinity from workspace placement state", async () => {
     const storageAdmin = createStorageAdmin({
       redisAvailable: true,
       redisEventBusEnabled: true,
@@ -389,7 +389,7 @@ describe("storage admin", () => {
         async upsert() {
           return undefined;
         },
-        async assignUser() {
+        async assignOwnerAffinity() {
           return undefined;
         },
         async setPreferredWorker() {
@@ -403,7 +403,7 @@ describe("storage admin", () => {
             {
               workspaceId: "ws_1",
               version: "live",
-              userId: "user_1",
+              ownerId: "user_1",
               ownerWorkerId: "worker_1",
               state: "idle" as const,
               updatedAt: "2026-04-15T00:00:00.000Z"
@@ -411,7 +411,7 @@ describe("storage admin", () => {
             {
               workspaceId: "ws_2",
               version: "live",
-              userId: "user_1",
+              ownerId: "user_1",
               ownerWorkerId: "worker_1",
               state: "active" as const,
               updatedAt: "2026-04-15T00:00:01.000Z"
@@ -419,7 +419,7 @@ describe("storage admin", () => {
             {
               workspaceId: "ws_3",
               version: "live",
-              userId: "user_1",
+              ownerId: "user_1",
               state: "unassigned" as const,
               updatedAt: "2026-04-15T00:00:02.000Z"
             }
@@ -430,7 +430,7 @@ describe("storage admin", () => {
             ? {
                 workspaceId,
                 version: "live",
-                userId: "user_1",
+                ownerId: "user_1",
                 state: "unassigned" as const,
                 updatedAt: "2026-04-15T00:00:02.000Z"
               }
@@ -443,13 +443,13 @@ describe("storage admin", () => {
       workspaceId: "ws_3"
     });
 
-    expect(affinity.userAffinityWorkerId).toBe("worker_1");
+    expect(affinity.ownerAffinityWorkerId).toBe("worker_1");
     expect(affinity.preferredWorkerId).toBe("worker_1");
     expect(affinity.candidates[0]).toMatchObject({
       workerId: "worker_1",
-      matchingUserWorkspaces: 2
+      matchingOwnerWorkspaces: 2
     });
-    expect(affinity.candidates[0]?.reasons).toContain("same_user");
+    expect(affinity.candidates[0]?.reasons).toContain("same_owner");
 
     await storageAdmin.close();
   });
@@ -490,7 +490,7 @@ describe("storage admin", () => {
         async upsert() {
           return undefined;
         },
-        async assignUser() {
+        async assignOwnerAffinity() {
           return undefined;
         },
         async setPreferredWorker() {
@@ -546,7 +546,7 @@ describe("storage admin", () => {
         async upsert() {
           return undefined;
         },
-        async assignUser() {
+        async assignOwnerAffinity() {
           return undefined;
         },
         async setPreferredWorker() {
@@ -560,7 +560,7 @@ describe("storage admin", () => {
             {
               workspaceId: "ws_1",
               version: "live",
-              userId: "user_1",
+              ownerId: "user_1",
               ownerWorkerId: "worker_1",
               state: "idle" as const,
               updatedAt: "2026-04-15T00:00:00.000Z"
@@ -568,7 +568,7 @@ describe("storage admin", () => {
             {
               workspaceId: "ws_2",
               version: "live",
-              userId: "user_2",
+              ownerId: "user_2",
               ownerWorkerId: "worker_2",
               state: "active" as const,
               updatedAt: "2026-04-15T00:00:01.000Z"
@@ -580,7 +580,7 @@ describe("storage admin", () => {
             ? {
                 workspaceId,
                 version: "live",
-                userId: "user_1",
+                ownerId: "user_1",
                 ownerWorkerId: "worker_1",
                 state: "idle" as const,
                 updatedAt: "2026-04-15T00:00:00.000Z"
@@ -595,7 +595,7 @@ describe("storage admin", () => {
         {
           workspaceId: "ws_1",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_1",
           state: "idle",
           updatedAt: "2026-04-15T00:00:00.000Z"
@@ -603,7 +603,7 @@ describe("storage admin", () => {
         {
           workspaceId: "ws_2",
           version: "live",
-          userId: "user_2",
+          ownerId: "user_2",
           ownerWorkerId: "worker_2",
           state: "active",
           updatedAt: "2026-04-15T00:00:01.000Z"
@@ -619,7 +619,7 @@ describe("storage admin", () => {
         {
           workspaceId: "ws_1",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_1",
           state: "idle",
           updatedAt: "2026-04-15T00:00:00.000Z"
@@ -628,14 +628,14 @@ describe("storage admin", () => {
     });
     await expect(
       storageAdmin.redisWorkspacePlacements({
-        userId: "user_2"
+        ownerId: "user_2"
       })
     ).resolves.toEqual({
       items: [
         {
           workspaceId: "ws_2",
           version: "live",
-          userId: "user_2",
+          ownerId: "user_2",
           ownerWorkerId: "worker_2",
           state: "active",
           updatedAt: "2026-04-15T00:00:01.000Z"
@@ -652,7 +652,7 @@ describe("storage admin", () => {
         {
           workspaceId: "ws_1",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_1",
           state: "idle",
           updatedAt: "2026-04-15T00:00:00.000Z"

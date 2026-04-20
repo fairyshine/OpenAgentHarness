@@ -51,7 +51,7 @@ Two workspace kinds:
 ### Controller
 
 - The control-plane role in OAH
-- Owns workspace placement, user affinity, capacity, drain, recovery, rebalance, and scaling
+- Owns workspace placement, owner affinity, capacity, drain, recovery, rebalance, and scaling
 - `Controller` does not execute business runs directly
 
 ### Sandbox
@@ -80,7 +80,7 @@ Two workspace kinds:
 ### Workspace Ownership
 
 - `workspace -> owner worker` is the routing truth for execution and file access
-- `userId` is a scheduling affinity key, not an ownership truth key
+- `ownerId` is the affinity scheduling key, not a separate ownership truth beyond `workspace -> owner worker`
 - While active, a workspace's read/write truth lives in the owner worker's `Active Workspace Copy`; after idle flush, truth returns to OSS / external storage
 
 ### Layering Rule
@@ -151,7 +151,7 @@ flowchart TD
 ### Controller
 
 - Owns workspace placement and worker lifecycle governance
-- Combines `user affinity + workspace ownership + worker health + capacity` into placement decisions
+- Combines `owner affinity + workspace ownership + worker health + capacity` into placement decisions
 - For `self_hosted / e2b` providers, also derives logical sandbox fleet demand: same `ownerId` reuses a sandbox, while ownerless workspaces fall into a shared pool by default
 - Owns drain, rebalance, recovery, and scaling
 - Does not execute business runs directly
@@ -258,7 +258,7 @@ sequenceDiagram
 - `Sandbox Host API` is the host compatibility boundary; the first implementation should be the self-hosted sandbox pod, with E2B as a later pluggable backend rather than the primary architecture vocabulary
 - `Controller` is the unified control-plane role; it owns placement, lifecycle, and capacity rather than direct business execution
 - For remote sandbox providers, the controller now also owns logical sandbox-fleet sizing signals so we can later attach real sandbox autoscaling targets without changing API semantics
-- `workspace -> owner worker` is the routing truth for execution and file access; `userId` is used only for affinity scheduling, not as the ownership truth
+- `workspace -> owner worker` is the routing truth for execution and file access; `ownerId` is used for affinity scheduling and must not be treated as a second ownership source of truth
 - While active, a workspace's read/write truth lives in the owner worker's `Active Workspace Copy`; after flush / evict, truth returns to OSS / external storage
 - Default trusted intranet environment -- no strong container isolation by default; if the platform is exposed more broadly, sandbox backend hardening should be prioritized
 - PostgreSQL is the central source of truth; local workspace state files do not serve as a cross-process sync mechanism

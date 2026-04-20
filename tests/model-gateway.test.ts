@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AiSdkModelGateway, prepareToolServers } from "@oah/model-gateway";
+import { normalizeRemoteMcpUrl } from "../packages/model-gateway/src/mcp-endpoint-utils.ts";
 
 const globalWithAiSdkWarnings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
 globalWithAiSdkWarnings.AI_SDK_LOG_WARNINGS = false;
@@ -98,6 +99,8 @@ const preparedClosers: Array<() => Promise<void>> = [];
 const httpServers: Server[] = [];
 
 afterEach(async () => {
+  delete process.env.OAH_DOCKER_HOST_ALIAS;
+  delete process.env.OAH_RUNNING_IN_DOCKER;
   await Promise.allSettled(preparedClosers.splice(0).map((close) => close()));
   await Promise.allSettled(
     httpServers.splice(0).map(
@@ -117,6 +120,20 @@ afterEach(async () => {
 });
 
 describe("model gateway mcp tools", () => {
+  it("rewrites loopback MCP HTTP URLs to the container host alias when running in Docker", () => {
+    process.env.OAH_RUNNING_IN_DOCKER = "true";
+
+    expect(normalizeRemoteMcpUrl("http://127.0.0.1:8788/mcp")).toBe("http://host.docker.internal:8788/mcp");
+    expect(normalizeRemoteMcpUrl("http://localhost:8788/mcp")).toBe("http://host.docker.internal:8788/mcp");
+    expect(normalizeRemoteMcpUrl("https://example.com/mcp")).toBe("https://example.com/mcp");
+  });
+
+  it("uses the configured Docker host alias when rewriting loopback MCP HTTP URLs", () => {
+    process.env.OAH_DOCKER_HOST_ALIAS = "docker-host.local";
+
+    expect(normalizeRemoteMcpUrl("http://127.0.0.1:8788/mcp")).toBe("http://docker-host.local:8788/mcp");
+  });
+
   it("loads MCP tools through AI SDK, applying prefix and include/exclude filters", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "oah-mcp-"));
     const serverPath = path.join(tempDir, "fake-mcp.cjs");

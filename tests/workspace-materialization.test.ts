@@ -493,7 +493,7 @@ describe("workspace materialization", () => {
     const store = new FakeDirectoryObjectStore();
     await store.putObject("workspace/demo/README.md", Buffer.from("# demo\n"));
     const heartbeats: Array<{ workspaceId: string; dirty: boolean; refCount: number; ownerBaseUrl?: string }> = [];
-    const placements: Array<{ workspaceId: string; state: string; userId?: string; ownerWorkerId?: string }> = [];
+    const placements: Array<{ workspaceId: string; state: string; ownerId?: string; ownerWorkerId?: string }> = [];
     const removals: Array<{ workspaceId: string; version: string; ownerWorkerId: string }> = [];
 
     const manager = new WorkspaceMaterializationManager({
@@ -519,11 +519,14 @@ describe("workspace materialization", () => {
           placements.push({
             workspaceId: entry.workspaceId,
             state: entry.state,
-            ...(entry.userId ? { userId: entry.userId } : {}),
+            ...(entry.ownerId ? { ownerId: entry.ownerId } : {}),
             ...(entry.ownerWorkerId ? { ownerWorkerId: entry.ownerWorkerId } : {})
           });
         },
-        async assignUser() {
+        async assignOwnerAffinity() {
+          return undefined;
+        },
+        async assignOwnerAffinity() {
           return undefined;
         },
         async setPreferredWorker() {
@@ -557,7 +560,7 @@ describe("workspace materialization", () => {
     expect(heartbeats.some((entry) => entry.workspaceId === "ws_1" && entry.refCount === 1)).toBe(true);
     expect(heartbeats.some((entry) => entry.workspaceId === "ws_1" && entry.dirty)).toBe(true);
     expect(heartbeats.some((entry) => entry.workspaceId === "ws_1" && entry.ownerBaseUrl === "http://worker-1.internal:8787")).toBe(true);
-    expect(placements.some((entry) => entry.workspaceId === "ws_1" && entry.userId === "user_1" && entry.state === "active")).toBe(true);
+    expect(placements.some((entry) => entry.workspaceId === "ws_1" && entry.ownerId === "user_1" && entry.state === "active")).toBe(true);
     expect(placements.some((entry) => entry.workspaceId === "ws_1" && entry.state === "active")).toBe(true);
     expect(placements.some((entry) => entry.workspaceId === "ws_1" && entry.state === "idle")).toBe(true);
     expect(placements.some((entry) => entry.workspaceId === "ws_1" && entry.state === "evicted")).toBe(true);

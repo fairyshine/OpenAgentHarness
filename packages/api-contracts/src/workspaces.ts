@@ -78,7 +78,6 @@ export const createWorkspaceRequestSchema = z
     runtime: z.string().min(1),
     rootPath: z.string().min(1).optional(),
     ownerId: z.string().trim().min(1).optional(),
-    userId: z.string().trim().min(1).optional(),
     serviceName: z
       .string()
       .trim()

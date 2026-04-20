@@ -1,4 +1,5 @@
 import { loadPlatformModels } from "@oah/config";
+import { enrichModelRegistryWithDiscoveredMetadata } from "./model-metadata-discovery.js";
 
 export type PlatformModelRegistry = Awaited<ReturnType<typeof loadPlatformModels>>;
 
@@ -64,9 +65,11 @@ export async function createPlatformModelCatalogService(options: {
   onLoadError(input: { filePath: string; error: unknown }): void;
   onModelsChanged?: ((models: PlatformModelRegistry) => Promise<void> | void) | undefined;
 }): Promise<PlatformModelCatalogService> {
-  const definitions = await loadPlatformModels(options.modelDir, {
-    onError: options.onLoadError
-  });
+  const definitions = await enrichModelRegistryWithDiscoveredMetadata(
+    await loadPlatformModels(options.modelDir, {
+      onError: options.onLoadError
+    })
+  );
   const listeners = new Set<(snapshot: PlatformModelSnapshot) => void>();
   let revision = 0;
   let reloadPromise: Promise<void> | undefined;
@@ -97,9 +100,11 @@ export async function createPlatformModelCatalogService(options: {
 
     reloadPromise = (async () => {
       const currentSnapshot = serializePlatformModels(definitions);
-      const nextModels = await loadPlatformModels(options.modelDir, {
-        onError: options.onLoadError
-      });
+      const nextModels = await enrichModelRegistryWithDiscoveredMetadata(
+        await loadPlatformModels(options.modelDir, {
+          onError: options.onLoadError
+        })
+      );
       const nextSnapshot = serializePlatformModels(nextModels);
 
       if (currentSnapshot === nextSnapshot) {
@@ -111,8 +116,8 @@ export async function createPlatformModelCatalogService(options: {
       revision += 1;
       await publishSnapshot();
     })().finally(() => {
-        reloadPromise = undefined;
-      });
+      reloadPromise = undefined;
+    });
 
     await reloadPromise;
     return getSnapshot();

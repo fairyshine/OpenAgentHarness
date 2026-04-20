@@ -1339,6 +1339,79 @@ describe("runtime service", () => {
     expect(finalInvocationText).not.toContain(firstContent);
   });
 
+  it("prefers metadata.max_model_len over contextWindowTokens when deciding whether to compact", async () => {
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      platformModels: {
+        "openai-default": {
+          provider: "openai",
+          name: "gpt-5",
+          metadata: {
+            max_model_len: 1_000,
+            contextWindowTokens: 20,
+            compactThresholdRatio: 0.7,
+            compactRecentGroupCount: 3
+          }
+        }
+      }
+    });
+    gateway.generateResponseFactory = () => undefined;
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+    const firstContent = "FIRST-CONTENT ".repeat(12).trim();
+    const secondContent = "SECOND-CONTENT ".repeat(12).trim();
+    const thirdContent = "THIRD-CONTENT ".repeat(12).trim();
+
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: firstContent }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(firstAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: secondContent }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(secondAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const thirdAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: thirdContent }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(thirdAccepted.runId);
+      return run.status === "completed";
+    });
+
+    expect(gateway.invocations).toHaveLength(3);
+
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    const compactKinds = messages.items
+      .map((message) => (message.metadata as { runtimeKind?: string } | undefined)?.runtimeKind)
+      .filter((kind): kind is string => typeof kind === "string");
+
+    expect(compactKinds).not.toContain("compact_boundary");
+    expect(compactKinds).not.toContain("compact_summary");
+  });
+
   it("skips redundant runtime message rewrites when later events do not change the projection", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();

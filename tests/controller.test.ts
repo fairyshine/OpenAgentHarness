@@ -150,28 +150,28 @@ describe("controller", () => {
         {
           workspaceId: "ws_1",
           version: "live",
-          userId: "owner_1",
+          ownerId: "owner_1",
           state: "active",
           updatedAt: "2026-04-15T00:00:00.000Z"
         },
         {
           workspaceId: "ws_2",
           version: "live",
-          userId: "owner_1",
+          ownerId: "owner_1",
           state: "idle",
           updatedAt: "2026-04-15T00:00:01.000Z"
         },
         {
           workspaceId: "ws_3",
           version: "live",
-          userId: "owner_1",
+          ownerId: "owner_1",
           state: "idle",
           updatedAt: "2026-04-15T00:00:02.000Z"
         },
         {
           workspaceId: "ws_4",
           version: "live",
-          userId: "owner_2",
+          ownerId: "owner_2",
           state: "active",
           updatedAt: "2026-04-15T00:00:03.000Z"
         },
@@ -288,7 +288,7 @@ describe("controller", () => {
       {
         workspaceId: "ws_1",
         version: "live",
-        userId: "user_1",
+        ownerId: "user_1",
         ownerWorkerId: "worker_1",
         state: "active",
         updatedAt: "2026-04-15T00:00:00.000Z"
@@ -303,7 +303,7 @@ describe("controller", () => {
       {
         workspaceId: "ws_3",
         version: "live",
-        userId: "user_2",
+        ownerId: "user_2",
         state: "evicted",
         updatedAt: "2026-04-15T00:00:02.000Z"
       },
@@ -328,8 +328,8 @@ describe("controller", () => {
 
     expect(summary).toEqual({
       totalWorkspaces: 3,
-      assignedUsers: 1,
-      unassignedUsers: 2,
+      assignedOwners: 1,
+      unassignedOwners: 2,
       ownedWorkspaces: 2,
       workersWithPlacements: 1,
       ownedByActiveWorkers: 2,
@@ -351,7 +351,7 @@ describe("controller", () => {
         {
           workspaceId: "ws_evicted",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_missing",
           state: "evicted",
           updatedAt: "2026-04-15T00:00:00.000Z"
@@ -367,8 +367,8 @@ describe("controller", () => {
       missingOwnerWorkspaces: 0,
       lateOwnerWorkspaces: 0,
       drainingOwnerWorkspaces: 0,
-      usersSpanningWorkers: 0,
-      maxWorkersPerUser: 0,
+      ownersSpanningWorkers: 0,
+      maxWorkersPerOwner: 0,
       sandboxesAboveWorkspaceCapacity: 0,
       maxWorkspaceRefsPerSandbox: 0
     });
@@ -379,7 +379,7 @@ describe("controller", () => {
       {
         workspaceId: "ws_replica",
         version: "live",
-        userId: "user_replica",
+        ownerId: "user_replica",
         ownerWorkerId: "worker:sandbox-1",
         state: "idle",
         updatedAt: "2026-04-15T00:00:00.000Z"
@@ -410,7 +410,7 @@ describe("controller", () => {
         {
           workspaceId: "ws_replica",
           version: "live",
-          userId: "user_replica",
+          ownerId: "user_replica",
           ownerWorkerId: "worker:sandbox-1",
           state: "idle",
           updatedAt: "2026-04-15T00:00:00.000Z"
@@ -445,7 +445,7 @@ describe("controller", () => {
         {
           workspaceId: "ws_1",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_1",
           state: "active",
           refCount: 2,
@@ -454,7 +454,7 @@ describe("controller", () => {
         {
           workspaceId: "ws_2",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_2",
           state: "idle",
           refCount: 1,
@@ -515,8 +515,8 @@ describe("controller", () => {
       missingOwnerWorkspaces: 0,
       lateOwnerWorkspaces: 0,
       drainingOwnerWorkspaces: 1,
-      usersSpanningWorkers: 1,
-      maxWorkersPerUser: 2,
+      ownersSpanningWorkers: 1,
+      maxWorkersPerOwner: 2,
       sandboxesAboveWorkspaceCapacity: 1,
       maxWorkspaceRefsPerSandbox: 2
     });
@@ -526,8 +526,8 @@ describe("controller", () => {
     const recommendations = summarizePlacementRecommendations({
       placementSummary: {
         totalWorkspaces: 4,
-        assignedUsers: 2,
-        unassignedUsers: 2,
+        assignedOwners: 2,
+        unassignedOwners: 2,
         ownedWorkspaces: 3,
         workersWithPlacements: 2,
         ownedByActiveWorkers: 2,
@@ -547,8 +547,8 @@ describe("controller", () => {
         missingOwnerWorkspaces: 1,
         lateOwnerWorkspaces: 1,
         drainingOwnerWorkspaces: 1,
-        usersSpanningWorkers: 1,
-        maxWorkersPerUser: 2,
+        ownersSpanningWorkers: 1,
+        maxWorkersPerOwner: 2,
         sandboxesAboveWorkspaceCapacity: 1,
         maxWorkspaceRefsPerSandbox: 3
       },
@@ -556,7 +556,7 @@ describe("controller", () => {
         {
           workspaceId: "ws_1",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_missing",
           state: "active",
           refCount: 2,
@@ -565,7 +565,7 @@ describe("controller", () => {
         {
           workspaceId: "ws_2",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_late",
           state: "idle",
           updatedAt: "2026-04-15T00:00:01.000Z"
@@ -573,7 +573,7 @@ describe("controller", () => {
         {
           workspaceId: "ws_3",
           version: "live",
-          userId: "user_2",
+          ownerId: "user_2",
           ownerWorkerId: "worker_3",
           state: "draining",
           updatedAt: "2026-04-15T00:00:02.000Z"
@@ -645,12 +645,12 @@ describe("controller", () => {
         message: "finish draining or hand off 1 workspace(s) on workers that are stopping"
       },
       {
-        kind: "consolidate_user_affinity",
+        kind: "consolidate_owner_affinity",
         priority: "medium",
         workspaceCount: 0,
-        userCount: 1,
-        sampleUserIds: ["user_1"],
-        message: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
+        ownerCount: 1,
+        sampleOwnerIds: ["user_1"],
+        message: "consider consolidating 1 owner affinity group(s) that currently span multiple workers"
       },
       {
         kind: "rebalance_workspace_capacity",
@@ -675,12 +675,12 @@ describe("controller", () => {
         message: "recover missing owners"
       },
       {
-        kind: "consolidate_user_affinity",
+        kind: "consolidate_owner_affinity",
         priority: "medium",
         workspaceCount: 0,
-        userCount: 1,
-        sampleUserIds: ["user_1"],
-        message: "consolidate user affinity"
+        ownerCount: 1,
+        sampleOwnerIds: ["user_1"],
+        message: "consolidate owner affinity"
       }
     ]);
 
@@ -709,13 +709,13 @@ describe("controller", () => {
           summary: "recover missing owners"
         },
         {
-          id: "consolidate_user_affinity:2",
+          id: "consolidate_owner_affinity:2",
           phase: "optimize",
-          kind: "consolidate_user_affinity",
+          kind: "consolidate_owner_affinity",
           priority: "medium",
-          blockers: ["user_affinity_split"],
-          userIds: ["user_1"],
-          summary: "consolidate user affinity"
+          blockers: ["owner_affinity_split"],
+          ownerIds: ["user_1"],
+          summary: "consolidate owner affinity"
         }
       ]
     });
@@ -846,14 +846,14 @@ describe("controller", () => {
         {
           workspaceId: "ws_unassigned",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           state: "unassigned",
           updatedAt: "2026-04-15T00:00:00.000Z"
         },
         {
           workspaceId: "ws_busy",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_1",
           state: "active",
           refCount: 2,
@@ -862,7 +862,7 @@ describe("controller", () => {
         {
           workspaceId: "ws_idle_split",
           version: "live",
-          userId: "user_1",
+          ownerId: "user_1",
           ownerWorkerId: "worker_2",
           state: "idle",
           updatedAt: "2026-04-15T00:00:02.000Z"
@@ -903,10 +903,10 @@ describe("controller", () => {
           targetWorkerId: "worker_1"
         }),
         expect.objectContaining({
-          id: "consolidate_user_affinity:ws_idle_split",
-          kind: "consolidate_user_affinity",
+          id: "consolidate_owner_affinity:ws_idle_split",
+          kind: "consolidate_owner_affinity",
           action: "set_preferred_worker",
-          reason: "user_affinity_split",
+          reason: "owner_affinity_split",
           targetWorkerId: "worker_1"
         })
       ])
@@ -1225,7 +1225,7 @@ describe("controller", () => {
     };
     const placementRegistry = {
       async upsert() {},
-      async assignUser() {},
+      async assignOwnerAffinity() {},
       async setPreferredWorker() {},
       async releaseOwnership() {},
       async listAll() {
@@ -1292,7 +1292,7 @@ describe("controller", () => {
     await controller.close();
   });
 
-  it("marks steady replicas as placement attention when user affinity and drain signals need follow-up", async () => {
+  it("marks steady replicas as placement attention when owner affinity and drain signals need follow-up", async () => {
     const queue = {
       async getSchedulingPressure() {
         return {
@@ -1334,7 +1334,7 @@ describe("controller", () => {
     };
     const placementRegistry = {
       async upsert() {},
-      async assignUser() {},
+      async assignOwnerAffinity() {},
       async setPreferredWorker() {},
       async releaseOwnership() {},
       async listAll() {
@@ -1342,7 +1342,7 @@ describe("controller", () => {
           {
             workspaceId: "ws_1",
             version: "live",
-            userId: "user_1",
+            ownerId: "user_1",
             ownerWorkerId: "pod-a",
             state: "active",
             refCount: 2,
@@ -1351,7 +1351,7 @@ describe("controller", () => {
           {
             workspaceId: "ws_2",
             version: "live",
-            userId: "user_1",
+            ownerId: "user_1",
             ownerWorkerId: "pod-b",
             state: "draining",
             updatedAt: "2026-04-15T00:00:01.000Z"
@@ -1398,8 +1398,8 @@ describe("controller", () => {
       missingOwnerWorkspaces: 0,
       lateOwnerWorkspaces: 0,
       drainingOwnerWorkspaces: 1,
-      usersSpanningWorkers: 1,
-      maxWorkersPerUser: 2,
+      ownersSpanningWorkers: 1,
+      maxWorkersPerOwner: 2,
       sandboxesAboveWorkspaceCapacity: 0,
       maxWorkspaceRefsPerSandbox: 2
     });
@@ -1413,12 +1413,12 @@ describe("controller", () => {
         message: "finish draining or hand off 1 workspace(s) on workers that are stopping"
       },
       {
-        kind: "consolidate_user_affinity",
+        kind: "consolidate_owner_affinity",
         priority: "medium",
         workspaceCount: 0,
-        userCount: 1,
-        sampleUserIds: ["user_1"],
-        message: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
+        ownerCount: 1,
+        sampleOwnerIds: ["user_1"],
+        message: "consider consolidating 1 owner affinity group(s) that currently span multiple workers"
       }
     ]);
     expect(snapshot.placementActionPlan).toEqual({
@@ -1446,13 +1446,13 @@ describe("controller", () => {
           summary: "finish draining or hand off 1 workspace(s) on workers that are stopping"
         },
         {
-          id: "consolidate_user_affinity:2",
+          id: "consolidate_owner_affinity:2",
           phase: "optimize",
-          kind: "consolidate_user_affinity",
+          kind: "consolidate_owner_affinity",
           priority: "medium",
-          blockers: ["user_affinity_split"],
-          userIds: ["user_1"],
-          summary: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
+          blockers: ["owner_affinity_split"],
+          ownerIds: ["user_1"],
+          summary: "consider consolidating 1 owner affinity group(s) that currently span multiple workers"
         }
       ]
     });
@@ -1511,7 +1511,7 @@ describe("controller", () => {
     ];
     const placementRegistry = {
       async upsert() {},
-      async assignUser() {},
+      async assignOwnerAffinity() {},
       async setPreferredWorker(workspaceId: string, preferredWorkerId: string, options?: { updatedAt?: string }) {
         const placement = placements.find((item) => item.workspaceId === workspaceId);
         if (!placement) {
@@ -2671,8 +2671,8 @@ describe("controller", () => {
         },
         placement: {
           totalWorkspaces: 3,
-          assignedUsers: 2,
-          unassignedUsers: 1,
+          assignedOwners: 2,
+          unassignedOwners: 1,
           ownedWorkspaces: 3,
           workersWithPlacements: 2,
           ownedByActiveWorkers: 2,
@@ -2692,8 +2692,8 @@ describe("controller", () => {
           missingOwnerWorkspaces: 0,
           lateOwnerWorkspaces: 1,
           drainingOwnerWorkspaces: 0,
-          usersSpanningWorkers: 1,
-          maxWorkersPerUser: 2,
+          ownersSpanningWorkers: 1,
+          maxWorkersPerOwner: 2,
           sandboxesAboveWorkspaceCapacity: 1,
           maxWorkspaceRefsPerSandbox: 3
         },
@@ -2708,12 +2708,12 @@ describe("controller", () => {
             message: "stabilize or reassign 1 workspace(s) currently attached to late owners"
           },
           {
-            kind: "consolidate_user_affinity",
+            kind: "consolidate_owner_affinity",
             priority: "medium",
             workspaceCount: 0,
-            userCount: 1,
-            sampleUserIds: ["user_1"],
-            message: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
+            ownerCount: 1,
+            sampleOwnerIds: ["user_1"],
+            message: "consider consolidating 1 owner affinity group(s) that currently span multiple workers"
           },
           {
             kind: "rebalance_workspace_capacity",
@@ -2749,13 +2749,13 @@ describe("controller", () => {
               summary: "stabilize or reassign 1 workspace(s) currently attached to late owners"
             },
             {
-              id: "consolidate_user_affinity:2",
+              id: "consolidate_owner_affinity:2",
               phase: "optimize",
-              kind: "consolidate_user_affinity",
+              kind: "consolidate_owner_affinity",
               priority: "medium",
-              blockers: ["user_affinity_split"],
-              userIds: ["user_1"],
-              summary: "consider consolidating 1 user affinity group(s) that currently span multiple workers"
+              blockers: ["owner_affinity_split"],
+              ownerIds: ["user_1"],
+              summary: "consider consolidating 1 owner affinity group(s) that currently span multiple workers"
             },
             {
               id: "rebalance_workspace_capacity:3",
@@ -2821,7 +2821,7 @@ describe("controller", () => {
     expect(metrics).toContain("oah_controller_placement_owned_by_active_workers 2");
     expect(metrics).toContain("oah_controller_placement_owned_by_late_workers 1");
     expect(metrics).toContain("oah_controller_placement_policy_attention_required 1");
-    expect(metrics).toContain("oah_controller_placement_policy_users_spanning_workers 1");
+    expect(metrics).toContain("oah_controller_placement_policy_owners_spanning_workers 1");
     expect(metrics).toContain("oah_controller_placement_recommendations_total 3");
     expect(metrics).toContain("oah_controller_placement_recommendations_high_priority 1");
     expect(metrics).toContain("oah_controller_placement_action_items_total 3");

@@ -1305,6 +1305,115 @@ compat-fast:
     }
   }, 15_000);
 
+  it("enriches workspace-local openai-compatible models with max_model_len during bootstrap discovery", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-workspace-model-discovery-"));
+    tempDirs.push(tempDir);
+
+    const workspaceDir = path.join(tempDir, "workspaces");
+    const runtimesDir = path.join(tempDir, "runtimes");
+    const modelsDir = path.join(tempDir, "models");
+    const toolsDir = path.join(tempDir, "tools");
+    const skillsDir = path.join(tempDir, "skills");
+    const workspaceRoot = path.join(workspaceDir, "demo-project");
+    const configPath = path.join(tempDir, "server.yaml");
+    const workspaceId = buildWorkspaceId("project", "demo-project", workspaceRoot);
+
+    await Promise.all([
+      mkdir(workspaceDir, { recursive: true }),
+      mkdir(runtimesDir, { recursive: true }),
+      mkdir(modelsDir, { recursive: true }),
+      mkdir(toolsDir, { recursive: true }),
+      mkdir(skillsDir, { recursive: true }),
+      mkdir(path.join(workspaceRoot, ".openharness", "models"), { recursive: true })
+    ]);
+
+    await writeFile(path.join(workspaceRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "models", "repo.yaml"),
+      `
+repo-model:
+  provider: openai-compatible
+  key: workspace-secret
+  url: https://llm.example.com/v1
+  name: openai/gpt-5
+  metadata:
+    contextWindowTokens: 8192
+`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(modelsDir, "openai.yaml"),
+      `
+openai-default:
+  provider: openai
+  name: gpt-4o-mini
+`,
+      "utf8"
+    );
+    await writeFile(
+      configPath,
+      `
+server:
+  host: 127.0.0.1
+  port: 8787
+storage: {}
+paths:
+  workspace_dir: ./workspaces
+  runtime_dir: ./runtimes
+  model_dir: ./models
+  tool_dir: ./tools
+  skill_dir: ./skills
+llm:
+  default_model: openai-default
+`,
+      "utf8"
+    );
+
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ input: unknown; init?: unknown }> = [];
+    globalThis.fetch = (async (input, init) => {
+      requests.push({ input, init });
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "openai/gpt-5",
+              max_model_len: 200_000
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    }) as typeof fetch;
+
+    const runtime = await bootstrapRuntime({
+      argv: ["--config", configPath],
+      startWorker: false,
+      processKind: "api"
+    });
+
+    try {
+      const workspace = await runtime.runtimeService.getWorkspaceRecord(workspaceId);
+
+      expect(requests.length).toBeGreaterThanOrEqual(1);
+      expect(requests.map((request) => String(request.input))).toContain("https://llm.example.com/v1/models");
+      expect(workspace.workspaceModels["repo-model"]?.metadata).toEqual(
+        expect.objectContaining({
+          max_model_len: 200_000,
+          contextWindowTokens: 8192
+        })
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      await runtime.close();
+    }
+  });
+
   it("infers managed workspace object-storage refs without enabling workspace mirror polling", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-managed-workspace-external-ref-"));
     tempDirs.push(tempDir);

@@ -195,7 +195,7 @@ export const storageRedisWorkspacePlacementStateSchema = z.enum([
 
 export const storageRedisWorkspacePlacementQuerySchema = z.object({
   workspaceId: z.string().optional(),
-  userId: z.string().optional(),
+  ownerId: z.string().optional(),
   ownerWorkerId: z.string().optional(),
   state: storageRedisWorkspacePlacementStateSchema.optional()
 });
@@ -203,7 +203,7 @@ export const storageRedisWorkspacePlacementQuerySchema = z.object({
 export const storageRedisWorkspacePlacementSchema = z.object({
   workspaceId: z.string(),
   version: z.string(),
-  userId: z.string().optional(),
+  ownerId: z.string().optional(),
   ownerWorkerId: z.string().optional(),
   ownerBaseUrl: z.string().optional(),
   preferredWorkerId: z.string().optional(),
@@ -249,7 +249,7 @@ export const storageRedisKeyQuerySchema = z.object({
 export const storageRedisWorkerAffinityQuerySchema = z.object({
   sessionId: z.string().optional(),
   workspaceId: z.string().optional(),
-  userId: z.string().optional(),
+  ownerId: z.string().optional(),
   ownerWorkerId: z.string().optional()
 });
 
@@ -258,7 +258,7 @@ export const storageRedisWorkerAffinityReasonSchema = z.enum([
   "owner_worker",
   "same_session",
   "same_workspace",
-  "same_user",
+  "same_owner",
   "healthy",
   "late",
   "idle_worker",
@@ -280,7 +280,7 @@ export const storageRedisWorkerAffinityCandidateSchema = z.object({
   busySlots: z.number().int().min(0).optional(),
   matchingSessionSlots: z.number().int().min(0),
   matchingWorkspaceSlots: z.number().int().min(0),
-  matchingUserWorkspaces: z.number().int().min(0),
+  matchingOwnerWorkspaces: z.number().int().min(0),
   reasons: z.array(storageRedisWorkerAffinityReasonSchema)
 });
 
@@ -289,7 +289,7 @@ export const storageRedisWorkerAffinitySchema = z.object({
   controllerTargetWorkerId: z.string().optional(),
   sessionAffinityWorkerId: z.string().optional(),
   workspaceAffinityWorkerId: z.string().optional(),
-  userAffinityWorkerId: z.string().optional(),
+  ownerAffinityWorkerId: z.string().optional(),
   ownerWorkerId: z.string().optional(),
   candidates: z.array(storageRedisWorkerAffinityCandidateSchema)
 });

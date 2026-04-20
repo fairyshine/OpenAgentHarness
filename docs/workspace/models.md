@@ -66,3 +66,16 @@ openrouter-main:
 | `name` | 是 | 对应的模型名 |
 
 一个文件可声明多个模型入口。具体 `model_ref` 中的名称部分支持中文和其他 Unicode 字符。
+
+## Context Window 发现与 Compact 优先级
+
+对于 `openai-compatible` 模型，无论它来自服务端 `model_dir` 还是 workspace 本地 `.openharness/models/*.yaml`，服务端都会在发现该模型后尽力请求对应模型接口的 `/v1/models` 列表，并读取匹配模型卡上的 `max_model_len`。
+
+compact 机制判断上下文窗口时，采用明确的两级优先级：
+
+1. 优先使用模型 API 返回的 `max_model_len`
+2. 若未拿到该字段，则回退到本地模型 metadata 里的 `contextWindowTokens`
+
+如果这两个来源都不存在，运行时不会基于上下文窗口自动触发 compact。
+
+这个在线探测是 best-effort 的：请求失败、接口未返回该字段，或模型名未匹配时，不会阻止模型加载，只会继续使用本地 metadata 回退。

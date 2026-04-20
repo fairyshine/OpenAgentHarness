@@ -70,7 +70,10 @@ function projectWorkspacePageForPublicApi(
 }
 
 async function reserveOwnerScopedWorkspacePlacement(
-  dependencies: Pick<AppDependencies, "assignWorkspacePlacementUser" | "releaseWorkspacePlacement" | "sandboxHostProviderKind">,
+  dependencies: Pick<
+    AppDependencies,
+    "assignWorkspacePlacementOwnerAffinity" | "releaseWorkspacePlacement" | "sandboxHostProviderKind"
+  >,
   ownerId: string | undefined,
   workspaceId: string | undefined
 ): Promise<{ workspaceId: string | undefined; release: () => Promise<void> }> {
@@ -83,9 +86,9 @@ async function reserveOwnerScopedWorkspacePlacement(
     };
   }
 
-  await dependencies.assignWorkspacePlacementUser?.({
+  await dependencies.assignWorkspacePlacementOwnerAffinity?.({
     workspaceId,
-    userId: ownerId,
+    ownerId,
     overwrite: true
   });
 
@@ -420,9 +423,9 @@ export function registerWorkspaceRoutes(
         } as typeof input & { workspaceId?: string | undefined }
       });
       if (ownerId && workspace.id !== reservedPlacement.workspaceId) {
-        await dependencies.assignWorkspacePlacementUser?.({
+        await dependencies.assignWorkspacePlacementOwnerAffinity?.({
           workspaceId: workspace.id,
-          userId: ownerId,
+          ownerId,
           overwrite: true
         });
       }
@@ -447,8 +450,7 @@ export function registerWorkspaceRoutes(
     const name = typeof body?.name === "string" ? body.name : undefined;
     const externalRef = typeof body?.externalRef === "string" ? body.externalRef : undefined;
     const ownerId = resolveOwnerId({
-      ownerId: typeof body?.ownerId === "string" ? body.ownerId : undefined,
-      userId: typeof body?.userId === "string" ? body.userId : undefined
+      ownerId: typeof body?.ownerId === "string" ? body.ownerId : undefined
     });
     const serviceName =
       typeof body?.serviceName === "string" && body.serviceName.trim().length > 0
@@ -463,9 +465,9 @@ export function registerWorkspaceRoutes(
       ...(serviceName ? { serviceName } : {})
     });
     if (ownerId) {
-      await dependencies.assignWorkspacePlacementUser?.({
+      await dependencies.assignWorkspacePlacementOwnerAffinity?.({
         workspaceId: workspace.id,
-        userId: ownerId,
+        ownerId,
         overwrite: true
       });
     }
@@ -586,11 +588,6 @@ export function registerWorkspaceRoutes(
       workspaceId: params.workspaceId,
       caller,
       input
-    });
-    await dependencies.assignWorkspacePlacementUser?.({
-      workspaceId: params.workspaceId,
-      userId: caller.subjectRef,
-      overwrite: false
     });
 
     return reply.status(201).send(session);

@@ -51,7 +51,7 @@ Open Agent Harness 是一个 headless Agent Engine。不提供 UI，通过 OpenA
 ### Controller
 
 - OAH 的控制面角色
-- 负责 workspace placement、user affinity、capacity、drain、recovery、rebalance 和扩缩容
+- 负责 workspace placement、owner affinity、capacity、drain、recovery、rebalance 和扩缩容
 - `Controller` 不直接执行业务 run
 
 ### Sandbox
@@ -80,7 +80,7 @@ Open Agent Harness 是一个 headless Agent Engine。不提供 UI，通过 OpenA
 ### Workspace Ownership
 
 - `workspace -> owner worker` 是运行与文件路由真值
-- `userId` 是调度亲和键，不是 ownership 真值
+- `ownerId` 是亲和调度键，但不是独立于 `workspace -> owner worker` 之外的另一套 ownership 真值
 - 活跃 workspace 的当前读写真值位于 owner worker 的 `Active Workspace Copy`；空闲 flush 后再回到 OSS / 外部存储真值
 
 ### 层级关系
@@ -154,7 +154,7 @@ flowchart TD
 ### Controller
 
 - 负责 workspace placement 与 worker 生命周期治理
-- 将 `user affinity + workspace ownership + worker health + capacity` 组合为放置决策
+- 将 `owner affinity + workspace ownership + worker health + capacity` 组合为放置决策
 - 在 `self_hosted / e2b` provider 下进一步推导 sandbox fleet 需求：同 `ownerId` 复用 sandbox，无 owner 默认进入共享池
 - 负责 drain、rebalance、recovery 与扩缩容
 - 不直接执行业务 run
@@ -263,7 +263,7 @@ sequenceDiagram
 - `Sandbox Host API` 是宿主兼容边界；首个实现应是自家 sandbox pod，E2B 适合作为后续可插拔后端，而不是先改写 OAH 的主语义
 - `Controller` 是统一控制面角色；负责 placement、lifecycle 与 capacity，不直接执行业务 run
 - 对远端 sandbox provider 而言，controller 现在还承担“逻辑 sandbox fleet”计算职责，为后续真实 sandbox autoscaling target 做准备
-- `workspace -> owner worker` 是运行与文件访问的路由真值；`userId` 只用于亲和调度，不作为 ownership 真值
+- `workspace -> owner worker` 是运行与文件访问的路由真值；`ownerId` 用于亲和调度，但不应被当作第二套 ownership 真值
 - 活跃 workspace 以 owner worker 的 `Active Workspace Copy` 为读写真值；flush / evict 后回到 OSS / 外部存储真值
 - `sandbox` API 面向“活跃执行副本”的文件与命令操作；`workspace` API 面向元数据、catalog 与生命周期管理
 - 默认可信内网环境，不做强隔离容器执行；若面向更开放环境，应优先加强 sandbox backend

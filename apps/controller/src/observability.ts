@@ -116,9 +116,9 @@ export function renderControllerMetrics(input: {
       value: input.controller.sandboxFleet?.capped ? 1 : 0
     },
     {
-      name: "placement_assigned_users",
-      help: "Number of workspace placement records with an assigned user affinity.",
-      value: input.controller.placement?.assignedUsers ?? 0
+      name: "placement_assigned_owners",
+      help: "Number of workspace placement records with an assigned owner affinity.",
+      value: input.controller.placement?.assignedOwners ?? 0
     },
     {
       name: "placement_owned_workspaces",
@@ -151,9 +151,9 @@ export function renderControllerMetrics(input: {
       value: input.controller.placementPolicy?.unassignedWorkspaces ?? 0
     },
     {
-      name: "placement_policy_users_spanning_workers",
-      help: "Number of users whose workspaces currently span multiple workers.",
-      value: input.controller.placementPolicy?.usersSpanningWorkers ?? 0
+      name: "placement_policy_owners_spanning_workers",
+      help: "Number of owner-affinity groups whose workspaces currently span multiple workers.",
+      value: input.controller.placementPolicy?.ownersSpanningWorkers ?? 0
     },
     {
       name: "placement_policy_sandboxes_above_workspace_capacity",

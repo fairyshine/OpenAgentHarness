@@ -28,10 +28,11 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
   async upsert(entry: WorkspacePlacementInput): Promise<void> {
     const key = this.#placementKey(entry.workspaceId);
     const existing = await this.#commands.hGetAll(key);
+    const existingOwnerId = this.#readStoredOwnerId(existing);
     const next = {
       workspaceId: entry.workspaceId,
       version: entry.version?.trim() || existing.version || "live",
-      ...(existing.userId ? { userId: existing.userId } : {}),
+      ...(existingOwnerId ? { ownerId: existingOwnerId } : {}),
       ...(existing.ownerWorkerId ? { ownerWorkerId: existing.ownerWorkerId } : {}),
       ...(existing.ownerBaseUrl ? { ownerBaseUrl: existing.ownerBaseUrl } : {}),
       ...(existing.preferredWorkerId ? { preferredWorkerId: existing.preferredWorkerId } : {}),
@@ -51,8 +52,9 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
       updatedAt: entry.updatedAt
     } satisfies WorkspacePlacementEntry;
 
-    if (entry.userId?.trim()) {
-      next.userId = entry.userId.trim();
+    const inputOwnerId = entry.ownerId?.trim();
+    if (inputOwnerId) {
+      next.ownerId = inputOwnerId;
     }
     if (entry.ownerWorkerId?.trim()) {
       next.ownerWorkerId = entry.ownerWorkerId.trim();
@@ -95,7 +97,7 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
     const transaction = this.#commands.multi().sAdd(this.#registrySetKey(), entry.workspaceId).hSet(key, {
       workspaceId: next.workspaceId,
       version: next.version,
-      ...(next.userId ? { userId: next.userId } : {}),
+      ...(next.ownerId ? { ownerId: next.ownerId } : {}),
       ...(next.ownerWorkerId ? { ownerWorkerId: next.ownerWorkerId } : {}),
       ...(next.ownerBaseUrl ? { ownerBaseUrl: next.ownerBaseUrl } : {}),
       ...(next.preferredWorkerId ? { preferredWorkerId: next.preferredWorkerId } : {}),
@@ -142,25 +144,25 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
     await transaction.exec();
   }
 
-  async assignUser(
+  async assignOwnerAffinity(
     workspaceId: string,
-    userId: string,
+    ownerId: string,
     options?: { overwrite?: boolean | undefined; updatedAt?: string | undefined }
   ): Promise<void> {
     const normalizedWorkspaceId = workspaceId.trim();
-    const normalizedUserId = userId.trim();
-    if (normalizedWorkspaceId.length === 0 || normalizedUserId.length === 0) {
+    const normalizedOwnerId = ownerId.trim();
+    if (normalizedWorkspaceId.length === 0 || normalizedOwnerId.length === 0) {
       return;
     }
 
     const existing = await this.getByWorkspaceId(normalizedWorkspaceId);
-    if (existing?.userId && !options?.overwrite) {
+    if (this.#readEntryOwnerId(existing) && !options?.overwrite) {
       return;
     }
 
     await this.upsert({
       workspaceId: normalizedWorkspaceId,
-      userId: normalizedUserId,
+      ownerId: normalizedOwnerId,
       state: existing?.state ?? "unassigned",
       updatedAt: options?.updatedAt ?? new Date().toISOString()
     });
@@ -223,7 +225,7 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
     const transaction = this.#commands.multi().sAdd(this.#registrySetKey(), normalizedWorkspaceId).hSet(key, {
       workspaceId: existing.workspaceId,
       version: existing.version,
-      ...(existing.userId ? { userId: existing.userId } : {}),
+      ...(this.#readEntryOwnerId(existing) ? { ownerId: this.#readEntryOwnerId(existing)! } : {}),
       ...(options?.preferredWorkerId?.trim()
         ? { preferredWorkerId: options.preferredWorkerId.trim() }
         : existing.preferredWorkerId
@@ -285,10 +287,12 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
         continue;
       }
 
+      const ownerId = this.#readStoredOwnerId(record.fields);
+
       items.push({
         workspaceId: record.fields.workspaceId ?? record.workspaceId,
         version: record.fields.version ?? "live",
-        ...(record.fields.userId ? { userId: record.fields.userId } : {}),
+        ...(ownerId ? { ownerId } : {}),
         ...(record.fields.ownerWorkerId ? { ownerWorkerId: record.fields.ownerWorkerId } : {}),
         ...(record.fields.ownerBaseUrl ? { ownerBaseUrl: record.fields.ownerBaseUrl } : {}),
         ...(record.fields.preferredWorkerId ? { preferredWorkerId: record.fields.preferredWorkerId } : {}),
@@ -327,10 +331,12 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
       return undefined;
     }
 
+    const ownerId = this.#readStoredOwnerId(fields);
+
     return {
       workspaceId: fields.workspaceId ?? workspaceId,
       version: fields.version ?? "live",
-      ...(fields.userId ? { userId: fields.userId } : {}),
+      ...(ownerId ? { ownerId } : {}),
       ...(fields.ownerWorkerId ? { ownerWorkerId: fields.ownerWorkerId } : {}),
       ...(fields.ownerBaseUrl ? { ownerBaseUrl: fields.ownerBaseUrl } : {}),
       ...(fields.preferredWorkerId ? { preferredWorkerId: fields.preferredWorkerId } : {}),
@@ -376,6 +382,16 @@ export class RedisWorkspacePlacementRegistry implements WorkspacePlacementRegist
 
   #placementKey(workspaceId: string): string {
     return `${this.#keyPrefix}:workspace-placement:${workspaceId}`;
+  }
+
+  #readStoredOwnerId(fields: Record<string, string>): string | undefined {
+    const ownerId = fields.ownerId?.trim();
+    return ownerId || undefined;
+  }
+
+  #readEntryOwnerId(entry: WorkspacePlacementEntry | undefined): string | undefined {
+    const ownerId = entry?.ownerId?.trim();
+    return ownerId || undefined;
   }
 }
 

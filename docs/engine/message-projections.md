@@ -247,6 +247,15 @@ export interface EngineMessageProjector {
 3. 保留 boundary 之后的 recent messages
 4. 更老的长 `tool_result` 仅保留 stub
 
+## Compact 触发窗口优先级
+
+compact 是否触发，首先要先得到当前模型的上下文窗口大小。这里采用两级优先级：
+
+1. 优先使用模型 API `/v1/models` 返回的 `max_model_len`
+2. 若没有该值，再回退到模型 metadata 中配置的 `contextWindowTokens`
+
+如果两者都缺失，runtime 会保留完整 Engine Messages，不执行基于 context window 的自动 compact。
+
 ---
 
 ## Prompt 选择与 AI SDK 序列化边界

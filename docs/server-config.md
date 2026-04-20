@@ -229,6 +229,9 @@ openai-default:
 
 公共 MCP tool server 定义。目录结构建议与 workspace `.openharness/tools` 保持一致（`settings.yaml` + `servers/*`）。由服务端统一加载，作为平台级能力参与 catalog 组装。
 
+> **tip**
+> 当 OAH 运行在 Docker 容器内时，HTTP MCP server 若配置为 `http://127.0.0.1:...` 或 `http://localhost:...`，运行时会自动改写为宿主机别名，默认使用 `host.docker.internal`。如需覆盖，可设置 `OAH_DOCKER_HOST_ALIAS`。
+
 ### `skill_dir`
 
 公共 skill 定义。与 workspace `.openharness/skills` 合并组成可见 skill 集合。同名 skill 中 workspace 级优先。
@@ -281,9 +284,13 @@ openai-default:
 | --- | --- | --- |
 | `OAH_HISTORY_EVENT_RETENTION_DAYS` | `7` | Postgres 模式下历史事件保留天数 |
 | `OAH_RUNTIME_DEBUG` | 未设置 | 设置后向标准输出镜像 runtime debug 日志 |
+| `OAH_DOCKER_HOST_ALIAS` | `host.docker.internal` | 当服务运行在 Docker 内且 HTTP MCP server 配置为 loopback 地址时，用于替换 `127.0.0.1` / `localhost` 的宿主机别名 |
 
 > **tip**
 > 当配置了 Redis 队列且使用 `API + embedded worker` 模式时，服务默认会至少启动 `2` 个 embedded worker，并根据 `ready queue` 相对当前空闲 worker 的缺口做轻量扩容；扩缩容还会经过 `scale_up_window` / `scale_down_window` 连续判定和 `cooldown_ms` 冷却控制。若出现 `subagent` backlog，则会优先补足 `reserved_capacity_for_subagent`，减少父 run 等待 child run 时被普通 backlog 挤压的风险。
+
+> **tip**
+> `OAH_DOCKER_HOST_ALIAS` 主要用于“容器中的 OAH 访问宿主机上的 HTTP MCP server”场景。本地 `docker-compose.local.yml` 已默认注入 `host.docker.internal:host-gateway`，因此大多数情况下无需额外配置。
 
 ---
 

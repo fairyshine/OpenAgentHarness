@@ -110,13 +110,13 @@ The current roadmap keeps:
 
 This means we are not moving to:
 
-- `user -> pod` as ownership truth
+- `owner -> pod` as ownership truth
 - shared multi-writer workspace truth
 - cross-pod live sync as the main model
 
-### 2.7 User Affinity Is a Placement Hint, Not Ownership
+### 2.7 Owner Affinity Is a Placement Hint, Not Ownership
 
-`userId` is now treated as:
+`ownerId` is now treated as:
 
 - placement affinity key
 - warm-cache reuse hint
@@ -125,11 +125,11 @@ This means we are not moving to:
 But not:
 
 - the execution truth key
-- a guarantee that one user maps to exactly one pod
+- a guarantee that one owner maps to exactly one pod
 
 The accepted policy is:
 
-- same-user workspaces should prefer the same worker / pod
+- same-owner workspaces should prefer the same worker / pod
 - but may spill to another worker when capacity, disk, drain, or health requires it
 
 ### 2.8 Controller Becomes the Future Home of Placement Logic
@@ -187,7 +187,7 @@ The codebase now uses `controller` as the only primary control-plane name:
 `Controller`
 
 - worker placement policy
-- user affinity policy
+- owner affinity policy
 - health / drain aware scaling
 - rebalance and recovery decisions
 
@@ -215,7 +215,7 @@ Status:
 
 - move controller narrative from replica scaler to placement control plane
 - define worker selection inputs:
-  - user affinity
+  - owner affinity
   - workspace ownership
   - current worker health
   - capacity
@@ -234,7 +234,7 @@ Implemented so far:
 - controller now emits placement policy signals covering:
   - unassigned workspaces
   - missing / late / draining owner workers
-  - users spanning multiple workers
+  - owners spanning multiple workers
   - workers whose placement ref-load exceeds the soft slots-per-pod capacity
 - controller can now surface `placement_attention` even when replica count stays steady, so placement governance is no longer invisible behind scale-only reasons
 - controller snapshots now also emit structured placement recommendations such as:
@@ -242,14 +242,14 @@ Implemented so far:
   - recover missing owners
   - reassign late owners
   - finish draining owners
-  - consolidate user affinity
+  - consolidate owner affinity
   - rebalance workers above soft placement capacity
-- placement recommendations now include representative workspace / worker / user samples so the control plane output can feed concrete rebalance and recovery workflows later
+- placement recommendations now include representative workspace / worker / owner samples so the control plane output can feed concrete rebalance and recovery workflows later
 - controller now emits a placement action-plan shape on top of recommendations, including:
   - execution phase (`stabilize` / `handoff` / `optimize`)
   - blocker type
   - next suggested item
-  - concrete workspace / worker / user scopes for follow-up
+  - concrete workspace / worker / owner scopes for follow-up
 - controller now also derives machine-actionable placement execution operations from live placement state, rather than stopping at descriptive recommendations
 - an optional placement executor can now perform the first safe ownership-handoff actions:
   - release placements that still point to missing owners
@@ -261,7 +261,7 @@ Implemented so far:
   - worker health
   - drain state
   - workspace affinity
-  - user affinity
+  - owner affinity
   - soft-capacity pressure
 - placement state can now persist controller handoff hints via `preferredWorkerId`, so reassignment is no longer just "drop ownership and hope"
 - unassigned workspaces, late owners, user-affinity splits, and soft-capacity hot spots can now all produce target-worker hints instead of only descriptive recommendations
@@ -271,7 +271,7 @@ Implemented so far:
 
 - introduce first-class placement state for:
   - `workspaceId`
-  - `userId`
+  - `ownerId`
   - `ownerWorkerId`
   - `ownerBaseUrl`
   - capacity / lifecycle metadata
@@ -285,12 +285,11 @@ Implemented so far:
 
 - Redis `workspace placement registry` now exists as a first-class state store, separate from transient workspace ownership leases
 - materialized workspace lifecycle now publishes placement state transitions such as `active` / `idle` / `draining` / `evicted`
-- workspace creation/import can seed `userId` into placement state
-- session creation now backfills `userId` from caller context when the workspace placement record is still missing one
+- workspace creation/import can seed `ownerId` into placement state
 - storage admin now exposes workspace placement snapshots for inspection
-- worker affinity inspection now derives `same_user` preference from workspace placement state, so sibling workspaces for the same user can prefer a warm worker without changing workspace ownership truth
+- worker affinity inspection now derives `same_owner` preference from workspace placement state, so sibling workspaces for the same owner can prefer a warm worker without changing workspace ownership truth
 - controller snapshots and metrics now distinguish placements on healthy / late / missing owner workers, and controller scale-down is blocked while placement ownership is still unstable
-- workspace placement inspection now supports filtering by `workspaceId`, `userId`, `ownerWorkerId`, and `state`, making placement state usable for control-plane debugging and future placement workflows
+- workspace placement inspection now supports filtering by `workspaceId`, `ownerId`, `ownerWorkerId`, and `state`, making placement state usable for control-plane debugging and future placement workflows
 
 ### Phase D: Sandbox-Backed Worker Hosts
 

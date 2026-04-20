@@ -130,6 +130,10 @@ interface CandidateScore {
   tieBreak: number;
 }
 
+function placementOwnerId(placement: Pick<WorkspacePlacementEntry, "ownerId">): string | undefined {
+  return trimToUndefined(placement.ownerId);
+}
+
 async function mapPinnedOwnerCandidates(options: {
   baseUrl: string;
   placements: WorkspacePlacementEntry[];
@@ -149,7 +153,7 @@ async function mapPinnedOwnerCandidates(options: {
   const pinnedOwners = new Map<string, string>();
 
   for (const placement of [...options.placements].sort(placementPriority)) {
-    const ownerId = trimToUndefined(placement.userId);
+    const ownerId = placementOwnerId(placement);
     const ownerBaseUrl = trimToUndefined(placement.ownerBaseUrl);
     if (!ownerId || !ownerBaseUrl || pinnedOwners.has(ownerId)) {
       continue;
@@ -172,7 +176,7 @@ async function mapPinnedOwnerCandidates(options: {
 }
 
 function listTrackedOwnerIds(placements: WorkspacePlacementEntry[]): string[] {
-  return [...new Set(placements.map((placement) => trimToUndefined(placement.userId)).filter((ownerId): ownerId is string => Boolean(ownerId)))].sort(
+  return [...new Set(placements.map((placement) => placementOwnerId(placement)).filter((ownerId): ownerId is string => Boolean(ownerId)))].sort(
     (left, right) => left.localeCompare(right)
   );
 }
@@ -237,7 +241,7 @@ async function scoreCandidateBaseUrls(options: {
       let workspaceCount = 0;
 
       for (const placement of options.placements) {
-        const placementOwnerId = trimToUndefined(placement.userId);
+        const affinityOwnerId = placementOwnerId(placement);
         const knownEndpoints = placementEndpoints.get(placement.workspaceId);
         if (!knownEndpoints || knownEndpoints.size === 0) {
           continue;
@@ -249,8 +253,8 @@ async function scoreCandidateBaseUrls(options: {
         }
 
         workspaceCount += 1;
-        if (placementOwnerId && placementOwnerId !== options.ownerId) {
-          foreignOwners.add(placementOwnerId);
+        if (affinityOwnerId && affinityOwnerId !== options.ownerId) {
+          foreignOwners.add(affinityOwnerId);
         }
       }
 
@@ -297,7 +301,7 @@ function shouldWaitForDedicatedCandidate(input: {
 export async function resolveSelfHostedSandboxCreateBaseUrl(options: {
   baseUrl: string;
   workspace: Pick<WorkspaceRecord, "ownerId"> & { id?: string | undefined };
-  workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignUser"> | undefined;
+  workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignOwnerAffinity"> | undefined;
   workerRegistry?: Pick<WorkerRegistry, "listActive"> | undefined;
   resolveHostAddresses?: ((hostname: string) => Promise<string[]>) | undefined;
   waitForAvailableReplicaMs?: number | undefined;
@@ -311,8 +315,8 @@ export async function resolveSelfHostedSandboxCreateBaseUrl(options: {
 
   const resolveHostAddresses = options.resolveHostAddresses ?? defaultResolveHostAddresses;
   const workspaceId = trimToUndefined(options.workspace.id);
-  if (workspaceId && typeof options.workspacePlacementRegistry.assignUser === "function") {
-    await options.workspacePlacementRegistry.assignUser(workspaceId, ownerId, {
+  if (workspaceId) {
+    await options.workspacePlacementRegistry.assignOwnerAffinity(workspaceId, ownerId, {
       overwrite: false,
       updatedAt: new Date().toISOString()
     });
@@ -342,7 +346,7 @@ export async function resolveSelfHostedSandboxCreateBaseUrl(options: {
     const source = workerRegistryCandidates.length > 0 ? "worker_registry" : "dns";
     const placements = (await options.workspacePlacementRegistry.listAll()).filter((placement) => placement.state !== "evicted");
     const existingOwnerPlacement = placements
-      .filter((placement) => placement.userId === ownerId && trimToUndefined(placement.ownerBaseUrl))
+      .filter((placement) => placementOwnerId(placement) === ownerId && trimToUndefined(placement.ownerBaseUrl))
       .sort(placementPriority)[0];
     if (existingOwnerPlacement?.ownerBaseUrl) {
       return mergeSandboxBaseUrl(options.baseUrl, existingOwnerPlacement.ownerBaseUrl) ?? undefined;

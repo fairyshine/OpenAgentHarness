@@ -12,6 +12,7 @@ import { sandboxSchema, type CreateWorkspaceRequest } from "@oah/api-contracts";
 import { createId, type WorkspaceInitializationResult } from "@oah/engine-core";
 
 import type { SandboxHost } from "./sandbox-host.js";
+import { enrichWorkspaceModelsWithDiscoveredMetadata } from "./model-metadata-discovery.js";
 
 const SANDBOX_WORKSPACE_ROOT = "/workspace";
 
@@ -131,7 +132,6 @@ async function createSelfHostedSandbox(input: {
       executionPolicy: input.request.executionPolicy,
       ...(input.request.externalRef ? { externalRef: input.request.externalRef } : {}),
       ...(input.request.ownerId ? { ownerId: input.request.ownerId } : {}),
-      ...(input.request.userId ? { userId: input.request.userId } : {}),
       ...(input.request.serviceName ? { serviceName: input.request.serviceName } : {})
     })
   });
@@ -179,12 +179,14 @@ export function createSandboxBackedWorkspaceInitializer(options: {
           skills: input.skills
         });
 
-        const discovered = await discoverWorkspace(stagingWorkspaceRoot, "project", {
-          platformModels: options.platformModels,
-          platformAgents: options.platformAgents,
-          platformSkillDir: options.platformSkillDir,
-          platformToolDir: options.toolDir
-        });
+        const discovered = await enrichWorkspaceModelsWithDiscoveredMetadata(
+          await discoverWorkspace(stagingWorkspaceRoot, "project", {
+            platformModels: options.platformModels,
+            platformAgents: options.platformAgents,
+            platformSkillDir: options.platformSkillDir,
+            platformToolDir: options.toolDir
+          })
+        );
 
         if (options.selfHosted) {
           const sandbox = await createSelfHostedSandbox({

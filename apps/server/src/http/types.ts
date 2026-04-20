@@ -71,9 +71,9 @@ export interface AppDependencies {
     ownerId?: string;
     serviceName?: string;
   }) => Promise<import("@oah/api-contracts").Workspace>;
-  assignWorkspacePlacementUser?: ((input: {
+  assignWorkspacePlacementOwnerAffinity?: ((input: {
     workspaceId: string;
-    userId: string;
+    ownerId: string;
     overwrite?: boolean | undefined;
   }) => Promise<void>) | undefined;
   releaseWorkspacePlacement?: ((input: {

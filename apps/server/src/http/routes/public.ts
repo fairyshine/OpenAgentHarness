@@ -34,6 +34,7 @@ import { AppError } from "@oah/engine-core";
 
 import { createParamsSchema, writeSseEvent } from "../context.js";
 import { describeSandboxTopology } from "../../sandbox-topology.js";
+import { resolveOwnerId } from "../proxy-utils.js";
 import {
   buildApiIndex,
   buildDeveloperDocsHtml,
@@ -350,7 +351,13 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
       throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
     }
 
-    const query = storageRedisWorkerAffinityQuerySchema.parse(request.query);
+    const rawQuery = request.query as Record<string, unknown>;
+    const query = storageRedisWorkerAffinityQuerySchema.parse({
+      ...rawQuery,
+      ownerId: resolveOwnerId({
+        ownerId: typeof rawQuery.ownerId === "string" ? rawQuery.ownerId : undefined
+      })
+    });
     return reply.send(
       storageRedisWorkerAffinitySchema.parse(await dependencies.storageAdmin.redisWorkerAffinity(query))
     );
@@ -361,7 +368,13 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
       throw new AppError(501, "storage_admin_unavailable", "Storage admin is unavailable on this server.");
     }
 
-    const query = storageRedisWorkspacePlacementQuerySchema.parse(request.query);
+    const rawQuery = request.query as Record<string, unknown>;
+    const query = storageRedisWorkspacePlacementQuerySchema.parse({
+      ...rawQuery,
+      ownerId: resolveOwnerId({
+        ownerId: typeof rawQuery.ownerId === "string" ? rawQuery.ownerId : undefined
+      })
+    });
     return reply.send(
       storageRedisWorkspacePlacementPageSchema.parse(
         await dependencies.storageAdmin.redisWorkspacePlacements(query)

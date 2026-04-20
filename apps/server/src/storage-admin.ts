@@ -313,12 +313,12 @@ export interface StorageAdmin {
   redisWorkerAffinity(input: {
     sessionId?: string | undefined;
     workspaceId?: string | undefined;
-    userId?: string | undefined;
+    ownerId?: string | undefined;
     ownerWorkerId?: string | undefined;
   }): Promise<StorageRedisWorkerAffinity>;
   redisWorkspacePlacements(input?: {
     workspaceId?: string | undefined;
-    userId?: string | undefined;
+    ownerId?: string | undefined;
     ownerWorkerId?: string | undefined;
     state?: "unassigned" | "active" | "idle" | "draining" | "evicted" | undefined;
   }): Promise<StorageRedisWorkspacePlacementPage>;
@@ -348,6 +348,43 @@ export function createStorageAdmin(options: {
   type PlacementEntry = Awaited<ReturnType<NonNullable<typeof options.workspacePlacementRegistry>["getByWorkspaceId"]>> & {
     preferredWorkerId?: string | undefined;
   };
+  const placementOwnerAffinityId = (placement: { ownerId?: string | undefined } | undefined) =>
+    placement?.ownerId?.trim() || undefined;
+  const normalizePlacementEntry = (entry: {
+    workspaceId: string;
+    version: string;
+    ownerId?: string | undefined;
+    ownerWorkerId?: string | undefined;
+    ownerBaseUrl?: string | undefined;
+    preferredWorkerId?: string | undefined;
+    preferredWorkerReason?: "controller_target" | undefined;
+    state: "unassigned" | "active" | "idle" | "draining" | "evicted";
+    sourceKind?: "object_store" | "local_directory" | undefined;
+    localPath?: string | undefined;
+    remotePrefix?: string | undefined;
+    dirty?: boolean | undefined;
+    refCount?: number | undefined;
+    lastActivityAt?: string | undefined;
+    materializedAt?: string | undefined;
+    updatedAt: string;
+  }) => ({
+    workspaceId: entry.workspaceId,
+    version: entry.version,
+    ...(placementOwnerAffinityId(entry) ? { ownerId: placementOwnerAffinityId(entry) } : {}),
+    ...(entry.ownerWorkerId ? { ownerWorkerId: entry.ownerWorkerId } : {}),
+    ...(entry.ownerBaseUrl ? { ownerBaseUrl: entry.ownerBaseUrl } : {}),
+    ...(entry.preferredWorkerId ? { preferredWorkerId: entry.preferredWorkerId } : {}),
+    ...(entry.preferredWorkerReason ? { preferredWorkerReason: entry.preferredWorkerReason } : {}),
+    state: entry.state,
+    ...(entry.sourceKind ? { sourceKind: entry.sourceKind } : {}),
+    ...(entry.localPath ? { localPath: entry.localPath } : {}),
+    ...(entry.remotePrefix ? { remotePrefix: entry.remotePrefix } : {}),
+    ...(typeof entry.dirty === "boolean" ? { dirty: entry.dirty } : {}),
+    ...(typeof entry.refCount === "number" ? { refCount: entry.refCount } : {}),
+    ...(entry.lastActivityAt ? { lastActivityAt: entry.lastActivityAt } : {}),
+    ...(entry.materializedAt ? { materializedAt: entry.materializedAt } : {}),
+    updatedAt: entry.updatedAt
+  });
   const keyPrefix = options.keyPrefix ?? "oah";
   const postgresPool = options.postgresPool;
   const postgresPoolFactory = options.postgresPoolFactory ?? ((input: { connectionString: string }) => new Pool(input));
@@ -823,10 +860,10 @@ export function createStorageAdmin(options: {
 
       const activeWorkers = await registry.listActive(Date.now());
       const normalizedWorkspaceId = input.workspaceId?.trim();
-      let normalizedUserId = input.userId?.trim();
+      let normalizedOwnerId = input.ownerId?.trim();
       let normalizedOwnerWorkerId = input.ownerWorkerId?.trim();
       let normalizedPreferredWorkerId: string | undefined;
-      let workerUserAffinities:
+      let workerOwnerAffinities:
         | Array<{
             workerId: string;
             workspaceCount: number;
@@ -838,14 +875,14 @@ export function createStorageAdmin(options: {
           ? ((await options.workspacePlacementRegistry.getByWorkspaceId(normalizedWorkspaceId)) as PlacementEntry)
           : undefined;
 
-        normalizedUserId ||= targetPlacement?.userId?.trim();
+        normalizedOwnerId ||= placementOwnerAffinityId(targetPlacement);
         normalizedOwnerWorkerId ||= targetPlacement?.ownerWorkerId?.trim();
         normalizedPreferredWorkerId ||= targetPlacement?.preferredWorkerId?.trim();
 
-        if (normalizedUserId) {
+        if (normalizedOwnerId) {
           const workerCounts = new Map<string, number>();
           for (const placement of await options.workspacePlacementRegistry.listAll()) {
-            if (placement.userId !== normalizedUserId) {
+            if (placementOwnerAffinityId(placement) !== normalizedOwnerId) {
               continue;
             }
             if (!placement.ownerWorkerId || placement.state === "evicted" || placement.state === "unassigned") {
@@ -858,7 +895,7 @@ export function createStorageAdmin(options: {
             workerCounts.set(placement.ownerWorkerId, (workerCounts.get(placement.ownerWorkerId) ?? 0) + 1);
           }
 
-          workerUserAffinities = [...workerCounts.entries()].map(([workerId, workspaceCount]) => ({
+          workerOwnerAffinities = [...workerCounts.entries()].map(([workerId, workspaceCount]) => ({
             workerId,
             workspaceCount
           }));
@@ -875,8 +912,8 @@ export function createStorageAdmin(options: {
         })),
         ...(input.sessionId?.trim() ? { sessionId: input.sessionId.trim() } : {}),
         ...(normalizedWorkspaceId ? { workspaceId: normalizedWorkspaceId } : {}),
-        ...(normalizedUserId ? { userId: normalizedUserId } : {}),
-        ...(workerUserAffinities ? { workerUserAffinities } : {}),
+        ...(normalizedOwnerId ? { ownerId: normalizedOwnerId } : {}),
+        ...(workerOwnerAffinities ? { workerOwnerAffinities } : {}),
         ...(normalizedPreferredWorkerId ? { preferredWorkerId: normalizedPreferredWorkerId } : {}),
         ...(normalizedOwnerWorkerId ? { ownerWorkerId: normalizedOwnerWorkerId } : {})
       });
@@ -889,7 +926,7 @@ export function createStorageAdmin(options: {
       }
 
       const normalizedWorkspaceId = input?.workspaceId?.trim();
-      const normalizedUserId = input?.userId?.trim();
+      const normalizedOwnerId = input?.ownerId?.trim();
       const normalizedOwnerWorkerId = input?.ownerWorkerId?.trim();
       const normalizedState = input?.state;
 
@@ -897,19 +934,17 @@ export function createStorageAdmin(options: {
         const entry = await registry.getByWorkspaceId(normalizedWorkspaceId);
         const items =
           entry &&
-          (!normalizedUserId || entry.userId === normalizedUserId) &&
+          (!normalizedOwnerId || placementOwnerAffinityId(entry) === normalizedOwnerId) &&
           (!normalizedOwnerWorkerId || entry.ownerWorkerId === normalizedOwnerWorkerId) &&
           (!normalizedState || entry.state === normalizedState)
             ? [entry]
             : [];
 
-        return {
-          items
-        };
+        return { items: items.map(normalizePlacementEntry) };
       }
 
       const items = (await registry.listAll()).filter((entry) => {
-        if (normalizedUserId && entry.userId !== normalizedUserId) {
+        if (normalizedOwnerId && placementOwnerAffinityId(entry) !== normalizedOwnerId) {
           return false;
         }
         if (normalizedOwnerWorkerId && entry.ownerWorkerId !== normalizedOwnerWorkerId) {
@@ -921,9 +956,7 @@ export function createStorageAdmin(options: {
         return true;
       });
 
-      return {
-        items
-      };
+      return { items: items.map(normalizePlacementEntry) };
     },
 
     async deleteRedisKey(key) {

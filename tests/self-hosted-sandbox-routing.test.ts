@@ -11,12 +11,15 @@ describe("self-hosted sandbox routing", () => {
         ownerId: "owner-a"
       },
       workspacePlacementRegistry: {
+        async assignOwnerAffinity() {
+          return undefined;
+        },
         async listAll() {
           return [
             {
               workspaceId: "ws-existing",
               version: "live",
-              userId: "owner-a",
+              ownerId: "owner-a",
               ownerBaseUrl: "http://sandbox-b:8787",
               state: "idle",
               updatedAt: "2026-04-19T15:10:00.000Z"
@@ -52,7 +55,7 @@ describe("self-hosted sandbox routing", () => {
             {
               workspaceId: "ws-owner-a",
               version: "live",
-              userId: "owner-a",
+              ownerId: "owner-a",
               ownerBaseUrl: "http://sandbox-a:8787",
               state: "idle",
               updatedAt: "2026-04-19T15:10:00.000Z"
@@ -94,7 +97,7 @@ describe("self-hosted sandbox routing", () => {
 
   it("waits for a new active worker replica so a new owner can get a dedicated sandbox", async () => {
     let pollCount = 0;
-    const assignedUsers: Array<{ workspaceId: string; userId: string }> = [];
+    const assignedOwners: Array<{ workspaceId: string; ownerId: string }> = [];
 
     const resolved = await resolveSelfHostedSandboxCreateBaseUrl({
       baseUrl: "http://oah-sandbox:8787/internal/v1",
@@ -103,15 +106,15 @@ describe("self-hosted sandbox routing", () => {
         ownerId: "owner-b"
       },
       workspacePlacementRegistry: {
-        async assignUser(workspaceId, userId) {
-          assignedUsers.push({ workspaceId, userId });
+        async assignOwnerAffinity(workspaceId, ownerId) {
+          assignedOwners.push({ workspaceId, ownerId });
         },
         async listAll() {
           return [
             {
               workspaceId: "ws-owner-a",
               version: "live",
-              userId: "owner-a",
+              ownerId: "owner-a",
               ownerBaseUrl: "http://sandbox-a:8787",
               state: "idle",
               updatedAt: "2026-04-19T15:10:00.000Z"
@@ -119,7 +122,7 @@ describe("self-hosted sandbox routing", () => {
             {
               workspaceId: "ws-owner-b-pending",
               version: "live",
-              userId: "owner-b",
+              ownerId: "owner-b",
               state: "unassigned",
               updatedAt: "2026-04-19T15:11:00.000Z"
             }
@@ -190,7 +193,7 @@ describe("self-hosted sandbox routing", () => {
     });
 
     expect(pollCount).toBeGreaterThan(1);
-    expect(assignedUsers).toEqual([{ workspaceId: "ws-owner-b-pending", userId: "owner-b" }]);
+    expect(assignedOwners).toEqual([{ workspaceId: "ws-owner-b-pending", ownerId: "owner-b" }]);
     expect(resolved).toBe("http://sandbox-b:8787/internal/v1");
   });
 
@@ -204,19 +207,22 @@ describe("self-hosted sandbox routing", () => {
         ownerId: "owner-b"
       },
       workspacePlacementRegistry: {
+        async assignOwnerAffinity() {
+          return undefined;
+        },
         async listAll() {
           return [
             {
               workspaceId: "ws-owner-a-pending",
               version: "live",
-              userId: "owner-a",
+              ownerId: "owner-a",
               state: "unassigned",
               updatedAt: "2026-04-19T15:10:00.000Z"
             },
             {
               workspaceId: "ws-owner-b-pending",
               version: "live",
-              userId: "owner-b",
+              ownerId: "owner-b",
               state: "unassigned",
               updatedAt: "2026-04-19T15:11:00.000Z"
             }

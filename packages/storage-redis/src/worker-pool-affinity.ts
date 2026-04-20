@@ -3,7 +3,7 @@ export type RedisWorkerAffinityReason =
   | "owner_worker"
   | "same_session"
   | "same_workspace"
-  | "same_user"
+  | "same_owner"
   | "healthy"
   | "late"
   | "idle_worker"
@@ -40,7 +40,7 @@ export interface RedisWorkerAffinityCandidate {
   busySlots?: number | undefined;
   matchingSessionSlots: number;
   matchingWorkspaceSlots: number;
-  matchingUserWorkspaces: number;
+  matchingOwnerWorkspaces: number;
   reasons: RedisWorkerAffinityReason[];
 }
 
@@ -49,7 +49,7 @@ export interface RedisWorkerAffinitySummary {
   controllerTargetWorkerId?: string | undefined;
   sessionAffinityWorkerId?: string | undefined;
   workspaceAffinityWorkerId?: string | undefined;
-  userAffinityWorkerId?: string | undefined;
+  ownerAffinityWorkerId?: string | undefined;
   ownerWorkerId?: string | undefined;
   candidates: RedisWorkerAffinityCandidate[];
 }
@@ -67,8 +67,8 @@ export function buildRedisWorkerAffinitySummary(input: {
   slots?: RedisWorkerAffinitySlotLike[] | undefined;
   sessionId?: string | undefined;
   workspaceId?: string | undefined;
-  userId?: string | undefined;
-  workerUserAffinities?:
+  ownerId?: string | undefined;
+  workerOwnerAffinities?:
     | Array<{
         workerId: string;
         workspaceCount: number;
@@ -77,19 +77,19 @@ export function buildRedisWorkerAffinitySummary(input: {
   ownerWorkerId?: string | undefined;
   preferredWorkerId?: string | undefined;
 }): RedisWorkerAffinitySummary {
-  const workerUserAffinityCounts = new Map<string, number>(
-    (input.workerUserAffinities ?? []).map((entry) => [entry.workerId, entry.workspaceCount])
+  const workerOwnerAffinityCounts = new Map<string, number>(
+    (input.workerOwnerAffinities ?? []).map((entry) => [entry.workerId, entry.workspaceCount])
   );
   const slotSummaries = summarizeSlotsByWorker(input.slots, input.sessionId, input.workspaceId);
   const candidates = input.activeWorkers
     .map((worker) =>
-      buildRedisWorkerAffinityCandidate(worker, slotSummaries.get(worker.workerId), workerUserAffinityCounts, input)
+      buildRedisWorkerAffinityCandidate(worker, slotSummaries.get(worker.workerId), workerOwnerAffinityCounts, input)
     )
     .sort(compareRedisWorkerAffinityCandidates);
 
   const sessionAffinityWorkerId = candidates.find((candidate) => candidate.matchingSessionSlots > 0)?.workerId;
   const workspaceAffinityWorkerId = candidates.find((candidate) => candidate.matchingWorkspaceSlots > 0)?.workerId;
-  const userAffinityWorkerId = candidates.find((candidate) => candidate.matchingUserWorkspaces > 0)?.workerId;
+  const ownerAffinityWorkerId = candidates.find((candidate) => candidate.matchingOwnerWorkspaces > 0)?.workerId;
   const controllerTargetWorkerId = candidates.find((candidate) => candidate.reasons.includes("controller_target"))?.workerId;
   const preferredWorkerId =
     candidates.find((candidate) => candidate.health === "healthy" && candidate.state !== "stopping")?.workerId ??
@@ -100,7 +100,7 @@ export function buildRedisWorkerAffinitySummary(input: {
     ...(controllerTargetWorkerId ? { controllerTargetWorkerId } : {}),
     ...(sessionAffinityWorkerId ? { sessionAffinityWorkerId } : {}),
     ...(workspaceAffinityWorkerId ? { workspaceAffinityWorkerId } : {}),
-    ...(userAffinityWorkerId ? { userAffinityWorkerId } : {}),
+    ...(ownerAffinityWorkerId ? { ownerAffinityWorkerId } : {}),
     ...(input.ownerWorkerId ? { ownerWorkerId: input.ownerWorkerId } : {}),
     candidates
   };
@@ -109,11 +109,11 @@ export function buildRedisWorkerAffinitySummary(input: {
 function buildRedisWorkerAffinityCandidate(
   worker: RedisWorkerAffinityActiveWorkerLike,
   slotSummary: RedisWorkerAffinitySlotSummary | undefined,
-  workerUserAffinityCounts: Map<string, number>,
+  workerOwnerAffinityCounts: Map<string, number>,
   input: {
     sessionId?: string | undefined;
     workspaceId?: string | undefined;
-    userId?: string | undefined;
+    ownerId?: string | undefined;
     ownerWorkerId?: string | undefined;
     preferredWorkerId?: string | undefined;
   }
@@ -147,10 +147,10 @@ function buildRedisWorkerAffinityCandidate(
     score += 250 + matchingWorkspaceSlots * 10;
   }
 
-  const matchingUserWorkspaces = input.userId ? (workerUserAffinityCounts.get(worker.workerId) ?? 0) : 0;
-  if (matchingUserWorkspaces > 0) {
-    reasons.push("same_user");
-    score += 140 + matchingUserWorkspaces * 15;
+  const matchingOwnerWorkspaces = input.ownerId ? (workerOwnerAffinityCounts.get(worker.workerId) ?? 0) : 0;
+  if (matchingOwnerWorkspaces > 0) {
+    reasons.push("same_owner");
+    score += 140 + matchingOwnerWorkspaces * 15;
   }
 
   if (worker.health === "healthy") {
@@ -192,7 +192,7 @@ function buildRedisWorkerAffinityCandidate(
     ...(slotSummary ? { busySlots: slotSummary.busySlots } : {}),
     matchingSessionSlots,
     matchingWorkspaceSlots,
-    matchingUserWorkspaces,
+    matchingOwnerWorkspaces,
     reasons
   };
 }

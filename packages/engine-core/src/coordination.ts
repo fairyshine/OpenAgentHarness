@@ -112,7 +112,7 @@ export type WorkspacePlacementState = "unassigned" | "active" | "idle" | "draini
 export interface WorkspacePlacementInput {
   workspaceId: string;
   version?: string | undefined;
-  userId?: string | undefined;
+  ownerId?: string | undefined;
   ownerWorkerId?: string | undefined;
   ownerBaseUrl?: string | undefined;
   preferredWorkerId?: string | undefined;
@@ -131,7 +131,7 @@ export interface WorkspacePlacementInput {
 export interface WorkspacePlacementEntry {
   workspaceId: string;
   version: string;
-  userId?: string | undefined;
+  ownerId?: string | undefined;
   ownerWorkerId?: string | undefined;
   ownerBaseUrl?: string | undefined;
   preferredWorkerId?: string | undefined;
@@ -149,9 +149,9 @@ export interface WorkspacePlacementEntry {
 
 export interface WorkspacePlacementRegistry {
   upsert(entry: WorkspacePlacementInput): Promise<void>;
-  assignUser(
+  assignOwnerAffinity(
     workspaceId: string,
-    userId: string,
+    ownerId: string,
     options?: { overwrite?: boolean | undefined; updatedAt?: string | undefined }
   ): Promise<void>;
   setPreferredWorker(

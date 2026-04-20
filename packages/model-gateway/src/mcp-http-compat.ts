@@ -8,6 +8,7 @@ import type {
   PrepareToolServersOptions,
   ToolServerClient
 } from "./mcp-types.js";
+import { normalizeRemoteMcpUrl } from "./mcp-endpoint-utils.js";
 import { toJsonValue, withServerTimeout } from "./mcp-tool-utils.js";
 
 const HTTP_MCP_COMPATIBLE_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"] as const;
@@ -89,7 +90,9 @@ async function sendCompatibilityRequest(
     throw new AppError(400, "invalid_mcp_server", `Tool server ${server.name} is missing url.`);
   }
 
-  const response = await fetch(server.url, {
+  const resolvedUrl = normalizeRemoteMcpUrl(server.url);
+
+  const response = await fetch(resolvedUrl, {
     method: "POST",
     headers: toFetchHeaders(server, protocolVersion, sessionId),
     body: JSON.stringify(message)

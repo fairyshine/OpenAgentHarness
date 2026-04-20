@@ -200,8 +200,18 @@ Additional checks:
 | `DATABASE_URL` | PostgreSQL connection string | `postgres://oah:oah@127.0.0.1:5432/open_agent_harness` |
 | `REDIS_URL` | Redis connection string | `redis://127.0.0.1:6379` |
 | `OAH_WEB_PROXY_TARGET` | Frontend proxy target (when backend is not at the default address) | `http://127.0.0.1:8787` |
+| `OAH_DOCKER_HOST_ALIAS` | Hostname used from containers to reach host-local services | `host.docker.internal` |
 
 Reference environment variables in `server.yaml` with `${env.DATABASE_URL}` syntax.
+
+If OAH itself runs inside Docker while an HTTP MCP server runs on the host machine:
+
+- MCP configs may still use `http://127.0.0.1:PORT/...` or `http://localhost:PORT/...`
+- OAH rewrites those loopback URLs to a host-reachable address inside the container
+- the default alias is `host.docker.internal`
+- override it with `OAH_DOCKER_HOST_ALIAS` when needed
+
+The local `docker-compose.local.yml` already injects `host.docker.internal:host-gateway` for `oah-api`, `oah-controller`, and `oah-sandbox`, so the default alias also works on Linux in the local stack.
 
 When using containers started by `docker-compose.local.yml`, the default connection strings are:
 

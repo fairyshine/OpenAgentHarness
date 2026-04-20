@@ -36,6 +36,7 @@ function readNumericMetadataValue(metadata: Record<string, unknown> | undefined,
 
 function readContextWindowTokens(model: ResolvedRunModel): number | undefined {
   return readNumericMetadataValue(model.modelDefinition?.metadata, [
+    "max_model_len",
     "contextWindowTokens",
     "context_window_tokens",
     "maxInputTokens",

@@ -135,8 +135,8 @@ export interface ControllerSnapshot {
 
 export interface ControllerPlacementSummary {
   totalWorkspaces: number;
-  assignedUsers: number;
-  unassignedUsers: number;
+  assignedOwners: number;
+  unassignedOwners: number;
   ownedWorkspaces: number;
   workersWithPlacements: number;
   ownedByActiveWorkers: number;
@@ -176,8 +176,8 @@ export interface ControllerPlacementPolicySummary {
   missingOwnerWorkspaces: number;
   lateOwnerWorkspaces: number;
   drainingOwnerWorkspaces: number;
-  usersSpanningWorkers: number;
-  maxWorkersPerUser: number;
+  ownersSpanningWorkers: number;
+  maxWorkersPerOwner: number;
   sandboxesAboveWorkspaceCapacity: number;
   maxWorkspaceRefsPerSandbox: number;
 }
@@ -188,15 +188,15 @@ export interface ControllerPlacementRecommendation {
     | "recover_missing_owner"
     | "reassign_late_owner"
     | "finish_draining_owner"
-    | "consolidate_user_affinity"
+    | "consolidate_owner_affinity"
     | "rebalance_workspace_capacity";
   priority: "high" | "medium";
   workspaceCount: number;
   workerCount?: number | undefined;
-  userCount?: number | undefined;
+  ownerCount?: number | undefined;
   sampleWorkspaceIds?: string[] | undefined;
   sampleWorkerIds?: string[] | undefined;
-  sampleUserIds?: string[] | undefined;
+  sampleOwnerIds?: string[] | undefined;
   message: string;
 }
 
@@ -208,7 +208,7 @@ export interface ControllerPlacementActionItem {
   blockers: string[];
   workspaceIds?: string[] | undefined;
   workerIds?: string[] | undefined;
-  userIds?: string[] | undefined;
+  ownerIds?: string[] | undefined;
   summary: string;
 }
 
@@ -231,7 +231,7 @@ export interface ControllerPlacementExecutionOperation {
     | "owner_late"
     | "worker_draining"
     | "unassigned_workspace"
-    | "user_affinity_split"
+    | "owner_affinity_split"
     | "workspace_capacity_exceeded";
   targetWorkerId?: string | undefined;
   targetWorkerReasons?: string[] | undefined;
@@ -294,6 +294,11 @@ export interface ControllerPlacementOwnershipRegistry extends WorkspacePlacement
 interface ControllerWorkspacePlacementEntry extends RedisWorkspacePlacementEntry {
   preferredWorkerId?: string | undefined;
   preferredWorkerReason?: "controller_target" | undefined;
+}
+
+function placementOwnerAffinityId(placement: Pick<RedisWorkspacePlacementEntry, "ownerId">): string | undefined {
+  const ownerId = placement.ownerId?.trim();
+  return ownerId || undefined;
 }
 
 function readEnv(names: string | string[]): string | undefined {
@@ -544,7 +549,7 @@ export function summarizeWorkspacePlacements(
   const ownerWorkers = new Set<string>();
   const lateOwnerWorkers = new Set<string>();
   const missingOwnerWorkers = new Set<string>();
-  let assignedUsers = 0;
+  let assignedOwners = 0;
   let active = 0;
   let idle = 0;
   let draining = 0;
@@ -576,8 +581,8 @@ export function summarizeWorkspacePlacements(
   }
 
   for (const placement of trackedPlacements) {
-    if (placement.userId) {
-      assignedUsers += 1;
+    if (placementOwnerAffinityId(placement)) {
+      assignedOwners += 1;
     }
     if (placement.ownerWorkerId) {
       ownedWorkspaces += 1;
@@ -597,8 +602,8 @@ export function summarizeWorkspacePlacements(
 
   return {
     totalWorkspaces: trackedPlacements.length,
-    assignedUsers,
-    unassignedUsers: Math.max(0, trackedPlacements.length - assignedUsers),
+    assignedOwners,
+    unassignedOwners: Math.max(0, trackedPlacements.length - assignedOwners),
     ownedWorkspaces,
     workersWithPlacements: ownerWorkers.size,
     ownedByActiveWorkers,
@@ -623,7 +628,7 @@ export function summarizeSandboxFleet(input: {
   let ownerlessWorkspaces = 0;
 
   for (const placement of trackedPlacements) {
-    const ownerId = placement.userId?.trim();
+    const ownerId = placementOwnerAffinityId(placement);
     if (ownerId) {
       ownerWorkspaceCounts.set(ownerId, (ownerWorkspaceCounts.get(ownerId) ?? 0) + 1);
     } else {
@@ -679,7 +684,7 @@ export function summarizePlacementPolicy(input: {
 
   const workerHealthById = new Map(activeWorkers.map((worker) => [workerPlacementReference(worker), worker.health]));
   const workerStateByIdByReference = new Map(activeWorkers.map((worker) => [workerPlacementReference(worker), worker.state]));
-  const userWorkers = new Map<string, Set<string>>();
+  const ownerAffinityWorkers = new Map<string, Set<string>>();
   const workerRefLoads = new Map<string, number>();
   let unassignedWorkspaces = 0;
   let missingOwnerWorkspaces = 0;
@@ -708,10 +713,11 @@ export function summarizePlacementPolicy(input: {
       drainingOwnerWorkspaces += 1;
     }
 
-    if (placement.userId) {
-      const workers = userWorkers.get(placement.userId) ?? new Set<string>();
+    const ownerId = placementOwnerAffinityId(placement);
+    if (ownerId) {
+      const workers = ownerAffinityWorkers.get(ownerId) ?? new Set<string>();
       workers.add(placement.ownerWorkerId);
-      userWorkers.set(placement.userId, workers);
+      ownerAffinityWorkers.set(ownerId, workers);
     }
 
     const refLoad =
@@ -719,9 +725,9 @@ export function summarizePlacementPolicy(input: {
     workerRefLoads.set(placement.ownerWorkerId, (workerRefLoads.get(placement.ownerWorkerId) ?? 0) + refLoad);
   }
 
-  const userWorkerCounts = [...userWorkers.values()].map((workers) => workers.size);
-  const maxWorkersPerUser = userWorkerCounts.length > 0 ? Math.max(...userWorkerCounts) : 0;
-  const usersSpanningWorkers = userWorkerCounts.filter((count) => count > 1).length;
+  const ownerWorkerCounts = [...ownerAffinityWorkers.values()].map((workers) => workers.size);
+  const maxWorkersPerOwner = ownerWorkerCounts.length > 0 ? Math.max(...ownerWorkerCounts) : 0;
+  const ownersSpanningWorkers = ownerWorkerCounts.filter((count) => count > 1).length;
   const maxWorkspaceRefsPerSandbox = workerRefLoads.size > 0 ? Math.max(...workerRefLoads.values()) : 0;
   const workspaceCapacity = Math.max(1, input.maxWorkspacesPerSandbox);
   const sandboxesAboveWorkspaceCapacity = [...workerRefLoads.values()].filter((load) => load > workspaceCapacity).length;
@@ -732,14 +738,14 @@ export function summarizePlacementPolicy(input: {
       missingOwnerWorkspaces > 0 ||
       lateOwnerWorkspaces > 0 ||
       drainingOwnerWorkspaces > 0 ||
-      usersSpanningWorkers > 0 ||
+      ownersSpanningWorkers > 0 ||
       sandboxesAboveWorkspaceCapacity > 0,
     unassignedWorkspaces,
     missingOwnerWorkspaces,
     lateOwnerWorkspaces,
     drainingOwnerWorkspaces,
-    usersSpanningWorkers,
-    maxWorkersPerUser,
+    ownersSpanningWorkers,
+    maxWorkersPerOwner,
     sandboxesAboveWorkspaceCapacity,
     maxWorkspaceRefsPerSandbox
   };
@@ -760,15 +766,16 @@ export function summarizePlacementRecommendations(input: {
 
   const placements = input.placements ?? [];
   const workerHealthById = new Map((input.activeWorkers ?? []).map((worker) => [workerPlacementReference(worker), worker.health]));
-  const userWorkers = new Map<string, Set<string>>();
+  const ownerAffinityWorkers = new Map<string, Set<string>>();
   const workerRefLoads = new Map<string, number>();
   const workspaceCapacity = Math.max(1, input.maxWorkspacesPerSandbox ?? 1);
 
   for (const placement of placements) {
-    if (placement.userId && placement.ownerWorkerId && placement.state !== "evicted" && placement.state !== "unassigned") {
-      const workers = userWorkers.get(placement.userId) ?? new Set<string>();
+    const ownerId = placementOwnerAffinityId(placement);
+    if (ownerId && placement.ownerWorkerId && placement.state !== "evicted" && placement.state !== "unassigned") {
+      const workers = ownerAffinityWorkers.get(ownerId) ?? new Set<string>();
       workers.add(placement.ownerWorkerId);
-      userWorkers.set(placement.userId, workers);
+      ownerAffinityWorkers.set(ownerId, workers);
     }
     if (placement.ownerWorkerId && placement.state !== "evicted" && placement.state !== "unassigned") {
       const refLoad =
@@ -777,8 +784,8 @@ export function summarizePlacementRecommendations(input: {
     }
   }
 
-  const spanningUsers = new Set(
-    [...userWorkers.entries()].filter(([, workers]) => workers.size > 1).map(([userId]) => userId)
+  const spanningOwners = new Set(
+    [...ownerAffinityWorkers.entries()].filter(([, workers]) => workers.size > 1).map(([ownerId]) => ownerId)
   );
   const overloadedWorkers = new Set(
     [...workerRefLoads.entries()].filter(([, load]) => load > workspaceCapacity).map(([workerId]) => workerId)
@@ -796,10 +803,10 @@ export function summarizePlacementRecommendations(input: {
       .filter((value): value is string => typeof value === "string" && value.length > 0)
       .filter((value, index, items) => items.indexOf(value) === index)
       .slice(0, 5);
-  const sampleUserIds = (filter: (placement: RedisWorkspacePlacementEntry) => boolean) =>
+  const sampleOwnerIds = (filter: (placement: RedisWorkspacePlacementEntry) => boolean) =>
     placements
       .filter(filter)
-      .map((placement) => placement.userId)
+      .map((placement) => placementOwnerAffinityId(placement))
       .filter((value): value is string => typeof value === "string" && value.length > 0)
       .filter((value, index, items) => items.indexOf(value) === index)
       .slice(0, 5);
@@ -857,14 +864,17 @@ export function summarizePlacementRecommendations(input: {
       message: `finish draining or hand off ${placementPolicy?.drainingOwnerWorkspaces ?? 0} workspace(s) on workers that are stopping`
     });
   }
-  if ((placementPolicy?.usersSpanningWorkers ?? 0) > 0) {
+  if ((placementPolicy?.ownersSpanningWorkers ?? 0) > 0) {
     recommendations.push({
-      kind: "consolidate_user_affinity",
+      kind: "consolidate_owner_affinity",
       priority: "medium",
       workspaceCount: 0,
-      userCount: placementPolicy?.usersSpanningWorkers ?? 0,
-      sampleUserIds: sampleUserIds((placement) => Boolean(placement.userId) && spanningUsers.has(placement.userId!)),
-      message: `consider consolidating ${placementPolicy?.usersSpanningWorkers ?? 0} user affinity group(s) that currently span multiple workers`
+      ownerCount: placementPolicy?.ownersSpanningWorkers ?? 0,
+      sampleOwnerIds: sampleOwnerIds((placement) => {
+        const ownerId = placementOwnerAffinityId(placement);
+        return Boolean(ownerId) && spanningOwners.has(ownerId!);
+      }),
+      message: `consider consolidating ${placementPolicy?.ownersSpanningWorkers ?? 0} owner affinity group(s) that currently span multiple workers`
     });
   }
   if ((placementPolicy?.sandboxesAboveWorkspaceCapacity ?? 0) > 0) {
@@ -904,8 +914,8 @@ function placementActionBlockers(recommendation: ControllerPlacementRecommendati
       return ["owner_late"];
     case "finish_draining_owner":
       return ["worker_draining"];
-    case "consolidate_user_affinity":
-      return ["user_affinity_split"];
+    case "consolidate_owner_affinity":
+      return ["owner_affinity_split"];
     case "rebalance_workspace_capacity":
       return ["workspace_capacity_exceeded"];
   }
@@ -926,7 +936,7 @@ export function summarizePlacementActionPlan(
     blockers: placementActionBlockers(recommendation),
     ...(recommendation.sampleWorkspaceIds ? { workspaceIds: recommendation.sampleWorkspaceIds } : {}),
     ...(recommendation.sampleWorkerIds ? { workerIds: recommendation.sampleWorkerIds } : {}),
-    ...(recommendation.sampleUserIds ? { userIds: recommendation.sampleUserIds } : {}),
+    ...(recommendation.sampleOwnerIds ? { ownerIds: recommendation.sampleOwnerIds } : {}),
     summary: recommendation.message
   }));
 
@@ -955,13 +965,14 @@ export function buildPlacementExecutionOperations(input: {
   const operations: ControllerPlacementExecutionOperation[] = [];
   const workspaceCapacity = Math.max(1, input.maxWorkspacesPerSandbox ?? 1);
   const workerRefLoads = new Map<string, number>();
-  const userWorkers = new Map<string, Set<string>>();
+  const ownerAffinityWorkers = new Map<string, Set<string>>();
 
   for (const placement of nonEvictedPlacements) {
-    if (placement.userId && placement.ownerWorkerId && placement.state !== "unassigned") {
-      const workers = userWorkers.get(placement.userId) ?? new Set<string>();
+    const ownerId = placementOwnerAffinityId(placement);
+    if (ownerId && placement.ownerWorkerId && placement.state !== "unassigned") {
+      const workers = ownerAffinityWorkers.get(ownerId) ?? new Set<string>();
       workers.add(placement.ownerWorkerId);
-      userWorkers.set(placement.userId, workers);
+      ownerAffinityWorkers.set(ownerId, workers);
     }
     if (placement.ownerWorkerId && placement.state !== "unassigned") {
       const refLoad =
@@ -987,14 +998,15 @@ export function buildPlacementExecutionOperations(input: {
       return undefined;
     }
 
-    const workerUserAffinities = placement.userId
+    const ownerId = placementOwnerAffinityId(placement);
+    const workerOwnerAffinities = ownerId
       ? candidateWorkers
           .map((worker) => ({
             workerId: worker.workerId,
             placementReference: workerPlacementReference(worker),
             workspaceCount: nonEvictedPlacements.filter(
               (item) =>
-                item.userId === placement.userId &&
+                placementOwnerAffinityId(item) === ownerId &&
                 item.workspaceId !== placement.workspaceId &&
                 item.ownerWorkerId === workerPlacementReference(worker) &&
                 item.state !== "unassigned"
@@ -1018,8 +1030,8 @@ export function buildPlacementExecutionOperations(input: {
         ...(worker.currentWorkspaceId ? { currentWorkspaceId: worker.currentWorkspaceId } : {})
       })),
       workspaceId: placement.workspaceId,
-      ...(placement.userId ? { userId: placement.userId } : {}),
-      ...(workerUserAffinities && workerUserAffinities.length > 0 ? { workerUserAffinities } : {})
+      ...(ownerId ? { ownerId } : {}),
+      ...(workerOwnerAffinities && workerOwnerAffinities.length > 0 ? { workerOwnerAffinities } : {})
     });
     const preferredCandidate = affinity.candidates.find(
       (candidate) => candidate.health === "healthy" && candidate.state !== "stopping"
@@ -1131,8 +1143,8 @@ export function buildPlacementExecutionOperations(input: {
   for (const placement of nonEvictedPlacements) {
     if (
       scheduledWorkspaceIds.has(placement.workspaceId) ||
-      !placement.userId ||
-      (userWorkers.get(placement.userId)?.size ?? 0) <= 1 ||
+      !placementOwnerAffinityId(placement) ||
+      (ownerAffinityWorkers.get(placementOwnerAffinityId(placement)!)?.size ?? 0) <= 1 ||
       (placement.state !== "idle" && placement.state !== "unassigned")
     ) {
       continue;
@@ -1149,13 +1161,13 @@ export function buildPlacementExecutionOperations(input: {
     }
 
     operations.push({
-      id: `consolidate_user_affinity:${placement.workspaceId}`,
-      kind: "consolidate_user_affinity",
+      id: `consolidate_owner_affinity:${placement.workspaceId}`,
+      kind: "consolidate_owner_affinity",
       workspaceId: placement.workspaceId,
       ...(placement.ownerWorkerId ? { ownerWorkerId: placement.ownerWorkerId } : {}),
       state: placement.state,
       action: "set_preferred_worker",
-      reason: "user_affinity_split",
+      reason: "owner_affinity_split",
       targetWorkerId: target.placementReference,
       targetWorkerReasons: target.reasons
     });
@@ -1535,7 +1547,7 @@ export class RedisController {
     };
 
     this.#logger?.info?.(
-      `[controller] rebalance=${rebalanceReason} activeReplicas=${fleet.activeReplicas} desiredReplicas=${desiredReplicas} suggestedReplicas=${suggestedReplicas} activeSlots=${fleet.activeSlots} busySlots=${fleet.busySlots} effectiveCapacityPerReplica=${fleet.effectiveCapacityPerReplica} readySessions=${schedulingPressure?.readySessionCount ?? "n/a"} scaleDownAllowed=${scaleDownGate ? (scaleDownGate.allowed ? "yes" : "no") : "n/a"} scaleDownBlockedReplicas=${scaleDownGate?.blockedReplicas ?? 0} sandboxProvider=${sandboxFleet.providerKind} sandboxDesired=${sandboxFleet.desiredSandboxes} sandboxLogical=${sandboxFleet.logicalSandboxes} sandboxOwnerGroups=${sandboxFleet.ownerGroups} placementMissingOwners=${placementSummary?.ownedByMissingWorkers ?? 0} placementLateOwners=${placementSummary?.ownedByLateWorkers ?? 0} placementUsersSpanningWorkers=${placementPolicy?.usersSpanningWorkers ?? 0} placementSandboxesAboveWorkspaceCapacity=${placementPolicy?.sandboxesAboveWorkspaceCapacity ?? 0} placementRecommendations=${placementRecommendations?.length ?? 0} placementActionItems=${placementActionPlan?.totalItems ?? 0} target=${scaleTarget?.kind ?? "none"} targetOutcome=${scaleTarget?.outcome ?? "n/a"}`
+      `[controller] rebalance=${rebalanceReason} activeReplicas=${fleet.activeReplicas} desiredReplicas=${desiredReplicas} suggestedReplicas=${suggestedReplicas} activeSlots=${fleet.activeSlots} busySlots=${fleet.busySlots} effectiveCapacityPerReplica=${fleet.effectiveCapacityPerReplica} readySessions=${schedulingPressure?.readySessionCount ?? "n/a"} scaleDownAllowed=${scaleDownGate ? (scaleDownGate.allowed ? "yes" : "no") : "n/a"} scaleDownBlockedReplicas=${scaleDownGate?.blockedReplicas ?? 0} sandboxProvider=${sandboxFleet.providerKind} sandboxDesired=${sandboxFleet.desiredSandboxes} sandboxLogical=${sandboxFleet.logicalSandboxes} sandboxOwnerGroups=${sandboxFleet.ownerGroups} placementMissingOwners=${placementSummary?.ownedByMissingWorkers ?? 0} placementLateOwners=${placementSummary?.ownedByLateWorkers ?? 0} placementOwnersSpanningWorkers=${placementPolicy?.ownersSpanningWorkers ?? 0} placementSandboxesAboveWorkspaceCapacity=${placementPolicy?.sandboxesAboveWorkspaceCapacity ?? 0} placementRecommendations=${placementRecommendations?.length ?? 0} placementActionItems=${placementActionPlan?.totalItems ?? 0} target=${scaleTarget?.kind ?? "none"} targetOutcome=${scaleTarget?.outcome ?? "n/a"}`
     );
 
     return this.snapshot();

@@ -720,7 +720,7 @@ describe("server runtime process modes", () => {
         async getByWorkspaceId() {
           return {
             state: "active",
-            userId: "user_1",
+            ownerId: "user_1",
             ownerWorkerId: "worker_owner",
             preferredWorkerId: "worker_hint"
           };
@@ -771,7 +771,7 @@ describe("server runtime process modes", () => {
       workspacePlacementRegistry: {
         async getByWorkspaceId() {
           return {
-            userId: "user_1",
+            ownerId: "user_1",
             state: "evicted",
             ownerWorkerId: "worker_stale"
           };

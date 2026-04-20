@@ -218,6 +218,9 @@ openai-default:
 
 Platform-level MCP tool server definitions. Directory structure should match workspace `.openharness/tools` (`settings.yaml` + `servers/*`). Loaded by the server and assembled into the platform capability catalog.
 
+> **tip**
+> When OAH runs inside Docker, HTTP MCP servers configured with `http://127.0.0.1:...` or `http://localhost:...` are rewritten at runtime to a host-reachable alias. The default alias is `host.docker.internal`. Override it with `OAH_DOCKER_HOST_ALIAS` if needed.
+
 ### `skill_dir`
 
 Platform-level skill definitions. Merged with workspace `.openharness/skills` to form the visible skill set. Workspace-level skills take precedence over platform skills with the same name.
@@ -234,6 +237,19 @@ Platform-level skill definitions. Merged with workspace `.openharness/skills` to
 | API + embedded worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml` | Smallest deployment. One `oah-api` process directly hosts the embedded worker. |
 | API only | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --config server.yaml --api-only` | Starts `oah-api` only. Typically paired with `oah-controller` and `oah-sandbox`. |
 | Standalone worker | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config server.yaml` | Standalone worker, typically running inside a self-hosted or E2B sandbox. |
+
+---
+
+## Environment Variable Overrides
+
+In addition to YAML config, the server also reads a few runtime environment variables.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OAH_DOCKER_HOST_ALIAS` | `host.docker.internal` | Host alias used when OAH runs inside Docker and an HTTP MCP server is configured with a loopback URL such as `127.0.0.1` or `localhost` |
+
+> **tip**
+> `OAH_DOCKER_HOST_ALIAS` is mainly for the case where containerized OAH needs to reach an HTTP MCP server running on the host machine. The local `docker-compose.local.yml` already injects `host.docker.internal:host-gateway`, so the default works in most setups.
 
 ---
 

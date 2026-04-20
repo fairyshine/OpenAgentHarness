@@ -77,6 +77,7 @@ import {
   createPlatformModelCatalogService,
   type PlatformModelSnapshot
 } from "./bootstrap/platform-model-service.js";
+import { enrichWorkspaceModelsWithDiscoveredMetadata } from "./bootstrap/model-metadata-discovery.js";
 import {
   buildSingleWorkspaceConfig,
   describeEngineProcess,
@@ -180,12 +181,12 @@ async function clearWorkspaceRootContents(input: {
 
 function selectPlacementPreferredWorkerId(placement: {
   state?: "unassigned" | "active" | "idle" | "draining" | "evicted" | undefined;
-  userId?: string | undefined;
+  ownerId?: string | undefined;
   ownerWorkerId?: string | undefined;
   preferredWorkerId?: string | undefined;
 } | null | undefined): string | undefined {
-  const userId = placement?.userId?.trim();
-  if (!userId) {
+  const ownerId = placement?.ownerId?.trim();
+  if (!ownerId) {
     return undefined;
   }
 
@@ -242,7 +243,7 @@ export function createPlacementAwareSessionRunQueue<TQueue extends PlacementAwar
     workspacePlacementRegistry?: {
       getByWorkspaceId?(workspaceId: string): Promise<{
         state?: "unassigned" | "active" | "idle" | "draining" | "evicted" | undefined;
-        userId?: string | undefined;
+        ownerId?: string | undefined;
         ownerWorkerId?: string | undefined;
         preferredWorkerId?: string | undefined;
       } | undefined>;
@@ -702,16 +703,21 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     ...createBuiltInPlatformAgents(),
     ...(options.platformAgents ?? {})
   };
+  async function discoverWorkspaceWithEnrichedModels(rootPath: string, kind: "project") {
+    return enrichWorkspaceModelsWithDiscoveredMetadata(
+      await discoverWorkspace(rootPath, kind, {
+        platformModels: models,
+        platformAgents,
+        platformSkillDir: config.paths.skill_dir,
+        platformToolDir: toolDir
+      } as Parameters<typeof discoverWorkspace>[2])
+    );
+  }
   const discoveredWorkspaces =
     singleWorkspace !== undefined
       ? [
           withManagedWorkspaceExternalRef(
-            await discoverWorkspace(singleWorkspace.rootPath, singleWorkspace.kind, {
-              platformModels: models,
-              platformAgents,
-              platformSkillDir: config.paths.skill_dir,
-              platformToolDir: toolDir
-            } as Parameters<typeof discoverWorkspace>[2]) as WorkspaceRecord,
+            (await discoverWorkspaceWithEnrichedModels(singleWorkspace.rootPath, singleWorkspace.kind)) as WorkspaceRecord,
             config,
             objectStorageMirror
           )
@@ -726,7 +732,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
             onError: ({ rootPath, kind, error }: { rootPath: string; kind: "project"; error: unknown }) => {
               logWorkspaceDiscoveryError(rootPath, kind, error);
             }
-          } as Parameters<typeof discoverWorkspaces>[0])
+          } as Parameters<typeof discoverWorkspaces>[0]).then((workspaces) =>
+            Promise.all(workspaces.map((workspace) => enrichWorkspaceModelsWithDiscoveredMetadata(workspace)))
+          )
         ).map((workspace) =>
           withManagedWorkspaceExternalRef(workspace as WorkspaceRecord, config, objectStorageMirror)
         );
@@ -993,7 +1001,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
                 onError: ({ rootPath, error }: { rootPath: string; kind: "project"; error: unknown }) => {
                   logWorkspaceDiscoveryError(rootPath, "project", error);
                 }
-              })
+              }).then((workspaces) =>
+                Promise.all(workspaces.map((workspace) => enrichWorkspaceModelsWithDiscoveredMetadata(workspace)))
+              )
             ).map((workspace) => withManagedWorkspaceExternalRef(workspace as WorkspaceRecord, config, objectStorageMirror));
             const persistedWorkspaces = await listAllWorkspaces(persistence.workspaceRepository);
             const staticWorkspaces = persistedWorkspaces.filter((workspace) => !isManagedWorkspace(workspace, config.paths));
@@ -1098,12 +1108,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     const refreshedWorkspaces = await Promise.all(
       currentWorkspaces.map(async (workspace) => {
         try {
-          const discovered = await discoverWorkspace(workspace.rootPath, workspace.kind, {
-            platformModels: models,
-            platformAgents,
-            platformSkillDir: config.paths.skill_dir,
-            platformToolDir: toolDir
-          } as Parameters<typeof discoverWorkspace>[2]);
+          const discovered = await discoverWorkspaceWithEnrichedModels(workspace.rootPath, workspace.kind);
 
           return {
             ...discovered,
@@ -1314,12 +1319,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
                     );
                   }
 
-                  const discovered = await discoverWorkspace(workspaceRoot, "project", {
-                    platformModels: models,
-                    platformAgents,
-                    platformSkillDir: config.paths.skill_dir,
-                    platformToolDir: toolDir
-                  } as Parameters<typeof discoverWorkspace>[2]);
+                  const discovered = await discoverWorkspaceWithEnrichedModels(workspaceRoot, "project");
 
                   return {
                     ...discovered,
@@ -1548,12 +1548,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
                     );
                   }
 
-                  const discovered = await discoverWorkspace(input.rootPath, "project", {
-                    platformModels: models,
-                    platformAgents,
-                    platformSkillDir: config.paths.skill_dir,
-                    platformToolDir: toolDir
-                  } as Parameters<typeof discoverWorkspace>[2]);
+                  const discovered = await discoverWorkspaceWithEnrichedModels(input.rootPath, "project");
                   const existing = await workspaceRepository.getById(discovered.id);
                   const inferredExternalRef =
                     resolveManagedWorkspaceExternalRef(input.rootPath, "project", config) ??
@@ -1582,12 +1577,12 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       : {}),
     ...(redisWorkspacePlacementRegistry
       ? {
-          assignWorkspacePlacementUser: async (input: {
+          assignWorkspacePlacementOwnerAffinity: async (input: {
             workspaceId: string;
-            userId: string;
+            ownerId: string;
             overwrite?: boolean | undefined;
           }) => {
-            await redisWorkspacePlacementRegistry.assignUser(input.workspaceId, input.userId, {
+            await redisWorkspacePlacementRegistry.assignOwnerAffinity(input.workspaceId, input.ownerId, {
               overwrite: input.overwrite,
               updatedAt: new Date().toISOString()
             });

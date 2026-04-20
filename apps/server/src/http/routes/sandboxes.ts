@@ -50,7 +50,10 @@ const DEFAULT_BACKGROUND_SESSION_PREFIX = "sandbox";
 type WorkspaceOwnership = Awaited<ReturnType<NonNullable<AppDependencies["resolveWorkspaceOwnership"]>>>;
 
 async function reserveOwnerScopedWorkspacePlacement(
-  dependencies: Pick<AppDependencies, "assignWorkspacePlacementUser" | "releaseWorkspacePlacement" | "sandboxHostProviderKind">,
+  dependencies: Pick<
+    AppDependencies,
+    "assignWorkspacePlacementOwnerAffinity" | "releaseWorkspacePlacement" | "sandboxHostProviderKind"
+  >,
   ownerId: string | undefined,
   workspaceId: string | undefined
 ): Promise<{ workspaceId: string | undefined; release: () => Promise<void> }> {
@@ -63,9 +66,9 @@ async function reserveOwnerScopedWorkspacePlacement(
     };
   }
 
-  await dependencies.assignWorkspacePlacementUser?.({
+  await dependencies.assignWorkspacePlacementOwnerAffinity?.({
     workspaceId,
-    userId: ownerId,
+    ownerId,
     overwrite: true
   });
 
@@ -105,6 +108,29 @@ function normalizeSandboxOwnerBaseUrl(input: string | undefined): string | undef
     }
     return `${trimmed.replace(/\/+$/u, "")}/internal/v1`;
   }
+}
+
+function assertSandboxOwnerMatchesWorkspace(
+  ownerId: string | undefined,
+  workspace: Pick<import("@oah/api-contracts").Workspace, "id" | "ownerId">
+): void {
+  const normalizedRequestedOwnerId = ownerId?.trim();
+  if (!normalizedRequestedOwnerId) {
+    return;
+  }
+
+  const normalizedWorkspaceOwnerId = workspace.ownerId?.trim();
+  if (normalizedWorkspaceOwnerId === normalizedRequestedOwnerId) {
+    return;
+  }
+
+  throw new AppError(
+    409,
+    "workspace_owner_mismatch",
+    normalizedWorkspaceOwnerId
+      ? `Workspace ${workspace.id} belongs to owner ${normalizedWorkspaceOwnerId}, not ${normalizedRequestedOwnerId}.`
+      : `Workspace ${workspace.id} has no owner and cannot be reopened with owner ${normalizedRequestedOwnerId}.`
+  );
 }
 
 function resolveWorkspaceOwnerBaseUrl(
@@ -539,10 +565,11 @@ function registerSandboxCoreRoutes(
 
       try {
         const existing = await dependencies.runtimeService.getWorkspace(input.workspaceId);
+        assertSandboxOwnerMatchesWorkspace(ownerId, existing);
         if (ownerId) {
-          await dependencies.assignWorkspacePlacementUser?.({
+          await dependencies.assignWorkspacePlacementOwnerAffinity?.({
             workspaceId: input.workspaceId,
-            userId: ownerId,
+            ownerId,
             overwrite: false
           });
         }
@@ -578,9 +605,9 @@ function registerSandboxCoreRoutes(
           }
         });
         if (ownerId && workspace.id !== reservedPlacement.workspaceId) {
-          await dependencies.assignWorkspacePlacementUser?.({
+          await dependencies.assignWorkspacePlacementOwnerAffinity?.({
             workspaceId: workspace.id,
-            userId: ownerId,
+            ownerId,
             overwrite: true
           });
         }
@@ -600,12 +627,13 @@ function registerSandboxCoreRoutes(
         rootPath: input.rootPath,
         ...(input.name ? { name: input.name } : {}),
         ...(input.externalRef ? { externalRef: input.externalRef } : {}),
+        ...(ownerId ? { ownerId } : {}),
         ...(input.serviceName ? { serviceName: input.serviceName } : {})
       });
       if (ownerId) {
-        await dependencies.assignWorkspacePlacementUser?.({
+        await dependencies.assignWorkspacePlacementOwnerAffinity?.({
           workspaceId: workspace.id,
-          userId: ownerId,
+          ownerId,
           overwrite: true
         });
       }
@@ -628,6 +656,7 @@ function registerSandboxCoreRoutes(
           runtime: input.runtime as string,
           executionPolicy: input.executionPolicy,
           ...(input.externalRef ? { externalRef: input.externalRef } : {}),
+          ...(ownerId ? { ownerId } : {}),
           ...(input.serviceName ? { serviceName: input.serviceName } : {}),
           ...(reservedPlacement.workspaceId ? { workspaceId: reservedPlacement.workspaceId } : {})
         } as {
@@ -635,14 +664,15 @@ function registerSandboxCoreRoutes(
           runtime: string;
           executionPolicy: "local" | "container" | "remote_runner";
           externalRef?: string | undefined;
+          ownerId?: string | undefined;
           serviceName?: string | undefined;
           workspaceId?: string | undefined;
         }
       });
       if (ownerId && workspace.id !== reservedPlacement.workspaceId) {
-        await dependencies.assignWorkspacePlacementUser?.({
+        await dependencies.assignWorkspacePlacementOwnerAffinity?.({
           workspaceId: workspace.id,
-          userId: ownerId,
+          ownerId,
           overwrite: true
         });
       }
