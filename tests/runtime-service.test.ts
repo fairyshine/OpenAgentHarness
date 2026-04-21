@@ -5231,6 +5231,141 @@ describe("runtime service", () => {
     });
   });
 
+  it("runs run_completed lifecycle hooks for successful api_action runs", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const recordedHookRuns: HookRunAuditRecord[] = [];
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      hookRunAuditRepository: {
+        async create(input) {
+          recordedHookRuns.push(input);
+          return input;
+        }
+      }
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_action_lifecycle_hooks",
+      name: "action-lifecycle-hooks",
+      rootPath: "/tmp",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {
+        "debug.echo": {
+          name: "debug.echo",
+          description: "Echo text",
+          callableByApi: true,
+          callableByUser: true,
+          exposeToLlm: false,
+          directory: "/tmp",
+          entry: {
+            command: "printf action-ok"
+          }
+        }
+      },
+      skills: {},
+      toolServers: {},
+      hooks: {
+        "action-completed": {
+          name: "action-completed",
+          events: ["run_completed"],
+          matcher: "api_action",
+          handlerType: "command",
+          capabilities: [],
+          definition: {
+            handler: {
+              type: "command",
+              command: "cat >/dev/null; node -e 'process.stdout.write(JSON.stringify({decision:\"ok\"}))'"
+            }
+          }
+        },
+        "manual-only": {
+          name: "manual-only",
+          events: ["run_completed"],
+          matcher: "manual_action",
+          handlerType: "command",
+          capabilities: [],
+          definition: {
+            handler: {
+              type: "command",
+              command: "cat >/dev/null; node -e 'process.stdout.write(JSON.stringify({decision:\"manual\"}))'"
+            }
+          }
+        }
+      },
+      catalog: {
+        workspaceId: "project_action_lifecycle_hooks",
+        agents: [],
+        models: [],
+        actions: [
+          {
+            name: "debug.echo",
+            description: "Echo text",
+            callableByApi: true,
+            callableByUser: true,
+            exposeToLlm: false
+          }
+        ],
+        skills: [],
+        tools: [],
+        hooks: [
+          { name: "action-completed", handlerType: "command", matcher: "api_action", events: ["run_completed"] },
+          { name: "manual-only", handlerType: "command", matcher: "manual_action", events: ["run_completed"] }
+        ],
+        nativeTools: []
+      }
+    });
+
+    const accepted = await runtimeService.triggerActionRun({
+      workspaceId: "project_action_lifecycle_hooks",
+      actionName: "debug.echo",
+      caller: {
+        subjectRef: "dev:test",
+        authSource: "standalone_server",
+        scopes: [],
+        workspaceAccess: []
+      }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+    await waitFor(async () =>
+      recordedHookRuns.some((record) => record.hookName === "action-completed" && record.eventName === "run_completed")
+    );
+
+    const run = await runtimeService.getRun(accepted.runId);
+    const runSteps = await runtimeService.listRunSteps(accepted.runId);
+
+    expect(run.triggerType).toBe("api_action");
+    expect(runSteps.items.some((step) => step.stepType === "hook" && step.name === "action-completed")).toBe(true);
+    expect(runSteps.items.some((step) => step.stepType === "hook" && step.name === "manual-only")).toBe(false);
+    expect(
+      recordedHookRuns.find((record) => record.hookName === "action-completed" && record.eventName === "run_completed")
+    ).toMatchObject({
+      hookName: "action-completed",
+      eventName: "run_completed",
+      status: "completed"
+    });
+    expect(recordedHookRuns.some((record) => record.hookName === "manual-only")).toBe(false);
+  });
+
   it("rejects user-triggered action runs when callableByUser is false", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();

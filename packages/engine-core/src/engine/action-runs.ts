@@ -38,6 +38,12 @@ export interface ActionRunServiceDependencies {
   setRunStatus: (run: Run, nextStatus: Run["status"], patch: Partial<Run>) => Promise<Run>;
   getRun: (runId: string) => Promise<Run>;
   recordSystemStep: (run: Run, name: string, output?: Record<string, unknown>) => Promise<unknown>;
+  runLifecycleHooks: (
+    workspace: WorkspaceRecord,
+    session: Session | undefined,
+    run: Run,
+    eventName: "run_completed"
+  ) => Promise<void>;
   recordToolCallAuditFromStep: (
     step: RunStep,
     toolName: string,
@@ -82,6 +88,7 @@ export class ActionRunService {
   readonly #setRunStatus: ActionRunServiceDependencies["setRunStatus"];
   readonly #getRun: ActionRunServiceDependencies["getRun"];
   readonly #recordSystemStep: ActionRunServiceDependencies["recordSystemStep"];
+  readonly #runLifecycleHooks: ActionRunServiceDependencies["runLifecycleHooks"];
   readonly #recordToolCallAuditFromStep: ActionRunServiceDependencies["recordToolCallAuditFromStep"];
   readonly #appendEvent: ActionRunServiceDependencies["appendEvent"];
   readonly #nowIso: ActionRunServiceDependencies["nowIso"];
@@ -97,6 +104,7 @@ export class ActionRunService {
     this.#setRunStatus = dependencies.setRunStatus;
     this.#getRun = dependencies.getRun;
     this.#recordSystemStep = dependencies.recordSystemStep;
+    this.#runLifecycleHooks = dependencies.runLifecycleHooks;
     this.#recordToolCallAuditFromStep = dependencies.recordToolCallAuditFromStep;
     this.#appendEvent = dependencies.appendEvent;
     this.#nowIso = dependencies.nowIso;
@@ -308,6 +316,8 @@ export class ActionRunService {
         }
       });
     }
+
+    await this.#runLifecycleHooks(workspace, session, completedRun, "run_completed");
   }
 
   async executeAction(

@@ -177,6 +177,7 @@ export function createEngineExecutionServices(
     setRunStatus: (run, nextStatus, patch) => dependencies.setRunStatus(run, nextStatus, patch),
     getRun: (runId) => dependencies.getRun(runId),
     recordSystemStep: (run, name, output) => dependencies.recordSystemStep(run, name, output),
+    runLifecycleHooks: (workspace, session, run, eventName) => hookApplications.runLifecycleHooks(workspace, session, run, eventName),
     recordToolCallAuditFromStep: (step, toolName, status) =>
       toolAudit.recordToolCallAuditFromStep(step, toolName, status),
     appendEvent: (input) => dependencies.appendEvent(input),
