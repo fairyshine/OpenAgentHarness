@@ -152,7 +152,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts
 ```
 
 If `server.docker.yaml` omits `workers.embedded`, `pnpm local:up` now seeds the sandbox-local worker pool with `min_count: 2` and `max_count: 4`, so background tools and subagents can overlap by default instead of collapsing to a single execution slot.
-If `workers.standalone.min_replicas` and `sandbox.fleet.min_count` are both omitted, the local stack now allows `oah-sandbox` to scale down to `0`, so an idle deployment no longer keeps one empty sandbox resident.
+If `workers.standalone.min_replicas` and `sandbox.fleet.min_count` are both omitted, the local stack now keeps `1` warm `oah-sandbox` replica by default so session prewarm still has a live target and first-message latency stays low. Set either value to `0` explicitly if you want local scale-to-zero behavior instead.
 
 ## Who Is It For?
 

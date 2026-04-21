@@ -208,7 +208,8 @@ function prepareDockerServerConfigs() {
     apiInt(
       sourceConfig.workers?.standalone?.min_replicas,
       configuredSandboxFleet?.min_count,
-      0
+      // Keep one warm sandbox locally unless the user explicitly opts into scale-to-zero.
+      1
     )
   );
   const initialSandboxReplicaCount = localStandaloneMinReplicas;

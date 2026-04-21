@@ -152,7 +152,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts
 ```
 
 如果 `server.docker.yaml` 没有显式配置 `workers.embedded`，`pnpm local:up` 现在会为 sandbox 内 worker 池补上 `min_count: 2`、`max_count: 4` 的本地默认值，这样后台工具和 subagent 默认就能并行，而不会退回单个执行槽。
-如果没有显式配置 `workers.standalone.min_replicas` 或 `sandbox.fleet.min_count`，本地 stack 现在默认允许 `oah-sandbox` 缩到 `0`，没有 workspace / session 时不会再额外常驻一个空 sandbox。
+如果没有显式配置 `workers.standalone.min_replicas` 或 `sandbox.fleet.min_count`，本地 stack 现在会默认保留 `1` 个预热好的 `oah-sandbox` 副本，这样 session prewarm 仍然有可用目标，首条消息延迟也更低。如果你希望本地空闲时缩到 `0`，可以显式把任一值配置成 `0`。
 
 ## 适用场景
 
