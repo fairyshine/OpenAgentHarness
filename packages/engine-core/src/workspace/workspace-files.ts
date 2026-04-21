@@ -195,15 +195,6 @@ function toOptionalIsoTimestamp(epochMs: number | undefined): string | undefined
   return new Date(epochMs).toISOString();
 }
 
-function chooseCreatedAt(entry: WorkspaceFileStat, updatedAt: string | undefined): string | undefined {
-  const createdAt = toOptionalIsoTimestamp(entry.birthtimeMs);
-  if (createdAt) {
-    return createdAt;
-  }
-
-  return updatedAt;
-}
-
 export class WorkspaceFileService {
   readonly #fileSystem: WorkspaceFileSystem;
 
@@ -228,8 +219,6 @@ export class WorkspaceFileService {
     }
 
     const updatedAt = listedEntry?.updatedAt ?? toOptionalIsoTimestamp(entry.mtimeMs);
-    const createdAt = chooseCreatedAt(entry, updatedAt);
-
     return {
       path: resolved.relativePath,
       name: resolved.relativePath === "." ? path.basename(workspace.rootPath) : path.basename(resolved.absolutePath),
@@ -242,7 +231,6 @@ export class WorkspaceFileService {
           }
         : {}),
       ...(updatedAt ? { updatedAt } : {}),
-      ...(createdAt ? { createdAt } : {}),
       readOnly: workspace.readOnly
     };
   }

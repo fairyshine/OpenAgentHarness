@@ -164,6 +164,7 @@ export function useWorkspaceFileManager(params: {
   const [fileBusy, setFileBusy] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
   const previousOpenRef = useRef(false);
+  const previousWorkspaceIdRef = useRef(params.workspaceId.trim());
 
   const workspaceIdValue = params.workspaceId.trim();
   const workspaceReadOnly = params.workspace?.readOnly ?? false;
@@ -540,17 +541,23 @@ export function useWorkspaceFileManager(params: {
 
   useEffect(() => {
     const wasOpen = previousOpenRef.current;
+    const previousWorkspaceId = previousWorkspaceIdRef.current;
+    const workspaceChanged = previousWorkspaceId !== workspaceIdValue;
     previousOpenRef.current = open;
+    previousWorkspaceIdRef.current = workspaceIdValue;
 
     if (!params.enabled || !open || !workspaceIdValue) {
       return;
     }
 
-    if (wasOpen) {
+    if (wasOpen && !workspaceChanged) {
       return;
     }
 
-    void refreshEntries({ path: normalizedCurrentPath, quiet: true });
+    void refreshEntries({
+      path: workspaceChanged ? "." : normalizedCurrentPath,
+      quiet: true
+    });
   }, [params.enabled, open, workspaceIdValue, normalizedCurrentPath, sandboxClient]);
 
   return {

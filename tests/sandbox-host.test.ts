@@ -471,12 +471,35 @@ describe("materialization sandbox host", () => {
       }
 
       if (url === "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/directories" && method === "POST") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          path: "/workspace/nested",
+          createParents: true
+        });
+
         return new Response(
           JSON.stringify({
             path: "/workspace/nested",
             name: "nested",
             type: "directory",
             readOnly: false
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      }
+
+      if (url === "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/stat?path=%2Fworkspace" && method === "GET") {
+        return new Response(
+          JSON.stringify({
+            kind: "directory",
+            size: 0,
+            mtimeMs: 0,
+            birthtimeMs: 0,
+            path: "/workspace"
           }),
           {
             status: 200,
@@ -518,10 +541,192 @@ describe("materialization sandbox host", () => {
       );
       expect(fetchSpy).toHaveBeenNthCalledWith(
         2,
+        "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/stat?path=%2Fworkspace",
+        expect.any(Object)
+      );
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        3,
         "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/directories",
         expect.objectContaining({
           method: "POST"
         })
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("ensures the sandbox workspace root exists before listing files through the http adapter", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? "GET";
+
+      if (url === "http://gateway.internal/internal/v1/sandboxes" && method === "POST") {
+        return new Response(
+          JSON.stringify({
+            id: "ws_test",
+            workspaceId: "ws_test",
+            provider: "self_hosted",
+            executionModel: "sandbox_hosted",
+            workerPlacement: "inside_sandbox",
+            rootPath: "/workspace",
+            name: "Test",
+            kind: "project",
+            executionPolicy: "local",
+            ownerWorkerId: "worker_owner",
+            ownerBaseUrl: "http://worker-owner.internal:8787/internal/v1",
+            createdAt: "2026-04-16T00:00:00.000Z",
+            updatedAt: "2026-04-16T00:00:00.000Z"
+          }),
+          {
+            status: 201,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      }
+
+      if (url === "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/stat?path=%2Fworkspace" && method === "GET") {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "workspace_directory_not_found",
+              message: "Directory . was not found."
+            }
+          }),
+          {
+            status: 404,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      }
+
+      if (url === "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/directories" && method === "POST") {
+        const body = JSON.parse(String(init?.body)) as {
+          path: string;
+          createParents: boolean;
+        };
+
+        if (body.path === "/workspace") {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: "workspace_root_mutation_not_allowed",
+                message: "The workspace root cannot be modified directly."
+              }
+            }),
+            {
+              status: 400,
+              headers: {
+                "content-type": "application/json"
+              }
+            }
+          );
+        }
+
+        expect(JSON.parse(String(init?.body))).toEqual({
+          path: "/workspace/.openharness",
+          createParents: true
+        });
+
+        return new Response(
+          JSON.stringify({
+            path: "/workspace/.openharness",
+            name: ".openharness",
+            type: "directory",
+            readOnly: false
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      }
+
+      if (
+        url ===
+          "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=200&sortBy=name&sortOrder=asc" &&
+        method === "GET"
+      ) {
+        return new Response(
+          JSON.stringify({
+            workspaceId: "ws_test",
+            path: "/workspace",
+            items: [
+              {
+                path: "/workspace/alpha.txt",
+                name: "alpha.txt",
+                type: "file",
+                readOnly: false
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+
+    try {
+      const service = createHttpE2BCompatibleSandboxService({
+        baseUrl: "http://gateway.internal/internal/v1"
+      });
+      const workspace = buildWorkspace({
+        id: "ws_test",
+        rootPath: "/workspace"
+      });
+
+      const lease = await service.acquireFileAccess({
+        workspace,
+        access: "read"
+      });
+      const entries = await service.readdir({
+        sandboxId: lease.sandboxId,
+        path: "/workspace"
+      });
+
+      expect(entries).toEqual([{ name: "alpha.txt", kind: "file" }]);
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        1,
+        "http://gateway.internal/internal/v1/sandboxes",
+        expect.objectContaining({
+          method: "POST"
+        })
+      );
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        2,
+        "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/stat?path=%2Fworkspace",
+        expect.any(Object)
+      );
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        3,
+        "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/directories",
+        expect.objectContaining({
+          method: "POST"
+        })
+      );
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        4,
+        "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/directories",
+        expect.objectContaining({
+          method: "POST"
+        })
+      );
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        5,
+        "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=200&sortBy=name&sortOrder=asc",
+        expect.any(Object)
       );
     } finally {
       fetchSpy.mockRestore();
@@ -614,6 +819,24 @@ describe("materialization sandbox host", () => {
         );
       }
 
+      if (url === "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/stat?path=%2Fworkspace" && method === "GET") {
+        return new Response(
+          JSON.stringify({
+            kind: "directory",
+            size: 0,
+            mtimeMs: 0,
+            birthtimeMs: 0,
+            path: "/workspace"
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      }
+
       throw new Error(`Unexpected fetch ${method} ${url}`);
     });
 
@@ -641,11 +864,16 @@ describe("materialization sandbox host", () => {
       ]);
       expect(fetchSpy).toHaveBeenNthCalledWith(
         2,
-        "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=200&sortBy=name&sortOrder=asc",
+        "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/stat?path=%2Fworkspace",
         expect.any(Object)
       );
       expect(fetchSpy).toHaveBeenNthCalledWith(
         3,
+        "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=200&sortBy=name&sortOrder=asc",
+        expect.any(Object)
+      );
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        4,
         "http://worker-owner.internal:8787/internal/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=200&cursor=cursor-1&sortBy=name&sortOrder=asc",
         expect.any(Object)
       );

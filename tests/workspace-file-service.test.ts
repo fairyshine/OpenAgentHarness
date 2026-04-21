@@ -130,7 +130,7 @@ describe("workspace file service", () => {
       updatedAt: "2026-04-19T12:34:56.000Z",
       sizeBytes: 12
     });
-    expect(page.items[0]?.createdAt).toBe("2026-04-19T12:34:56.000Z");
+    expect(page.items[0]?.createdAt).toBeUndefined();
   });
 
   it("omits invalid epoch-zero timestamps instead of returning 1970 dates", async () => {

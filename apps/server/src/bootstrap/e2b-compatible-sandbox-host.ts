@@ -117,6 +117,23 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   return JSON.parse(raw) as T;
 }
 
+function sandboxErrorHasCode(error: unknown, expectedCode: string): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  try {
+    const payload = JSON.parse(error.message) as {
+      error?: {
+        code?: string | undefined;
+      } | undefined;
+    };
+    return payload.error?.code === expectedCode;
+  } catch {
+    return false;
+  }
+}
+
 function parseSandboxHttpBaseUrl(input: string): { baseUrl: string; routePrefix: "/api/v1" | "/internal/v1" | "" } {
   const trimmed = input.trim();
   try {
@@ -226,6 +243,42 @@ export function createHttpE2BCompatibleSandboxService(
     return sandbox;
   }
 
+  async function ensureWorkspaceRoot(sandboxId: string, rootPath: string) {
+    const client = clientForSandbox(sandboxId);
+
+    try {
+      await client.getFileStat(sandboxId, {
+        path: rootPath
+      });
+      return;
+    } catch (error) {
+      if (
+        !sandboxErrorHasCode(error, "workspace_not_found") &&
+        !sandboxErrorHasCode(error, "workspace_entry_not_found") &&
+        !sandboxErrorHasCode(error, "workspace_directory_not_found")
+      ) {
+        throw error;
+      }
+    }
+
+    try {
+      await client.createDirectory(sandboxId, {
+        path: rootPath,
+        createParents: true
+      });
+      return;
+    } catch (error) {
+      if (!sandboxErrorHasCode(error, "workspace_root_mutation_not_allowed")) {
+        throw error;
+      }
+    }
+
+    await client.createDirectory(sandboxId, {
+      path: path.posix.join(rootPath, ".openharness"),
+      createParents: true
+    });
+  }
+
   function relativeToSandboxRoot(rootPath: string, targetPath: string) {
     return normalizeHttpSandboxPath(rootPath, targetPath);
   }
@@ -233,6 +286,7 @@ export function createHttpE2BCompatibleSandboxService(
   return {
     async acquireExecution(input) {
       const sandbox = await resolveSandboxForWorkspace(input.workspace);
+      await ensureWorkspaceRoot(sandbox.id, sandbox.rootPath);
       return {
         sandboxId: sandbox.id,
         rootPath: sandbox.rootPath,
@@ -243,6 +297,7 @@ export function createHttpE2BCompatibleSandboxService(
     },
     async acquireFileAccess(input) {
       const sandbox = await resolveSandboxForWorkspace(input.workspace);
+      await ensureWorkspaceRoot(sandbox.id, sandbox.rootPath);
       return {
         sandboxId: sandbox.id,
         rootPath: sandbox.rootPath,

@@ -418,7 +418,7 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                             </div>
                             <p className="mt-1 truncate text-xs text-muted-foreground" title={updatedAt.detail}>
                               {entry.type === "directory"
-                                ? entry.updatedAt ? `updated ${updatedAt.inline}` : "directory"
+                                ? entry.updatedAt ? updatedAt.inline : "directory"
                                 : `${formatSize(entry.sizeBytes)}${entry.updatedAt ? ` · ${updatedAt.inline}` : ""}`}
                             </p>
                           </div>
@@ -480,7 +480,7 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                           <p className="mt-1 text-xs text-muted-foreground">{selectedEntry.path}</p>
                         </div>
                         <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Last Updated</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time</p>
                           <p className="mt-2 text-sm font-medium text-foreground">{selectedEntryUpdatedAt.inline}</p>
                           <p className="mt-1 text-xs text-muted-foreground">{selectedEntryUpdatedAt.detail}</p>
                         </div>
@@ -511,7 +511,7 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                         </div>
                       </div>
                       <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Last Updated</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time</p>
                         <p className="mt-2 text-sm font-medium text-foreground">{selectedPreviewUpdatedAt.inline}</p>
                         <p className="mt-1 text-xs text-muted-foreground">{selectedPreviewUpdatedAt.detail}</p>
                       </div>
