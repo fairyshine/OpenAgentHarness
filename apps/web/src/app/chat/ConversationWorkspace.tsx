@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { useStreamStore } from "../stores/stream-store";
 import { useUiStore } from "../stores/ui-store";
-import { formatTimestamp, statusTone, toneBadgeClass, toneTextClass } from "../support";
+import { formatTimestamp, statusTone, toneBadgeClass } from "../support";
 import type { Message } from "@oah/api-contracts";
 import type { useAppController } from "../use-app-controller";
 import { Badge } from "@/components/ui/badge";
@@ -578,7 +578,7 @@ function isToolOnlyMessage(content: Message["content"]) {
   return hasToolOrApproval && !hasText && !hasReasoning;
 }
 
-/** Render message content — text parts as prose, reasoning as collapsible, tool calls/results as chips */
+/** Render message content — text parts as prose, reasoning as visible context, tool calls/results as chips */
 function MessageContent({
   content,
   isUser,
@@ -609,11 +609,21 @@ function MessageContent({
             </span>
           </summary>
           <div className={`mt-1.5 rounded-lg border px-3 py-2 ${toneBadgeClass("plum")}`}>
-            {reasoningParts.map((part, i) => (
-              <div key={i} className={`whitespace-pre-wrap break-words text-xs leading-relaxed ${toneTextClass("plum")}`}>
-                {"text" in part ? part.text : null}
-              </div>
-            ))}
+            <div className="space-y-2">
+              {reasoningParts.map((part, i) =>
+                "text" in part && part.text ? (
+                  <div key={i}>
+                    <ExpandableMarkdownText
+                      text={part.text}
+                      collapseThreshold={1600}
+                      previewChars={700}
+                      expandLabel="Show full reasoning"
+                      collapseLabel="Collapse reasoning"
+                    />
+                  </div>
+                ) : null
+              )}
+            </div>
           </div>
         </details>
       )}
