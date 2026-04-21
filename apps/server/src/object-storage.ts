@@ -18,8 +18,8 @@ interface ObjectStorageEntry {
 
 export interface DirectoryObjectStore {
   listEntries(prefix: string): Promise<ObjectStorageEntry[]>;
-  getObject(key: string): Promise<Buffer>;
-  putObject(key: string, body: Buffer): Promise<void>;
+  getObject(key: string): Promise<{ body: Buffer; metadata?: Record<string, string> | undefined }>;
+  putObject(key: string, body: Buffer, options?: { mtimeMs?: number | undefined }): Promise<void>;
   deleteObjects(keys: string[]): Promise<void>;
   bucket?: string | undefined;
 }
@@ -47,6 +47,7 @@ const DEFAULT_KEY_PREFIXES: Record<ManagedPathKey, string> = {
   tool: "tool",
   skill: "skill"
 };
+const OBJECT_MTIME_METADATA_KEY = "oah-mtime-ms";
 
 const DEFAULT_MANAGED_PATHS = Object.keys(DEFAULT_KEY_PREFIXES) as ManagedPathKey[];
 
@@ -97,6 +98,20 @@ function shouldIgnoreRelativePath(relativePath: string): boolean {
     basename.endsWith(".db-shm") ||
     basename.endsWith(".db-wal")
   );
+}
+
+function parseObjectMtimeMs(metadata: Record<string, string> | undefined): number | undefined {
+  const raw = metadata?.[OBJECT_MTIME_METADATA_KEY];
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return undefined;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return Math.trunc(parsed);
 }
 
 async function collectLocalDirectorySnapshot(rootDir: string, options?: DirectorySyncOptions): Promise<LocalDirectorySnapshot> {
@@ -305,22 +320,32 @@ class S3DirectoryStore implements DirectoryObjectStore {
     return entries.sort((left, right) => left.key.localeCompare(right.key));
   }
 
-  async getObject(key: string): Promise<Buffer> {
+  async getObject(key: string): Promise<{ body: Buffer; metadata?: Record<string, string> | undefined }> {
     const response = await this.#client.send(
       new GetObjectCommand({
         Bucket: this.#bucket,
         Key: key
       })
     );
-    return streamBodyToBuffer(response.Body);
+    return {
+      body: await streamBodyToBuffer(response.Body),
+      metadata: response.Metadata
+    };
   }
 
-  async putObject(key: string, body: Buffer): Promise<void> {
+  async putObject(key: string, body: Buffer, options?: { mtimeMs?: number | undefined }): Promise<void> {
     await this.#client.send(
       new PutObjectCommand({
         Bucket: this.#bucket,
         Key: key,
-        Body: body
+        Body: body,
+        ...(typeof options?.mtimeMs === "number" && Number.isFinite(options.mtimeMs) && options.mtimeMs > 0
+          ? {
+              Metadata: {
+                [OBJECT_MTIME_METADATA_KEY]: String(Math.trunc(options.mtimeMs))
+              }
+            }
+          : {})
       })
     );
   }
@@ -635,9 +660,13 @@ export async function syncRemotePrefixToLocal(
     }
 
     await mkdir(path.dirname(targetPath), { recursive: true });
-    const body = await store.getObject(entry.key);
-    await writeFile(targetPath, body);
-    if (entry.lastModified) {
+    const object = await store.getObject(entry.key);
+    await writeFile(targetPath, object.body);
+    const preservedMtimeMs = parseObjectMtimeMs(object.metadata);
+    if (typeof preservedMtimeMs === "number") {
+      const preservedDate = new Date(preservedMtimeMs);
+      await utimes(targetPath, preservedDate, preservedDate);
+    } else if (entry.lastModified) {
       await utimes(targetPath, entry.lastModified, entry.lastModified);
     }
   }
@@ -678,7 +707,9 @@ export async function syncLocalDirectoryToRemote(
       continue;
     }
 
-    await store.putObject(buildRemoteKey(remotePrefix, relativePath), await readFile(file.absolutePath));
+    await store.putObject(buildRemoteKey(remotePrefix, relativePath), await readFile(file.absolutePath), {
+      mtimeMs: file.mtimeMs
+    });
   }
 
   for (const relativePath of snapshot.emptyDirectories) {

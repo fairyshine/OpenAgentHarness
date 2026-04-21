@@ -14,7 +14,7 @@ import {
 
 class FakeDirectoryObjectStore implements DirectoryObjectStore {
   readonly bucket = "test-bucket";
-  readonly objects = new Map<string, { body: Buffer; lastModified: Date }>();
+  readonly objects = new Map<string, { body: Buffer; lastModified: Date; metadata?: Record<string, string> | undefined }>();
   getObjectCalls = 0;
   failPutObject = false;
 
@@ -30,22 +30,32 @@ class FakeDirectoryObjectStore implements DirectoryObjectStore {
       .sort((left, right) => left.key.localeCompare(right.key));
   }
 
-  async getObject(key: string): Promise<Buffer> {
+  async getObject(key: string): Promise<{ body: Buffer; metadata?: Record<string, string> | undefined }> {
     this.getObjectCalls += 1;
     const entry = this.objects.get(key);
     if (!entry) {
       throw new Error(`Missing object ${key}`);
     }
-    return Buffer.from(entry.body);
+    return {
+      body: Buffer.from(entry.body),
+      ...(entry.metadata ? { metadata: { ...entry.metadata } } : {})
+    };
   }
 
-  async putObject(key: string, body: Buffer): Promise<void> {
+  async putObject(key: string, body: Buffer, options?: { mtimeMs?: number | undefined }): Promise<void> {
     if (this.failPutObject) {
       throw new Error(`put failed for ${key}`);
     }
     this.objects.set(key, {
       body: Buffer.from(body),
-      lastModified: new Date()
+      lastModified: new Date(),
+      ...(typeof options?.mtimeMs === "number" && options.mtimeMs > 0
+        ? {
+            metadata: {
+              "oah-mtime-ms": String(Math.trunc(options.mtimeMs))
+            }
+          }
+        : {})
     });
   }
 

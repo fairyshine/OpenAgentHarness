@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -15,7 +15,7 @@ import {
 
 class FakeDirectoryObjectStore implements DirectoryObjectStore {
   readonly bucket = "test-bucket";
-  readonly objects = new Map<string, { body: Buffer; lastModified: Date }>();
+  readonly objects = new Map<string, { body: Buffer; lastModified: Date; metadata?: Record<string, string> | undefined }>();
 
   async listEntries(prefix: string) {
     const normalizedPrefix = prefix ? `${prefix}/` : "";
@@ -29,18 +29,28 @@ class FakeDirectoryObjectStore implements DirectoryObjectStore {
       .sort((left, right) => left.key.localeCompare(right.key));
   }
 
-  async getObject(key: string): Promise<Buffer> {
+  async getObject(key: string): Promise<{ body: Buffer; metadata?: Record<string, string> | undefined }> {
     const entry = this.objects.get(key);
     if (!entry) {
       throw new Error(`Missing object ${key}`);
     }
-    return Buffer.from(entry.body);
+    return {
+      body: Buffer.from(entry.body),
+      ...(entry.metadata ? { metadata: { ...entry.metadata } } : {})
+    };
   }
 
-  async putObject(key: string, body: Buffer): Promise<void> {
+  async putObject(key: string, body: Buffer, options?: { mtimeMs?: number | undefined }): Promise<void> {
     this.objects.set(key, {
       body: Buffer.from(body),
-      lastModified: new Date()
+      lastModified: new Date(),
+      ...(typeof options?.mtimeMs === "number" && options.mtimeMs > 0
+        ? {
+            metadata: {
+              "oah-mtime-ms": String(Math.trunc(options.mtimeMs))
+            }
+          }
+        : {})
     });
   }
 
@@ -118,6 +128,24 @@ describe("object storage sync", () => {
     expect(store.objects.get("workspace/demo/.openharness/settings.yaml")?.body.toString("utf8")).toBe(
       "default_agent: assistant\n"
     );
+  });
+
+  it("preserves original file mtime across local-to-remote and remote-to-local sync", async () => {
+    const sourceDirectory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-roundtrip-source-"));
+    const targetDirectory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-roundtrip-target-"));
+    tempDirs.push(sourceDirectory, targetDirectory);
+    const store = new FakeDirectoryObjectStore();
+    const expectedMtime = new Date("2026-04-18T08:09:10.000Z");
+
+    await writeFile(path.join(sourceDirectory, "README.md"), "# synced\n", "utf8");
+    await utimes(path.join(sourceDirectory, "README.md"), expectedMtime, expectedMtime);
+
+    await syncLocalDirectoryToRemote(store, "workspace/demo", sourceDirectory);
+    await syncRemotePrefixToLocal(store, "workspace/demo", targetDirectory);
+
+    const materializedStat = await stat(path.join(targetDirectory, "README.md"));
+    expect(Math.trunc(materializedStat.mtimeMs)).toBe(expectedMtime.getTime());
+    expect(store.objects.get("workspace/demo/README.md")?.metadata?.["oah-mtime-ms"]).toBe(String(expectedMtime.getTime()));
   });
 
   it("pushes workspace roots to object storage while excluding runtime-only state", async () => {
