@@ -603,7 +603,7 @@ function MessageContent({
         <details className="group/reasoning">
           <summary className="list-none cursor-pointer select-none">
             <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-medium transition ${toneBadgeClass("plum")}`}>
-              <span className="opacity-70">✦</span> reasoning
+              <Sparkles className="h-3 w-3 opacity-70" /> reasoning
               <span className="opacity-50 text-[10px] group-open/reasoning:hidden">▸</span>
               <span className="opacity-50 text-[10px] hidden group-open/reasoning:inline">▾</span>
             </span>

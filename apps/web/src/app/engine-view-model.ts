@@ -75,7 +75,16 @@ function isToolOnlyAssistantMessage(message: Message) {
 }
 
 function isStreamedAssistantTextMessage(message: Message, deltaMessageIds: Set<string>) {
-  return message.role === "assistant" && deltaMessageIds.has(readComparableMessageId(message)) && contentText(message.content).trim().length > 0;
+  if (message.role !== "assistant" || !deltaMessageIds.has(readComparableMessageId(message))) {
+    return false;
+  }
+
+  if (typeof message.content === "string") {
+    return message.content.trim().length > 0;
+  }
+
+  const containsStructuredParts = message.content.some((part) => part.type !== "text");
+  return !containsStructuredParts && contentText(message.content).trim().length > 0;
 }
 
 function projectRunConversation(messages: Message[], events: SessionEventContract[]) {
@@ -168,6 +177,7 @@ function projectRunConversation(messages: Message[], events: SessionEventContrac
         continue;
       }
 
+      activeSegments.delete(messageId);
       projected.push(completedMessage);
       seenProjectedMessageIds.add(messageId);
       continue;
