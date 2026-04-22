@@ -19,6 +19,9 @@ For the bundled starter runtime, the expected platform model name is:
 Then run:
 
 ```bash
+python3 ./scripts/sync_to_minio.py --delete
 pnpm local:up
 pnpm dev:web
 ```
+
+If this deploy root is copied outside the repository, `./scripts/sync_to_minio.py` still works on its own as long as Docker can run `amazon/aws-cli` and reach your object-storage endpoint.

@@ -196,6 +196,34 @@ function readCompactionGroupKey(message: CompactMessage, source: EngineMessage |
   return `message:${source?.id ?? message.sourceMessageIds[0] ?? message.semanticType}`;
 }
 
+function isTransientMemoryContextNote(message: EngineMessage): boolean {
+  return (
+    message.role === "system" &&
+    message.kind === "system_note" &&
+    message.metadata?.synthetic === true &&
+    message.metadata?.eligibleForModelContext === true &&
+    Array.isArray(message.metadata?.tags) &&
+    (message.metadata.tags.includes("session-memory") || message.metadata.tags.includes("workspace-memory"))
+  );
+}
+
+function mergeEphemeralContextNotes(engineMessages: EngineMessage[], ephemeralNotes: EngineMessage[]): EngineMessage[] {
+  if (ephemeralNotes.length === 0) {
+    return engineMessages;
+  }
+
+  const merged = [...engineMessages];
+  const existingIds = new Set(engineMessages.map((message) => message.id));
+  for (const note of ephemeralNotes) {
+    if (!existingIds.has(note.id)) {
+      merged.push(note);
+      existingIds.add(note.id);
+    }
+  }
+
+  return merged;
+}
+
 function groupMessagesForCompaction(
   messages: CompactMessage[],
   engineMessagesById: Map<string, EngineMessage>
@@ -308,13 +336,16 @@ export class ContextCompactionService implements ContextPreparationModule {
     engineMessages: EngineMessage[];
   }): Promise<EngineMessage[]> {
     const engineMessages = input.engineMessages;
+    const ephemeralNotes = engineMessages.filter((message) => isTransientMemoryContextNote(message));
+    const compactionSourceMessages =
+      ephemeralNotes.length > 0 ? engineMessages.filter((message) => !isTransientMemoryContextNote(message)) : engineMessages;
     const resolvedModel = this.#resolveRunModel(input.workspace, input.session, input.run, input.activeAgentName);
     const contextWindowTokens = readContextWindowTokens(resolvedModel);
     if (!contextWindowTokens) {
       return engineMessages;
     }
 
-    const compactProjection = this.#projector.projectToCompact(engineMessages, {
+    const compactProjection = this.#projector.projectToCompact(compactionSourceMessages, {
       sessionId: input.session.id,
       activeAgentName: input.activeAgentName,
       ...(input.session.modelRef ? { modelRef: input.session.modelRef } : {}),
@@ -341,7 +372,7 @@ export class ContextCompactionService implements ContextPreparationModule {
       return engineMessages;
     }
 
-    const engineMessagesById = new Map(engineMessages.map((message) => [message.id, message]));
+    const engineMessagesById = new Map(compactionSourceMessages.map((message) => [message.id, message]));
     const groups = groupMessagesForCompaction(compactProjection.messages, engineMessagesById);
     if (groups.length <= 1) {
       return engineMessages;
@@ -575,7 +606,10 @@ export class ContextCompactionService implements ContextPreparationModule {
         summaryUsage: isRecord(summaryResponse.usage) ? summaryResponse.usage : undefined
       });
 
-      return this.#buildEngineMessagesForSession(input.session.id, input.messages);
+      return mergeEphemeralContextNotes(
+        await this.#buildEngineMessagesForSession(input.session.id, input.messages),
+        ephemeralNotes
+      );
     } catch (error) {
       this.#logger?.warn?.("Runtime auto-compaction failed; continuing with un-compacted context.", {
         sessionId: input.session.id,

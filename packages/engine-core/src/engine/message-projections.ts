@@ -66,6 +66,17 @@ function isEligibleForModelContext(message: EngineMessage): boolean {
   return message.metadata?.eligibleForModelContext !== false;
 }
 
+function isTransientMemoryContextNote(message: EngineMessage): boolean {
+  return (
+    message.role === "system" &&
+    message.kind === "system_note" &&
+    message.metadata?.synthetic === true &&
+    message.metadata?.eligibleForModelContext === true &&
+    Array.isArray(message.metadata?.tags) &&
+    (message.metadata.tags.includes("session-memory") || message.metadata.tags.includes("workspace-memory"))
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -139,6 +150,33 @@ function applyLatestCompactBoundary(messages: EngineMessage[]): {
     messages: [...(summaryMessage ? [summaryMessage] : []), ...recentMessages],
     appliedCompactBoundaryId: boundaryMessage.id
   };
+}
+
+function hoistTransientMemoryContextNotes(messages: EngineMessage[]): EngineMessage[] {
+  const transientMemoryNotes = messages.filter((message) => isTransientMemoryContextNote(message));
+  if (transientMemoryNotes.length === 0) {
+    return messages;
+  }
+
+  const leadingSystemMessages: EngineMessage[] = [];
+  const remainingMessages: EngineMessage[] = [];
+  let stillLeading = true;
+
+  for (const message of messages) {
+    if (isTransientMemoryContextNote(message)) {
+      continue;
+    }
+
+    if (stillLeading && message.role === "system") {
+      leadingSystemMessages.push(message);
+      continue;
+    }
+
+    stillLeading = false;
+    remainingMessages.push(message);
+  }
+
+  return [...leadingSystemMessages, ...transientMemoryNotes, ...remainingMessages];
 }
 
 function projectGenericMessage<TView extends ProjectionView>(
@@ -263,6 +301,8 @@ export class EngineMessageProjector {
       messages = bounded.messages;
       appliedCompactBoundaryId = bounded.appliedCompactBoundaryId;
     }
+
+    messages = hoistTransientMemoryContextNotes(messages);
 
     const projected = messages.flatMap((message) => {
       if (!isEligibleForModelContext(message)) {

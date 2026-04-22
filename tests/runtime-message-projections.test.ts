@@ -329,6 +329,61 @@ describe("runtime message projections", () => {
     ]);
   });
 
+  it("hoists transient memory notes into the leading system context for model projection", () => {
+    const projector = new EngineMessageProjector();
+    const engineMessages: EngineMessage[] = [
+      {
+        id: "msg_system",
+        sessionId: "sess_1",
+        role: "system",
+        kind: "system_note",
+        content: "Base system guidance",
+        createdAt: "2026-04-08T00:00:00.000Z"
+      },
+      {
+        id: "msg_user",
+        sessionId: "sess_1",
+        role: "user",
+        kind: "user_input",
+        content: "How should I continue?",
+        createdAt: "2026-04-08T00:00:01.000Z"
+      },
+      {
+        id: "msg_memory",
+        sessionId: "sess_1",
+        role: "system",
+        kind: "system_note",
+        content: "<workspace_memory>durable guidance</workspace_memory>",
+        createdAt: "2026-04-08T00:00:02.000Z",
+        metadata: {
+          synthetic: true,
+          eligibleForModelContext: true,
+          tags: ["workspace-memory"]
+        }
+      },
+      {
+        id: "msg_reply",
+        sessionId: "sess_1",
+        role: "assistant",
+        kind: "assistant_text",
+        content: "reply",
+        createdAt: "2026-04-08T00:00:03.000Z"
+      }
+    ];
+
+    const result = projector.projectToModel(engineMessages, {
+      sessionId: "sess_1",
+      activeAgentName: "default"
+    });
+
+    expect(result.messages.map((message) => message.sourceMessageIds[0])).toEqual([
+      "msg_system",
+      "msg_memory",
+      "msg_user",
+      "msg_reply"
+    ]);
+  });
+
   it("serializes model messages into AI SDK-compatible messages", () => {
     const serializer = new ModelMessageSerializer();
 

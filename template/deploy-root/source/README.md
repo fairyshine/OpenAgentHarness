@@ -5,9 +5,8 @@ This directory is the local source of truth for data published from your deploy 
 After editing anything here, run:
 
 ```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
-export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
-pnpm storage:sync
+cd /absolute/path/to/oah-deploy-root
+python3 ./scripts/sync_to_minio.py --delete
 ```
 
 ## Mapping
@@ -22,6 +21,8 @@ pnpm storage:sync
 
 ## Notes
 
+- This deploy root ships with its own sync script at `scripts/sync_to_minio.py`, so it can be used outside the repository.
+- If you are still working from the main OAH repository, `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm storage:sync` remains equivalent for readonly prefixes.
 - `pnpm storage:sync` syncs readonly prefixes by default and skips `source/workspaces` unless you pass `--include-workspaces`.
 - The bundled runtime template expects a platform model named `openai-default`.
 - Empty directories are fine. Add only the models, tools, skills, and workspaces you actually need.

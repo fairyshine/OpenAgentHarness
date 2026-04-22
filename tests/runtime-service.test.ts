@@ -3249,6 +3249,144 @@ describe("runtime service", () => {
     expect(secondInvocationText).not.toContain('<workspace_memory_file path=".openharness/memory/testing.md">');
   });
 
+  it("deduplicates recently surfaced workspace memory topics across queued runs", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-recall-queued-dedupe-"));
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
+      [
+        "- [testing](.openharness/memory/testing.md) - finish checklist and validation commands",
+        "- [style](.openharness/memory/style.md) - final response formatting preferences"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "testing.md"),
+      [
+        "---",
+        "name: Testing",
+        "description: Finish checklist and validation commands.",
+        "type: project",
+        "---",
+        "",
+        "# Testing",
+        "",
+        "- Always run `pnpm test` before finishing repo work."
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "style.md"),
+      [
+        "---",
+        "name: Style",
+        "description: Final response formatting preferences.",
+        "type: feedback",
+        "---",
+        "",
+        "# Style",
+        "",
+        "- Keep final responses terse and avoid trailing summaries."
+      ].join("\n"),
+      "utf8"
+    );
+
+    const { gateway, runtimeService, workspace } = await createRuntime(10, {
+      rootPath: workspaceRoot,
+      workspaceSettings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true
+          }
+        }
+      }
+    });
+    let selectorCallCount = 0;
+    gateway.generateResponseFactory = (input) => {
+      const systemPrompt = input.messages?.find((message) => message.role === "system");
+      if (
+        typeof systemPrompt?.content === "string" &&
+        systemPrompt.content.includes("workspace memory recall selector")
+      ) {
+        selectorCallCount += 1;
+        return {
+          model: input.model ?? "openai-default",
+          text: JSON.stringify({
+            paths: [".openharness/memory/testing.md"]
+          }),
+          finishReason: "stop",
+          usage: {
+            inputTokens: 12,
+            outputTokens: 6,
+            totalTokens: 18
+          }
+        };
+      }
+
+      return undefined;
+    };
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "How should I finish repo work and shape the final response?" }
+    });
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "How should I finish repo work and shape the final response?" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(secondAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const firstRunSteps = await runtimeService.listRunSteps(firstAccepted.runId);
+    const firstRecallStep = firstRunSteps.items.find((step) => step.name === "workspace_memory_recall");
+    const selectorInvocations = gateway.invocations.filter((candidate) =>
+      candidate.input.messages?.some(
+        (message) =>
+          typeof message.content === "string" && message.content.includes("workspace memory recall selector")
+      )
+    );
+    const secondSelectorText = (selectorInvocations.at(-1)?.input.messages ?? [])
+      .map((message) => (typeof message.content === "string" ? message.content : JSON.stringify(message.content)))
+      .join("\n\n");
+    const secondSelectorManifest = secondSelectorText.match(
+      /<available_workspace_memory_topics>\n([\s\S]*?)\n<\/available_workspace_memory_topics>/
+    )?.[1] ?? "";
+    const modelInvocationsWithTopics = gateway.invocations.filter((candidate) =>
+      candidate.input.messages?.some(
+        (message) => typeof message.content === "string" && message.content.includes("<workspace_memory_file")
+      )
+    );
+    const secondInvocationText = (modelInvocationsWithTopics.at(-1)?.input.messages ?? [])
+      .map((message) => (typeof message.content === "string" ? message.content : JSON.stringify(message.content)))
+      .join("\n\n");
+
+    expect(selectorCallCount).toBeGreaterThanOrEqual(2);
+    expect(firstRecallStep?.output).toMatchObject({
+      recalledPaths: [".openharness/memory/testing.md"]
+    });
+    expect(secondSelectorManifest).not.toContain(".openharness/memory/testing.md");
+    expect(secondSelectorManifest).toContain(".openharness/memory/style.md");
+    expect(secondInvocationText).toContain('<workspace_memory_file path=".openharness/memory/style.md">');
+    expect(secondInvocationText).not.toContain('<workspace_memory_file path=".openharness/memory/testing.md">');
+  });
+
   it("uses the default platform model for workspace memory recall selection even when the main run uses a workspace model", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();
@@ -3416,6 +3554,134 @@ describe("runtime service", () => {
 
     expect(selectorInvocation?.model).toBe("openai-default");
     expect(mainInvocation?.model).toBe("workspace/repo-model");
+  });
+
+  it("accounts for injected memory context when deciding to compact without summarizing the memory note itself", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-compact-budget-"));
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
+      "Repository memory: " + "run pnpm test before finishing. ".repeat(80),
+      "utf8"
+    );
+
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      rootPath: workspaceRoot,
+      platformModels: {
+        "openai-default": {
+          provider: "openai",
+          name: "gpt-5",
+          metadata: {
+            contextWindowTokens: 160,
+            compactThresholdTokens: 60,
+            compactRecentGroupCount: 3
+          }
+        }
+      },
+      workspaceSettings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true
+          }
+        }
+      }
+    });
+    gateway.generateResponseFactory = (input) => {
+      const systemPrompt = input.messages?.find((message) => message.role === "system");
+      if (typeof systemPrompt?.content === "string" && systemPrompt.content.includes("Summarize the earlier conversation context")) {
+        return {
+          model: input.model ?? "openai-default",
+          text: "Compacted summary of prior work",
+          finishReason: "stop",
+          usage: {
+            inputTokens: 20,
+            outputTokens: 8,
+            totalTokens: 28
+          }
+        };
+      }
+
+      return undefined;
+    };
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "FIRST-CONTENT ".repeat(8).trim() }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(firstAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "SECOND-CONTENT ".repeat(8).trim() }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(secondAccepted.runId);
+      return run.status === "completed";
+    });
+    await waitFor(() => gateway.invocations.length >= 3);
+
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    const compactKinds = messages.items
+      .map((message) => (message.metadata as { runtimeKind?: string } | undefined)?.runtimeKind)
+      .filter((kind): kind is string => typeof kind === "string");
+    const compactInvocation = gateway.invocations.find((invocation) =>
+      invocation.input.messages?.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Summarize the earlier conversation context")
+      )
+    );
+    const compactInvocationText = (compactInvocation?.input.messages ?? [])
+      .map((message) => (typeof message.content === "string" ? message.content : JSON.stringify(message.content)))
+      .join("\n\n");
+    const finalInvocation = gateway.invocations
+      .filter(
+        (invocation) =>
+          !invocation.input.messages?.some(
+            (message) =>
+              message.role === "system" &&
+              typeof message.content === "string" &&
+              message.content.includes("Summarize the earlier conversation context")
+          ) &&
+          !invocation.input.messages?.some(
+            (message) =>
+              typeof message.content === "string" &&
+              message.content.includes("workspace memory extraction subagent")
+          ) &&
+          !invocation.input.messages?.some(
+            (message) =>
+              typeof message.content === "string" &&
+              message.content.includes("Update the durable workspace memory directory for this repository.")
+          )
+      )
+      .at(-1);
+    const finalInvocationText = (finalInvocation?.input.messages ?? [])
+      .map((message) => (typeof message.content === "string" ? message.content : JSON.stringify(message.content)))
+      .join("\n\n");
+
+    expect(compactKinds).toContain("compact_boundary");
+    expect(compactKinds).toContain("compact_summary");
+    expect(compactInvocationText).not.toContain("<workspace_memory");
+    expect(finalInvocationText).toContain("<workspace_memory");
+    expect(finalInvocationText).toContain("Compacted summary of prior work");
   });
 
   it("runs workspace memory extraction in a background child run and writes MEMORY.md after completion", async () => {
