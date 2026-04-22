@@ -1324,6 +1324,115 @@ describe("runtime service", () => {
     await expect(runtimeService.listSessionQueuedRuns(session.id)).resolves.toEqual({ items: [] });
   });
 
+  it("persists multimodal user messages and shows attachment-aware queue previews", async () => {
+    const { runtimeService, workspace } = await createRuntime(30);
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const first = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "first" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(first.runId);
+      return run.status === "running";
+    });
+
+    const imageOnlyContent = [
+      {
+        type: "image" as const,
+        image: "data:image/png;base64,AAAA",
+        mediaType: "image/png"
+      }
+    ];
+    const second = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: imageOnlyContent }
+    });
+
+    await waitFor(async () => {
+      const queue = await runtimeService.listSessionQueuedRuns(session.id);
+      return queue.items.length === 1 && queue.items[0]?.runId === second.runId;
+    });
+
+    const queuedRuns = await runtimeService.listSessionQueuedRuns(session.id);
+    expect(queuedRuns.items).toEqual([
+      expect.objectContaining({
+        runId: second.runId,
+        messageId: second.messageId,
+        content: "1 image",
+        position: 1
+      })
+    ]);
+
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    expect(messages.items.find((message) => message.id === second.messageId)).toMatchObject({
+      role: "user",
+      content: imageOnlyContent
+    });
+  });
+
+  it("forwards multimodal user content to the model gateway unchanged", async () => {
+    const { gateway, runtimeService, workspace } = await createRuntime();
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const multimodalContent = [
+      {
+        type: "text" as const,
+        text: "describe this image"
+      },
+      {
+        type: "image" as const,
+        image: "data:image/png;base64,AAAA",
+        mediaType: "image/png"
+      }
+    ];
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: multimodalContent }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+    await waitFor(() => gateway.invocations.length > 0);
+
+    expect(gateway.invocations.at(-1)?.input.messages).toEqual(
+      expect.arrayContaining([
+        {
+          role: "user",
+          content: multimodalContent
+        }
+      ])
+    );
+  });
+
   it("interrupts an active session run only when requested explicitly", async () => {
     const { runtimeService, workspace } = await createRuntime(30);
     const caller = {

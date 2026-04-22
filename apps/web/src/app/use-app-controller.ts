@@ -3,6 +3,7 @@ import { useShallow } from "zustand/shallow";
 
 import {
   type ActionRunAccepted,
+  type CreateMessageRequest,
   type GuideQueuedRunAccepted,
   healthReportSchema,
   readinessReportSchema,
@@ -67,6 +68,7 @@ import { useSessionAgentStore } from "./stores/session-agent-store";
 import { useSettingsStore } from "./stores/settings-store";
 import { useStreamStore } from "./stores/stream-store";
 import { useUiStore } from "./stores/ui-store";
+import { buildComposerMessageContent, summarizeComposerMessageContent } from "./chat/composer-content";
 
 const COMPLETED_RUN_RESULT_POLL_LIMIT = 5;
 const MESSAGE_PAGE_SIZE = 120;
@@ -1255,7 +1257,7 @@ export function useAppController() {
 
   const submitSessionMessage = useEffectEvent(
     async (
-      content: string,
+      content: CreateMessageRequest["content"],
       options?: {
         clearDraft?: boolean;
         runningRunBehavior?: "queue" | "interrupt";
@@ -1267,8 +1269,8 @@ export function useAppController() {
         return;
       }
 
-      const trimmedContent = content.trim();
-      if (!trimmedContent) {
+      const contentPreview = summarizeComposerMessageContent(content).trim();
+      if (!contentPreview) {
         return;
       }
 
@@ -1297,7 +1299,7 @@ export function useAppController() {
           "content-type": "application/json"
         },
         body: JSON.stringify({
-          content: trimmedContent,
+          content,
           runningRunBehavior
         })
       });
@@ -1306,6 +1308,7 @@ export function useAppController() {
       startTransition(() => {
         if (options?.clearDraft !== false) {
           useStreamStore.getState().setDraftMessage("");
+          useStreamStore.getState().setDraftAttachments([]);
         }
         if (shouldDisplayAsQueued) {
           setSessionQueuedRuns((current) => {
@@ -1314,7 +1317,7 @@ export function useAppController() {
             const nextItem: SessionQueuedRun = {
               runId: accepted.runId,
               messageId: accepted.messageId,
-              content: trimmedContent,
+              content: contentPreview,
               createdAt: nextCreatedAt,
               position: nextPosition
             };
@@ -1331,7 +1334,7 @@ export function useAppController() {
               runId: "",
               sessionId,
               role: "user",
-              content: trimmedContent,
+              content,
               createdAt: new Date().toISOString()
             }
           }));
@@ -1361,7 +1364,8 @@ export function useAppController() {
       return;
     }
 
-    const content = useStreamStore.getState().draftMessage.trim();
+    const { draftMessage, draftAttachments } = useStreamStore.getState();
+    const content = buildComposerMessageContent(draftMessage, draftAttachments);
     if (!content) {
       return;
     }
@@ -1382,7 +1386,8 @@ export function useAppController() {
       return;
     }
 
-    const content = useStreamStore.getState().draftMessage.trim();
+    const { draftMessage, draftAttachments } = useStreamStore.getState();
+    const content = buildComposerMessageContent(draftMessage, draftAttachments);
     if (!content) {
       return;
     }

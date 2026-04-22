@@ -3268,6 +3268,86 @@ describe("http api", () => {
     });
   });
 
+  it("accepts structured user messages with image parts over HTTP", async () => {
+    activeApp = await createStartedApp();
+    const authHeaders = {
+      authorization: "Bearer token-1",
+      "content-type": "application/json"
+    };
+
+    const workspaceResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        name: "demo",
+        runtime: "workspace",
+        rootPath: "/tmp/demo-multimodal"
+      })
+    });
+    const workspace = (await workspaceResponse.json()) as { id: string };
+
+    const sessionResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/sessions`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({})
+    });
+    const session = (await sessionResponse.json()) as { id: string };
+
+    const acceptedResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        content: [
+          {
+            type: "text",
+            text: "describe this"
+          },
+          {
+            type: "image",
+            image: "data:image/png;base64,AAAA",
+            mediaType: "image/png"
+          }
+        ]
+      })
+    });
+
+    expect(acceptedResponse.status).toBe(202);
+    const accepted = (await acceptedResponse.json()) as { messageId: string };
+
+    await waitFor(async () => {
+      const messagesResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages`, {
+        headers: {
+          authorization: "Bearer token-1"
+        }
+      });
+      const page = (await messagesResponse.json()) as { items: Array<{ id: string }> };
+      return page.items.some((item) => item.id === accepted.messageId);
+    });
+
+    const messagesResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages`, {
+      headers: {
+        authorization: "Bearer token-1"
+      }
+    });
+    const page = (await messagesResponse.json()) as { items: Array<{ id: string; role: string; content: unknown }> };
+    expect(page.items.find((item) => item.id === accepted.messageId)).toEqual(
+      expect.objectContaining({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "describe this"
+          },
+          {
+            type: "image",
+            image: "data:image/png;base64,AAAA",
+            mediaType: "image/png"
+          }
+        ]
+      })
+    );
+  });
+
   it("manually requeues quarantined runs over HTTP", async () => {
     const gateway = new FakeModelGateway(20);
     const persistence = createMemoryRuntimePersistence();

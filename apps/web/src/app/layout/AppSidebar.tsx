@@ -355,7 +355,15 @@ function RuntimeSidebar(props: SidebarProps) {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={props.refreshWorkspaceIndex} title="Refresh workspace list">
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8"
+                onClick={() => {
+                  void props.refreshWorkspaceIndex();
+                }}
+                title="Refresh workspace list"
+              >
                 <RotateCcw className="h-4 w-4" />
               </Button>
               {props.workspaceManagementEnabled ? (

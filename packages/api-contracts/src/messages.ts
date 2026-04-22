@@ -220,8 +220,28 @@ export const chatMessageSchema = z.union([
   toolChatMessageSchema
 ]);
 
+export const createMessageContentSchema = z.union([
+  z.string().trim().min(1),
+  z
+    .array(z.union([textMessagePartSchema, imageMessagePartSchema, fileMessagePartSchema]))
+    .min(1)
+    .refine(
+      (parts) =>
+        parts.some((part) => {
+          if (part.type === "text") {
+            return part.text.trim().length > 0;
+          }
+
+          return true;
+        }),
+      {
+        message: "Message content must include non-empty text or at least one attachment."
+      }
+    )
+]);
+
 export const createMessageRequestSchema = z.object({
-  content: z.string().min(1),
+  content: createMessageContentSchema,
   metadata: jsonObjectSchema.optional(),
   runningRunBehavior: z.enum(["queue", "interrupt"]).optional()
 });

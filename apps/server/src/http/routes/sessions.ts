@@ -79,17 +79,23 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: AppDep
     return reply.send(sessionQueueSchema.parse(queue));
   });
 
-  app.post("/api/v1/sessions/:sessionId/messages", async (request, reply) => {
-    const params = createParamsSchema("sessionId").parse(request.params);
-    const input = createMessageRequestSchema.parse(request.body);
-    const accepted = await dependencies.runtimeService.createSessionMessage({
-      sessionId: params.sessionId,
-      caller: toCallerContext(request),
-      input
-    });
+  app.post(
+    "/api/v1/sessions/:sessionId/messages",
+    {
+      bodyLimit: 16 * 1024 * 1024
+    },
+    async (request, reply) => {
+      const params = createParamsSchema("sessionId").parse(request.params);
+      const input = createMessageRequestSchema.parse(request.body);
+      const accepted = await dependencies.runtimeService.createSessionMessage({
+        sessionId: params.sessionId,
+        caller: toCallerContext(request),
+        input
+      });
 
-    return reply.status(202).send(messageAcceptedSchema.parse(accepted));
-  });
+      return reply.status(202).send(messageAcceptedSchema.parse(accepted));
+    }
+  );
 
   app.get(
     "/api/v1/sessions/:sessionId/events",

@@ -427,6 +427,30 @@ export function extractTextFromContent(content: MessageContent): string {
     .join("\n\n");
 }
 
+export function summarizeContentForDisplay(content: MessageContent): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  const text = content
+    .filter(isTextMessagePart)
+    .map((part) => part.text.trim())
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+  const imageCount = content.filter((part) => part.type === "image").length;
+  const fileCount = content.filter((part) => part.type === "file").length;
+  const attachmentSummary = [
+    ...(imageCount > 0 ? [`${imageCount} image${imageCount === 1 ? "" : "s"}`] : []),
+    ...(fileCount > 0 ? [`${fileCount} file${fileCount === 1 ? "" : "s"}`] : [])
+  ].join(", ");
+
+  if (text && attachmentSummary) {
+    return `${text}\n\n${attachmentSummary}`;
+  }
+
+  return text || attachmentSummary;
+}
+
 export function contentToPromptMessage(role: Message["role"], content: MessageContent): ChatMessage {
   switch (role) {
     case "system":

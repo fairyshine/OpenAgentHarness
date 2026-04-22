@@ -5,6 +5,7 @@ import { create } from "zustand";
 import type { Message, ModelGenerateResponse, Run, RunStep, SessionEventContract } from "@oah/api-contracts";
 
 import type { LiveConversationMessageRecord } from "../support";
+import type { DraftImageAttachment } from "../chat/composer-content";
 
 export type StreamStatus = "idle" | "connecting" | "listening" | "open" | "error";
 
@@ -16,6 +17,7 @@ type StreamState = {
   run: Run | null;
   runSteps: RunStep[];
   draftMessage: string;
+  draftAttachments: DraftImageAttachment[];
   liveMessagesByKey: Record<string, LiveConversationMessageRecord>;
   streamState: StreamStatus;
   generateOutput: ModelGenerateResponse | null;
@@ -27,6 +29,7 @@ type StreamState = {
   setRun: Dispatch<SetStateAction<Run | null>>;
   setRunSteps: Dispatch<SetStateAction<RunStep[]>>;
   setDraftMessage: Dispatch<SetStateAction<string>>;
+  setDraftAttachments: Dispatch<SetStateAction<DraftImageAttachment[]>>;
   setLiveMessagesByKey: Dispatch<SetStateAction<Record<string, LiveConversationMessageRecord>>>;
   setStreamState: Dispatch<SetStateAction<StreamStatus>>;
   setGenerateOutput: Dispatch<SetStateAction<ModelGenerateResponse | null>>;
@@ -45,6 +48,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
   run: null,
   runSteps: [],
   draftMessage: "",
+  draftAttachments: [],
   liveMessagesByKey: {},
   streamState: "idle",
   generateOutput: null,
@@ -56,6 +60,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
   setRun: (updater) => set({ run: resolve(updater, get().run) }),
   setRunSteps: (updater) => set({ runSteps: resolve(updater, get().runSteps) }),
   setDraftMessage: (updater) => set({ draftMessage: resolve(updater, get().draftMessage) }),
+  setDraftAttachments: (updater) => set({ draftAttachments: resolve(updater, get().draftAttachments) }),
   setLiveMessagesByKey: (updater) => set({ liveMessagesByKey: resolve(updater, get().liveMessagesByKey) }),
   setStreamState: (updater) => set({ streamState: resolve(updater, get().streamState) }),
   setGenerateOutput: (updater) => set({ generateOutput: resolve(updater, get().generateOutput) }),

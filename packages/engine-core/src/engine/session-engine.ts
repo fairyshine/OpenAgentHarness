@@ -5,7 +5,7 @@ import { AppError } from "../errors.js";
 import {
   extractTextFromContent,
   isMessageContentForRole,
-  textContent
+  summarizeContentForDisplay
 } from "../execution-message-content.js";
 import type { EngineMessageProjector, TranscriptMessage } from "./message-projections.js";
 import type { ModelInputService } from "./model-input.js";
@@ -329,7 +329,7 @@ export class SessionEngineService {
       sessionId,
       runId,
       role: "user",
-      content: textContent(input.content),
+      content: input.content,
       metadata: input.metadata,
       createdAt: now
     };
@@ -597,8 +597,7 @@ export class SessionEngineService {
         items.push({
           runId: entry.runId,
           messageId,
-          content:
-            typeof message.content === "string" ? message.content : extractTextFromContent(message.content),
+          content: summarizeContentForDisplay(message.content),
           createdAt: entry.createdAt,
           position: items.length + 1
         });
