@@ -2,12 +2,14 @@
 
 This directory contains workspace initialization templates published to `runtime/`.
 
-Included starter runtime:
+Included runtimes:
 
-- `workspace/`
-  - Standard project workspace runtime
-  - References the platform model alias `openai-default`
-  - Intended as the minimal starting point for new workspaces
+- `micro-learning/`
+  - Short teaching loop runtime with `learn` / `plan` / `eval` / `research` agents
+  - Template-adjusted to use `platform/openai-default` only
+- `vibe-coding/`
+  - OpenCode-style coding runtime with `build` / `plan` plus `general` / `explore` subagents
+  - Good fit for repository-oriented coding workflows
 
 Notes:
 

@@ -1,0 +1,18 @@
+default_agent: learn
+models:
+  learn:
+    ref: platform/openai-default
+    temperature: 0.3
+    top_p: 0.9
+  plan:
+    ref: platform/openai-default
+    temperature: 0.1
+    top_p: 0.7
+  eval:
+    ref: platform/openai-default
+    temperature: 0.1
+    top_p: 0.7
+  research:
+    ref: platform/openai-default
+    temperature: 0.2
+    top_p: 0.8

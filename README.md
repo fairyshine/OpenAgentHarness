@@ -122,6 +122,38 @@ cd /Users/wumengsong/Code/OpenAgentHarness
 pnpm local:down
 ```
 
+### Template Deploy Root
+
+The repository ships a self-contained deploy-root template under [`template/deploy-root`](./template/deploy-root/README.md).
+
+What it contains:
+
+- `server.docker.yaml`: the local-stack server config
+- `source/models/`: platform model YAML files you provide
+- `source/runtimes/`: bundled runtime templates such as `micro-learning` and `vibe-coding`
+- `source/tools/`, `source/skills/`, `source/workspaces/`: optional deploy data
+- `scripts/sync_to_minio.py`: a standalone sync script that still works after copying the deploy root outside this repository
+
+Recommended setup:
+
+```bash
+mkdir -p /absolute/path/to/oah-deploy-root
+cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
+
+# 1. Add at least one model YAML under source/models/
+# 2. Ensure llm.default_model in server.docker.yaml matches that model name
+# 3. Optionally trim or extend source/runtimes/, source/tools/, and source/skills/
+```
+
+Two common ways to use it:
+
+- From the repository:
+  `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm local:up`
+- Outside the repository:
+  `cd /absolute/path/to/oah-deploy-root && python3 ./scripts/sync_to_minio.py --delete`
+
+If you pass a relative `OAH_DEPLOY_ROOT` such as `./template/deploy-root`, `pnpm local:up` now resolves it to an absolute path before handing it to Docker Compose.
+
 This local stack is designed for a single OAH instance on host port `8787`. If you want multiple OAH replicas later, keep the same service split and put OAH behind a reverse proxy or a K8s Service instead of binding each replica directly to the host.
 
 **Local addresses:**

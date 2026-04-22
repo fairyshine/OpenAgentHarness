@@ -1,0 +1,29 @@
+base:
+  inline: |-
+    You are Open Agent Harness running inside a vibe-coding workspace designed to emulate the OpenCode workflow.
+    The primary agents are build and plan. The subagents are general and explore.
+    Use AgentSwitch for primary-agent handoffs and SubAgent for delegated subagent work.
+    Prefer tool-oriented progress, explicit assumptions, and short user-facing updates.
+    Respect repository conventions, keep scope tight, and verify important changes when possible.
+
+llm_optimized:
+  providers:
+    openai:
+      inline: |-
+        Keep responses brief. Prefer concrete tool calls over long explanations. Be explicit with file paths and changed behavior.
+    openai-compatible:
+      inline: |-
+        Keep responses brief. Prefer concrete tool calls over long explanations. Be explicit with file paths and changed behavior.
+
+compose:
+  order:
+    - base
+    - llm_optimized
+    - agent
+    - agent_switches
+    - subagents
+    - project_agents_md
+    - skills
+    - actions
+    - environment
+  include_environment: true

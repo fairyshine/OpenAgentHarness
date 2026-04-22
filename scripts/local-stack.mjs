@@ -168,10 +168,12 @@ function ensureLocalRuntimeSources(deployRoot) {
 }
 
 function prepareDockerServerConfigs() {
-  const deployRoot = process.env.OAH_DEPLOY_ROOT;
-  if (!deployRoot) {
+  const requestedDeployRoot = process.env.OAH_DEPLOY_ROOT;
+  if (!requestedDeployRoot) {
     throw new Error("OAH_DEPLOY_ROOT is required.");
   }
+  const deployRoot = path.resolve(requestedDeployRoot);
+  process.env.OAH_DEPLOY_ROOT = deployRoot;
 
   const sourceConfigPath = path.join(deployRoot, "server.docker.yaml");
   if (!existsSync(sourceConfigPath)) {

@@ -122,6 +122,38 @@ cd /Users/wumengsong/Code/OpenAgentHarness
 pnpm local:down
 ```
 
+### Template Deploy Root 用法
+
+仓库内置了一套可自包含的 deploy-root 模板，位置在 [`template/deploy-root`](./template/deploy-root/README.md)。
+
+它包含：
+
+- `server.docker.yaml`：本地整套服务使用的服务端配置
+- `source/models/`：你自行提供的平台模型 YAML
+- `source/runtimes/`：内置 runtime 模板，目前包含 `micro-learning` 和 `vibe-coding`
+- `source/tools/`、`source/skills/`、`source/workspaces/`：可选的部署数据
+- `scripts/sync_to_minio.py`：把 deploy root 拷出仓库后依然可独立运行的同步脚本
+
+推荐准备方式：
+
+```bash
+mkdir -p /absolute/path/to/oah-deploy-root
+cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
+
+# 1. 在 source/models/ 下至少添加一个模型 YAML
+# 2. 确保 server.docker.yaml 里的 llm.default_model 与该模型名一致
+# 3. 按需裁剪或扩展 source/runtimes/、source/tools/、source/skills/
+```
+
+常见有两种使用方式：
+
+- 在仓库里直接启动：
+  `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm local:up`
+- 把 deploy root 单独拷出去后再同步：
+  `cd /absolute/path/to/oah-deploy-root && python3 ./scripts/sync_to_minio.py --delete`
+
+如果你传的是相对路径，比如 `./template/deploy-root`，`pnpm local:up` 现在也会先把它解析成绝对路径，再交给 Docker Compose。
+
 这套本地 compose 默认是单实例 OAH 入口，直接占用宿主机 `8787` 端口。后续如果要多副本，服务拆分结构本身不用变，只需要把 OAH 放到反向代理或 K8s Service 后面，不要让每个副本都直接绑宿主机端口。
 
 **本地地址：**
