@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { Session, Workspace, WorkspaceCatalog } from "@oah/api-contracts";
 
@@ -39,18 +39,31 @@ export function useNavigationState() {
   }, []);
 
   const orderedSavedWorkspaces = savedWorkspaces;
-  const sessionsByWorkspaceId = new Map<string, SavedSessionRecord[]>();
-  for (const entry of savedSessions) {
-    const group = sessionsByWorkspaceId.get(entry.workspaceId) ?? [];
-    group.push(entry);
-    sessionsByWorkspaceId.set(entry.workspaceId, group);
-  }
-  const activeWorkspaceId = session?.workspaceId || workspaceId;
-  const activeSavedWorkspace = savedWorkspaces.find((entry) => entry.id === activeWorkspaceId);
-  const activeWorkspace = workspace?.id === activeWorkspaceId ? workspace : null;
-  const currentWorkspaceName = activeWorkspace?.name ?? activeSavedWorkspace?.name ?? activeWorkspaceId ?? "No workspace";
-  const currentSessionName = session?.title?.trim() || session?.id || "No session";
-  const hasActiveSession = Boolean(sessionId.trim() && session);
+  const sessionsByWorkspaceId = useMemo(() => {
+    const next = new Map<string, SavedSessionRecord[]>();
+    for (const entry of savedSessions) {
+      const group = next.get(entry.workspaceId) ?? [];
+      group.push(entry);
+      next.set(entry.workspaceId, group);
+    }
+
+    return next;
+  }, [savedSessions]);
+  const activeWorkspaceId = useMemo(() => session?.workspaceId || workspaceId, [session?.workspaceId, workspaceId]);
+  const activeSavedWorkspace = useMemo(
+    () => savedWorkspaces.find((entry) => entry.id === activeWorkspaceId),
+    [activeWorkspaceId, savedWorkspaces]
+  );
+  const activeWorkspace = useMemo(
+    () => (workspace?.id === activeWorkspaceId ? workspace : null),
+    [activeWorkspaceId, workspace]
+  );
+  const currentWorkspaceName = useMemo(
+    () => activeWorkspace?.name ?? activeSavedWorkspace?.name ?? activeWorkspaceId ?? "No workspace",
+    [activeSavedWorkspace?.name, activeWorkspace?.name, activeWorkspaceId]
+  );
+  const currentSessionName = useMemo(() => session?.title?.trim() || session?.id || "No session", [session?.id, session?.title]);
+  const hasActiveSession = useMemo(() => Boolean(sessionId.trim() && session), [session, sessionId]);
 
   return {
     workspaceDraft,

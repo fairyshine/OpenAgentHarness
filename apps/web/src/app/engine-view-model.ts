@@ -11,37 +11,8 @@ import {
   toModelCallTrace,
   uniqueStrings,
   type LiveConversationMessageRecord,
-  type ModelCallTrace,
-  type ModelCallTraceMessage
+  type ModelCallTrace
 } from "./support";
-
-function resolveMessageSystemMessages(message: Message | null, traces: ModelCallTrace[]): ModelCallTraceMessage[] {
-  if (!message) {
-    return [];
-  }
-
-  const snapshot = readMessageSystemPromptSnapshot(message);
-  if (snapshot.length > 0) {
-    return snapshot;
-  }
-
-  const stepRef = readMessageModelCallStepRef(message);
-  if (stepRef?.stepId) {
-    const matchedTrace = traces.find((trace) => trace.id === stepRef.stepId);
-    if (matchedTrace) {
-      return matchedTrace.input.messages.filter((traceMessage) => traceMessage.role === "system");
-    }
-  }
-
-  if (stepRef?.stepSeq !== undefined) {
-    const matchedTrace = traces.find((trace) => trace.seq === stepRef.stepSeq);
-    if (matchedTrace) {
-      return matchedTrace.input.messages.filter((traceMessage) => traceMessage.role === "system");
-    }
-  }
-
-  return [];
-}
 
 function readEventMessageId(event: SessionEventContract) {
   return typeof event.data.messageId === "string" ? event.data.messageId : undefined;
@@ -131,9 +102,17 @@ function projectRunConversation(messages: Message[], events: SessionEventContrac
   }
 
   const messagesById = new Map(messages.map((message) => [readComparableMessageId(message), message] as const));
-  const deltaMessageIds = new Set(
-    events.flatMap((event) => (event.event === "message.delta" ? [readEventMessageId(event)].filter((value): value is string => Boolean(value)) : []))
-  );
+  const deltaMessageIds = new Set<string>();
+  for (const event of events) {
+    if (event.event !== "message.delta") {
+      continue;
+    }
+
+    const messageId = readEventMessageId(event);
+    if (messageId) {
+      deltaMessageIds.add(messageId);
+    }
+  }
   const runMessagesById = new Set(messages.map((message) => readComparableMessageId(message)));
   const projected: Message[] = [];
   const seenProjectedMessageIds = new Set<string>();
@@ -249,9 +228,8 @@ function projectRunConversation(messages: Message[], events: SessionEventContrac
     return [...projected, ...fallbackMessages];
   }
 
-  const leadingFallbackMessages = messages
-    .slice(0, firstProjectedMessageIndex)
-    .filter((message) => fallbackMessages.some((candidate) => candidate.id === message.id));
+  const fallbackMessageIds = new Set(fallbackMessages.map((message) => message.id));
+  const leadingFallbackMessages = messages.slice(0, firstProjectedMessageIndex).filter((message) => fallbackMessageIds.has(message.id));
   const leadingFallbackIds = new Set(leadingFallbackMessages.map((message) => message.id));
   const trailingFallbackMessages = fallbackMessages.filter((message) => !leadingFallbackIds.has(message.id));
 
@@ -354,6 +332,8 @@ export function buildRuntimeViewModel(params: {
 }) {
   const visibleMessages = params.messages.filter((message) => !params.queuedMessageIds.has(message.id));
   const modelCallTraces = params.runSteps.map(toModelCallTrace).filter((trace): trace is ModelCallTrace => trace !== null);
+  const modelCallTracesById = new Map(modelCallTraces.map((trace) => [trace.id, trace] as const));
+  const modelCallTracesBySeq = new Map(modelCallTraces.map((trace) => [trace.seq, trace] as const));
   const firstModelCallTrace = modelCallTraces[0] ?? null;
   const latestModelCallTrace = modelCallTraces.at(-1) ?? null;
   const selectedModelCallTrace = modelCallTraces.find((trace) => trace.id === params.selectedTraceId) ?? firstModelCallTrace;
@@ -362,7 +342,22 @@ export function buildRuntimeViewModel(params: {
   const latestModelMessageCounts = countMessagesByRole(latestModelCallTrace?.input.messages ?? []);
   const selectedSessionMessage =
     visibleMessages.find((message) => message.id === params.selectedMessageId) ?? visibleMessages[0] ?? null;
-  const selectedMessageSystemMessages = resolveMessageSystemMessages(selectedSessionMessage, modelCallTraces);
+  const selectedMessageSystemMessages = (() => {
+    if (!selectedSessionMessage) {
+      return [];
+    }
+
+    const snapshot = readMessageSystemPromptSnapshot(selectedSessionMessage);
+    if (snapshot.length > 0) {
+      return snapshot;
+    }
+
+    const stepRef = readMessageModelCallStepRef(selectedSessionMessage);
+    const matchedTrace =
+      (stepRef?.stepId ? modelCallTracesById.get(stepRef.stepId) : undefined) ??
+      (stepRef?.stepSeq !== undefined ? modelCallTracesBySeq.get(stepRef.stepSeq) : undefined);
+    return matchedTrace?.input.messages.filter((message) => message.role === "system") ?? [];
+  })();
   const selectedRunStep = params.runSteps.find((step) => step.id === params.selectedStepId) ?? params.runSteps[0] ?? null;
   const selectedSessionEvent =
     params.deferredEvents.find((event) => event.id === params.selectedEventId) ?? params.deferredEvents[0] ?? null;
@@ -376,32 +371,35 @@ export function buildRuntimeViewModel(params: {
   const resolvedModelRefs = uniqueStrings(
     modelCallTraces.map((trace) => trace.input.canonicalModelRef).filter((value): value is string => Boolean(value))
   );
-  const persistedMessagesById = new Map(visibleMessages.map((message) => [message.id, message]));
-  const persistedToolRefKeys = new Set(
-    visibleMessages.flatMap((message) =>
-      contentToolRefs(message.content).map((ref) => `${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`)
-    )
-  );
-  const liveEntries = Object.entries(params.liveMessagesByKey).filter(([, entry]) => {
+  const persistedMessagesById = new Map(visibleMessages.map((message) => [message.id, message] as const));
+  const persistedToolRefKeys = new Set<string>();
+  for (const message of visibleMessages) {
+    for (const ref of contentToolRefs(message.content)) {
+      persistedToolRefKeys.add(`${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`);
+    }
+  }
+  const liveMessages: Message[] = [];
+  for (const [liveMessageKey, entry] of Object.entries(params.liveMessagesByKey)) {
     const hasTextContent = contentText(entry.content).trim().length > 0;
     const toolRefKeys = contentToolRefs(entry.content).map(
       (ref) => `${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`
     );
     if (!hasTextContent && toolRefKeys.length === 0) {
-      return false;
+      continue;
     }
 
-    if (entry.persistedMessageId && persistedMessagesById.has(entry.persistedMessageId)) {
-      return true;
+    if (
+      toolRefKeys.length > 0 &&
+      (!entry.persistedMessageId || !persistedMessagesById.has(entry.persistedMessageId)) &&
+      !toolRefKeys.some((key) => !persistedToolRefKeys.has(key))
+    ) {
+      continue;
     }
 
-    if (toolRefKeys.length === 0) {
-      return hasTextContent;
+    if (toolRefKeys.length === 0 && !hasTextContent) {
+      continue;
     }
 
-    return toolRefKeys.some((key) => !persistedToolRefKeys.has(key));
-  });
-  const liveMessages = liveEntries.flatMap(([liveMessageKey, entry]) => {
     const persistedMessage = entry.persistedMessageId ? persistedMessagesById.get(entry.persistedMessageId) : undefined;
     const liveMessage = buildMessageRecord({
       id: `live:${entry.persistedMessageId ?? liveMessageKey}`,
@@ -412,8 +410,10 @@ export function buildRuntimeViewModel(params: {
       ...(persistedMessage?.metadata || entry.metadata ? { metadata: persistedMessage?.metadata ?? entry.metadata } : {}),
       createdAt: persistedMessage?.createdAt ?? entry.createdAt
     });
-    return liveMessage ? [liveMessage] : [];
-  });
+    if (liveMessage) {
+      liveMessages.push(liveMessage);
+    }
+  }
   const messageFeed = buildProjectedMessageFeed({
     messages: visibleMessages,
     deferredEvents: params.deferredEvents,

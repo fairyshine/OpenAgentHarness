@@ -1,4 +1,5 @@
-import { startTransition, useDeferredValue, useEffect, useEffectEvent, useRef, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/shallow";
 
 import {
   type ActionRunAccepted,
@@ -150,6 +151,46 @@ function readQueuedRunsFromEventData(data: Record<string, unknown>): SessionQueu
   return items;
 }
 
+const SESSION_RUN_LIST_REFRESH_EVENTS = new Set<SessionEventContract["event"]>([
+  "run.queued",
+  "run.started",
+  "run.completed",
+  "run.failed",
+  "run.cancelled",
+  "agent.delegate.started",
+  "agent.delegate.completed",
+  "agent.delegate.failed"
+]);
+
+const RUN_DETAIL_REFRESH_EVENTS = new Set<SessionEventContract["event"]>([
+  "run.queued",
+  "run.started",
+  "run.completed",
+  "run.failed",
+  "run.cancelled",
+  "tool.started",
+  "tool.completed",
+  "tool.failed",
+  "agent.switched",
+  "agent.delegate.started",
+  "agent.delegate.completed",
+  "agent.delegate.failed"
+]);
+
+const ACTIVITY_VISIBLE_EVENTS = new Set<SessionEventContract["event"]>([
+  "run.queued",
+  "run.started",
+  "run.completed",
+  "run.failed",
+  "run.cancelled",
+  "queue.updated",
+  "agent.switched",
+  "agent.delegate.started",
+  "agent.delegate.completed",
+  "agent.delegate.failed",
+  "tool.failed"
+]);
+
 export function useAppController() {
   const {
     connection,
@@ -160,7 +201,18 @@ export function useAppController() {
     setWorkspaceRuntimeFilter,
     setServiceScope,
     setModelDraft
-  } = useSettingsStore();
+  } = useSettingsStore(
+    useShallow((state) => ({
+      connection: state.connection,
+      workspaceRuntimeFilter: state.workspaceRuntimeFilter,
+      serviceScope: state.serviceScope,
+      modelDraft: state.modelDraft,
+      setConnection: state.setConnection,
+      setWorkspaceRuntimeFilter: state.setWorkspaceRuntimeFilter,
+      setServiceScope: state.setServiceScope,
+      setModelDraft: state.setModelDraft
+    }))
+  );
   const {
     messages,
     events,
@@ -168,25 +220,58 @@ export function useAppController() {
     sessionRuns,
     run,
     runSteps,
-    draftMessage,
     liveMessagesByKey,
     streamState,
-    generateOutput,
-    generateBusy,
     setMessages,
     setEvents,
     setSelectedRunId,
     setSessionRuns,
     setRun,
     setRunSteps,
-    setDraftMessage,
     setLiveMessagesByKey,
     setStreamState,
     setGenerateOutput,
     setGenerateBusy
-  } = useStreamStore();
-  const { healthStatus, healthReport, readinessReport, setHealthStatus, setHealthReport, setReadinessReport } = useHealthStore();
-  const { modelProviders, platformModels, setModelProviders, setPlatformModels } = useModelsStore();
+  } = useStreamStore(
+    useShallow((state) => ({
+      messages: state.messages,
+      events: state.events,
+      selectedRunId: state.selectedRunId,
+      sessionRuns: state.sessionRuns,
+      run: state.run,
+      runSteps: state.runSteps,
+      liveMessagesByKey: state.liveMessagesByKey,
+      streamState: state.streamState,
+      setMessages: state.setMessages,
+      setEvents: state.setEvents,
+      setSelectedRunId: state.setSelectedRunId,
+      setSessionRuns: state.setSessionRuns,
+      setRun: state.setRun,
+      setRunSteps: state.setRunSteps,
+      setLiveMessagesByKey: state.setLiveMessagesByKey,
+      setStreamState: state.setStreamState,
+      setGenerateOutput: state.setGenerateOutput,
+      setGenerateBusy: state.setGenerateBusy
+    }))
+  );
+  const { healthStatus, healthReport, readinessReport, setHealthStatus, setHealthReport, setReadinessReport } = useHealthStore(
+    useShallow((state) => ({
+      healthStatus: state.healthStatus,
+      healthReport: state.healthReport,
+      readinessReport: state.readinessReport,
+      setHealthStatus: state.setHealthStatus,
+      setHealthReport: state.setHealthReport,
+      setReadinessReport: state.setReadinessReport
+    }))
+  );
+  const { modelProviders, platformModels, setModelProviders, setPlatformModels } = useModelsStore(
+    useShallow((state) => ({
+      modelProviders: state.modelProviders,
+      platformModels: state.platformModels,
+      setModelProviders: state.setModelProviders,
+      setPlatformModels: state.setPlatformModels
+    }))
+  );
   const {
     surfaceMode,
     mainViewMode,
@@ -197,9 +282,7 @@ export function useAppController() {
     selectedStepId,
     selectedEventId,
     consoleOpen,
-    consoleHeight,
     consoleFilter,
-    activity,
     errorMessage,
     activeError,
     streamRevision,
@@ -212,13 +295,42 @@ export function useAppController() {
     setSelectedStepId,
     setSelectedEventId,
     setConsoleOpen,
-    setConsoleHeight,
     setConsoleFilter,
     setActivity,
     setErrorMessage,
     setActiveError,
     setStreamRevision
-  } = useUiStore();
+  } = useUiStore(
+    useShallow((state) => ({
+      surfaceMode: state.surfaceMode,
+      mainViewMode: state.mainViewMode,
+      inspectorTab: state.inspectorTab,
+      timelineInspectorMode: state.timelineInspectorMode,
+      selectedTraceId: state.selectedTraceId,
+      selectedMessageId: state.selectedMessageId,
+      selectedStepId: state.selectedStepId,
+      selectedEventId: state.selectedEventId,
+      consoleOpen: state.consoleOpen,
+      consoleFilter: state.consoleFilter,
+      errorMessage: state.errorMessage,
+      activeError: state.activeError,
+      streamRevision: state.streamRevision,
+      setSurfaceMode: state.setSurfaceMode,
+      setMainViewMode: state.setMainViewMode,
+      setInspectorTab: state.setInspectorTab,
+      setTimelineInspectorMode: state.setTimelineInspectorMode,
+      setSelectedTraceId: state.setSelectedTraceId,
+      setSelectedMessageId: state.setSelectedMessageId,
+      setSelectedStepId: state.setSelectedStepId,
+      setSelectedEventId: state.setSelectedEventId,
+      setConsoleOpen: state.setConsoleOpen,
+      setConsoleFilter: state.setConsoleFilter,
+      setActivity: state.setActivity,
+      setErrorMessage: state.setErrorMessage,
+      setActiveError: state.setActiveError,
+      setStreamRevision: state.setStreamRevision
+    }))
+  );
   const {
     pendingSessionAgentName,
     switchingSessionAgentId,
@@ -228,7 +340,18 @@ export function useAppController() {
     setSwitchingSessionAgentId,
     setPendingSessionModelRef,
     setSwitchingSessionModelId
-  } = useSessionAgentStore();
+  } = useSessionAgentStore(
+    useShallow((state) => ({
+      pendingSessionAgentName: state.pendingSessionAgentName,
+      switchingSessionAgentId: state.switchingSessionAgentId,
+      pendingSessionModelRef: state.pendingSessionModelRef,
+      switchingSessionModelId: state.switchingSessionModelId,
+      setPendingSessionAgentName: state.setPendingSessionAgentName,
+      setSwitchingSessionAgentId: state.setSwitchingSessionAgentId,
+      setPendingSessionModelRef: state.setPendingSessionModelRef,
+      setSwitchingSessionModelId: state.setSwitchingSessionModelId
+    }))
+  );
   const navigation = useNavigationState();
   const {
     workspaceDraft,
@@ -295,66 +418,102 @@ export function useAppController() {
   const conversationTailRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoFollowConversationRef = useRef(true);
   const selectedRunIdValue = selectedRunId.trim();
-  const hasActiveSessionRun = sessionRuns.some((item) => !isTerminalRunStatus(item.status));
-  const normalizedServiceScope = normalizeServiceScope(serviceScope);
-  const serviceFilteredWorkspaces = orderedSavedWorkspaces.filter((entry) =>
-    serviceScopeMatches(normalizedServiceScope, entry.serviceName)
+  const hasActiveSessionRun = useMemo(
+    () => sessionRuns.some((item) => !isTerminalRunStatus(item.status)),
+    [sessionRuns]
   );
-  const knownServiceNames = Array.from(
-    new Set(
-      [
-        ...orderedSavedWorkspaces.map((entry) => normalizeServiceName(entry.serviceName)),
-        normalizeServiceName(workspace?.serviceName),
-        normalizeServiceName(normalizedServiceScope)
-      ].filter((entry): entry is string => Boolean(entry))
-    )
-  ).sort((left, right) => left.localeCompare(right));
-  const serviceScopeOptions = [
-    {
-      value: SERVICE_SCOPE_ALL,
-      label: serviceScopeLabel(SERVICE_SCOPE_ALL)
-    },
-    {
-      value: SERVICE_SCOPE_DEFAULT,
-      label: serviceScopeLabel(SERVICE_SCOPE_DEFAULT)
-    },
-    ...knownServiceNames.map((entry) => ({
-      value: entry,
-      label: serviceScopeLabel(entry)
-    }))
-  ];
-  const selectedServiceScopeLabel = serviceScopeLabel(normalizedServiceScope);
+  const normalizedServiceScope = useMemo(() => normalizeServiceScope(serviceScope), [serviceScope]);
+  const serviceFilteredWorkspaces = useMemo(
+    () => orderedSavedWorkspaces.filter((entry) => serviceScopeMatches(normalizedServiceScope, entry.serviceName)),
+    [normalizedServiceScope, orderedSavedWorkspaces]
+  );
+  const knownServiceNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            ...orderedSavedWorkspaces.map((entry) => normalizeServiceName(entry.serviceName)),
+            normalizeServiceName(workspace?.serviceName),
+            normalizeServiceName(normalizedServiceScope)
+          ].filter((entry): entry is string => Boolean(entry))
+        )
+      ).sort((left, right) => left.localeCompare(right)),
+    [normalizedServiceScope, orderedSavedWorkspaces, workspace?.serviceName]
+  );
+  const serviceScopeOptions = useMemo(
+    () => [
+      {
+        value: SERVICE_SCOPE_ALL,
+        label: serviceScopeLabel(SERVICE_SCOPE_ALL)
+      },
+      {
+        value: SERVICE_SCOPE_DEFAULT,
+        label: serviceScopeLabel(SERVICE_SCOPE_DEFAULT)
+      },
+      ...knownServiceNames.map((entry) => ({
+        value: entry,
+        label: serviceScopeLabel(entry)
+      }))
+    ],
+    [knownServiceNames]
+  );
+  const selectedServiceScopeLabel = useMemo(() => serviceScopeLabel(normalizedServiceScope), [normalizedServiceScope]);
   const workspaceRuntimeFilterValue = workspaceRuntimeFilter.trim();
-  const workspaceRuntimeFilterOptions = Array.from(
-    new Set(
-      [
-        ...workspaceRuntimes,
-        ...serviceFilteredWorkspaces.map((entry) => entry.runtime ?? ""),
-        workspaceRuntimeFilterValue
-      ]
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0)
-    )
-  ).sort((left, right) => left.localeCompare(right));
-  const filteredSavedWorkspaces = workspaceRuntimeFilterValue
-    ? serviceFilteredWorkspaces.filter((entry) => (entry.runtime ?? "").trim() === workspaceRuntimeFilterValue)
-    : serviceFilteredWorkspaces;
-  const filteredSavedSessionsCount = filteredSavedWorkspaces.reduce(
-    (count, entry) => count + (sessionsByWorkspaceId.get(entry.id)?.length ?? 0),
-    0
+  const workspaceRuntimeFilterOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            ...workspaceRuntimes,
+            ...serviceFilteredWorkspaces.map((entry) => entry.runtime ?? ""),
+            workspaceRuntimeFilterValue
+          ]
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0)
+        )
+      ).sort((left, right) => left.localeCompare(right)),
+    [serviceFilteredWorkspaces, workspaceRuntimeFilterValue, workspaceRuntimes]
   );
-  const runtimeViewModel = buildRuntimeViewModel({
-    messages,
-    queuedMessageIds: new Set(sessionQueuedRuns.map((item) => item.messageId)),
-    runSteps,
-    deferredEvents,
-    liveMessagesByKey,
-    selectedTraceId,
-    selectedMessageId,
-    selectedStepId,
-    selectedEventId,
-    sessionId
-  });
+  const filteredSavedWorkspaces = useMemo(
+    () =>
+      workspaceRuntimeFilterValue
+        ? serviceFilteredWorkspaces.filter((entry) => (entry.runtime ?? "").trim() === workspaceRuntimeFilterValue)
+        : serviceFilteredWorkspaces,
+    [serviceFilteredWorkspaces, workspaceRuntimeFilterValue]
+  );
+  const filteredSavedSessionsCount = useMemo(
+    () =>
+      filteredSavedWorkspaces.reduce((count, entry) => count + (sessionsByWorkspaceId.get(entry.id)?.length ?? 0), 0),
+    [filteredSavedWorkspaces, sessionsByWorkspaceId]
+  );
+  const queuedMessageIds = useMemo(() => new Set(sessionQueuedRuns.map((item) => item.messageId)), [sessionQueuedRuns]);
+  const runtimeViewModel = useMemo(
+    () =>
+      buildRuntimeViewModel({
+        messages,
+        queuedMessageIds,
+        runSteps,
+        deferredEvents,
+        liveMessagesByKey,
+        selectedTraceId,
+        selectedMessageId,
+        selectedStepId,
+        selectedEventId,
+        sessionId
+      }),
+    [
+      deferredEvents,
+      liveMessagesByKey,
+      messages,
+      queuedMessageIds,
+      runSteps,
+      selectedEventId,
+      selectedMessageId,
+      selectedStepId,
+      selectedTraceId,
+      sessionId
+    ]
+  );
   const {
     modelCallTraces,
     firstModelCallTrace,
@@ -375,7 +534,14 @@ export function useAppController() {
     resolvedModelRefs,
     messageFeed
   } = runtimeViewModel;
-  const consoleEntries = buildRuntimeConsoleEntries(events, activeError);
+  const isConsoleVisible = consoleOpen && surfaceMode === "engine";
+  const consoleEntries = useMemo(() => {
+    if (!isConsoleVisible) {
+      return [];
+    }
+
+    return buildRuntimeConsoleEntries(events, activeError);
+  }, [activeError, events, isConsoleVisible]);
 
   async function request<T>(path: string, init?: RequestInit, options?: { auth?: boolean }) {
     const headers = new Headers(init?.headers);
@@ -1139,7 +1305,7 @@ export function useAppController() {
 
       startTransition(() => {
         if (options?.clearDraft !== false) {
-          setDraftMessage("");
+          useStreamStore.getState().setDraftMessage("");
         }
         if (shouldDisplayAsQueued) {
           setSessionQueuedRuns((current) => {
@@ -1195,7 +1361,7 @@ export function useAppController() {
       return;
     }
 
-    const content = draftMessage.trim();
+    const content = useStreamStore.getState().draftMessage.trim();
     if (!content) {
       return;
     }
@@ -1216,7 +1382,7 @@ export function useAppController() {
       return;
     }
 
-    const content = draftMessage.trim();
+    const content = useStreamStore.getState().draftMessage.trim();
     if (!content) {
       return;
     }
@@ -1703,8 +1869,12 @@ export function useAppController() {
         "agent.delegate.failed"
       ].includes(event.event)
     ) {
-      void refreshSessionRuns(true);
-      scheduleRunRefresh(event.runId);
+      if (SESSION_RUN_LIST_REFRESH_EVENTS.has(event.event)) {
+        void refreshSessionRuns(true);
+      }
+      if (RUN_DETAIL_REFRESH_EVENTS.has(event.event)) {
+        scheduleRunRefresh(event.runId);
+      }
     }
 
     if (event.event === "agent.delegate.started") {
@@ -1716,7 +1886,9 @@ export function useAppController() {
       scheduleMessagesRefresh();
     }
 
-    setActivity(`${event.event}${event.runId ? ` · ${event.runId}` : ""}`);
+    if (ACTIVITY_VISIBLE_EVENTS.has(event.event)) {
+      setActivity(`${event.event}${event.runId ? ` · ${event.runId}` : ""}`);
+    }
   });
 
   useEffect(() => {
@@ -1774,7 +1946,7 @@ export function useAppController() {
     void navigationActions.refreshWorkspaceRuntimes(true);
     void refreshModelProviders(true);
     void refreshPlatformModels(true);
-  }, [connection.baseUrl, connection.token, sessionId, workspaceId]);
+  }, [connection.baseUrl, connection.token]);
 
   useEffect(() => {
     platformModelStreamAbortRef.current?.abort();
@@ -1868,7 +2040,7 @@ export function useAppController() {
       setRunSteps([]);
       setSelectedRunId("");
     });
-  }, [connection.baseUrl, connection.token, sessionId, workspaceId]);
+  }, [connection.baseUrl, connection.token, sessionId]);
 
   useEffect(() => {
     if (!sessionId.trim() || session?.id !== sessionId) {
@@ -2061,21 +2233,80 @@ export function useAppController() {
     setInspectorTab("timeline");
   }
 
-  return {
-    errorMessage,
-    activeError,
-    surfaceMode,
-    headerProps: {
+  const handlePingHealth = useEffectEvent(() => {
+    void pingHealth();
+  });
+  const handleRefreshModelProviders = useEffectEvent(() => {
+    void refreshModelProviders();
+  });
+  const handleRefreshPlatformModels = useEffectEvent(() => {
+    void refreshPlatformModels();
+  });
+  const handleGenerateOnce = useEffectEvent(() => {
+    void generateOnce();
+  });
+  const handleRefreshSessionRuns = useEffectEvent(() => {
+    void refreshSessionRuns(false, { includeSteps: true });
+  });
+  const handleRefreshRunById = useEffectEvent((targetId: string) => {
+    void refreshRun(targetId, true);
+  });
+  const handleRefreshRunStepsById = useEffectEvent((targetId: string) => {
+    void refreshRunSteps(targetId, true);
+  });
+  const handleLoadOlderMessages = useEffectEvent(() => {
+    void loadOlderMessages();
+  });
+  const handleRefreshMessages = useEffectEvent(() => {
+    void refreshMessages();
+  });
+  const handleSendMessage = useEffectEvent(() => {
+    void sendMessage();
+  });
+  const handleGuideMessage = useEffectEvent(() => {
+    void guideMessage();
+  });
+  const handleGuideQueuedSessionInput = useEffectEvent((runId: string) => {
+    void guideQueuedSessionInput(runId);
+  });
+  const handleRefreshRun = useEffectEvent(() => {
+    void refreshRun();
+  });
+  const handleRefreshRunSteps = useEffectEvent(() => {
+    void refreshRunSteps();
+  });
+  const handleCancelCurrentRun = useEffectEvent(() => {
+    void cancelCurrentRun();
+  });
+  const handleSwitchSessionAgent = useEffectEvent((targetId: string, activeAgentName: string) => {
+    void switchSessionAgent(targetId, activeAgentName);
+  });
+  const handleUpdateSessionModel = useEffectEvent((targetId: string, modelRef: string | null) => {
+    void updateSessionModel(targetId, modelRef);
+  });
+  const handleRefreshWorkspace = useEffectEvent((targetId: string) => {
+    void navigationActions.refreshWorkspace(targetId, true);
+  });
+  const handleInspectConsoleEntry = useEffectEvent((entry: RuntimeConsoleEntry) => {
+    inspectConsoleEntry(entry);
+  });
+  const headerProps = useMemo(
+    () => ({
       serviceScopeOptions
-    },
-    storageSurfaceProps: storageController.storageSurfaceProps,
-    providerSurfaceProps: {
-      pingHealth: () => void pingHealth(),
-      refreshModelProviders: () => void refreshModelProviders(),
-      refreshPlatformModels: () => void refreshPlatformModels(),
-      generateOnce: () => void generateOnce()
-    },
-    sidebarSurfaceProps: {
+    }),
+    [serviceScopeOptions]
+  );
+  const providerSurfaceProps = useMemo(
+    () => ({
+      pingHealth: handlePingHealth,
+      refreshModelProviders: handleRefreshModelProviders,
+      refreshPlatformModels: handleRefreshPlatformModels,
+      generateOnce: handleGenerateOnce
+    }),
+    [handleGenerateOnce, handlePingHealth, handleRefreshModelProviders, handleRefreshPlatformModels]
+  );
+  const sidebarSurfaceProps = useMemo(
+    () => ({
       serviceScope: normalizedServiceScope,
       selectedServiceScopeLabel,
       workspaceRuntimeFilterOptions,
@@ -2091,16 +2322,16 @@ export function useAppController() {
       workspaceDraft,
       setWorkspaceDraft,
       workspaceRuntimes,
-      createWorkspace: () => void navigationActions.createWorkspace(),
-      refreshWorkspaceRuntimes: () => void navigationActions.refreshWorkspaceRuntimes(),
+      createWorkspace: navigationActions.createWorkspace,
+      refreshWorkspaceRuntimes: navigationActions.refreshWorkspaceRuntimes,
       uploadWorkspaceRuntime: navigationActions.uploadWorkspaceRuntime,
       deleteWorkspaceRuntime: navigationActions.deleteWorkspaceRuntime,
-      refreshWorkspaceIndex: () => void navigationActions.refreshWorkspaceIndex(),
-      createSession: () => void navigationActions.createSession(),
+      refreshWorkspaceIndex: navigationActions.refreshWorkspaceIndex,
+      createSession: navigationActions.createSession,
       sessionId,
-      refreshSessionById: (targetId: string) => void navigationActions.refreshSession(targetId),
+      refreshSessionById: navigationActions.refreshSession,
       removeSavedSession: navigationActions.removeSavedSession,
-      renameSession: (targetId: string, title: string) => void navigationActions.renameSession(targetId, title),
+      renameSession: navigationActions.renameSession,
       sessionsByWorkspaceId,
       expandedWorkspaceIds,
       expandedSessionIds,
@@ -2110,7 +2341,7 @@ export function useAppController() {
         setExpandedSessionIds((current) =>
           current.includes(targetId) ? current.filter((entry) => entry !== targetId) : [targetId, ...current].slice(0, 64)
         ),
-      deleteWorkspace: (targetId: string) => void navigationActions.deleteWorkspace(targetId),
+      deleteWorkspace: navigationActions.deleteWorkspace,
       storageOverview: storageController.storageSurfaceProps.storageOverview,
       storageRedisEnabled: storageController.storageSurfaceProps.storageRedisEnabled,
       storageBrowserTab: storageController.storageSurfaceProps.storageBrowserTab,
@@ -2141,12 +2372,82 @@ export function useAppController() {
       onSelectRedisKey: storageController.storageSurfaceProps.onSelectRedisKey,
       onRefreshRedisKeys: storageController.storageSurfaceProps.onRefreshRedisKeys,
       storageBusy: storageController.storageSurfaceProps.storageBusy,
-      pingHealth: () => void pingHealth(),
-      refreshModelProviders: () => void refreshModelProviders(),
-      refreshPlatformModels: () => void refreshPlatformModels(),
+      pingHealth: handlePingHealth,
+      refreshModelProviders: handleRefreshModelProviders,
+      refreshPlatformModels: handleRefreshPlatformModels,
       modelProviders
-    },
-    runtimeDetailSurfaceProps: {
+    }),
+    [
+      activeWorkspaceId,
+      expandedSessionIds,
+      expandedWorkspaceIds,
+      filteredSavedSessionsCount,
+      filteredSavedWorkspaces,
+      handlePingHealth,
+      handleRefreshModelProviders,
+      handleRefreshPlatformModels,
+      modelProviders,
+      navigationActions.createSession,
+      navigationActions.createWorkspace,
+      navigationActions.deleteWorkspace,
+      navigationActions.deleteWorkspaceRuntime,
+      navigationActions.expandWorkspaceInSidebar,
+      navigationActions.openWorkspace,
+      navigationActions.refreshSession,
+      navigationActions.refreshWorkspaceIndex,
+      navigationActions.refreshWorkspaceRuntimes,
+      navigationActions.removeSavedSession,
+      navigationActions.renameSession,
+      navigationActions.toggleWorkspaceExpansion,
+      navigationActions.uploadWorkspaceRuntime,
+      normalizedServiceScope,
+      orderedSavedWorkspaces,
+      savedSessions.length,
+      selectedServiceScopeLabel,
+      sessionId,
+      sessionsByWorkspaceId,
+      setExpandedSessionIds,
+      setShowWorkspaceCreator,
+      setWorkspaceDraft,
+      showWorkspaceCreator,
+      storageController.storageSurfaceProps.onClearStorageTableFilters,
+      storageController.storageSurfaceProps.onRedisKeyPatternChange,
+      storageController.storageSurfaceProps.onRefreshRedisKeys,
+      storageController.storageSurfaceProps.onRefreshStorageOverview,
+      storageController.storageSurfaceProps.onRefreshStorageTable,
+      storageController.storageSurfaceProps.onSelectRedisKey,
+      storageController.storageSurfaceProps.onSelectStorageTable,
+      storageController.storageSurfaceProps.onStorageBrowserTabChange,
+      storageController.storageSurfaceProps.onStorageTableErrorCodeChange,
+      storageController.storageSurfaceProps.onStorageTableRecoveryStateChange,
+      storageController.storageSurfaceProps.onStorageTableRunIdChange,
+      storageController.storageSurfaceProps.onStorageTableSearchChange,
+      storageController.storageSurfaceProps.onStorageTableSessionIdChange,
+      storageController.storageSurfaceProps.onStorageTableStatusChange,
+      storageController.storageSurfaceProps.onStorageTableWorkspaceIdChange,
+      storageController.storageSurfaceProps.redisKeyPage,
+      storageController.storageSurfaceProps.redisKeyPattern,
+      storageController.storageSurfaceProps.selectedRedisKey,
+      storageController.storageSurfaceProps.selectedStorageTable,
+      storageController.storageSurfaceProps.storageBrowserTab,
+      storageController.storageSurfaceProps.storageBusy,
+      storageController.storageSurfaceProps.storageOverview,
+      storageController.storageSurfaceProps.storageRedisEnabled,
+      storageController.storageSurfaceProps.storageTableErrorCode,
+      storageController.storageSurfaceProps.storageTableRecoveryState,
+      storageController.storageSurfaceProps.storageTableRunId,
+      storageController.storageSurfaceProps.storageTableSearch,
+      storageController.storageSurfaceProps.storageTableSessionId,
+      storageController.storageSurfaceProps.storageTableStatus,
+      storageController.storageSurfaceProps.storageTableWorkspaceId,
+      workspaceDraft,
+      workspaceManagementEnabled,
+      workspaceRuntimeFilterOptions,
+      workspaceRuntimes
+    ]
+  );
+  const runtimeDetailSurfaceProps = useMemo(
+    () => ({
       mainViewMode,
       setMainViewMode,
       setSurfaceMode,
@@ -2159,12 +2460,12 @@ export function useAppController() {
       workspace,
       workspaceId,
       sessionRuns,
-      refreshSessionRuns: () => void refreshSessionRuns(false, { includeSteps: true }),
+      refreshSessionRuns: handleRefreshSessionRuns,
       sessionEvents: events,
       deferredEvents,
       messageFeed,
-      refreshRunById: (targetId: string) => void refreshRun(targetId, true),
-      refreshRunStepsById: (targetId: string) => void refreshRunSteps(targetId, true),
+      refreshRunById: handleRefreshRunById,
+      refreshRunStepsById: handleRefreshRunStepsById,
       conversationThreadRef,
       conversationTailRef,
       shouldAutoFollowConversationRef,
@@ -2172,15 +2473,15 @@ export function useAppController() {
       messagesLoading,
       loadingOlderMessages,
       queuedSessionRuns: sessionQueuedRuns,
-      loadOlderMessages: () => void loadOlderMessages(),
-      refreshMessages: () => void refreshMessages(),
-      sendMessage: () => void sendMessage(),
-      guideMessage: () => void guideMessage(),
-      guideQueuedSessionInput: (runId: string) => void guideQueuedSessionInput(runId),
+      loadOlderMessages: handleLoadOlderMessages,
+      refreshMessages: handleRefreshMessages,
+      sendMessage: handleSendMessage,
+      guideMessage: handleGuideMessage,
+      guideQueuedSessionInput: handleGuideQueuedSessionInput,
       guideMessageSupported: true,
-      refreshRun: () => void refreshRun(),
-      refreshRunSteps: () => void refreshRunSteps(),
-      cancelCurrentRun: () => void cancelCurrentRun(),
+      refreshRun: handleRefreshRun,
+      refreshRunSteps: handleRefreshRunSteps,
+      cancelCurrentRun: handleCancelCurrentRun,
       modelCallTraces,
       latestModelCallTrace,
       firstModelCallTrace,
@@ -2201,19 +2502,99 @@ export function useAppController() {
       selectedSessionEvent,
       catalog,
       isSwitchingSessionAgent: switchingSessionAgentId === session?.id && pendingSessionAgentName !== null,
-      switchSessionAgent: (targetId: string, activeAgentName: string) => void switchSessionAgent(targetId, activeAgentName),
+      switchSessionAgent: handleSwitchSessionAgent,
       isSwitchingSessionModel: switchingSessionModelId === session?.id,
-      updateSessionModel: (targetId: string, modelRef: string | null) => void updateSessionModel(targetId, modelRef),
+      updateSessionModel: handleUpdateSessionModel,
       triggerWorkspaceAction,
-      refreshWorkspace: (targetId: string) => void navigationActions.refreshWorkspace(targetId, true),
+      refreshWorkspace: handleRefreshWorkspace,
       isRunning: hasActiveSessionRun,
       fileManager: workspaceFileManager.fileManagerSurfaceProps
-    },
-    consolePanelProps: {
+    }),
+    [
+      allAdvertisedToolNames,
+      allEngineToolNames,
+      allEngineTools,
+      allToolServers,
+      catalog,
+      composedSystemMessages,
+      conversationTailRef,
+      conversationThreadRef,
+      currentSessionName,
+      currentWorkspaceName,
+      deferredEvents,
+      downloadSessionTrace,
+      events,
+      workspaceFileManager.fileManagerSurfaceProps,
+      firstModelCallTrace,
+      handleCancelCurrentRun,
+      handleGuideMessage,
+      handleGuideQueuedSessionInput,
+      handleLoadOlderMessages,
+      handleRefreshMessages,
+      handleRefreshRun,
+      handleRefreshRunById,
+      handleRefreshRunSteps,
+      handleRefreshRunStepsById,
+      handleRefreshSessionRuns,
+      handleRefreshWorkspace,
+      handleSendMessage,
+      handleSwitchSessionAgent,
+      handleUpdateSessionModel,
+      hasActiveSession,
+      hasActiveSessionRun,
+      inspectorSubtitle,
+      latestEvent,
+      latestModelCallTrace,
+      latestModelMessageCounts,
+      loadingOlderMessages,
+      mainViewMode,
+      messageFeed,
+      messagesLoading,
+      messagesNextCursor,
+      modelCallTraces,
+      pendingSessionAgentName,
+      queuedMessageIds,
+      resolvedModelNames,
+      resolvedModelRefs,
+      selectedModelCallTrace,
+      selectedRunStep,
+      selectedSessionEvent,
+      selectedSessionMessage,
+      selectedMessageSystemMessages,
+      session,
+      sessionRuns,
+      sessionQueuedRuns,
+      setMainViewMode,
+      setSurfaceMode,
+      shouldAutoFollowConversationRef,
+      storedMessageCounts,
+      switchingSessionAgentId,
+      switchingSessionModelId,
+      triggerWorkspaceAction,
+      workspace,
+      workspaceFileManager.fileManagerSurfaceProps,
+      workspaceId
+    ]
+  );
+  const consolePanelProps = useMemo(
+    () => ({
       isOpen: consoleOpen && surfaceMode === "engine",
       entries: consoleEntries,
-      onEntryInspect: inspectConsoleEntry,
+      onEntryInspect: handleInspectConsoleEntry,
       openErrors: openConsoleForErrors
-    }
+    }),
+    [consoleEntries, consoleOpen, handleInspectConsoleEntry, openConsoleForErrors, surfaceMode]
+  );
+
+  return {
+    errorMessage,
+    activeError,
+    surfaceMode,
+    headerProps,
+    storageSurfaceProps: storageController.storageSurfaceProps,
+    providerSurfaceProps,
+    sidebarSurfaceProps,
+    runtimeDetailSurfaceProps,
+    consolePanelProps
   };
 }

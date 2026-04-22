@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useCallback, useState } from "react";
+import { memo, useEffect, useRef, useCallback, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Archive, ArrowRight, Bot, ChevronRight, Folder, Loader2, RefreshCw, Send, Sparkles, Square, Wrench, CornerDownRight } from "lucide-react";
@@ -13,7 +13,7 @@ import type { Message } from "@oah/api-contracts";
 import type { useAppController } from "../use-app-controller";
 import { Badge } from "@/components/ui/badge";
 import { WorkspaceFileManagerPanel } from "./WorkspaceFileManagerPanel";
-import { resolveMessageAgentInfo } from "./message-agent-info";
+import { buildMessageAgentInfoIndex } from "./message-agent-info";
 
 type RuntimeProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"];
 type ToolStatus = "running" | "started" | "completed" | "failed";
@@ -578,6 +578,106 @@ function isToolOnlyMessage(content: Message["content"]) {
   return hasToolOrApproval && !hasText && !hasReasoning;
 }
 
+type ConversationComposerProps = Pick<
+  RuntimeProps,
+  "refreshMessages" | "sendMessage" | "cancelCurrentRun"
+> & {
+  isRunning: boolean;
+  isSwitchingSessionAgent: boolean;
+};
+
+const ConversationComposer = memo(function ConversationComposer(props: ConversationComposerProps) {
+  const draftMessage = useStreamStore((state) => state.draftMessage);
+  const setDraftMessage = useStreamStore((state) => state.setDraftMessage);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const hasDraftMessage = draftMessage.trim().length > 0;
+  const canSend = !props.isSwitchingSessionAgent && hasDraftMessage;
+  const inputPlaceholder = props.isRunning
+    ? "当前 run 正在执行，回车会先加入队列"
+    : props.isSwitchingSessionAgent
+    ? "Updating session agent…"
+    : "Message the current session";
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  }, [draftMessage]);
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        if (canSend) {
+          props.sendMessage();
+        }
+      }
+    },
+    [canSend, props.sendMessage]
+  );
+
+  return (
+    <div
+      className="pointer-events-auto relative flex items-end gap-2 rounded-xl p-2 shadow-lg"
+      style={{
+        background: "color-mix(in srgb, var(--background) 80%, transparent)",
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
+        border: "1px solid color-mix(in srgb, var(--foreground) 12%, transparent)"
+      }}
+    >
+      <Button
+        onClick={props.refreshMessages}
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9 flex-shrink-0"
+        title="Refresh messages"
+      >
+        <RefreshCw className="h-4 w-4" />
+      </Button>
+
+      <Textarea
+        ref={textareaRef}
+        value={draftMessage}
+        onChange={(event) => setDraftMessage(event.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={inputPlaceholder}
+        disabled={props.isSwitchingSessionAgent}
+        rows={1}
+        className="min-h-[24px] max-h-[200px] flex-1 resize-none border-none bg-transparent px-0 py-2 text-sm shadow-none outline-none focus-visible:ring-0 disabled:opacity-50"
+      />
+
+      {!props.isRunning || canSend ? (
+        <Button
+          onClick={props.sendMessage}
+          disabled={!canSend}
+          size="icon"
+          className="shadow-elegant h-9 w-9 flex-shrink-0"
+          title="Send message"
+        >
+          <Send className="h-4 w-4" />
+        </Button>
+      ) : null}
+
+      {props.isRunning ? (
+        <Button
+          onClick={props.cancelCurrentRun}
+          size="icon"
+          variant="ghost"
+          className="h-9 w-9 flex-shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+          title="Stop run"
+        >
+          <Square className="h-4 w-4 fill-current" />
+        </Button>
+      ) : null}
+    </div>
+  );
+});
+
 /** Render message content — text parts as prose, reasoning as visible context, tool calls/results as chips */
 function MessageContent({
   content,
@@ -676,36 +776,318 @@ function MessageContent({
   );
 }
 
+type ConversationMessageRowProps = {
+  message: Message;
+  agentName?: string;
+  agentMode?: "primary" | "subagent" | "all";
+  onInspectRun: (runId: string) => void;
+};
+
+const ConversationMessageRow = memo(function ConversationMessageRow(props: ConversationMessageRowProps) {
+  const { message, agentName, agentMode, onInspectRun } = props;
+  const isUser = message.role === "user";
+  const isStreaming = message.id.startsWith("live:");
+  const runtimeKind = readRuntimeKind(message.metadata);
+  const isToolOnly = !isUser && isToolOnlyMessage(message.content);
+
+  if (runtimeKind === "compact_boundary") {
+    return (
+      <article className="animate-fade-in py-2 md:py-3">
+        <CompactBoundaryCard message={message} />
+      </article>
+    );
+  }
+
+  if (runtimeKind === "compact_summary") {
+    return (
+      <article className="animate-fade-in py-2 md:py-3">
+        <CompactSummaryCard message={message} />
+      </article>
+    );
+  }
+
+  return (
+    <article className={`group/message animate-fade-in flex gap-3 md:gap-4 py-2 md:py-3 ${isUser ? "flex-row-reverse" : ""}`}>
+      <div
+        className={`flex-shrink-0 w-8 h-8 md:w-9 md:h-9 rounded-full flex items-center justify-center text-sm shadow-elegant overflow-hidden ${
+          isUser ? "bg-foreground text-background text-xs font-medium" : "bg-muted"
+        }`}
+      >
+        {isUser ? "You" : "AI"}
+      </div>
+
+      <div className={`flex-1 ${isUser ? "max-w-[85%] md:max-w-[75%] text-right" : isToolOnly ? "max-w-[95%]" : "max-w-[95%] md:max-w-[85%]"}`}>
+        <div
+          className={
+            isToolOnly
+              ? "selection-surface"
+              : isUser
+              ? "selection-inverse inline-block select-text text-left rounded-2xl px-4 py-3 bg-foreground text-background shadow-elegant border-elegant"
+              : "selection-surface select-text rounded-2xl px-4 py-3 shadow-elegant border-elegant hover-lift bg-card"
+          }
+        >
+          <MessageContent content={message.content} isUser={isUser} messageMetadata={message.metadata} />
+          {isStreaming ? (
+            <span className="mt-1 inline-block h-4 w-0.5 animate-pulse bg-current opacity-60" />
+          ) : null}
+        </div>
+        <div
+          className={`mt-1.5 flex min-h-5 flex-wrap items-center gap-2 text-[10px] font-medium text-muted-foreground/50 max-md:visible max-md:opacity-100 md:invisible md:opacity-0 md:pointer-events-none md:group-hover/message:visible md:group-hover/message:opacity-100 md:group-hover/message:pointer-events-auto md:group-focus-within/message:visible md:group-focus-within/message:opacity-100 md:group-focus-within/message:pointer-events-auto ${isUser ? "justify-end" : ""}`}
+        >
+          {message.runId ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-5 rounded-md px-1.5 text-[10px]"
+              onClick={() => onInspectRun(message.runId ?? "")}
+            >
+              {message.runId}
+            </Button>
+          ) : null}
+          {isStreaming ? <span className="uppercase tracking-[0.14em]">Streaming</span> : null}
+          {!isUser && agentName ? (
+            <>
+              <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[10px] font-medium">
+                {agentName}
+              </Badge>
+              {agentMode ? (
+                <span
+                  className={`inline-flex h-5 items-center rounded-md border px-1.5 text-[10px] font-medium uppercase tracking-[0.12em] ${agentModeTone(agentMode)}`}
+                >
+                  {agentMode}
+                </span>
+              ) : null}
+            </>
+          ) : null}
+          <span>{formatTimestamp(message.createdAt)}</span>
+        </div>
+      </div>
+    </article>
+  );
+});
+
+type QueuedRunsPanelProps = Pick<RuntimeProps, "guideQueuedSessionInput" | "guideMessageSupported"> & {
+  items: RuntimeProps["queuedSessionRuns"];
+};
+
+const QueuedRunsPanel = memo(function QueuedRunsPanel(props: QueuedRunsPanelProps) {
+  if (props.items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      className="pointer-events-auto mb-3 rounded-2xl border px-3 py-3 shadow-lg"
+      style={{
+        background: "color-mix(in srgb, var(--background) 88%, transparent)",
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
+        borderColor: "color-mix(in srgb, var(--foreground) 10%, transparent)"
+      }}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold tracking-[0.12em] text-muted-foreground">后续消息队列</p>
+          <p className="mt-1 text-xs text-muted-foreground">当前 run 结束后，会按顺序自动发起后续轮次。</p>
+        </div>
+        <Badge variant="secondary">{props.items.length}</Badge>
+      </div>
+      <div className="mt-3 space-y-2">
+        {props.items.map((item, index) => (
+          <div key={item.runId} className="flex items-start justify-between gap-3 rounded-xl border border-border/60 bg-background/70 px-3 py-2">
+            <CornerDownRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <span>{`#${item.position || index + 1}`}</span>
+                <span>{formatTimestamp(item.createdAt)}</span>
+              </div>
+              <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">{item.content}</p>
+            </div>
+            {props.guideMessageSupported ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-8 flex-shrink-0 px-3 text-xs"
+                onClick={() => props.guideQueuedSessionInput(item.runId)}
+              >
+                引导
+              </Button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+type ConversationStatusBarProps = {
+  hasActiveSession: boolean;
+  isRunning: boolean;
+};
+
+const ConversationStatusBar = memo(function ConversationStatusBar(props: ConversationStatusBarProps) {
+  const run = useStreamStore((state) => state.run);
+
+  if (!props.hasActiveSession || (!props.isRunning && !run?.status)) {
+    return null;
+  }
+
+  return (
+    <div className="sticky top-0 z-10 flex items-center justify-end gap-2 px-4 py-1.5 pointer-events-none min-h-[36px]">
+      {props.isRunning ? (
+        <Badge variant="secondary" className="pointer-events-auto animate-pulse gap-1.5">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {run?.effectiveAgentName ?? "running"}
+        </Badge>
+      ) : run?.status ? (
+        <Badge className={`pointer-events-auto ${statusTone(run.status)}`}>{run.status}</Badge>
+      ) : null}
+    </div>
+  );
+});
+
+type ConversationFeedProps = Pick<
+  RuntimeProps,
+  | "hasActiveSession"
+  | "currentWorkspaceName"
+  | "messagesLoading"
+  | "messageFeed"
+  | "conversationTailRef"
+  | "catalog"
+  | "session"
+  | "sessionEvents"
+  | "refreshRunById"
+  | "refreshRunStepsById"
+> & {
+  hasMoreMessages: boolean;
+  loadingOlderMessages: boolean;
+  onLoadOlderMessages: () => void;
+};
+
+const ConversationFeed = memo(function ConversationFeed(props: ConversationFeedProps) {
+  const run = useStreamStore((state) => state.run);
+  const runSteps = useStreamStore((state) => state.runSteps);
+  const setSelectedRunId = useStreamStore((state) => state.setSelectedRunId);
+  const setMainViewMode = useUiStore((state) => state.setMainViewMode);
+  const setInspectorTab = useUiStore((state) => state.setInspectorTab);
+  const messageAgentInfoById = useMemo(
+    () =>
+      buildMessageAgentInfoIndex({
+        messages: props.messageFeed,
+        catalog: props.catalog,
+        runSteps,
+        run,
+        session: props.session,
+        sessionEvents: props.sessionEvents
+      }),
+    [props.catalog, props.messageFeed, props.session, props.sessionEvents, run, runSteps]
+  );
+  const handleInspectRun = useCallback(
+    (runId: string) => {
+      if (!runId) {
+        return;
+      }
+
+      setSelectedRunId(runId);
+      setMainViewMode("inspector");
+      setInspectorTab("timeline");
+      props.refreshRunById(runId);
+      props.refreshRunStepsById(runId);
+    },
+    [props.refreshRunById, props.refreshRunStepsById, setInspectorTab, setMainViewMode, setSelectedRunId]
+  );
+
+  if (!props.hasActiveSession) {
+    return (
+      <div className="flex min-h-[52vh] items-center justify-center py-10">
+        <div className="max-w-md text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-border/70 bg-background/85 text-muted-foreground shadow-sm">
+            <Folder className="h-5 w-5" />
+          </div>
+          <h2 className="text-xl font-semibold tracking-tight text-foreground">No Session Selected</h2>
+          <p className="mt-3 text-sm leading-7 text-muted-foreground">Choose a session from the sidebar, or create one in {props.currentWorkspaceName}.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (props.messagesLoading && props.messageFeed.length === 0) {
+    return (
+      <div className="flex min-h-[52vh] items-center justify-center py-10">
+        <div className="max-w-md text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-border/70 bg-background/85 text-muted-foreground shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+          <h2 className="text-xl font-semibold tracking-tight text-foreground">Loading Conversation</h2>
+          <p className="mt-3 text-sm leading-7 text-muted-foreground">Fetching the latest message block for this session.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (props.messageFeed.length === 0) {
+    return (
+      <div className="flex min-h-[52vh] items-center justify-center py-10">
+        <div className="max-w-md text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-foreground text-background shadow-lg">
+            <Bot className="h-5 w-5" />
+          </div>
+          <h2 className="text-xl font-semibold tracking-tight text-foreground">OpenAgentHarness</h2>
+          <p className="mt-3 text-sm leading-7 text-muted-foreground">Send a message to start this session. Tool calls, traces, and engine output will appear as the conversation unfolds.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {props.hasMoreMessages || props.loadingOlderMessages ? (
+        <div className="mb-5 flex justify-center">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={props.onLoadOlderMessages}
+            disabled={props.loadingOlderMessages}
+            className="rounded-full bg-background/85 px-4 shadow-sm backdrop-blur-sm"
+          >
+            {props.loadingOlderMessages ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+            {props.loadingOlderMessages ? "Loading earlier messages" : "Load earlier messages"}
+          </Button>
+        </div>
+      ) : null}
+      {props.messageFeed.map((message) => {
+        const messageAgentInfo = messageAgentInfoById.get(message.id);
+        return (
+          <ConversationMessageRow
+            key={message.id}
+            message={message}
+            agentName={messageAgentInfo?.name}
+            agentMode={messageAgentInfo?.mode}
+            onInspectRun={handleInspectRun}
+          />
+        );
+      })}
+      {props.hasActiveSession ? <div className="h-36" aria-hidden="true" /> : null}
+      <div ref={props.conversationTailRef} aria-hidden="true" />
+    </>
+  );
+});
+
 /** Persist scroll positions per session across component re-mounts */
 const scrollPositions = new Map<string, number>();
 
 function ConversationWorkspaceImpl(props: RuntimeProps) {
-  const run = useStreamStore((state) => state.run);
-  const runSteps = useStreamStore((state) => state.runSteps);
-  const draftMessage = useStreamStore((state) => state.draftMessage);
-  const setDraftMessage = useStreamStore((state) => state.setDraftMessage);
-  const setSelectedRunId = useStreamStore((state) => state.setSelectedRunId);
-  const setMainViewMode = useUiStore((state) => state.setMainViewMode);
-  const setInspectorTab = useUiStore((state) => state.setInspectorTab);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(0);
   const restoredRef = useRef(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const prependSnapshotRef = useRef<{ messageCount: number; scrollHeight: number; scrollTop: number } | null>(null);
 
   const sessionId = props.session?.id ?? "";
   const messageCount = props.messageFeed.length;
-  const hasStreamingMessage = props.messageFeed.some((m) => m.id.startsWith("live:"));
+  const hasStreamingMessage = useMemo(() => props.messageFeed.some((message) => message.id.startsWith("live:")), [props.messageFeed]);
   const isRunning = props.isRunning;
   const queuedSessionRuns = props.queuedSessionRuns;
-  const hasDraftMessage = draftMessage.trim().length > 0;
-  const canSend = !props.isSwitchingSessionAgent && hasDraftMessage;
-  const inputPlaceholder = isRunning
-    ? "当前 run 正在执行，回车会先加入队列"
-    : props.isSwitchingSessionAgent
-    ? "Updating session agent…"
-    : "Message the current session";
 
   // Reset restored flag when session changes
   useEffect(() => {
@@ -767,15 +1149,6 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     }
   });
 
-  // Auto-resize textarea
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = "auto";
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-    }
-  }, [draftMessage]);
-
   useEffect(() => {
     if (props.loadingOlderMessages) {
       return;
@@ -792,16 +1165,6 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     prevMessageCountRef.current = messageCount;
     prependSnapshotRef.current = null;
   }, [messageCount, props.loadingOlderMessages]);
-
-  // Enter to send, Shift+Enter for newline
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (canSend) {
-        props.sendMessage();
-      }
-    }
-  };
 
   const handleLoadOlderMessages = () => {
     const el = scrollContainerRef.current;
@@ -827,167 +1190,24 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
         className="flex-1 overflow-y-auto min-h-0"
         onScroll={handleScroll}
       >
-        {/* Sticky status bar */}
-        {props.hasActiveSession && (isRunning || run?.status) ? (
-          <div className="sticky top-0 z-10 flex items-center justify-end gap-2 px-4 py-1.5 pointer-events-none min-h-[36px]">
-            {isRunning ? (
-              <Badge variant="secondary" className="pointer-events-auto animate-pulse gap-1.5">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                {run?.effectiveAgentName ?? "running"}
-              </Badge>
-            ) : run?.status ? (
-              <Badge className={`pointer-events-auto ${statusTone(run.status)}`}>
-                {run.status}
-              </Badge>
-            ) : null}
-          </div>
-        ) : null}
+        <ConversationStatusBar hasActiveSession={props.hasActiveSession} isRunning={isRunning} />
 
         <div className="mx-auto flex w-full max-w-4xl flex-col px-4 py-6 md:px-6 md:py-8">
-          {props.hasActiveSession && (props.hasMoreMessages || props.loadingOlderMessages) ? (
-            <div className="mb-5 flex justify-center">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleLoadOlderMessages}
-                disabled={props.loadingOlderMessages}
-                className="rounded-full bg-background/85 px-4 shadow-sm backdrop-blur-sm"
-              >
-                {props.loadingOlderMessages ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
-                {props.loadingOlderMessages ? "Loading earlier messages" : "Load earlier messages"}
-              </Button>
-            </div>
-          ) : null}
-
-          {!props.hasActiveSession ? (
-            <div className="flex min-h-[52vh] items-center justify-center py-10">
-              <div className="max-w-md text-center">
-                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-border/70 bg-background/85 text-muted-foreground shadow-sm">
-                  <Folder className="h-5 w-5" />
-                </div>
-                <h2 className="text-xl font-semibold tracking-tight text-foreground">No Session Selected</h2>
-                <p className="mt-3 text-sm leading-7 text-muted-foreground">Choose a session from the sidebar, or create one in {props.currentWorkspaceName}.</p>
-              </div>
-            </div>
-          ) : props.messagesLoading && props.messageFeed.length === 0 ? (
-            <div className="flex min-h-[52vh] items-center justify-center py-10">
-              <div className="max-w-md text-center">
-                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-border/70 bg-background/85 text-muted-foreground shadow-sm">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                </div>
-                <h2 className="text-xl font-semibold tracking-tight text-foreground">Loading Conversation</h2>
-                <p className="mt-3 text-sm leading-7 text-muted-foreground">Fetching the latest message block for this session.</p>
-              </div>
-            </div>
-          ) : props.messageFeed.length === 0 ? (
-            <div className="flex min-h-[52vh] items-center justify-center py-10">
-              <div className="max-w-md text-center">
-                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-foreground text-background shadow-lg">
-                  <Bot className="h-5 w-5" />
-                </div>
-                <h2 className="text-xl font-semibold tracking-tight text-foreground">OpenAgentHarness</h2>
-                <p className="mt-3 text-sm leading-7 text-muted-foreground">Send a message to start this session. Tool calls, traces, and engine output will appear as the conversation unfolds.</p>
-              </div>
-            </div>
-          ) : (
-            props.messageFeed.map((message) => {
-              const isUser = message.role === "user";
-              const isStreaming = message.id.startsWith("live:");
-              const runtimeKind = readRuntimeKind(message.metadata);
-              const isToolOnly = !isUser && isToolOnlyMessage(message.content);
-              const messageAgentInfo = resolveMessageAgentInfo({
-                message,
-                catalog: props.catalog,
-                runSteps: runSteps,
-                run,
-                session: props.session,
-                sessionEvents: props.sessionEvents
-              });
-
-              if (runtimeKind === "compact_boundary") {
-                return (
-                  <article key={message.id} className="animate-fade-in py-2 md:py-3">
-                    <CompactBoundaryCard message={message} />
-                  </article>
-                );
-              }
-
-              if (runtimeKind === "compact_summary") {
-                return (
-                  <article key={message.id} className="animate-fade-in py-2 md:py-3">
-                    <CompactSummaryCard message={message} />
-                  </article>
-                );
-              }
-
-              return (
-                <article key={message.id} className={`group/message animate-fade-in flex gap-3 md:gap-4 py-2 md:py-3 ${isUser ? "flex-row-reverse" : ""}`}>
-                  <div
-                    className={`flex-shrink-0 w-8 h-8 md:w-9 md:h-9 rounded-full flex items-center justify-center text-sm shadow-elegant overflow-hidden ${
-                      isUser ? "bg-foreground text-background text-xs font-medium" : "bg-muted"
-                    }`}
-                  >
-                    {isUser ? "You" : "AI"}
-                  </div>
-
-                  <div className={`flex-1 ${isUser ? "max-w-[85%] md:max-w-[75%] text-right" : isToolOnly ? "max-w-[95%]" : "max-w-[95%] md:max-w-[85%]"}`}>
-                    <div
-                      className={
-                        isToolOnly
-                          ? "selection-surface"
-                          : isUser
-                          ? "selection-inverse inline-block select-text text-left rounded-2xl px-4 py-3 bg-foreground text-background shadow-elegant border-elegant"
-                          : "selection-surface select-text rounded-2xl px-4 py-3 shadow-elegant border-elegant hover-lift bg-card"
-                      }
-                    >
-                      <MessageContent content={message.content} isUser={isUser} messageMetadata={message.metadata} />
-                      {isStreaming && (
-                        <span className="mt-1 inline-block h-4 w-0.5 animate-pulse bg-current opacity-60" />
-                      )}
-                    </div>
-                    <div
-                      className={`mt-1.5 flex min-h-5 flex-wrap items-center gap-2 text-[10px] font-medium text-muted-foreground/50 max-md:visible max-md:opacity-100 md:invisible md:opacity-0 md:pointer-events-none md:group-hover/message:visible md:group-hover/message:opacity-100 md:group-hover/message:pointer-events-auto md:group-focus-within/message:visible md:group-focus-within/message:opacity-100 md:group-focus-within/message:pointer-events-auto ${isUser ? "justify-end" : ""}`}
-                    >
-                      {message.runId ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-5 rounded-md px-1.5 text-[10px]"
-                          onClick={() => {
-                            setSelectedRunId(message.runId ?? "");
-                            setMainViewMode("inspector");
-                            setInspectorTab("timeline");
-                            props.refreshRunById(message.runId ?? "");
-                            props.refreshRunStepsById(message.runId ?? "");
-                          }}
-                        >
-                          {message.runId}
-                        </Button>
-                      ) : null}
-                      {isStreaming ? <span className="uppercase tracking-[0.14em]">Streaming</span> : null}
-                      {!isUser && messageAgentInfo ? (
-                        <>
-                          <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[10px] font-medium">
-                            {messageAgentInfo.name}
-                          </Badge>
-                          {messageAgentInfo.mode ? (
-                            <span
-                              className={`inline-flex h-5 items-center rounded-md border px-1.5 text-[10px] font-medium uppercase tracking-[0.12em] ${agentModeTone(messageAgentInfo.mode)}`}
-                            >
-                              {messageAgentInfo.mode}
-                            </span>
-                          ) : null}
-                        </>
-                      ) : null}
-                      <span>{formatTimestamp(message.createdAt)}</span>
-                    </div>
-                  </div>
-                </article>
-              );
-            })
-          )}
-          {props.hasActiveSession ? <div className="h-36" aria-hidden="true" /> : null}
-          <div ref={props.conversationTailRef} aria-hidden="true" />
+          <ConversationFeed
+            hasActiveSession={props.hasActiveSession}
+            currentWorkspaceName={props.currentWorkspaceName}
+            messagesLoading={props.messagesLoading}
+            messageFeed={props.messageFeed}
+            conversationTailRef={props.conversationTailRef}
+            catalog={props.catalog}
+            session={props.session}
+            sessionEvents={props.sessionEvents}
+            refreshRunById={props.refreshRunById}
+            refreshRunStepsById={props.refreshRunStepsById}
+            hasMoreMessages={props.hasMoreMessages}
+            loadingOlderMessages={props.loadingOlderMessages}
+            onLoadOlderMessages={handleLoadOlderMessages}
+          />
         </div>
       </div>
 
@@ -995,105 +1215,18 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
           <div className="p-4 md:p-6">
             <div className="max-w-4xl mx-auto">
-              {queuedSessionRuns.length > 0 ? (
-                <div
-                  className="pointer-events-auto mb-3 rounded-2xl border px-3 py-3 shadow-lg"
-                  style={{
-                    background: "color-mix(in srgb, var(--background) 88%, transparent)",
-                    backdropFilter: "blur(12px)",
-                    WebkitBackdropFilter: "blur(12px)",
-                    borderColor: "color-mix(in srgb, var(--foreground) 10%, transparent)"
-                  }}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold tracking-[0.12em] text-muted-foreground">后续消息队列</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        当前 run 结束后，会按顺序自动发起后续轮次。
-                      </p>
-                    </div>
-                    <Badge variant="secondary">{queuedSessionRuns.length}</Badge>
-                  </div>
-                  <div className="mt-3 space-y-2">
-                    {queuedSessionRuns.map((item, index) => (
-                      <div key={item.runId} className="flex items-start justify-between gap-3 rounded-xl border border-border/60 bg-background/70 px-3 py-2">
-                        <CornerDownRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                            <span>{`#${item.position || index + 1}`}</span>
-                            <span>{formatTimestamp(item.createdAt)}</span>
-                          </div>
-                          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">{item.content}</p>
-                        </div>
-                        {props.guideMessageSupported ? (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="h-8 flex-shrink-0 px-3 text-xs"
-                            onClick={() => props.guideQueuedSessionInput(item.runId)}
-                          >
-                            引导
-                          </Button>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              <div
-                className="pointer-events-auto relative flex items-end gap-2 rounded-xl p-2 shadow-lg"
-                style={{
-                  background: "color-mix(in srgb, var(--background) 80%, transparent)",
-                  backdropFilter: "blur(12px)",
-                  WebkitBackdropFilter: "blur(12px)",
-                  border: "1px solid color-mix(in srgb, var(--foreground) 12%, transparent)",
-                }}
-              >
-                <Button
-                  onClick={props.refreshMessages}
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9 flex-shrink-0"
-                  title="Refresh messages"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
-
-                <Textarea
-                  ref={textareaRef}
-                  value={draftMessage}
-                  onChange={(event) => setDraftMessage(event.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={inputPlaceholder}
-                  disabled={props.isSwitchingSessionAgent}
-                  rows={1}
-                  className="min-h-[24px] max-h-[200px] flex-1 resize-none border-none bg-transparent px-0 py-2 text-sm shadow-none outline-none focus-visible:ring-0 disabled:opacity-50"
-                />
-
-                {!isRunning || canSend ? (
-                  <Button
-                    onClick={props.sendMessage}
-                    disabled={!canSend}
-                    size="icon"
-                    className="shadow-elegant h-9 w-9 flex-shrink-0"
-                    title="Send message"
-                  >
-                    <Send className="h-4 w-4" />
-                  </Button>
-                ) : null}
-
-                {isRunning ? (
-                  <Button
-                    onClick={props.cancelCurrentRun}
-                    size="icon"
-                    variant="ghost"
-                    className="h-9 w-9 flex-shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                    title="Stop run"
-                  >
-                    <Square className="h-4 w-4 fill-current" />
-                  </Button>
-                ) : null}
-              </div>
+              <QueuedRunsPanel
+                items={queuedSessionRuns}
+                guideQueuedSessionInput={props.guideQueuedSessionInput}
+                guideMessageSupported={props.guideMessageSupported}
+              />
+              <ConversationComposer
+                refreshMessages={props.refreshMessages}
+                sendMessage={props.sendMessage}
+                cancelCurrentRun={props.cancelCurrentRun}
+                isRunning={isRunning}
+                isSwitchingSessionAgent={props.isSwitchingSessionAgent}
+              />
             </div>
           </div>
         </div>

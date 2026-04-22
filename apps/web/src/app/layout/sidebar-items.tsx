@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import { Bot, ChevronDown, ChevronRight, Folder, PencilLine, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -27,7 +29,7 @@ function DetailLine(props: { label: string; value: string; mono?: boolean }) {
   );
 }
 
-export function WorkspaceNavItem(props: {
+type WorkspaceNavItemProps = {
   entry: SavedWorkspaceRecord;
   active: boolean;
   expanded: boolean;
@@ -37,7 +39,9 @@ export function WorkspaceNavItem(props: {
   onSelect: () => void;
   onToggleExpanded: () => void;
   onRemove: () => void;
-}) {
+};
+
+function WorkspaceNavItemImpl(props: WorkspaceNavItemProps) {
   const ExpandIcon = props.expanded ? ChevronDown : ChevronRight;
   const folderName = pathLeaf(props.entry.rootPath);
   const metaLine = [
@@ -114,7 +118,27 @@ export function WorkspaceNavItem(props: {
   );
 }
 
-export function SessionNavItem(props: {
+function areWorkspaceNavItemPropsEqual(previous: WorkspaceNavItemProps, next: WorkspaceNavItemProps) {
+  return (
+    previous.active === next.active &&
+    previous.expanded === next.expanded &&
+    previous.sessionCount === next.sessionCount &&
+    previous.lastEditedAt === next.lastEditedAt &&
+    previous.canRemove === next.canRemove &&
+    previous.entry.id === next.entry.id &&
+    previous.entry.name === next.entry.name &&
+    previous.entry.rootPath === next.entry.rootPath &&
+    previous.entry.runtime === next.entry.runtime &&
+    previous.entry.serviceName === next.entry.serviceName &&
+    previous.entry.status === next.entry.status &&
+    previous.entry.createdAt === next.entry.createdAt &&
+    previous.entry.lastOpenedAt === next.entry.lastOpenedAt
+  );
+}
+
+export const WorkspaceNavItem = memo(WorkspaceNavItemImpl, areWorkspaceNavItemPropsEqual);
+
+type SessionNavItemProps = {
   entry: SavedSessionRecord;
   active: boolean;
   depth?: number;
@@ -124,7 +148,9 @@ export function SessionNavItem(props: {
   onToggleExpanded?: () => void;
   onRename: (title: string) => void | Promise<void>;
   onRemove: () => void;
-}) {
+};
+
+function SessionNavItemImpl(props: SessionNavItemProps) {
   const primaryTime = formatTimestamp(props.entry.lastRunAt || props.entry.createdAt);
   const subtitle = [props.entry.agentName, primaryTime].filter(Boolean).join(" · ");
   const isChild = (props.depth ?? 0) > 0;
@@ -249,3 +275,23 @@ export function SessionNavItem(props: {
     </div>
   );
 }
+
+function areSessionNavItemPropsEqual(previous: SessionNavItemProps, next: SessionNavItemProps) {
+  return (
+    previous.active === next.active &&
+    previous.depth === next.depth &&
+    previous.expanded === next.expanded &&
+    previous.hasChildren === next.hasChildren &&
+    previous.entry.id === next.entry.id &&
+    previous.entry.workspaceId === next.entry.workspaceId &&
+    previous.entry.parentSessionId === next.entry.parentSessionId &&
+    previous.entry.title === next.entry.title &&
+    previous.entry.modelRef === next.entry.modelRef &&
+    previous.entry.agentName === next.entry.agentName &&
+    previous.entry.lastRunAt === next.entry.lastRunAt &&
+    previous.entry.createdAt === next.entry.createdAt &&
+    previous.entry.lastOpenedAt === next.entry.lastOpenedAt
+  );
+}
+
+export const SessionNavItem = memo(SessionNavItemImpl, areSessionNavItemPropsEqual);

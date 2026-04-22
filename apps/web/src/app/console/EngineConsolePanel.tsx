@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 import { useUiStore } from "../stores/ui-store";
 import { downloadJsonFile, formatTimestamp, prettyJson, toneBadgeClass, type ConsoleFilter, type RuntimeConsoleEntry } from "../support";
+import { useShallow } from "zustand/shallow";
 
 const filters: Array<{ id: ConsoleFilter; label: string }> = [
   { id: "all", label: "All" },
@@ -40,22 +41,103 @@ interface EngineConsolePanelProps {
   onEntryInspect: (entry: RuntimeConsoleEntry) => void;
 }
 
+type ConsoleEntryRowProps = {
+  entry: RuntimeConsoleEntry;
+  isExpanded: boolean;
+  onInspect: (entry: RuntimeConsoleEntry) => void;
+  onToggleExpanded: (entryId: string) => void;
+};
+
+function ConsoleEntryRowImpl(props: ConsoleEntryRowProps) {
+  const { entry, isExpanded, onInspect, onToggleExpanded } = props;
+
+  return (
+    <article
+      className={cn(
+        "rounded-2xl border px-3 py-2 transition",
+        entry.level === "error" ? toneBadgeClass("rose") : "console-entry"
+      )}
+    >
+      <div className="flex flex-wrap items-start gap-2">
+        <span className="pt-0.5 text-[11px] text-muted-foreground">{formatTimestamp(entry.timestamp)}</span>
+        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${levelBadgeClass(entry.level)}`}>
+          {entry.level}
+        </span>
+        <span className="console-chip rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-foreground/68">
+          {entry.category}
+        </span>
+        {entry.runId ? (
+          <button
+            type="button"
+            onClick={() => onInspect(entry)}
+            className="console-chip rounded-full px-2 py-0.5 text-[10px] text-foreground/68 hover:text-foreground"
+          >
+            {entry.runId}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left text-foreground/84"
+          onClick={() => {
+            if (entry.details !== undefined) {
+              onToggleExpanded(entry.id);
+              return;
+            }
+
+            if (entry.eventId || entry.runId || entry.stepId) {
+              onInspect(entry);
+            }
+          }}
+        >
+          <span className="whitespace-pre-wrap break-words leading-6">{entry.message}</span>
+        </button>
+      </div>
+      {entry.details !== undefined && isExpanded ? (
+        <pre className="console-detail mt-2 max-h-56 overflow-auto rounded-xl p-3 text-[11px] leading-6">
+          {prettyJson(entry.details)}
+        </pre>
+      ) : null}
+    </article>
+  );
+}
+
+function areConsoleEntryRowPropsEqual(previous: ConsoleEntryRowProps, next: ConsoleEntryRowProps) {
+  return previous.entry === next.entry && previous.isExpanded === next.isExpanded;
+}
+
+const ConsoleEntryRow = memo(ConsoleEntryRowImpl, areConsoleEntryRowPropsEqual);
+
 function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
-  const height = useUiStore((state) => state.consoleHeight);
-  const onHeightChange = useUiStore((state) => state.setConsoleHeight);
-  const filter = useUiStore((state) => state.consoleFilter);
-  const onFilterChange = useUiStore((state) => state.setConsoleFilter);
-  const setConsoleOpen = useUiStore((state) => state.setConsoleOpen);
+  const { height, onHeightChange, filter, onFilterChange, setConsoleOpen } = useUiStore(
+    useShallow((state) => ({
+      height: state.consoleHeight,
+      onHeightChange: state.setConsoleHeight,
+      filter: state.consoleFilter,
+      onFilterChange: state.setConsoleFilter,
+      setConsoleOpen: state.setConsoleOpen
+    }))
+  );
   const [search, setSearch] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [dragging, setDragging] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const handleToggleExpanded = (entryId: string) => {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(entryId)) {
+        next.delete(entryId);
+      } else {
+        next.add(entryId);
+      }
+      return next;
+    });
+  };
 
-  const visibleEntries = useMemo(() => {
+  const { visibleEntries, errorCount, toolEventCount } = useMemo(() => {
     const searchQuery = search.trim().toLowerCase();
-    return props.entries.filter((entry) => {
+    const visibleEntries = props.entries.filter((entry) => {
       const filterMatches =
         filter === "all"
           ? true
@@ -82,6 +164,23 @@ function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
       const searchable = `${entry.message}\n${entry.details ? prettyJson(entry.details) : ""}`.toLowerCase();
       return searchable.includes(searchQuery);
     });
+
+    let errorCount = 0;
+    let toolEventCount = 0;
+    for (const entry of props.entries) {
+      if (entry.level === "error") {
+        errorCount += 1;
+      }
+      if (entry.category === "tool") {
+        toolEventCount += 1;
+      }
+    }
+
+    return {
+      visibleEntries,
+      errorCount,
+      toolEventCount
+    };
   }, [props.entries, filter, search]);
 
   useEffect(() => {
@@ -191,65 +290,14 @@ function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
           ) : (
             <div className="space-y-2 pb-2 font-mono text-xs">
               {visibleEntries.map((entry) => {
-                const isExpanded = expandedIds.has(entry.id);
                 return (
-                  <article
+                  <ConsoleEntryRow
                     key={entry.id}
-                    className={cn(
-                      "rounded-2xl border px-3 py-2 transition",
-                      entry.level === "error"
-                        ? toneBadgeClass("rose")
-                        : "console-entry"
-                    )}
-                  >
-                    <div className="flex flex-wrap items-start gap-2">
-                      <span className="pt-0.5 text-[11px] text-muted-foreground">{formatTimestamp(entry.timestamp)}</span>
-                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${levelBadgeClass(entry.level)}`}>
-                        {entry.level}
-                      </span>
-                      <span className="console-chip rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-foreground/68">
-                        {entry.category}
-                      </span>
-                      {entry.runId ? (
-                        <button
-                          type="button"
-                          onClick={() => props.onEntryInspect(entry)}
-                          className="console-chip rounded-full px-2 py-0.5 text-[10px] text-foreground/68 hover:text-foreground"
-                        >
-                          {entry.runId}
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="min-w-0 flex-1 text-left text-foreground/84"
-                        onClick={() => {
-                          if (entry.details !== undefined) {
-                            setExpandedIds((current) => {
-                              const next = new Set(current);
-                              if (next.has(entry.id)) {
-                                next.delete(entry.id);
-                              } else {
-                                next.add(entry.id);
-                              }
-                              return next;
-                            });
-                            return;
-                          }
-
-                          if (entry.eventId || entry.runId || entry.stepId) {
-                            props.onEntryInspect(entry);
-                          }
-                        }}
-                      >
-                        <span className="whitespace-pre-wrap break-words leading-6">{entry.message}</span>
-                      </button>
-                    </div>
-                    {entry.details !== undefined && isExpanded ? (
-                      <pre className="console-detail mt-2 max-h-56 overflow-auto rounded-xl p-3 text-[11px] leading-6">
-                        {prettyJson(entry.details)}
-                      </pre>
-                    ) : null}
-                  </article>
+                    entry={entry}
+                    isExpanded={expandedIds.has(entry.id)}
+                    onInspect={props.onEntryInspect}
+                    onToggleExpanded={handleToggleExpanded}
+                  />
                 );
               })}
               <div ref={bottomRef} />
@@ -259,8 +307,8 @@ function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
 
         <div className="console-divider flex flex-wrap items-center gap-3 border-t px-3 py-2 text-[11px] text-muted-foreground">
           <span>{visibleEntries.length} visible entries</span>
-          <span>{props.entries.filter((entry) => entry.level === "error").length} errors</span>
-          <span>{props.entries.filter((entry) => entry.category === "tool").length} tool events</span>
+          <span>{errorCount} errors</span>
+          <span>{toolEventCount} tool events</span>
         </div>
       </div>
     </section>

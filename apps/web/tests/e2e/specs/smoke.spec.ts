@@ -36,7 +36,7 @@ test.describe("web app smoke", () => {
   test("app shell renders without crashing", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByText("Open Agent Harness").first()).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Runtime" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Engine" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Provider" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Storage" })).toBeVisible();
   });

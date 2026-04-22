@@ -1,4 +1,4 @@
-import { memo, useRef, useState, type ReactNode } from "react";
+import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   Bot,
@@ -40,6 +40,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { useShallow } from "zustand/shallow";
 
 import { useHealthStore } from "../stores/health-store";
 import { useModelsStore } from "../stores/models-store";
@@ -217,9 +218,13 @@ function SidebarActionItem(props: {
 }
 
 function RuntimeSidebar(props: SidebarProps) {
-  const workspaceRuntimeFilter = useSettingsStore((state) => state.workspaceRuntimeFilter);
-  const setWorkspaceRuntimeFilter = useSettingsStore((state) => state.setWorkspaceRuntimeFilter);
-  const serviceScope = useSettingsStore((state) => state.serviceScope);
+  const { workspaceRuntimeFilter, setWorkspaceRuntimeFilter, serviceScope } = useSettingsStore(
+    useShallow((state) => ({
+      workspaceRuntimeFilter: state.workspaceRuntimeFilter,
+      setWorkspaceRuntimeFilter: state.setWorkspaceRuntimeFilter,
+      serviceScope: state.serviceScope
+    }))
+  );
   const showFilteredWorkspaceCount = props.filteredSavedWorkspaces.length !== props.orderedSavedWorkspaces.length;
   const workspaceCountLabel = showFilteredWorkspaceCount
     ? `${props.filteredSavedWorkspaces.length} of ${props.orderedSavedWorkspaces.length} workspaces`
@@ -228,6 +233,47 @@ function RuntimeSidebar(props: SidebarProps) {
     props.savedSessionsCount === props.totalSavedSessionsCount
       ? `${props.savedSessionsCount} sessions`
       : `${props.savedSessionsCount} of ${props.totalSavedSessionsCount} sessions`;
+  const expandedWorkspaceIdSet = useMemo(() => new Set(props.expandedWorkspaceIds), [props.expandedWorkspaceIds]);
+  const expandedSessionIdSet = useMemo(() => new Set(props.expandedSessionIds), [props.expandedSessionIds]);
+  const workspaceSessionGroups = useMemo(
+    () =>
+      props.filteredSavedWorkspaces.map((entry) => {
+        const workspaceSessions = props.sessionsByWorkspaceId.get(entry.id) ?? [];
+        const sessionIds = new Set(workspaceSessions.map((sessionEntry) => sessionEntry.id));
+        const childSessionsByParentId = new Map<string, SavedSessionRecord[]>();
+        for (const sessionEntry of workspaceSessions) {
+          if (!sessionEntry.parentSessionId || !sessionIds.has(sessionEntry.parentSessionId)) {
+            continue;
+          }
+          const children = childSessionsByParentId.get(sessionEntry.parentSessionId) ?? [];
+          children.push(sessionEntry);
+          childSessionsByParentId.set(sessionEntry.parentSessionId, children);
+        }
+
+        const topLevelSessions = workspaceSessions.filter(
+          (sessionEntry) => !sessionEntry.parentSessionId || !sessionIds.has(sessionEntry.parentSessionId)
+        );
+        const lastEditedAt = workspaceSessions.reduce<string | undefined>((latest, sessionEntry) => {
+          if (!sessionEntry.lastRunAt) {
+            return latest;
+          }
+          if (!latest) {
+            return sessionEntry.lastRunAt;
+          }
+
+          return Date.parse(sessionEntry.lastRunAt) > Date.parse(latest) ? sessionEntry.lastRunAt : latest;
+        }, undefined);
+
+        return {
+          entry,
+          workspaceSessions,
+          childSessionsByParentId,
+          topLevelSessions,
+          lastEditedAt
+        };
+      }),
+    [props.filteredSavedWorkspaces, props.sessionsByWorkspaceId]
+  );
 
   function hasActiveDescendant(
     sessionId: string,
@@ -259,8 +305,12 @@ function RuntimeSidebar(props: SidebarProps) {
       const childSessions = childSessionsByParentId?.get(sessionEntry.id) ?? [];
       const shouldExpand =
         childSessions.length > 0 &&
-        (props.expandedSessionIds.includes(sessionEntry.id) ||
-          (props.sessionId === sessionEntry.id ? true : hasActiveDescendant(sessionEntry.id, childSessionsByParentId ?? new Map(), props.sessionId)));
+        (expandedSessionIdSet.has(sessionEntry.id) ||
+          (props.sessionId === sessionEntry.id
+            ? true
+            : childSessionsByParentId
+              ? hasActiveDescendant(sessionEntry.id, childSessionsByParentId, props.sessionId)
+              : false));
       return (
         <div key={sessionEntry.id} className={depth === 0 ? "space-y-1" : "space-y-0.5"}>
           <SessionNavItem
@@ -373,34 +423,8 @@ function RuntimeSidebar(props: SidebarProps) {
               </p>
             </div>
           ) : (
-            props.filteredSavedWorkspaces.map((entry) => {
-              const workspaceSessions = props.sessionsByWorkspaceId.get(entry.id) ?? [];
-              const sessionIds = new Set(workspaceSessions.map((sessionEntry) => sessionEntry.id));
-              const childSessionsByParentId = new Map<string, typeof workspaceSessions>();
-              for (const sessionEntry of workspaceSessions) {
-                if (!sessionEntry.parentSessionId || !sessionIds.has(sessionEntry.parentSessionId)) {
-                  continue;
-                }
-                const children = childSessionsByParentId.get(sessionEntry.parentSessionId) ?? [];
-                children.push(sessionEntry);
-                childSessionsByParentId.set(sessionEntry.parentSessionId, children);
-              }
-              const topLevelSessions = workspaceSessions.filter(
-                (sessionEntry) => !sessionEntry.parentSessionId || !sessionIds.has(sessionEntry.parentSessionId)
-              );
-              const isExpanded = props.expandedWorkspaceIds.includes(entry.id) || entry.id === props.activeWorkspaceId;
-              const lastEditedAt = workspaceSessions.reduce<string | undefined>((latest, sessionEntry) => {
-                if (!sessionEntry.lastRunAt) {
-                  return latest;
-                }
-
-                if (!latest) {
-                  return sessionEntry.lastRunAt;
-                }
-
-                return Date.parse(sessionEntry.lastRunAt) > Date.parse(latest) ? sessionEntry.lastRunAt : latest;
-              }, undefined);
-
+            workspaceSessionGroups.map(({ entry, workspaceSessions, childSessionsByParentId, topLevelSessions, lastEditedAt }) => {
+              const isExpanded = expandedWorkspaceIdSet.has(entry.id) || entry.id === props.activeWorkspaceId;
               return (
                 <div key={entry.id} className="runtime-workspace-group space-y-1.5">
                   <WorkspaceNavItem
@@ -437,8 +461,16 @@ function RuntimeSidebar(props: SidebarProps) {
 }
 
 function StorageSidebar(props: SidebarProps) {
-  const healthReport = useHealthStore((state) => state.healthReport);
-  const serviceScope = useSettingsStore((state) => state.serviceScope);
+  const { healthReport } = useHealthStore(
+    useShallow((state) => ({
+      healthReport: state.healthReport
+    }))
+  );
+  const { serviceScope } = useSettingsStore(
+    useShallow((state) => ({
+      serviceScope: state.serviceScope
+    }))
+  );
   const postgresAvailable = props.storageOverview?.postgres.available ?? false;
   const redisAvailable = props.storageOverview?.redis.available ?? false;
   const postgresTableCount = props.storageOverview?.postgres.tables.length ?? 0;
@@ -748,15 +780,35 @@ function StorageSidebar(props: SidebarProps) {
 }
 
 function ProviderSidebar(props: SidebarProps) {
-  const connection = useSettingsStore((state) => state.connection);
-  const modelDraft = useSettingsStore((state) => state.modelDraft);
-  const setModelDraft = useSettingsStore((state) => state.setModelDraft);
-  const healthStatus = useHealthStore((state) => state.healthStatus);
-  const readinessReport = useHealthStore((state) => state.readinessReport);
-  const modelProviders = useModelsStore((state) => state.modelProviders);
-  const platformModels = useModelsStore((state) => state.platformModels);
-  const streamState = useStreamStore((state) => state.streamState);
-  const setStreamRevision = useUiStore((state) => state.setStreamRevision);
+  const { connection, modelDraft, setModelDraft } = useSettingsStore(
+    useShallow((state) => ({
+      connection: state.connection,
+      modelDraft: state.modelDraft,
+      setModelDraft: state.setModelDraft
+    }))
+  );
+  const { healthStatus, readinessReport } = useHealthStore(
+    useShallow((state) => ({
+      healthStatus: state.healthStatus,
+      readinessReport: state.readinessReport
+    }))
+  );
+  const { modelProviders, platformModels } = useModelsStore(
+    useShallow((state) => ({
+      modelProviders: state.modelProviders,
+      platformModels: state.platformModels
+    }))
+  );
+  const { streamState } = useStreamStore(
+    useShallow((state) => ({
+      streamState: state.streamState
+    }))
+  );
+  const { setStreamRevision } = useUiStore(
+    useShallow((state) => ({
+      setStreamRevision: state.setStreamRevision
+    }))
+  );
   const defaultModel = platformModels.find((model) => model.isDefault);
 
   return (
@@ -833,7 +885,11 @@ function ProviderSidebar(props: SidebarProps) {
 }
 
 function AppSidebarImpl(props: SidebarProps) {
-  const surfaceMode = useUiStore((state) => state.surfaceMode);
+  const { surfaceMode } = useUiStore(
+    useShallow((state) => ({
+      surfaceMode: state.surfaceMode
+    }))
+  );
   const uploadTemplateInputRef = useRef<HTMLInputElement>(null);
   const [uploadTemplateName, setUploadTemplateName] = useState("");
   const [uploadTemplateOverwrite, setUploadTemplateOverwrite] = useState(false);
