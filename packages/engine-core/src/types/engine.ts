@@ -130,6 +130,12 @@ export interface ModelStepPreparation {
   activeToolNames?: string[] | undefined;
 }
 
+export interface ModelStreamChunk {
+  type: "reasoning-delta";
+  id: string;
+  text: string;
+}
+
 export interface ModelStreamOptions {
   signal?: AbortSignal | undefined;
   tools?: EngineToolSet | undefined;
@@ -142,6 +148,7 @@ export interface ModelStreamOptions {
   onToolCallStart?: ((toolCall: ModelToolCall) => Promise<void> | void) | undefined;
   onToolCallFinish?: ((toolResult: ModelToolResult) => Promise<void> | void) | undefined;
   onStepFinish?: ((step: ModelStepResult) => Promise<void> | void) | undefined;
+  onChunk?: ((chunk: ModelStreamChunk) => Promise<void> | void) | undefined;
 }
 
 export interface StreamedModelResponse {

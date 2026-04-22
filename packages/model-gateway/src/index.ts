@@ -216,6 +216,21 @@ export class AiSdkModelGateway implements ModelGateway {
               );
             }
           }
+        : {}),
+      ...(options?.onChunk
+        ? {
+            onChunk: async ({ chunk }) => {
+              if (chunk.type !== "reasoning-delta") {
+                return;
+              }
+
+              await options.onChunk?.({
+                type: "reasoning-delta",
+                id: chunk.id,
+                text: chunk.text
+              });
+            }
+          }
         : {})
     });
 

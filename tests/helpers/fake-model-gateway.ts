@@ -74,6 +74,11 @@ export class FakeModelGateway implements ModelGateway {
             text?: string | undefined;
             content?: unknown[] | undefined;
             reasoning?: unknown[] | undefined;
+            reasoningDeltas?: Array<{
+              id?: string | undefined;
+              text: string;
+              delayMs?: number | undefined;
+            }> | undefined;
             stepRequest?: Record<string, unknown> | undefined;
             stepResponse?: Record<string, unknown> | undefined;
             stepProviderMetadata?: Record<string, unknown> | undefined;
@@ -322,6 +327,24 @@ export class FakeModelGateway implements ModelGateway {
           text = scenario?.text ?? gateway.#buildText(currentInput);
           chunks = text.match(/.{1,4}/g) ?? [text];
           gateway.invocations.push({ model: currentModelName, input: currentInput });
+        }
+
+        if (Array.isArray(scenario?.reasoningDeltas)) {
+          for (const reasoningDelta of scenario.reasoningDeltas) {
+            if (options?.signal?.aborted) {
+              throw new Error("aborted");
+            }
+
+            if ((reasoningDelta.delayMs ?? gateway.delayMs) > 0) {
+              await sleep(reasoningDelta.delayMs ?? gateway.delayMs);
+            }
+
+            await options?.onChunk?.({
+              type: "reasoning-delta",
+              id: reasoningDelta.id ?? "reasoning_1",
+              text: reasoningDelta.text
+            });
+          }
         }
 
         for (const chunk of chunks) {

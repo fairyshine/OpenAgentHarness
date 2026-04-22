@@ -4560,6 +4560,124 @@ describe("runtime service", () => {
     });
   });
 
+  it("emits live reasoning snapshots before message.completed when reasoning deltas stream in", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_live_reasoning_delta",
+      name: "live-reasoning-delta",
+      rootPath: "/tmp/live-reasoning-delta",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "You are the builder agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_live_reasoning_delta",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    gateway.streamScenarioFactory = () => ({
+      reasoningDeltas: [
+        { id: "reasoning_1", text: "thinking " },
+        { id: "reasoning_1", text: "step" }
+      ],
+      text: "final answer",
+      reasoning: [
+        {
+          type: "reasoning",
+          text: "thinking step"
+        }
+      ]
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_live_reasoning_delta",
+      caller,
+      input: {
+        agentName: "builder"
+      }
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "show reasoning live first" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+    const firstStructuredDeltaIndex = events.findIndex(
+      (event) =>
+        event.event === "message.delta" &&
+        Array.isArray(event.data.content) &&
+        event.data.content.some(
+          (part) => typeof part === "object" && part !== null && "type" in part && part.type === "reasoning"
+        )
+    );
+    const completedEventIndex = events.findIndex((event) => event.event === "message.completed");
+
+    expect(firstStructuredDeltaIndex).toBeGreaterThanOrEqual(0);
+    expect(completedEventIndex).toBeGreaterThan(firstStructuredDeltaIndex);
+    expect(events[firstStructuredDeltaIndex]?.data.content).toEqual([
+      {
+        type: "reasoning",
+        text: "thinking "
+      }
+    ]);
+  });
+
   it("includes systemMessages in message.delta metadata only when the prompt changes", async () => {
     const gateway = new FakeModelGateway();
     gateway.streamScenarioFactory = () => ({

@@ -250,6 +250,8 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
   readonly #modelCallMessageMetadata = new Map<number, Record<string, unknown>>();
   readonly #persistedToolCalls = new Set<string>();
   readonly #toolMessageMetadataByCallId = new Map<string, ToolMessageMetadata>();
+  readonly #liveReasoningById = new Map<string, string>();
+  readonly #liveReasoningOrder: string[] = [];
 
   #assistantMessage: AssistantMessage | undefined;
   #accumulatedText = "";
@@ -308,7 +310,7 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
     return this.#modelCallSteps;
   }
 
-  buildStreamOptions(): Pick<ModelStreamOptions, "prepareStep" | "onToolCallStart" | "onToolCallFinish" | "onStepFinish"> {
+  buildStreamOptions(): Pick<ModelStreamOptions, "prepareStep" | "onToolCallStart" | "onToolCallFinish" | "onStepFinish" | "onChunk"> {
     return {
       prepareStep: async (stepNumber) => {
         const activeToolNames = this.#planning.getActiveToolNames(this.#executionContext.currentAgentName);
@@ -471,6 +473,11 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
         });
         await this.#syncRunStatusFromActiveTools();
       },
+      onChunk: async (chunk) => {
+        if (chunk.type === "reasoning-delta") {
+          await this.consumeReasoningDelta(chunk.id, chunk.text);
+        }
+      },
       onStepFinish: async (step) => {
         const messageMetadata =
           this.#modelCallMessageMetadata.get(this.#completedModelStepCount) ?? this.#latestMessageGenerationMetadata;
@@ -587,6 +594,7 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
         for (const toolError of failedToolResults) {
           this.#toolMessageMetadataByCallId.delete(toolError.toolCallId);
         }
+        this.#resetLiveReasoning();
       }
     };
   }
@@ -607,6 +615,7 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
     this.#assistantMessage = updatedMessage;
     const deltaEventMetadata = buildDeltaEventMetadata(updatedMessage.metadata, this.#latestDeltaSystemMessageSignature);
     this.#latestDeltaSystemMessageSignature = deltaEventMetadata.systemMessageSignature;
+    const liveStructuredContent = this.#buildLiveStructuredContent();
     await this.#messages.appendEvent({
       sessionId: this.#session.id,
       runId: this.#run.id,
@@ -614,11 +623,52 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
       data: {
         runId: this.#run.id,
         messageId: updatedMessage.id,
-        delta: chunk,
+        ...(liveStructuredContent ? { content: liveStructuredContent } : { delta: chunk }),
         ...(deltaEventMetadata.metadata ? { metadata: deltaEventMetadata.metadata } : {})
       }
     });
     return updatedMessage;
+  }
+
+  async consumeReasoningDelta(reasoningId: string, text: string): Promise<void> {
+    if (text.length === 0) {
+      return;
+    }
+
+    const currentMetadata =
+      this.#modelCallMessageMetadata.get(this.#completedModelStepCount) ?? this.#latestMessageGenerationMetadata;
+    const message = await this.#messages.ensureAssistantMessage(
+      this.#session,
+      this.#run,
+      this.#assistantMessage,
+      this.#allMessages,
+      "",
+      currentMetadata
+    );
+    this.#assistantMessage = message;
+    const previousReasoning = this.#liveReasoningById.get(reasoningId) ?? "";
+    if (!this.#liveReasoningById.has(reasoningId)) {
+      this.#liveReasoningOrder.push(reasoningId);
+    }
+    this.#liveReasoningById.set(reasoningId, `${previousReasoning}${text}`);
+    const liveStructuredContent = this.#buildLiveStructuredContent();
+    if (!liveStructuredContent) {
+      return;
+    }
+
+    const deltaEventMetadata = buildDeltaEventMetadata(message.metadata, this.#latestDeltaSystemMessageSignature);
+    this.#latestDeltaSystemMessageSignature = deltaEventMetadata.systemMessageSignature;
+    await this.#messages.appendEvent({
+      sessionId: this.#session.id,
+      runId: this.#run.id,
+      event: "message.delta",
+      data: {
+        runId: this.#run.id,
+        messageId: message.id,
+        content: liveStructuredContent,
+        ...(deltaEventMetadata.metadata ? { metadata: deltaEventMetadata.metadata } : {})
+      }
+    });
   }
 
   async completePendingModelSteps(
@@ -635,5 +685,35 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
       this.#run.id,
       this.#activeToolCallIds.size > 0 ? "waiting_tool" : "running"
     );
+  }
+
+  #buildLiveStructuredContent() {
+    if (this.#liveReasoningOrder.length === 0) {
+      return null;
+    }
+
+    const reasoning = this.#liveReasoningOrder
+      .map((reasoningId) => this.#liveReasoningById.get(reasoningId) ?? "")
+      .filter((reasoningText) => reasoningText.length > 0)
+      .map((reasoningText) => ({
+        type: "reasoning" as const,
+        text: reasoningText
+      }));
+
+    if (reasoning.length === 0) {
+      return null;
+    }
+
+    const content = assistantContentFromModelOutput({
+      text: this.#accumulatedText,
+      reasoning
+    });
+
+    return Array.isArray(content) ? content : null;
+  }
+
+  #resetLiveReasoning() {
+    this.#liveReasoningById.clear();
+    this.#liveReasoningOrder.length = 0;
   }
 }
