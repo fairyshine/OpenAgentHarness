@@ -173,6 +173,13 @@ const schemaStatements = [
   )`,
   `create index if not exists runtime_messages_session_created_idx on runtime_messages (session_id, created_at, id)`,
   `create index if not exists runtime_messages_run_created_idx on runtime_messages (run_id, created_at, id)`,
+  `create table if not exists session_pending_runs (
+    run_id text primary key references runs(id) on delete cascade,
+    session_id text not null references sessions(id) on delete cascade,
+    position integer not null,
+    created_at timestamptz not null
+  )`,
+  `create index if not exists session_pending_runs_session_position_idx on session_pending_runs (session_id, position asc, created_at asc, run_id asc)`,
   `create table if not exists run_steps (
     id text primary key,
     run_id text not null references runs(id) on delete cascade,

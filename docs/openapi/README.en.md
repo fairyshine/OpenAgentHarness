@@ -11,6 +11,7 @@ The HTTP API is built on REST resource endpoints + SSE event streams. The [opena
 - Streaming uses SSE
 - Final execution status determined by the run resource
 - Sending a session message is non-interrupting by default; pass `runningRunBehavior: "interrupt"` if you want the new message to cancel the current active run first
+- The follow-up message queue is a server-side resource. Read it with `GET /sessions/{id}/queue`, and promote an already queued message with `POST /runs/{id}/guide`
 
 Key boundaries: `session` = context boundary, `run` = execution boundary, runs within a session are serial.
 
@@ -30,7 +31,7 @@ File and command endpoints intentionally keep [E2B](https://github.com/e2b-dev/E
 | [openapi.yaml](./openapi.yaml) | OpenAPI 3.1 specification |
 | [workspaces.md](./workspaces.md) | Workspace, catalog, model visibility |
 | [sessions.md](./sessions.md) | Sessions and messages |
-| [runs.md](./runs.md) | Run lookup and cancellation |
+| [runs.md](./runs.md) | Run lookup, cancellation, and queued-run guide |
 | [actions.md](./actions.md) | Manual action triggering |
 | [files.md](./files.md) | Sandbox file management and commands |
 | [models.md](./models.md) | Model gateway |

@@ -49,7 +49,9 @@ export function WorkspaceNavItem(props: {
 
   return (
     <div
-      className={`ob-list-item ob-workspace-item group relative flex items-center gap-1.5 rounded-xl px-2 py-2 transition-colors cursor-pointer ${workspaceItemClass(props.active)}`}
+      className={`ob-list-item ob-workspace-item group relative flex items-center gap-1.5 rounded-xl px-2 py-2 transition-colors cursor-pointer ${
+        props.canRemove ? "pr-9" : ""
+      } ${workspaceItemClass(props.active)}`}
       onClick={() => {
         if (hasTextSelection()) return;
         props.onSelect();
@@ -66,7 +68,7 @@ export function WorkspaceNavItem(props: {
       </Button>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div className={`flex min-w-0 flex-1 items-center gap-2 pr-1 ${props.canRemove ? "mr-8 max-w-[calc(100%-2rem)]" : ""}`}>
             <div className={`ob-list-item-icon ob-workspace-item-icon flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[9px] ${props.active ? "ob-list-item-icon-active" : ""}`}>
               <Folder className="h-[11px] w-[11px]" />
             </div>
@@ -78,7 +80,7 @@ export function WorkspaceNavItem(props: {
             </div>
           </div>
         </TooltipTrigger>
-        <TooltipContent side="right" sideOffset={10} className="max-w-sm items-start rounded-xl px-3 py-3">
+        <TooltipContent side="right" sideOffset={24} className="max-w-sm items-start rounded-xl px-3 py-3">
           <div className="space-y-2">
             <div className="space-y-1">
               <p className="text-sm font-semibold text-background">{props.entry.name}</p>
@@ -93,18 +95,20 @@ export function WorkspaceNavItem(props: {
         </TooltipContent>
       </Tooltip>
       {props.canRemove ? (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="ob-list-item-control h-4 w-4 shrink-0 rounded-[8px] text-muted-foreground/56 opacity-0 group-hover:opacity-100"
-          onClick={(e) => {
-            e.stopPropagation();
-            props.onRemove();
-          }}
-          title="Delete workspace"
-        >
-          <Trash2 className="h-[11px] w-[11px]" />
-        </Button>
+        <div className="absolute right-1 top-1/2 z-[1] flex -translate-y-1/2 translate-x-1 items-center transition-all opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ob-list-item-control h-4 w-4 shrink-0 rounded-[8px] text-muted-foreground/56"
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onRemove();
+            }}
+            title="Delete workspace"
+          >
+            <Trash2 className="h-[11px] w-[11px]" />
+          </Button>
+        </div>
       ) : null}
     </div>
   );

@@ -158,6 +158,13 @@ export const schemaStatements = [
   )`,
   `create unique index if not exists session_events_session_cursor_idx on session_events (session_id, cursor)`,
   `create index if not exists session_events_session_run_cursor_idx on session_events (session_id, run_id, cursor)`,
+  `create table if not exists session_pending_runs (
+    run_id text primary key,
+    session_id text not null,
+    position integer not null,
+    created_at text not null
+  )`,
+  `create index if not exists session_pending_runs_session_position_idx on session_pending_runs (session_id, position asc, created_at asc, run_id asc)`,
   `create table if not exists tool_calls (
     id text primary key,
     run_id text not null,

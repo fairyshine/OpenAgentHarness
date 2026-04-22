@@ -102,6 +102,13 @@ export interface WorkspaceArchiveRecord {
   artifacts: ArtifactRecord[];
 }
 
+export interface SessionPendingRunQueueEntry {
+  sessionId: string;
+  runId: string;
+  position: number;
+  createdAt: string;
+}
+
 export interface WorkspaceArchiveRepository {
   archiveWorkspace(input: {
     workspace: WorkspaceRecord;
@@ -134,6 +141,19 @@ export interface RunQueue {
       preferredWorkerId?: string | undefined;
     }
   ): Promise<void>;
+}
+
+export interface SessionPendingRunQueueRepository {
+  enqueue(input: {
+    sessionId: string;
+    runId: string;
+    createdAt: string;
+  }): Promise<SessionPendingRunQueueEntry>;
+  listBySessionId(sessionId: string): Promise<SessionPendingRunQueueEntry[]>;
+  getByRunId(runId: string): Promise<SessionPendingRunQueueEntry | null>;
+  promote(runId: string): Promise<void>;
+  dequeueNext(sessionId: string): Promise<SessionPendingRunQueueEntry | null>;
+  remove(runId: string): Promise<void>;
 }
 
 export interface WorkspaceRepository {

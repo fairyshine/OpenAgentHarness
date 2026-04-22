@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/p
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DirectoryObjectStore } from "../apps/server/src/object-storage.ts";
 import {
@@ -63,12 +63,24 @@ class FakeDirectoryObjectStore implements DirectoryObjectStore {
 
 const tempDirs: string[] = [];
 
+async function importObjectStorageWithFsOverrides(overrides: Partial<typeof import("node:fs/promises")>) {
+  vi.resetModules();
+  vi.doMock("node:fs/promises", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    return { ...actual, ...overrides };
+  });
+  return import("../apps/server/src/object-storage.ts");
+}
+
 afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0).map(async (directory) => {
       await rm(directory, { recursive: true, force: true });
     })
   );
+  vi.doUnmock("node:fs/promises");
+  vi.restoreAllMocks();
+  vi.resetModules();
 });
 
 describe("object storage sync", () => {
@@ -128,6 +140,64 @@ describe("object storage sync", () => {
     expect(store.objects.get("workspace/demo/.openharness/settings.yaml")?.body.toString("utf8")).toBe(
       "default_agent: assistant\n"
     );
+  });
+
+  it("ignores files that disappear while collecting a local snapshot", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-snapshot-race-"));
+    tempDirs.push(directory);
+    const store = new FakeDirectoryObjectStore();
+    const disappearingFile = path.join(directory, ".openharness", "agents", "compact-e2e.md");
+
+    await mkdir(path.dirname(disappearingFile), { recursive: true });
+    await writeFile(path.join(directory, "README.md"), "# synced\n", "utf8");
+    await writeFile(disappearingFile, "agent prompt\n", "utf8");
+
+    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const objectStorage = await importObjectStorageWithFsOverrides({
+      stat: async (target, options) => {
+        if (String(target) === disappearingFile) {
+          const error = new Error(`ENOENT: no such file or directory, stat '${disappearingFile}'`) as NodeJS.ErrnoException;
+          error.code = "ENOENT";
+          throw error;
+        }
+        return actualFs.stat(target, options as never);
+      }
+    });
+
+    await expect(objectStorage.syncLocalDirectoryToRemote(store, "workspace/demo", directory)).resolves.toBeUndefined();
+    vi.doUnmock("node:fs/promises");
+    vi.resetModules();
+
+    expect([...store.objects.keys()].sort()).toEqual(["workspace/demo/README.md"]);
+  });
+
+  it("ignores files that disappear after snapshot collection but before upload", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-upload-race-"));
+    tempDirs.push(directory);
+    const store = new FakeDirectoryObjectStore();
+    const disappearingFile = path.join(directory, ".openharness", "agents", "compact-e2e.md");
+
+    await mkdir(path.dirname(disappearingFile), { recursive: true });
+    await writeFile(path.join(directory, "README.md"), "# synced\n", "utf8");
+    await writeFile(disappearingFile, "agent prompt\n", "utf8");
+
+    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const objectStorage = await importObjectStorageWithFsOverrides({
+      readFile: async (target, options) => {
+        if (String(target) === disappearingFile) {
+          const error = new Error(`ENOENT: no such file or directory, open '${disappearingFile}'`) as NodeJS.ErrnoException;
+          error.code = "ENOENT";
+          throw error;
+        }
+        return actualFs.readFile(target, options as never);
+      }
+    });
+
+    await expect(objectStorage.syncLocalDirectoryToRemote(store, "workspace/demo", directory)).resolves.toBeUndefined();
+    vi.doUnmock("node:fs/promises");
+    vi.resetModules();
+
+    expect([...store.objects.keys()].sort()).toEqual(["workspace/demo/README.md"]);
   });
 
   it("preserves original file mtime across local-to-remote and remote-to-local sync", async () => {

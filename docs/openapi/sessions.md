@@ -44,11 +44,23 @@
 - 仅当显式传入 `runningRunBehavior = "interrupt"` 时，runtime 才会先请求取消当前活跃 run，再把新消息作为下一轮执行
 - Web 控制台里的普通发送对应默认排队；“引导”按钮对应显式 `interrupt`
 
+### `GET /sessions/{sessionId}/queue`
+
+读取当前 session 的服务端后续消息队列。返回有序 `items`：
+
+- `runId`：排队 run 的可寻址资源 ID
+- `messageId`：对应用户消息 ID
+- `content`：用户输入文本
+- `createdAt`：进入服务端队列的时间
+- `position`：当前队列顺序（从 1 开始）
+
 ## 设计说明
 
 - 消息创建是异步语义，需结合 `GET /runs/{runId}` 和 SSE 获取进度
 - 同 session 可连续写入多条消息，形成串行 run 队列
+- 后续消息队列现在是服务端可寻址资源；前端只负责读取 `/sessions/{sessionId}/queue` 并调用相关 API，不再维护本地排队状态
 - API 默认是“排队而不是打断”；只有显式 `runningRunBehavior = "interrupt"` 才会中断当前活跃 run
+- 对已经进入队列的消息，如果要转成“打断当前 run 的引导模式”，请调用 `POST /runs/{runId}/guide`
 - runtime 按 AI SDK 兼容结构持久化消息（含 tool-call / tool-result）
 - session 维护 `activeAgentName`，run 内 `agent.switch` 后可同步更新
 - session/message/run 统一保存到中心库，本地 `history.db` 仅作为运行时数据文件

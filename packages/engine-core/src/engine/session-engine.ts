@@ -14,14 +14,17 @@ import type {
   ActionRunAcceptedResult,
   CreateSessionMessageParams,
   CreateSessionParams,
+  GuideQueuedRunResult,
   MessagePageDirection,
   MessageListResult,
+  MessageAcceptedResult,
   RunListResult,
   RunStepListResult,
   EngineMessageListResult,
   EngineServiceOptions,
   EngineWorkspaceCatalog,
   SessionListResult,
+  SessionQueuedRunListResult,
   TriggerActionRunParams,
   UpdateSessionParams,
   WorkspaceRecord
@@ -35,6 +38,7 @@ export interface SessionEngineServiceDependencies {
   messageRepository: EngineServiceOptions["messageRepository"];
   runRepository: EngineServiceOptions["runRepository"];
   runStepRepository: EngineServiceOptions["runStepRepository"];
+  sessionPendingRunQueueRepository: EngineServiceOptions["sessionPendingRunQueueRepository"];
   workspaceArchiveRepository?: EngineServiceOptions["workspaceArchiveRepository"] | undefined;
   modelInputs: ModelInputService;
   engineMessageSync: EngineMessageSyncService;
@@ -44,7 +48,7 @@ export interface SessionEngineServiceDependencies {
   appendEvent: (input: {
     sessionId: string;
     runId: string;
-    event: "run.queued";
+    event: "run.queued" | "queue.updated";
     data: Record<string, unknown>;
   }) => Promise<unknown>;
   enqueueRun: (sessionId: string, runId: string) => Promise<void>;
@@ -56,6 +60,7 @@ export class SessionEngineService {
   readonly #messageRepository: EngineServiceOptions["messageRepository"];
   readonly #runRepository: EngineServiceOptions["runRepository"];
   readonly #runStepRepository: EngineServiceOptions["runStepRepository"];
+  readonly #sessionPendingRunQueueRepository: EngineServiceOptions["sessionPendingRunQueueRepository"];
   readonly #workspaceArchiveRepository: EngineServiceOptions["workspaceArchiveRepository"];
   readonly #modelInputs: ModelInputService;
   readonly #engineMessageSync: EngineMessageSyncService;
@@ -71,6 +76,7 @@ export class SessionEngineService {
     this.#messageRepository = dependencies.messageRepository;
     this.#runRepository = dependencies.runRepository;
     this.#runStepRepository = dependencies.runStepRepository;
+    this.#sessionPendingRunQueueRepository = dependencies.sessionPendingRunQueueRepository;
     this.#workspaceArchiveRepository = dependencies.workspaceArchiveRepository;
     this.#modelInputs = dependencies.modelInputs;
     this.#engineMessageSync = dependencies.engineMessageSync;
@@ -312,35 +318,29 @@ export class SessionEngineService {
     return nextCursor === undefined ? { items } : { items, nextCursor };
   }
 
-  async createSessionMessage({ sessionId, caller, input }: CreateSessionMessageParams): Promise<{
-    messageId: string;
-    runId: string;
-    status: "queued";
-  }> {
+  async createSessionMessage({ sessionId, caller, input }: CreateSessionMessageParams): Promise<MessageAcceptedResult> {
     const session = await this.getSession(sessionId);
-    if ((input.runningRunBehavior ?? "queue") === "interrupt") {
-      await this.#interruptActiveSessionRuns(sessionId);
-    }
     const now = nowIso();
+    const messageId = createId("msg");
+    const runId = createId("run");
 
     const message: Message = {
-      id: createId("msg"),
+      id: messageId,
       sessionId,
+      runId,
       role: "user",
       content: textContent(input.content),
       metadata: input.metadata,
       createdAt: now
     };
 
-    await this.#messageRepository.create(message);
-
     const run: Run = {
-      id: createId("run"),
+      id: runId,
       workspaceId: session.workspaceId,
       sessionId: session.id,
       initiatorRef: caller.subjectRef,
       triggerType: "message",
-      triggerRef: message.id,
+      triggerRef: messageId,
       agentName: session.activeAgentName,
       effectiveAgentName: session.activeAgentName,
       switchCount: 0,
@@ -349,6 +349,7 @@ export class SessionEngineService {
     };
 
     await this.#runRepository.create(run);
+    await this.#messageRepository.create(message);
     await this.#appendEvent({
       sessionId: session.id,
       runId: run.id,
@@ -360,24 +361,273 @@ export class SessionEngineService {
       }
     });
 
-    await this.#enqueueRun(session.id, run.id);
+    const runningRunBehavior = input.runningRunBehavior ?? "queue";
+    const sessionQueueState = await this.#getSessionQueueState(session.id, {
+      excludeRunIds: [run.id]
+    });
+
+    if (runningRunBehavior === "interrupt") {
+      if (sessionQueueState.hasActiveRun || sessionQueueState.pendingRunIds.size > 0) {
+        const queuedEntry = await this.#sessionPendingRunQueueRepository.enqueue({
+          sessionId: session.id,
+          runId: run.id,
+          createdAt: now
+        });
+        await this.#sessionPendingRunQueueRepository.promote(run.id);
+        await this.#appendQueueUpdatedEvent(session.id, run.id, "promoted", queuedEntry.position);
+        const nextPendingRunIds = new Set(sessionQueueState.pendingRunIds);
+        nextPendingRunIds.add(run.id);
+        if (sessionQueueState.hasActiveRun) {
+          await this.#interruptActiveSessionRuns(session.id, nextPendingRunIds);
+        } else {
+          await this.dispatchNextQueuedRun(session.id);
+        }
+        return {
+          messageId: message.id,
+          runId: run.id,
+          status: "queued",
+          delivery: "session_queue",
+          queuedPosition: queuedEntry.position,
+          createdAt: now
+        };
+      } else {
+        await this.#enqueueRun(session.id, run.id);
+      }
+    } else if (sessionQueueState.hasActiveRun || sessionQueueState.pendingRunIds.size > 0) {
+      const queuedEntry = await this.#sessionPendingRunQueueRepository.enqueue({
+        sessionId: session.id,
+        runId: run.id,
+        createdAt: now
+      });
+      await this.#appendQueueUpdatedEvent(session.id, run.id, "enqueued", queuedEntry.position);
+      return {
+        messageId: message.id,
+        runId: run.id,
+        status: "queued",
+        delivery: "session_queue",
+        queuedPosition: queuedEntry.position,
+        createdAt: now
+      };
+    } else {
+      await this.#enqueueRun(session.id, run.id);
+    }
 
     return {
       messageId: message.id,
       runId: run.id,
-      status: "queued"
+      status: "queued",
+      delivery: "active_run",
+      createdAt: now
     };
   }
 
-  async #interruptActiveSessionRuns(sessionId: string): Promise<void> {
+  async listSessionQueuedRuns(sessionId: string): Promise<SessionQueuedRunListResult> {
+    await this.getSession(sessionId);
+    return {
+      items: await this.#collectSessionQueuedRuns(sessionId, { healStaleEntries: true })
+    };
+  }
+
+  async #removeQueuedRunBestEffort(sessionId: string, runId: string): Promise<void> {
+    await this.#sessionPendingRunQueueRepository.remove(runId).catch(() => undefined);
+    await this.#appendQueueUpdatedEvent(sessionId, runId, "removed").catch(() => undefined);
+  }
+
+  async #appendQueueUpdatedEvent(
+    sessionId: string,
+    runId: string,
+    action: "enqueued" | "promoted" | "dequeued" | "removed",
+    queuedPosition?: number
+  ): Promise<void> {
+    const items = await this.#collectSessionQueuedRuns(sessionId, { healStaleEntries: false });
+    await this.#appendEvent({
+      sessionId,
+      runId,
+      event: "queue.updated",
+      data: {
+        runId,
+        action,
+        items,
+        ...(typeof queuedPosition === "number" ? { queuedPosition } : {})
+      }
+    });
+  }
+
+  async guideQueuedRun(runId: string): Promise<GuideQueuedRunResult> {
+    let queueEntry = await this.#sessionPendingRunQueueRepository.getByRunId(runId);
+    if (!queueEntry) {
+      const run = await this.#runRepository.getById(runId).catch(() => null);
+      if (run?.sessionId) {
+        const sessionEntries = await this.#sessionPendingRunQueueRepository.listBySessionId(run.sessionId).catch(() => []);
+        queueEntry = sessionEntries.find((entry) => entry.runId === runId) ?? null;
+      }
+      if (!queueEntry && run?.sessionId && run.triggerType === "message") {
+        return {
+          runId,
+          status: "interrupt_requested"
+        };
+      }
+    }
+
+    if (!queueEntry) {
+      throw new AppError(404, "queued_run_not_found", `Queued run ${runId} was not found.`);
+    }
+
+    const sessionQueueState = await this.#getSessionQueueState(queueEntry.sessionId);
+    await this.#sessionPendingRunQueueRepository.promote(runId);
+    await this.#appendQueueUpdatedEvent(queueEntry.sessionId, runId, "promoted", queueEntry.position);
+    if (sessionQueueState.hasActiveRun) {
+      await this.#interruptActiveSessionRuns(queueEntry.sessionId, sessionQueueState.pendingRunIds);
+    } else {
+      await this.dispatchNextQueuedRun(queueEntry.sessionId);
+    }
+
+    return {
+      runId,
+      status: "interrupt_requested"
+    };
+  }
+
+  async dispatchNextQueuedRun(sessionId: string): Promise<string | undefined> {
+    const sessionQueueState = await this.#getSessionQueueState(sessionId);
+    if (sessionQueueState.hasActiveRun) {
+      return undefined;
+    }
+
+    const nextQueuedRun = await this.#sessionPendingRunQueueRepository.dequeueNext(sessionId);
+    if (!nextQueuedRun) {
+      return undefined;
+    }
+
+    const dispatchAt = nowIso();
+    await this.#retimestampQueuedMessageForDispatch(nextQueuedRun.runId, sessionId, dispatchAt);
+    await this.#appendQueueUpdatedEvent(sessionId, nextQueuedRun.runId, "dequeued", nextQueuedRun.position);
+    await this.#enqueueRun(sessionId, nextQueuedRun.runId);
+    return nextQueuedRun.runId;
+  }
+
+  async #interruptActiveSessionRuns(sessionId: string, pendingRunIds?: ReadonlySet<string>): Promise<void> {
     const runs = await this.#runRepository.listBySessionId(sessionId);
+    const queuedRunIds = pendingRunIds ?? new Set((await this.#sessionPendingRunQueueRepository.listBySessionId(sessionId)).map((entry) => entry.runId));
     const activeRuns = runs.filter(
       (run) =>
         (run.status === "queued" || run.status === "running" || run.status === "waiting_tool") &&
+        !queuedRunIds.has(run.id) &&
         !run.cancelRequestedAt
     );
 
     await Promise.all(activeRuns.map((run) => this.#requestRunCancellation(run.id)));
+  }
+
+  async #getSessionQueueState(sessionId: string): Promise<{
+    hasActiveRun: boolean;
+    pendingRunIds: Set<string>;
+  }>;
+  async #getSessionQueueState(
+    sessionId: string,
+    options: {
+      excludeRunIds?: string[] | undefined;
+    }
+  ): Promise<{
+    hasActiveRun: boolean;
+    pendingRunIds: Set<string>;
+  }>;
+  async #getSessionQueueState(
+    sessionId: string,
+    options?: {
+      excludeRunIds?: string[] | undefined;
+    }
+  ): Promise<{
+    hasActiveRun: boolean;
+    pendingRunIds: Set<string>;
+  }> {
+    const [runs, pendingRuns] = await Promise.all([
+      this.#runRepository.listBySessionId(sessionId),
+      this.#sessionPendingRunQueueRepository.listBySessionId(sessionId)
+    ]);
+    const excludedRunIds = new Set(options?.excludeRunIds ?? []);
+    const pendingRunIds = new Set(pendingRuns.map((entry) => entry.runId));
+    const hasActiveRun = runs.some(
+      (run) =>
+        (run.status === "queued" || run.status === "running" || run.status === "waiting_tool") &&
+        !excludedRunIds.has(run.id) &&
+        !pendingRunIds.has(run.id) &&
+        !run.cancelRequestedAt
+    );
+
+    return {
+      hasActiveRun,
+      pendingRunIds
+    };
+  }
+
+  async #collectSessionQueuedRuns(
+    sessionId: string,
+    options: {
+      healStaleEntries: boolean;
+    }
+  ): Promise<SessionQueuedRunListResult["items"]> {
+    const entries = await this.#sessionPendingRunQueueRepository.listBySessionId(sessionId);
+    const items: SessionQueuedRunListResult["items"] = [];
+
+    for (const entry of entries) {
+      try {
+        const run = await this.#runRepository.getById(entry.runId).catch(() => null);
+        const messageId = run?.triggerType === "message" ? run.triggerRef : undefined;
+
+        if (!run || run.sessionId !== sessionId || run.status !== "queued" || !messageId) {
+          if (options.healStaleEntries) {
+            await this.#removeQueuedRunBestEffort(sessionId, entry.runId);
+          }
+          continue;
+        }
+
+        const message = await this.#messageRepository.getById(messageId).catch(() => null);
+        if (!message) {
+          continue;
+        }
+
+        if (message.sessionId !== sessionId) {
+          if (options.healStaleEntries) {
+            await this.#removeQueuedRunBestEffort(sessionId, entry.runId);
+          }
+          continue;
+        }
+
+        items.push({
+          runId: entry.runId,
+          messageId,
+          content:
+            typeof message.content === "string" ? message.content : extractTextFromContent(message.content),
+          createdAt: entry.createdAt,
+          position: items.length + 1
+        });
+      } catch {
+        if (options.healStaleEntries) {
+          await this.#removeQueuedRunBestEffort(sessionId, entry.runId);
+        }
+      }
+    }
+
+    return items;
+  }
+
+  async #retimestampQueuedMessageForDispatch(runId: string, sessionId: string, dispatchAt: string): Promise<void> {
+    const run = await this.#runRepository.getById(runId).catch(() => null);
+    if (!run || run.sessionId !== sessionId || run.triggerType !== "message" || !run.triggerRef) {
+      return;
+    }
+
+    const message = await this.#messageRepository.getById(run.triggerRef).catch(() => null);
+    if (!message || message.sessionId !== sessionId) {
+      return;
+    }
+
+    await this.#messageRepository.update({
+      ...message,
+      runId,
+      createdAt: dispatchAt
+    });
   }
 
   async triggerActionRun({

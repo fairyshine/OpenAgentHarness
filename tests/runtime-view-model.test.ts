@@ -120,6 +120,7 @@ describe("buildRuntimeViewModel", () => {
 
     const viewModel = buildRuntimeViewModel({
       messages: [message],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [],
       liveMessagesByKey: {},
@@ -144,6 +145,7 @@ describe("buildRuntimeViewModel", () => {
 
     const viewModel = buildRuntimeViewModel({
       messages: [message],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [],
       liveMessagesByKey: {},
@@ -176,6 +178,7 @@ describe("buildRuntimeViewModel", () => {
 
     const viewModel = buildRuntimeViewModel({
       messages: [toolCallMessage],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [],
       liveMessagesByKey: {
@@ -207,6 +210,7 @@ describe("buildRuntimeViewModel", () => {
 
     const viewModel = buildRuntimeViewModel({
       messages: [persistedAssistantMessage],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [],
       liveMessagesByKey: {
@@ -236,6 +240,7 @@ describe("buildRuntimeViewModel", () => {
   it("preserves live assistant metadata for the conversation view", () => {
     const viewModel = buildRuntimeViewModel({
       messages: [],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [],
       liveMessagesByKey: {
@@ -273,6 +278,7 @@ describe("buildRuntimeViewModel", () => {
   it("renders live tool-call and tool-result messages before persistence catches up", () => {
     const viewModel = buildRuntimeViewModel({
       messages: [],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [],
       liveMessagesByKey: {
@@ -394,6 +400,7 @@ describe("buildRuntimeViewModel", () => {
 
     const viewModel = buildRuntimeViewModel({
       messages: [persistedToolCall, persistedToolResult],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [],
       liveMessagesByKey: {
@@ -437,6 +444,7 @@ describe("buildRuntimeViewModel", () => {
   it("preserves started status for background tool launch messages", () => {
     const viewModel = buildRuntimeViewModel({
       messages: [],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [],
       liveMessagesByKey: {
@@ -514,6 +522,104 @@ describe("buildRuntimeViewModel", () => {
     });
   });
 
+  it("anchors a guided queued run by execution time instead of original queue time", () => {
+    const activeRunAssistant = createAssistantMessage({
+      id: "msg_active_assistant",
+      runId: "run_active",
+      content: "current run reply",
+      createdAt: "2026-04-07T00:00:05.000Z"
+    });
+    const guidedUserMessage: Message = {
+      id: "msg_guided_user",
+      sessionId: "ses_1",
+      runId: "run_guided",
+      role: "user",
+      content: "queued then guided",
+      createdAt: "2026-04-07T00:00:01.000Z"
+    };
+    const guidedAssistantMessage = createAssistantMessage({
+      id: "msg_guided_assistant",
+      runId: "run_guided",
+      content: "guided reply",
+      createdAt: "2026-04-07T00:00:07.000Z"
+    });
+
+    const viewModel = buildRuntimeViewModel({
+      messages: [guidedUserMessage, activeRunAssistant, guidedAssistantMessage],
+      queuedMessageIds: new Set(),
+      runSteps: [createModelCallStep()],
+      deferredEvents: [
+        createEvent({
+          cursor: "1",
+          runId: "run_guided",
+          event: "run.started",
+          data: {
+            runId: "run_guided",
+            status: "running"
+          },
+          createdAt: "2026-04-07T00:00:06.000Z"
+        })
+      ],
+      liveMessagesByKey: {},
+      selectedTraceId: "",
+      selectedMessageId: "",
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(viewModel.messageFeed.map((message) => message.id)).toEqual([
+      "msg_active_assistant",
+      "msg_guided_user",
+      "msg_guided_assistant"
+    ]);
+  });
+
+  it("keeps the user message at the start of a run even when assistant messages are projected from events", () => {
+    const userMessage: Message = {
+      id: "msg_user_run_start",
+      sessionId: "ses_1",
+      runId: "run_1",
+      role: "user",
+      content: "tell me more",
+      createdAt: "2026-04-07T00:00:00.000Z"
+    };
+    const assistantMessage = createAssistantMessage({
+      id: "msg_assistant_run_body",
+      runId: "run_1",
+      content: "more detail",
+      createdAt: "2026-04-07T00:00:01.000Z"
+    });
+
+    const viewModel = buildRuntimeViewModel({
+      messages: [userMessage, assistantMessage],
+      queuedMessageIds: new Set(),
+      runSteps: [createModelCallStep()],
+      deferredEvents: [
+        createEvent({
+          cursor: "1",
+          runId: "run_1",
+          event: "message.completed",
+          data: {
+            messageId: assistantMessage.id,
+            content: assistantMessage.content
+          }
+        })
+      ],
+      liveMessagesByKey: {},
+      selectedTraceId: "",
+      selectedMessageId: "",
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(viewModel.messageFeed.map((message) => message.id)).toEqual([
+      userMessage.id,
+      assistantMessage.id
+    ]);
+  });
+
   it("projects interrupted assistant text into separate bubbles using session events", () => {
     const userMessage: Message = {
       id: "msg_user",
@@ -560,6 +666,7 @@ describe("buildRuntimeViewModel", () => {
 
     const viewModel = buildRuntimeViewModel({
       messages: [userMessage, streamedAssistant, assistantToolCall, toolResult],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [
         createEvent({
@@ -680,6 +787,7 @@ describe("buildRuntimeViewModel", () => {
 
     const viewModel = buildRuntimeViewModel({
       messages: [userMessage, assistantToolCall, toolResult],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [
         createEvent({
@@ -790,6 +898,7 @@ describe("buildRuntimeViewModel", () => {
 
     const viewModel = buildRuntimeViewModel({
       messages: [userMessage, assistantMessage],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [
         createEvent({
@@ -832,9 +941,52 @@ describe("buildRuntimeViewModel", () => {
     expect(viewModel.messageFeed[1]?.content).toEqual(assistantMessage.content);
   });
 
+  it("keeps queued user messages out of the main conversation feed until they leave the queue", () => {
+    const queuedUserMessage: Message = {
+      id: "msg_queued_user",
+      sessionId: "ses_1",
+      role: "user",
+      content: "queued follow-up",
+      createdAt: "2026-04-07T00:00:03.000Z"
+    };
+
+    const queuedViewModel = buildRuntimeViewModel({
+      messages: [queuedUserMessage],
+      queuedMessageIds: new Set([queuedUserMessage.id]),
+      runSteps: [],
+      deferredEvents: [],
+      liveMessagesByKey: {},
+      selectedTraceId: "",
+      selectedMessageId: queuedUserMessage.id,
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(queuedViewModel.messageFeed).toEqual([]);
+    expect(queuedViewModel.selectedSessionMessage).toBeNull();
+
+    const activeViewModel = buildRuntimeViewModel({
+      messages: [queuedUserMessage],
+      queuedMessageIds: new Set(),
+      runSteps: [],
+      deferredEvents: [],
+      liveMessagesByKey: {},
+      selectedTraceId: "",
+      selectedMessageId: queuedUserMessage.id,
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(activeViewModel.messageFeed.map((message) => message.id)).toEqual([queuedUserMessage.id]);
+    expect(activeViewModel.selectedSessionMessage?.id).toBe(queuedUserMessage.id);
+  });
+
   it("keeps an optimistic user message ahead of a live assistant reply", () => {
     const viewModel = buildRuntimeViewModel({
       messages: [],
+      queuedMessageIds: new Set(),
       runSteps: [createModelCallStep()],
       deferredEvents: [],
       liveMessagesByKey: {

@@ -8,13 +8,6 @@ import type { LiveConversationMessageRecord } from "../support";
 
 export type StreamStatus = "idle" | "connecting" | "listening" | "open" | "error";
 
-export interface QueuedSessionInput {
-  id: string;
-  sessionId: string;
-  content: string;
-  createdAt: string;
-}
-
 type StreamState = {
   messages: Message[];
   events: SessionEventContract[];
@@ -23,7 +16,6 @@ type StreamState = {
   run: Run | null;
   runSteps: RunStep[];
   draftMessage: string;
-  queuedSessionInputsBySessionId: Record<string, QueuedSessionInput[]>;
   liveMessagesByKey: Record<string, LiveConversationMessageRecord>;
   streamState: StreamStatus;
   generateOutput: ModelGenerateResponse | null;
@@ -35,7 +27,6 @@ type StreamState = {
   setRun: Dispatch<SetStateAction<Run | null>>;
   setRunSteps: Dispatch<SetStateAction<RunStep[]>>;
   setDraftMessage: Dispatch<SetStateAction<string>>;
-  setQueuedSessionInputsBySessionId: Dispatch<SetStateAction<Record<string, QueuedSessionInput[]>>>;
   setLiveMessagesByKey: Dispatch<SetStateAction<Record<string, LiveConversationMessageRecord>>>;
   setStreamState: Dispatch<SetStateAction<StreamStatus>>;
   setGenerateOutput: Dispatch<SetStateAction<ModelGenerateResponse | null>>;
@@ -54,7 +45,6 @@ export const useStreamStore = create<StreamState>((set, get) => ({
   run: null,
   runSteps: [],
   draftMessage: "",
-  queuedSessionInputsBySessionId: {},
   liveMessagesByKey: {},
   streamState: "idle",
   generateOutput: null,
@@ -66,8 +56,6 @@ export const useStreamStore = create<StreamState>((set, get) => ({
   setRun: (updater) => set({ run: resolve(updater, get().run) }),
   setRunSteps: (updater) => set({ runSteps: resolve(updater, get().runSteps) }),
   setDraftMessage: (updater) => set({ draftMessage: resolve(updater, get().draftMessage) }),
-  setQueuedSessionInputsBySessionId: (updater) =>
-    set({ queuedSessionInputsBySessionId: resolve(updater, get().queuedSessionInputsBySessionId) }),
   setLiveMessagesByKey: (updater) => set({ liveMessagesByKey: resolve(updater, get().liveMessagesByKey) }),
   setStreamState: (updater) => set({ streamState: resolve(updater, get().streamState) }),
   setGenerateOutput: (updater) => set({ generateOutput: resolve(updater, get().generateOutput) }),

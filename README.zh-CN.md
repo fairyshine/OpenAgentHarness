@@ -36,7 +36,7 @@ Open Agent Harness 是一个**可部署的 Agent Engine**，负责承载 Agent R
 
 控制台提供：
 - **对话视图**：流式输出、tool call 折叠展示、run 追踪
-- **后续消息队列**：当前 run 还在执行时，新增输入会先显示在输入框上方；需要立即打断时可点击 `引导`
+- **后续消息队列**：当前 run 还在执行时，新增输入会先通过服务端 API 进入队列并显示在输入框上方；需要立即打断时可点击 `引导`
 - **Inspector**：查看模型侧消息、工具列表、run 步骤和运行时 trace
 - **Storage 工作台**：PostgreSQL 和 Redis 数据查看，支持结构化 `messages.content` 检视
 

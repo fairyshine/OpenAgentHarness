@@ -13,7 +13,7 @@ import type {
   WorkspaceFileSystem
 } from "@oah/engine-core";
 import { createMemoryRuntimePersistence } from "@oah/storage-memory";
-import type { Message } from "@oah/api-contracts";
+import type { Message, Run } from "@oah/api-contracts";
 
 import { FakeModelGateway } from "./helpers/fake-model-gateway";
 
@@ -1255,6 +1255,10 @@ describe("runtime service", () => {
       caller,
       input: { content: "first" }
     });
+    expect(first).toMatchObject({
+      status: "queued",
+      delivery: "active_run"
+    });
 
     await waitFor(async () => {
       const run = await runtimeService.getRun(first.runId);
@@ -1273,6 +1277,26 @@ describe("runtime service", () => {
       caller,
       input: { content: "second" }
     });
+    expect(second).toMatchObject({
+      status: "queued",
+      delivery: "session_queue",
+      queuedPosition: 1
+    });
+
+    await waitFor(async () => {
+      const queue = await runtimeService.listSessionQueuedRuns(session.id);
+      return queue.items.length === 1 && queue.items[0]?.runId === second.runId;
+    });
+
+    const queuedRuns = await runtimeService.listSessionQueuedRuns(session.id);
+    expect(queuedRuns.items).toEqual([
+      expect.objectContaining({
+        runId: second.runId,
+        messageId: second.messageId,
+        content: "second",
+        position: 1
+      })
+    ]);
 
     await waitFor(async () => {
       const [firstRun, secondRun] = await Promise.all([
@@ -1297,6 +1321,7 @@ describe("runtime service", () => {
     expect(userMessages.map((message) => messageText(message))).toEqual(["first", "second"]);
     expect(messageText(firstAssistant)).toBeTruthy();
     expect(messageText(secondAssistant)).toBe("reply:second");
+    await expect(runtimeService.listSessionQueuedRuns(session.id)).resolves.toEqual({ items: [] });
   });
 
   it("interrupts an active session run only when requested explicitly", async () => {
@@ -1345,6 +1370,421 @@ describe("runtime service", () => {
 
     expect(runCancelled).toEqual([first.runId]);
     expect(runCompleted).toEqual([second.runId]);
+  });
+
+  it("promotes a queued session message and interrupts the active run when guided", async () => {
+    const { runtimeService, workspace } = await createRuntime(30);
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const first = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "first" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(first.runId);
+      return run.status === "running";
+    });
+
+    const second = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "second" }
+    });
+    const third = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "third" }
+    });
+
+    await waitFor(async () => {
+      const queue = await runtimeService.listSessionQueuedRuns(session.id);
+      return queue.items.length === 2;
+    });
+
+    await expect(runtimeService.guideQueuedRun(third.runId)).resolves.toEqual({
+      runId: third.runId,
+      status: "interrupt_requested"
+    });
+
+    await waitFor(async () => {
+      const queue = await runtimeService.listSessionQueuedRuns(session.id);
+      return queue.items.length === 2 && queue.items[0]?.runId === third.runId && queue.items[1]?.runId === second.runId;
+    });
+
+    await waitFor(async () => {
+      const [firstRun, secondRun, thirdRun] = await Promise.all([
+        runtimeService.getRun(first.runId),
+        runtimeService.getRun(second.runId),
+        runtimeService.getRun(third.runId)
+      ]);
+      return firstRun.status === "cancelled" && thirdRun.status === "completed" && secondRun.status === "completed";
+    });
+
+    const events = await runtimeService.listSessionEvents(session.id);
+    expect(events.filter((event) => event.event === "run.started").map((event) => event.runId)).toEqual([
+      first.runId,
+      third.runId,
+      second.runId
+    ]);
+    expect(events.filter((event) => event.event === "run.cancelled").map((event) => event.runId)).toEqual([first.runId]);
+    await expect(runtimeService.listSessionQueuedRuns(session.id)).resolves.toEqual({ items: [] });
+  });
+
+  it("emits queue.updated events with the latest queue snapshot", async () => {
+    const { runtimeService, workspace } = await createRuntime(30);
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const first = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "first" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(first.runId);
+      return run.status === "running";
+    });
+
+    const second = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "second" }
+    });
+    const third = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "third" }
+    });
+
+    await waitFor(async () => {
+      const events = await runtimeService.listSessionEvents(session.id);
+      return events.some(
+        (event) =>
+          event.event === "queue.updated" &&
+          event.runId === third.runId &&
+          Array.isArray(event.data.items) &&
+          event.data.items.length >= 2
+      );
+    });
+
+    const events = await runtimeService.listSessionEvents(session.id);
+    const latestQueueUpdate = events.find((event) => event.event === "queue.updated" && event.runId === third.runId);
+    expect(latestQueueUpdate).toMatchObject({
+      event: "queue.updated",
+      runId: third.runId,
+      data: {
+        action: "enqueued",
+        items: [
+          expect.objectContaining({
+            runId: second.runId,
+            content: "second",
+            position: 1
+          }),
+          expect.objectContaining({
+            runId: third.runId,
+            content: "third",
+            position: 2
+          })
+        ]
+      }
+    });
+  });
+
+  it("treats guide requests as idempotent after a queued run has already left the queue", async () => {
+    const { runtimeService, workspace } = await createRuntime(30);
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const first = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "first" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(first.runId);
+      return run.status === "running";
+    });
+
+    const second = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "second" }
+    });
+
+    await waitFor(async () => {
+      const queue = await runtimeService.listSessionQueuedRuns(session.id);
+      return queue.items.length === 1 && queue.items[0]?.runId === second.runId;
+    });
+
+    await runtimeService.cancelRun(first.runId);
+
+    await waitFor(async () => {
+      const queue = await runtimeService.listSessionQueuedRuns(session.id);
+      return queue.items.length === 0;
+    });
+
+    await expect(runtimeService.guideQueuedRun(second.runId)).resolves.toEqual({
+      runId: second.runId,
+      status: "interrupt_requested"
+    });
+  });
+
+  it("retimestamps a queued user message when it leaves the queue for execution", async () => {
+    const { runtimeService, workspace } = await createRuntime(30);
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const first = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "first" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(first.runId);
+      return run.status === "running";
+    });
+
+    const second = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "second" }
+    });
+
+    const messagesBeforeDispatch = await runtimeService.listSessionMessages(session.id);
+    const queuedUserBeforeDispatch = messagesBeforeDispatch.items.find((message) => message.id === second.messageId);
+    expect(messageText(queuedUserBeforeDispatch)).toBe("second");
+
+    await runtimeService.cancelRun(first.runId);
+
+    await waitFor(async () => {
+      const secondRun = await runtimeService.getRun(second.runId);
+      return secondRun.status === "running" || secondRun.status === "completed";
+    });
+
+    const messagesAfterDispatch = await runtimeService.listSessionMessages(session.id);
+    const queuedUserAfterDispatch = messagesAfterDispatch.items.find((message) => message.id === second.messageId);
+    expect(queuedUserAfterDispatch?.runId).toBe(second.runId);
+    expect(queuedUserAfterDispatch?.createdAt > (queuedUserBeforeDispatch?.createdAt ?? "")).toBe(true);
+  });
+
+  it("self-heals stale pending queue rows when listing a session queue", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      workspaceInitializer: {
+        async initialize(input) {
+          return {
+            rootPath: input.rootPath,
+            settings: {
+              defaultAgent: "default",
+              skillDirs: []
+            },
+            defaultAgent: "default",
+            workspaceModels: {},
+            agents: {},
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "runtime",
+              agents: [],
+              models: [],
+              actions: [],
+              skills: [],
+              tools: [],
+              hooks: [],
+              nativeTools: []
+            }
+          };
+        }
+      }
+    });
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const workspace = await runtimeService.createWorkspace({
+      input: {
+        name: "demo",
+        runtime: "workspace",
+        rootPath: "/tmp/demo",
+        executionPolicy: "local"
+      }
+    });
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    await persistence.sessionPendingRunQueueRepository.enqueue({
+      sessionId: session.id,
+      runId: "run_missing",
+      createdAt: new Date().toISOString()
+    });
+
+    await expect(runtimeService.listSessionQueuedRuns(session.id)).resolves.toEqual({ items: [] });
+    await expect(persistence.sessionPendingRunQueueRepository.listBySessionId(session.id)).resolves.toEqual([]);
+  });
+
+  it("keeps queued runs intact when their message is temporarily unavailable during queue listing", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      workspaceInitializer: {
+        async initialize(input) {
+          return {
+            rootPath: input.rootPath,
+            settings: {
+              defaultAgent: "default",
+              skillDirs: []
+            },
+            defaultAgent: "default",
+            workspaceModels: {},
+            agents: {},
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "runtime",
+              agents: [],
+              models: [],
+              actions: [],
+              skills: [],
+              tools: [],
+              hooks: [],
+              nativeTools: []
+            }
+          };
+        }
+      }
+    });
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server" as const,
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const workspace = await runtimeService.createWorkspace({
+      input: {
+        name: "demo",
+        runtime: "workspace",
+        rootPath: "/tmp/demo",
+        executionPolicy: "local"
+      }
+    });
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const createdAt = new Date().toISOString();
+    const queuedMessage: Message = {
+      id: "msg_transient_queue",
+      sessionId: session.id,
+      role: "user",
+      content: "second",
+      createdAt
+    };
+    const queuedRun: Run = {
+      id: "run_transient_queue",
+      workspaceId: workspace.id,
+      sessionId: session.id,
+      initiatorRef: caller.subjectRef,
+      triggerType: "message",
+      triggerRef: queuedMessage.id,
+      agentName: "default",
+      effectiveAgentName: "default",
+      switchCount: 0,
+      status: "queued",
+      createdAt
+    };
+
+    await persistence.messageRepository.create(queuedMessage);
+    await persistence.runRepository.create(queuedRun);
+    await persistence.sessionPendingRunQueueRepository.enqueue({
+      sessionId: session.id,
+      runId: queuedRun.id,
+      createdAt
+    });
+
+    const getByIdSpy = vi.spyOn(persistence.messageRepository, "getById").mockResolvedValueOnce(null);
+
+    await expect(runtimeService.listSessionQueuedRuns(session.id)).resolves.toEqual({ items: [] });
+    await expect(runtimeService.listSessionQueuedRuns(session.id)).resolves.toEqual({
+      items: [
+        {
+          runId: queuedRun.id,
+          messageId: queuedMessage.id,
+          content: "second",
+          position: 1,
+          createdAt
+        }
+      ]
+    });
+
+    await expect(persistence.sessionPendingRunQueueRepository.listBySessionId(session.id)).resolves.toHaveLength(1);
+    getByIdSpy.mockRestore();
   });
 
   it("auto compacts older context into boundary and summary artifacts before the next model call", async () => {

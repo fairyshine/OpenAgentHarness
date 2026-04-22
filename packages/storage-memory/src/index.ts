@@ -15,6 +15,7 @@ import type {
   RunStepRepository
 } from "@oah/engine-core";
 import { AppError, createId, nowIso, parseCursor } from "@oah/engine-core";
+import type { SessionPendingRunQueueEntry, SessionPendingRunQueueRepository } from "@oah/engine-core";
 
 export class InMemoryWorkspaceRepository implements WorkspaceRepository {
   readonly #items = new Map<string, WorkspaceRecord>();
@@ -284,6 +285,99 @@ export class InMemoryRunStepRepository implements RunStepRepository {
   }
 }
 
+export class InMemorySessionPendingRunQueueRepository implements SessionPendingRunQueueRepository {
+  readonly #itemsBySessionId = new Map<string, SessionPendingRunQueueEntry[]>();
+
+  async enqueue(input: {
+    sessionId: string;
+    runId: string;
+    createdAt: string;
+  }): Promise<SessionPendingRunQueueEntry> {
+    const existing = await this.getByRunId(input.runId);
+    if (existing) {
+      return existing;
+    }
+
+    const items = this.#itemsBySessionId.get(input.sessionId) ?? [];
+    const position = items.at(-1)?.position ?? 0;
+    const entry: SessionPendingRunQueueEntry = {
+      sessionId: input.sessionId,
+      runId: input.runId,
+      position: position + 1,
+      createdAt: input.createdAt
+    };
+    items.push(entry);
+    this.#itemsBySessionId.set(input.sessionId, items);
+    return entry;
+  }
+
+  async listBySessionId(sessionId: string): Promise<SessionPendingRunQueueEntry[]> {
+    return [...(this.#itemsBySessionId.get(sessionId) ?? [])].sort((left, right) => left.position - right.position);
+  }
+
+  async getByRunId(runId: string): Promise<SessionPendingRunQueueEntry | null> {
+    for (const items of this.#itemsBySessionId.values()) {
+      const entry = items.find((candidate) => candidate.runId === runId);
+      if (entry) {
+        return entry;
+      }
+    }
+
+    return null;
+  }
+
+  async promote(runId: string): Promise<void> {
+    const entry = await this.getByRunId(runId);
+    if (!entry) {
+      return;
+    }
+
+    const items = this.#itemsBySessionId.get(entry.sessionId) ?? [];
+    const minPosition = items.reduce((lowest, candidate) => Math.min(lowest, candidate.position), entry.position);
+    const target = items.find((candidate) => candidate.runId === runId);
+    if (target) {
+      target.position = minPosition - 1;
+    }
+    items.sort((left, right) => left.position - right.position);
+  }
+
+  async dequeueNext(sessionId: string): Promise<SessionPendingRunQueueEntry | null> {
+    const items = this.#itemsBySessionId.get(sessionId) ?? [];
+    if (items.length === 0) {
+      return null;
+    }
+
+    items.sort((left, right) => left.position - right.position);
+    const [next] = items.splice(0, 1);
+    if (items.length === 0) {
+      this.#itemsBySessionId.delete(sessionId);
+    }
+    return next ?? null;
+  }
+
+  async remove(runId: string): Promise<void> {
+    for (const [sessionId, items] of this.#itemsBySessionId.entries()) {
+      const nextItems = items.filter((candidate) => candidate.runId !== runId);
+      if (nextItems.length === items.length) {
+        continue;
+      }
+
+      if (nextItems.length === 0) {
+        this.#itemsBySessionId.delete(sessionId);
+      } else {
+        this.#itemsBySessionId.set(sessionId, nextItems);
+      }
+      return;
+    }
+  }
+
+  deleteBySessionIds(sessionIds: string[]): void {
+    for (const sessionId of sessionIds) {
+      this.#itemsBySessionId.delete(sessionId);
+    }
+  }
+}
+
 export class InMemorySessionEventStore implements SessionEventStore {
   readonly #eventsBySession = new Map<string, SessionEvent[]>();
   readonly #listeners = new Map<string, Set<(event: SessionEvent) => void>>();
@@ -366,6 +460,7 @@ export interface MemoryRuntimePersistence {
   runRepository: InMemoryRunRepository;
   runStepRepository: InMemoryRunStepRepository;
   sessionEventStore: InMemorySessionEventStore;
+  sessionPendingRunQueueRepository: InMemorySessionPendingRunQueueRepository;
 }
 
 export function createMemoryRuntimePersistence(): MemoryRuntimePersistence {
@@ -374,9 +469,11 @@ export function createMemoryRuntimePersistence(): MemoryRuntimePersistence {
   const runRepository = new InMemoryRunRepository();
   const runStepRepository = new InMemoryRunStepRepository();
   const sessionEventStore = new InMemorySessionEventStore();
+  const sessionPendingRunQueueRepository = new InMemorySessionPendingRunQueueRepository();
   const deleteSessionArtifacts = async (sessionId: string) => {
     const deletedRunIds = runRepository.deleteBySessionIds([sessionId]);
     sessionEventStore.deleteBySessionIds([sessionId]);
+    sessionPendingRunQueueRepository.deleteBySessionIds([sessionId]);
     messageRepository.deleteBySessionIds([sessionId]);
     engineMessageRepository.deleteBySessionIds([sessionId]);
     runStepRepository.deleteByRunIds(deletedRunIds);
@@ -395,6 +492,7 @@ export function createMemoryRuntimePersistence(): MemoryRuntimePersistence {
     engineMessageRepository,
     runRepository,
     runStepRepository,
-    sessionEventStore
+    sessionEventStore,
+    sessionPendingRunQueueRepository
   };
 }

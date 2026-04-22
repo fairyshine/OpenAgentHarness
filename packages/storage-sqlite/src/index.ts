@@ -7,6 +7,7 @@ import type {
   RunRepository,
   RunStepRepository,
   SessionEventStore,
+  SessionPendingRunQueueRepository,
   SessionRepository,
   ToolCallAuditRepository,
   WorkspaceRecord,
@@ -21,6 +22,7 @@ import {
   SQLiteRunRepository,
   SQLiteRunStepRepository,
   SQLiteEngineMessageRepository,
+  SQLiteSessionPendingRunQueueRepository,
   SQLiteSessionEventStore,
   SQLiteSessionRepository,
   SQLiteToolCallAuditRepository
@@ -36,6 +38,7 @@ export interface SQLiteRuntimePersistence {
   runRepository: RunRepository;
   runStepRepository: RunStepRepository;
   sessionEventStore: SessionEventStore;
+  sessionPendingRunQueueRepository: SessionPendingRunQueueRepository;
   toolCallAuditRepository: ToolCallAuditRepository;
   hookRunAuditRepository: HookRunAuditRepository;
   artifactRepository: ArtifactRepository;
@@ -78,6 +81,7 @@ export async function createSQLiteRuntimePersistence(
   const runRepository = new SQLiteRunRepository(coordinator);
   const runStepRepository = new SQLiteRunStepRepository(coordinator);
   const sessionEventStore = new SQLiteSessionEventStore(coordinator);
+  const sessionPendingRunQueueRepository = new SQLiteSessionPendingRunQueueRepository(coordinator);
   const toolCallAuditRepository = new SQLiteToolCallAuditRepository(coordinator);
   const hookRunAuditRepository = new SQLiteHookRunAuditRepository(coordinator);
   const artifactRepository = new SQLiteArtifactRepository(coordinator);
@@ -95,6 +99,7 @@ export async function createSQLiteRuntimePersistence(
     runRepository,
     runStepRepository,
     sessionEventStore,
+    sessionPendingRunQueueRepository,
     toolCallAuditRepository,
     hookRunAuditRepository,
     artifactRepository,

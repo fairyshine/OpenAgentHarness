@@ -28,6 +28,7 @@ export const sessionEventSchema = z.object({
   runId: z.string().optional(),
   event: z.enum([
     "run.queued",
+    "queue.updated",
     "run.started",
     "message.delta",
     "message.completed",

@@ -11,6 +11,7 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 - 流式输出走 SSE
 - 最终执行状态以 run 资源为准
 - session 发消息默认不会打断当前活跃 run；只有显式传 `runningRunBehavior: "interrupt"` 才会先取消当前 run
+- session 后续消息队列是服务端资源；可通过 `GET /sessions/{id}/queue` 读取，并通过 `POST /runs/{id}/guide` 将已排队消息提升为打断模式
 
 关键边界：`session` = 上下文边界，`run` = 执行边界，同 session 内 run 串行。
 
@@ -65,6 +66,7 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | GET | `/sessions/{id}` | 获取详情 |
 | GET | `/sessions/{id}/messages` | 列出消息 |
 | POST | `/sessions/{id}/messages` | 发送消息（202） |
+| GET | `/sessions/{id}/queue` | 读取服务端后续消息队列 |
 | GET | `/sessions/{id}/events` | SSE 事件流 |
 
 ### Runs
@@ -74,6 +76,7 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | GET | `/runs/{id}` | 获取详情 |
 | GET | `/runs/{id}/steps` | 列出步骤 |
 | POST | `/runs/{id}/cancel` | 取消（202） |
+| POST | `/runs/{id}/guide` | 将已排队消息提升为引导（202） |
 
 ### Actions
 

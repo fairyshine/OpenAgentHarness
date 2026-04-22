@@ -48,7 +48,7 @@ After startup, check:
 1. `oah-api`, `oah-controller`, and `oah-sandbox` all start successfully
 2. Browser opens `http://localhost:5174`
 3. Send a message in the console. The run should move from `queued` to executing.
-4. While a run is still active, sending another message should place it into the queue above the input box. Use the `Guide` button if you want to interrupt the active run immediately.
+4. While a run is still active, sending another message should place it into the server-side queue surfaced above the input box through `/api/v1/sessions/{sessionId}/queue`. Use the `Guide` button to call `/api/v1/runs/{runId}/guide` if you want to interrupt the active run immediately.
 
 !!! tip
     If the backend is not at the default address, set the proxy target:

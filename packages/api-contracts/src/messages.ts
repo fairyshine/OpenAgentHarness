@@ -229,7 +229,10 @@ export const createMessageRequestSchema = z.object({
 export const messageAcceptedSchema = z.object({
   messageId: z.string(),
   runId: z.string(),
-  status: z.literal("queued")
+  status: z.literal("queued"),
+  delivery: z.enum(["active_run", "session_queue"]).optional(),
+  queuedPosition: z.number().int().min(1).optional(),
+  createdAt: timestampSchema.optional()
 });
 
 export type Message = z.infer<typeof messageSchema>;

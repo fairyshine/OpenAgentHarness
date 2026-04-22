@@ -13,6 +13,8 @@ import type {
   RunRepository,
   RunStep,
   RunStepRepository,
+  SessionPendingRunQueueEntry,
+  SessionPendingRunQueueRepository,
   Session,
   SessionEvent,
   SessionEventStore,
@@ -145,6 +147,7 @@ export class SQLiteSessionRepository implements SessionRepository {
 
       handle.db.prepare("delete from runtime_messages where session_id = ?").run(id);
       handle.db.prepare("delete from session_events where session_id = ?").run(id);
+      handle.db.prepare("delete from session_pending_runs where session_id = ?").run(id);
       handle.db.prepare("delete from messages where session_id = ?").run(id);
       handle.db.prepare("delete from sessions where id = ?").run(id);
 
@@ -283,6 +286,147 @@ export class SQLiteEngineMessageRepository implements EngineMessageRepository {
         kind: isEngineMessageKind(message.kind) ? message.kind : "assistant_text"
       };
     });
+  }
+}
+
+export class SQLiteSessionPendingRunQueueRepository implements SessionPendingRunQueueRepository {
+  readonly #coordinator: SQLitePersistenceCoordinator;
+
+  constructor(coordinator: SQLitePersistenceCoordinator) {
+    this.#coordinator = coordinator;
+  }
+
+  async enqueue(input: {
+    sessionId: string;
+    runId: string;
+    createdAt: string;
+  }): Promise<SessionPendingRunQueueEntry> {
+    const handle = await this.#coordinator.getSessionHandle(input.sessionId);
+    const maxRow = handle.db
+      .prepare("select coalesce(max(position), 0) as position from session_pending_runs where session_id = ?")
+      .get(input.sessionId) as { position: number } | undefined;
+    const entry: SessionPendingRunQueueEntry = {
+      sessionId: input.sessionId,
+      runId: input.runId,
+      position: (maxRow?.position ?? 0) + 1,
+      createdAt: input.createdAt
+    };
+    handle.db
+      .prepare(
+        `insert into session_pending_runs (run_id, session_id, position, created_at)
+         values (?, ?, ?, ?)
+         on conflict(run_id) do nothing`
+      )
+      .run(entry.runId, entry.sessionId, entry.position, entry.createdAt);
+
+    return (await this.getByRunId(input.runId)) ?? entry;
+  }
+
+  async listBySessionId(sessionId: string): Promise<SessionPendingRunQueueEntry[]> {
+    const handle = await this.#coordinator.getSessionHandle(sessionId);
+    const rows = coerceRows<{
+      run_id: string;
+      session_id: string;
+      position: number;
+      created_at: string;
+    }>(
+      handle.db
+        .prepare(
+          `select run_id, session_id, position, created_at
+           from session_pending_runs
+           where session_id = ?
+           order by position asc, created_at asc, run_id asc`
+        )
+        .all(sessionId)
+    );
+    return rows.map((row) => ({
+      sessionId: row.session_id,
+      runId: row.run_id,
+      position: row.position,
+      createdAt: row.created_at
+    }));
+  }
+
+  async getByRunId(runId: string): Promise<SessionPendingRunQueueEntry | null> {
+    try {
+      const handle = await this.#coordinator.getRunHandle(runId);
+      const row = handle.db
+        .prepare(
+          `select run_id, session_id, position, created_at
+           from session_pending_runs
+           where run_id = ?
+           limit 1`
+        )
+        .get(runId) as { run_id: string; session_id: string; position: number; created_at: string } | undefined;
+
+      if (!row) {
+        return null;
+      }
+
+      return {
+        sessionId: row.session_id,
+        runId: row.run_id,
+        position: row.position,
+        createdAt: row.created_at
+      };
+    } catch (error) {
+      if (error instanceof AppError && error.code === "run_not_found") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async promote(runId: string): Promise<void> {
+    const entry = await this.getByRunId(runId);
+    if (!entry) {
+      return;
+    }
+
+    const handle = await this.#coordinator.getSessionHandle(entry.sessionId);
+    const minRow = handle.db
+      .prepare("select coalesce(min(position), 0) as position from session_pending_runs where session_id = ?")
+      .get(entry.sessionId) as { position: number } | undefined;
+    handle.db
+      .prepare("update session_pending_runs set position = ? where run_id = ?")
+      .run((minRow?.position ?? 0) - 1, runId);
+  }
+
+  async dequeueNext(sessionId: string): Promise<SessionPendingRunQueueEntry | null> {
+    const handle = await this.#coordinator.getSessionHandle(sessionId);
+    const row = handle.db
+      .prepare(
+        `select run_id, session_id, position, created_at
+         from session_pending_runs
+         where session_id = ?
+         order by position asc, created_at asc, run_id asc
+         limit 1`
+      )
+      .get(sessionId) as { run_id: string; session_id: string; position: number; created_at: string } | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    handle.db.prepare("delete from session_pending_runs where run_id = ?").run(row.run_id);
+    return {
+      sessionId: row.session_id,
+      runId: row.run_id,
+      position: row.position,
+      createdAt: row.created_at
+    };
+  }
+
+  async remove(runId: string): Promise<void> {
+    try {
+      const handle = await this.#coordinator.getRunHandle(runId);
+      handle.db.prepare("delete from session_pending_runs where run_id = ?").run(runId);
+    } catch (error) {
+      if (error instanceof AppError && error.code === "run_not_found") {
+        return;
+      }
+      throw error;
+    }
   }
 }
 

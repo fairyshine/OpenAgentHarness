@@ -18,6 +18,7 @@ export type ActionRetryPolicy = "manual" | "safe";
 export type EngineWorkspaceCatalog = WorkspaceCatalog;
 export type SessionEventName =
   | "run.queued"
+  | "queue.updated"
   | "run.started"
   | "message.delta"
   | "message.completed"

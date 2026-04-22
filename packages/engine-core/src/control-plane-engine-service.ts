@@ -30,12 +30,14 @@ type ControlPlaneRuntimeKernel = Pick<
   | "deleteSession"
   | "listSessionMessages"
   | "listSessionRuns"
+  | "listSessionQueuedRuns"
   | "createSessionMessage"
   | "listSessionEvents"
   | "subscribeSessionEvents"
   | "getRun"
   | "listRunSteps"
   | "cancelRun"
+  | "guideQueuedRun"
   | "requeueRun"
 >;
 
@@ -75,12 +77,14 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
   readonly deleteSession: EngineService["deleteSession"];
   readonly listSessionMessages: EngineService["listSessionMessages"];
   readonly listSessionRuns: EngineService["listSessionRuns"];
+  readonly listSessionQueuedRuns: EngineService["listSessionQueuedRuns"];
   readonly createSessionMessage: EngineService["createSessionMessage"];
   readonly listSessionEvents: EngineService["listSessionEvents"];
   readonly subscribeSessionEvents: EngineService["subscribeSessionEvents"];
   readonly getRun: EngineService["getRun"];
   readonly listRunSteps: EngineService["listRunSteps"];
   readonly cancelRun: EngineService["cancelRun"];
+  readonly guideQueuedRun: EngineService["guideQueuedRun"];
   readonly requeueRun: EngineService["requeueRun"];
 
   constructor(
@@ -223,6 +227,11 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
       await this.#touchSessionWorkspace(sessionId);
       return runs;
     };
+    this.listSessionQueuedRuns = async (sessionId) => {
+      const queue = await kernel.listSessionQueuedRuns(sessionId);
+      await this.#touchSessionWorkspace(sessionId);
+      return queue;
+    };
     this.createSessionMessage = async (input) => {
       const message = await kernel.createSessionMessage(input);
       await this.#touchSessionWorkspace(input.sessionId);
@@ -250,6 +259,11 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     };
     this.cancelRun = async (runId) => {
       const result = await kernel.cancelRun(runId);
+      await this.#touchRunWorkspace(runId);
+      return result;
+    };
+    this.guideQueuedRun = async (runId) => {
+      const result = await kernel.guideQueuedRun(runId);
       await this.#touchRunWorkspace(runId);
       return result;
     };

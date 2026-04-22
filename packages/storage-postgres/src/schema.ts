@@ -135,6 +135,17 @@ export const sessionEvents = pgTable("session_events", {
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
 });
 
+export const sessionPendingRuns = pgTable("session_pending_runs", {
+  runId: text("run_id")
+    .primaryKey()
+    .references(() => runs.id, { onDelete: "cascade" }),
+  sessionId: text("session_id")
+    .notNull()
+    .references(() => sessions.id, { onDelete: "cascade" }),
+  position: integer("position").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
+});
+
 export const toolCalls = pgTable("tool_calls", {
   id: text("id").primaryKey(),
   runId: text("run_id")
@@ -220,6 +231,7 @@ export const oahPostgresSchema = {
   engineMessages,
   runSteps,
   sessionEvents,
+  sessionPendingRuns,
   toolCalls,
   hookRuns,
   artifacts,

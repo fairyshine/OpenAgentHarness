@@ -2,6 +2,7 @@ import { startTransition, useDeferredValue, useEffect, useEffectEvent, useRef, u
 
 import {
   type ActionRunAccepted,
+  type GuideQueuedRunAccepted,
   healthReportSchema,
   readinessReportSchema,
   type Message,
@@ -11,6 +12,8 @@ import {
   type Run,
   type RunPage,
   type RunStep,
+  type SessionQueue,
+  type SessionQueuedRun,
   type SessionEventContract
 } from "@oah/api-contracts";
 
@@ -61,7 +64,7 @@ import { useHealthStore } from "./stores/health-store";
 import { useModelsStore } from "./stores/models-store";
 import { useSessionAgentStore } from "./stores/session-agent-store";
 import { useSettingsStore } from "./stores/settings-store";
-import { useStreamStore, type QueuedSessionInput } from "./stores/stream-store";
+import { useStreamStore } from "./stores/stream-store";
 import { useUiStore } from "./stores/ui-store";
 
 const COMPLETED_RUN_RESULT_POLL_LIMIT = 5;
@@ -115,6 +118,38 @@ function mergeMessageCursor(current: string | null, incoming: string | undefined
   return normalizedCurrent;
 }
 
+function readQueuedRunsFromEventData(data: Record<string, unknown>): SessionQueuedRun[] | null {
+  if (!Array.isArray(data.items)) {
+    return null;
+  }
+
+  const items: SessionQueuedRun[] = [];
+  for (const item of data.items) {
+    if (!isRecord(item)) {
+      return null;
+    }
+    if (
+      typeof item.runId !== "string" ||
+      typeof item.messageId !== "string" ||
+      typeof item.content !== "string" ||
+      typeof item.createdAt !== "string" ||
+      typeof item.position !== "number"
+    ) {
+      return null;
+    }
+
+    items.push({
+      runId: item.runId,
+      messageId: item.messageId,
+      content: item.content,
+      createdAt: item.createdAt,
+      position: item.position
+    });
+  }
+
+  return items;
+}
+
 export function useAppController() {
   const {
     connection,
@@ -134,7 +169,6 @@ export function useAppController() {
     run,
     runSteps,
     draftMessage,
-    queuedSessionInputsBySessionId,
     liveMessagesByKey,
     streamState,
     generateOutput,
@@ -146,7 +180,6 @@ export function useAppController() {
     setRun,
     setRunSteps,
     setDraftMessage,
-    setQueuedSessionInputsBySessionId,
     setLiveMessagesByKey,
     setStreamState,
     setGenerateOutput,
@@ -240,6 +273,7 @@ export function useAppController() {
   const [messagesNextCursor, setMessagesNextCursor] = useState<string | null>(null);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [sessionQueuedRuns, setSessionQueuedRuns] = useState<SessionQueuedRun[]>([]);
   const completedRunResultPollsRef = useRef<Record<string, number>>({});
   const streamAbortRef = useRef<AbortController | null>(null);
   const platformModelStreamAbortRef = useRef<AbortController | null>(null);
@@ -248,6 +282,7 @@ export function useAppController() {
   const messageRefreshTimerRef = useRef<number | undefined>(undefined);
   const messageRefreshSeqRef = useRef(0);
   const olderMessagesSeqRef = useRef(0);
+  const sessionQueueRefreshSeqRef = useRef(0);
   const runRefreshTimerRef = useRef<number | undefined>(undefined);
   const workspaceIndexRefreshTimerRef = useRef<number | undefined>(undefined);
   const runPollingTimerRef = useRef<number | undefined>(undefined);
@@ -256,12 +291,10 @@ export function useAppController() {
   const sessionAgentSwitchSeqRef = useRef(0);
   const sessionModelUpdateRef = useRef<{ sessionId: string; promise: Promise<boolean> } | null>(null);
   const sessionModelUpdateSeqRef = useRef(0);
-  const queuedMessageDispatchRef = useRef<{ sessionId: string; queueItemId: string } | null>(null);
   const conversationThreadRef = useRef<HTMLDivElement | null>(null);
   const conversationTailRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoFollowConversationRef = useRef(true);
   const selectedRunIdValue = selectedRunId.trim();
-  const currentQueuedSessionInputs = sessionId.trim() ? (queuedSessionInputsBySessionId[sessionId] ?? []) : [];
   const hasActiveSessionRun = sessionRuns.some((item) => !isTerminalRunStatus(item.status));
   const normalizedServiceScope = normalizeServiceScope(serviceScope);
   const serviceFilteredWorkspaces = orderedSavedWorkspaces.filter((entry) =>
@@ -312,6 +345,7 @@ export function useAppController() {
   );
   const runtimeViewModel = buildRuntimeViewModel({
     messages,
+    queuedMessageIds: new Set(sessionQueuedRuns.map((item) => item.messageId)),
     runSteps,
     deferredEvents,
     liveMessagesByKey,
@@ -915,6 +949,37 @@ export function useAppController() {
     }
   }
 
+  async function refreshSessionQueue(quiet = false) {
+    const targetSessionId = sessionId.trim();
+    if (!targetSessionId) {
+      startTransition(() => {
+        setSessionQueuedRuns([]);
+      });
+      return;
+    }
+
+    const refreshSeq = sessionQueueRefreshSeqRef.current + 1;
+    sessionQueueRefreshSeqRef.current = refreshSeq;
+
+    try {
+      const queue = await request<SessionQueue>(`/api/v1/sessions/${targetSessionId}/queue`);
+      if (activeSessionIdRef.current !== targetSessionId || sessionQueueRefreshSeqRef.current !== refreshSeq) {
+        return;
+      }
+
+      startTransition(() => {
+        setSessionQueuedRuns(queue.items);
+      });
+      if (!quiet) {
+        clearActiveError();
+      }
+    } catch (error) {
+      if (!quiet) {
+        reportError(error);
+      }
+    }
+  }
+
   useEffect(() => {
     setPendingSessionAgentName(null);
     setSwitchingSessionAgentId(null);
@@ -922,7 +987,6 @@ export function useAppController() {
     setPendingSessionModelRef(null);
     setSwitchingSessionModelId(null);
     sessionModelUpdateRef.current = null;
-    queuedMessageDispatchRef.current = null;
   }, [session?.id]);
 
   async function switchSessionAgent(targetId: string, activeAgentName: string) {
@@ -1023,44 +1087,6 @@ export function useAppController() {
     }
   }
 
-  const enqueueSessionInput = useEffectEvent((targetSessionId: string, content: string) => {
-    const queuedInput: QueuedSessionInput = {
-      id: `queued-input:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
-      sessionId: targetSessionId,
-      content,
-      createdAt: new Date().toISOString()
-    };
-
-    startTransition(() => {
-      setQueuedSessionInputsBySessionId((current) => ({
-        ...current,
-        [targetSessionId]: [...(current[targetSessionId] ?? []), queuedInput]
-      }));
-      setDraftMessage("");
-    });
-
-    setActivity(`消息已加入队列（${(queuedSessionInputsBySessionId[targetSessionId]?.length ?? 0) + 1}）`);
-    clearActiveError();
-  });
-
-  const removeQueuedSessionInput = useEffectEvent((targetSessionId: string, queueItemId: string) => {
-    startTransition(() => {
-      setQueuedSessionInputsBySessionId((current) => {
-        const nextItems = (current[targetSessionId] ?? []).filter((item) => item.id !== queueItemId);
-        if (nextItems.length === 0) {
-          const next = { ...current };
-          delete next[targetSessionId];
-          return next;
-        }
-
-        return {
-          ...current,
-          [targetSessionId]: nextItems
-        };
-      });
-    });
-  });
-
   const submitSessionMessage = useEffectEvent(
     async (
       content: string,
@@ -1096,6 +1122,8 @@ export function useAppController() {
         }
       }
 
+      const runningRunBehavior = options?.runningRunBehavior ?? "queue";
+
       shouldAutoFollowConversationRef.current = true;
       const accepted = await request<MessageAccepted>(`/api/v1/sessions/${sessionId}/messages`, {
         method: "POST",
@@ -1104,35 +1132,59 @@ export function useAppController() {
         },
         body: JSON.stringify({
           content: trimmedContent,
-          runningRunBehavior: options?.runningRunBehavior ?? "queue"
+          runningRunBehavior
         })
       });
+      const shouldDisplayAsQueued = accepted.delivery === "session_queue";
 
       startTransition(() => {
         if (options?.clearDraft !== false) {
           setDraftMessage("");
         }
-        setSelectedRunId(accepted.runId);
-        setLiveMessagesByKey((current) => ({
-          ...current,
-          [`pending-user:${accepted.messageId}`]: {
-            persistedMessageId: accepted.messageId,
-            runId: "",
-            sessionId,
-            role: "user",
-            content: trimmedContent,
-            createdAt: new Date().toISOString()
-          }
-        }));
+        if (shouldDisplayAsQueued) {
+          setSessionQueuedRuns((current) => {
+            const nextCreatedAt = accepted.createdAt ?? new Date().toISOString();
+            const nextPosition = accepted.queuedPosition ?? current.length + 1;
+            const nextItem: SessionQueuedRun = {
+              runId: accepted.runId,
+              messageId: accepted.messageId,
+              content: trimmedContent,
+              createdAt: nextCreatedAt,
+              position: nextPosition
+            };
+            const deduped = current.filter((item) => item.runId !== accepted.runId);
+            return [...deduped, nextItem].sort((left, right) => left.position - right.position);
+          });
+        }
+        if (!shouldDisplayAsQueued) {
+          setSelectedRunId(accepted.runId);
+          setLiveMessagesByKey((current) => ({
+            ...current,
+            [`pending-user:${accepted.messageId}`]: {
+              persistedMessageId: accepted.messageId,
+              runId: "",
+              sessionId,
+              role: "user",
+              content: trimmedContent,
+              createdAt: new Date().toISOString()
+            }
+          }));
+        }
       });
       setStreamRevision((current) => current + 1);
-      await Promise.all([
-        refreshMessages(true),
-        refreshSessionRuns(true, { includeSteps: true }),
-        refreshRun(accepted.runId, true),
-        refreshRunSteps(accepted.runId, true)
-      ]);
-      setActivity(options?.activityLabel ?? `消息已入队，run=${accepted.runId}`);
+      const refreshes: Array<Promise<unknown>> = [refreshSessionRuns(true, { includeSteps: true })];
+      if (!shouldDisplayAsQueued) {
+        refreshes.unshift(refreshMessages(true));
+      }
+      if (!shouldDisplayAsQueued) {
+        refreshes.push(refreshRun(accepted.runId, true), refreshRunSteps(accepted.runId, true));
+      }
+
+      await Promise.all(refreshes);
+      setActivity(
+        options?.activityLabel ??
+          (shouldDisplayAsQueued ? `消息已加入后续队列，run=${accepted.runId}` : `消息已入队，run=${accepted.runId}`)
+      );
       clearActiveError();
     }
   );
@@ -1149,11 +1201,6 @@ export function useAppController() {
     }
 
     try {
-      if (hasActiveSessionRun) {
-        enqueueSessionInput(sessionId, content);
-        return;
-      }
-
       await submitSessionMessage(content, {
         clearDraft: true
       });
@@ -1186,26 +1233,27 @@ export function useAppController() {
     }
   }
 
-  async function guideQueuedSessionInput(queueItemId: string) {
-    if (!sessionId.trim() || !queueItemId.trim()) {
+  async function guideQueuedSessionInput(runId: string) {
+    if (!sessionId.trim() || !runId.trim()) {
       reportError("请先创建或加载 session。");
       return;
     }
 
-    const targetQueuedInput = currentQueuedSessionInputs.find((item) => item.id === queueItemId);
-    if (!targetQueuedInput) {
-      reportError("未找到要引导的排队消息。");
-      return;
-    }
-
     try {
-      await submitSessionMessage(targetQueuedInput.content, {
-        clearDraft: false,
-        runningRunBehavior: "interrupt",
-        activityLabel: "已引导排队消息，正在切换到新的处理轮次"
+      await request<GuideQueuedRunAccepted>(`/api/v1/runs/${runId}/guide`, {
+        method: "POST"
       });
-      removeQueuedSessionInput(sessionId, targetQueuedInput.id);
+      await refreshSessionRuns(true, { includeSteps: true });
+      setActivity("已引导排队消息，正在切换到新的处理轮次");
+      clearActiveError();
     } catch (error) {
+      const summary = toErrorSummary(error);
+      if (summary?.code === "queued_run_not_found") {
+        await Promise.all([refreshSessionQueue(true), refreshSessionRuns(true, { includeSteps: true })]);
+        setActivity("该排队消息已离开队列，已刷新当前状态");
+        clearActiveError();
+        return;
+      }
       reportError(error);
       openConsoleForErrors();
     }
@@ -1228,59 +1276,6 @@ export function useAppController() {
       openConsoleForErrors();
     }
   }
-
-  useEffect(() => {
-    if (!sessionId.trim() || currentQueuedSessionInputs.length === 0) {
-      return;
-    }
-
-    if (hasActiveSessionRun) {
-      return;
-    }
-
-    const activeDispatch = queuedMessageDispatchRef.current;
-    if (activeDispatch?.sessionId === sessionId) {
-      return;
-    }
-
-    const nextQueuedInput = currentQueuedSessionInputs[0];
-    if (!nextQueuedInput) {
-      return;
-    }
-
-    queuedMessageDispatchRef.current = {
-      sessionId,
-      queueItemId: nextQueuedInput.id
-    };
-
-    void (async () => {
-      try {
-        await submitSessionMessage(nextQueuedInput.content, {
-          clearDraft: false,
-          activityLabel: "已从消息队列发起下一轮 run"
-        });
-        removeQueuedSessionInput(sessionId, nextQueuedInput.id);
-      } catch (error) {
-        reportError(error);
-        openConsoleForErrors();
-      } finally {
-        if (
-          queuedMessageDispatchRef.current?.sessionId === sessionId &&
-          queuedMessageDispatchRef.current?.queueItemId === nextQueuedInput.id
-        ) {
-          queuedMessageDispatchRef.current = null;
-        }
-      }
-    })();
-  }, [
-    currentQueuedSessionInputs,
-    openConsoleForErrors,
-    removeQueuedSessionInput,
-    reportError,
-    hasActiveSessionRun,
-    sessionId,
-    submitSessionMessage
-  ]);
 
   async function triggerWorkspaceAction(input: {
     workspaceId: string;
@@ -1414,6 +1409,8 @@ export function useAppController() {
       eventMetadata?.toolStatus === "failed"
         ? eventMetadata.toolStatus
         : undefined;
+    const eventQueueSnapshot = event.event === "queue.updated" ? readQueuedRunsFromEventData(event.data) : null;
+    const eventQueueAction = typeof event.data.action === "string" ? event.data.action : undefined;
 
     const normalizeToolCallInput = (value: unknown): Record<string, unknown> | undefined => {
       if (isRecord(value)) {
@@ -1676,6 +1673,19 @@ export function useAppController() {
       scheduleMessagesRefresh();
     }
 
+    if (event.event === "queue.updated") {
+      if (eventQueueSnapshot) {
+        startTransition(() => {
+          setSessionQueuedRuns(eventQueueSnapshot);
+        });
+      } else {
+        void refreshSessionQueue(true);
+      }
+      if (eventQueueAction === "dequeued" || eventQueueAction === "removed") {
+        scheduleMessagesRefresh();
+      }
+    }
+
     if (
       typeof event.runId === "string" &&
       [
@@ -1748,6 +1758,7 @@ export function useAppController() {
     if (!sessionId.trim()) {
       startTransition(() => {
         setMessages([]);
+        setSessionQueuedRuns([]);
       });
       setMessagesLoading(false);
       return;
@@ -1755,6 +1766,7 @@ export function useAppController() {
 
     setMessagesLoading(true);
     void refreshMessages(true, { reset: true });
+    void refreshSessionQueue(true);
   }, [sessionId]);
 
   useEffect(() => {
@@ -2022,22 +2034,6 @@ export function useAppController() {
     };
   }, [connection.baseUrl, connection.token, run?.id, run?.status, selectedRunIdValue, sessionId, streamState]);
 
-  useEffect(() => {
-    if (!shouldAutoFollowConversationRef.current) {
-      return;
-    }
-
-    const thread = conversationThreadRef.current;
-    const tail = conversationTailRef.current;
-    if (!thread || !tail) {
-      return;
-    }
-
-    window.requestAnimationFrame(() => {
-      tail.scrollIntoView({ block: "end" });
-    });
-  }, [liveMessagesByKey, messageFeed.length, selectedRunIdValue]);
-
   const latestEvent = deferredEvents[0];
   const inspectorSubtitle =
     inspectorTab === "overview"
@@ -2175,12 +2171,12 @@ export function useAppController() {
       hasMoreMessages: Boolean(messagesNextCursor),
       messagesLoading,
       loadingOlderMessages,
-      queuedSessionInputs: currentQueuedSessionInputs,
+      queuedSessionRuns: sessionQueuedRuns,
       loadOlderMessages: () => void loadOlderMessages(),
       refreshMessages: () => void refreshMessages(),
       sendMessage: () => void sendMessage(),
       guideMessage: () => void guideMessage(),
-      guideQueuedSessionInput: (queueItemId: string) => void guideQueuedSessionInput(queueItemId),
+      guideQueuedSessionInput: (runId: string) => void guideQueuedSessionInput(runId),
       guideMessageSupported: true,
       refreshRun: () => void refreshRun(),
       refreshRunSteps: () => void refreshRunSteps(),

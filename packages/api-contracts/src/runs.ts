@@ -52,6 +52,11 @@ export const cancelRunAcceptedSchema = z.object({
   status: z.literal("cancellation_requested")
 });
 
+export const guideQueuedRunAcceptedSchema = z.object({
+  runId: z.string(),
+  status: z.literal("interrupt_requested")
+});
+
 export const requeueRunAcceptedSchema = z.object({
   runId: z.string(),
   status: z.literal("queued"),
@@ -106,6 +111,7 @@ export type RunPage = z.infer<typeof runPageSchema>;
 export type RunStep = z.infer<typeof runStepSchema>;
 export type RunStepPage = z.infer<typeof runStepPageSchema>;
 export type CancelRunAccepted = z.infer<typeof cancelRunAcceptedSchema>;
+export type GuideQueuedRunAccepted = z.infer<typeof guideQueuedRunAcceptedSchema>;
 export type RequeueRunAccepted = z.infer<typeof requeueRunAcceptedSchema>;
 export type BatchRequeueRunsRequest = z.infer<typeof batchRequeueRunsRequestSchema>;
 export type BatchRequeueRunsResponse = z.infer<typeof batchRequeueRunsResponseSchema>;

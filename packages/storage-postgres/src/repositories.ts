@@ -16,6 +16,8 @@ import type {
   Session,
   SessionEvent,
   SessionEventStore,
+  SessionPendingRunQueueEntry,
+  SessionPendingRunQueueRepository,
   SessionRepository,
   ToolCallAuditRecord,
   ToolCallAuditRepository,
@@ -37,6 +39,7 @@ import {
   runs,
   engineMessages,
   sessionEvents,
+  sessionPendingRuns,
   sessions,
   toolCalls,
   workspaces
@@ -421,6 +424,120 @@ export class PostgresRunStepRepository implements RunStepRepository {
   async listByRunId(runId: string): Promise<RunStep[]> {
     const rows = await this.db.select().from(runSteps).where(eq(runSteps.runId, runId)).orderBy(asc(runSteps.seq));
     return rows.map(toRunStep);
+  }
+}
+
+export class PostgresSessionPendingRunQueueRepository implements SessionPendingRunQueueRepository {
+  constructor(private readonly db: OahDatabase) {}
+
+  async enqueue(input: {
+    sessionId: string;
+    runId: string;
+    createdAt: string;
+  }): Promise<SessionPendingRunQueueEntry> {
+    return this.db.transaction(async (tx) => {
+      const current = await tx
+        .select({
+          maxPosition: sql<number>`coalesce(max(${sessionPendingRuns.position}), 0)`
+        })
+        .from(sessionPendingRuns)
+        .where(eq(sessionPendingRuns.sessionId, input.sessionId));
+      const position = nonNull(current[0]?.maxPosition, 0) + 1;
+
+      await tx
+        .insert(sessionPendingRuns)
+        .values({
+          runId: input.runId,
+          sessionId: input.sessionId,
+          position,
+          createdAt: input.createdAt
+        })
+        .onConflictDoNothing();
+
+      return (
+        (await this.getByRunId(input.runId)) ?? {
+          sessionId: input.sessionId,
+          runId: input.runId,
+          position,
+          createdAt: input.createdAt
+        }
+      );
+    });
+  }
+
+  async listBySessionId(sessionId: string): Promise<SessionPendingRunQueueEntry[]> {
+    const rows = await this.db
+      .select()
+      .from(sessionPendingRuns)
+      .where(eq(sessionPendingRuns.sessionId, sessionId))
+      .orderBy(asc(sessionPendingRuns.position), asc(sessionPendingRuns.createdAt), asc(sessionPendingRuns.runId));
+
+    return rows.map((row) => ({
+      sessionId: row.sessionId,
+      runId: row.runId,
+      position: row.position,
+      createdAt: row.createdAt
+    }));
+  }
+
+  async getByRunId(runId: string): Promise<SessionPendingRunQueueEntry | null> {
+    const [row] = await this.db.select().from(sessionPendingRuns).where(eq(sessionPendingRuns.runId, runId)).limit(1);
+    if (!row) {
+      return null;
+    }
+
+    return {
+      sessionId: row.sessionId,
+      runId: row.runId,
+      position: row.position,
+      createdAt: row.createdAt
+    };
+  }
+
+  async promote(runId: string): Promise<void> {
+    const entry = await this.getByRunId(runId);
+    if (!entry) {
+      return;
+    }
+
+    const current = await this.db
+      .select({
+        minPosition: sql<number>`coalesce(min(${sessionPendingRuns.position}), 0)`
+      })
+      .from(sessionPendingRuns)
+      .where(eq(sessionPendingRuns.sessionId, entry.sessionId));
+    await this.db
+      .update(sessionPendingRuns)
+      .set({
+        position: nonNull(current[0]?.minPosition, 0) - 1
+      })
+      .where(eq(sessionPendingRuns.runId, runId));
+  }
+
+  async dequeueNext(sessionId: string): Promise<SessionPendingRunQueueEntry | null> {
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(sessionPendingRuns)
+        .where(eq(sessionPendingRuns.sessionId, sessionId))
+        .orderBy(asc(sessionPendingRuns.position), asc(sessionPendingRuns.createdAt), asc(sessionPendingRuns.runId))
+        .limit(1);
+      if (!row) {
+        return null;
+      }
+
+      await tx.delete(sessionPendingRuns).where(eq(sessionPendingRuns.runId, row.runId));
+      return {
+        sessionId: row.sessionId,
+        runId: row.runId,
+        position: row.position,
+        createdAt: row.createdAt
+      };
+    });
+  }
+
+  async remove(runId: string): Promise<void> {
+    await this.db.delete(sessionPendingRuns).where(eq(sessionPendingRuns.runId, runId));
   }
 }
 

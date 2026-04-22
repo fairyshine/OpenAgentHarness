@@ -1500,6 +1500,7 @@ function levelFromEventName(eventName: SessionEventContract["event"], data: Reco
 
 function categoryFromEventName(eventName: SessionEventContract["event"]): EngineLogCategory | null {
   switch (eventName) {
+    case "queue.updated":
     case "run.queued":
     case "run.started":
     case "run.completed":
@@ -1525,6 +1526,8 @@ function categoryFromEventName(eventName: SessionEventContract["event"]): Engine
 
 function consoleMessageFromEvent(event: SessionEventContract): string {
   switch (event.event) {
+    case "queue.updated":
+      return `Queue updated${typeof event.data.runId === "string" ? ` · ${event.data.runId}` : ""}`;
     case "run.queued":
       return `Run queued${typeof event.data.runId === "string" ? ` · ${event.data.runId}` : ""}`;
     case "run.started":

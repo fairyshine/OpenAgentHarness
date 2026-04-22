@@ -722,6 +722,22 @@ paths:
                 $ref: '#/components/schemas/MessageAccepted'
         default:
           $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/queue:
+    get:
+      tags: [Messages]
+      summary: List queued session follow-up messages
+      operationId: listSessionQueue
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Ordered service-side queue for the session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionQueue'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /sessions/{sessionId}/events:
     get:
       tags: [Events]
@@ -805,6 +821,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CancelRunAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runs/{runId}/guide:
+    post:
+      tags: [Runs]
+      summary: Promote a queued session message and interrupt active work
+      operationId: guideQueuedRun
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: Guide request accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuideQueuedRunAccepted'
         default:
           $ref: '#/components/responses/ErrorResponse'
 components:
@@ -2503,6 +2535,35 @@ components:
         status:
           type: string
           enum: [queued]
+    SessionQueuedRun:
+      type: object
+      required:
+        - runId
+        - messageId
+        - content
+        - createdAt
+        - position
+      properties:
+        runId:
+          type: string
+        messageId:
+          type: string
+        content:
+          type: string
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        position:
+          type: integer
+          minimum: 1
+    SessionQueue:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionQueuedRun'
     CreateActionRunRequest:
       type: object
       properties:
@@ -2584,6 +2645,17 @@ components:
         status:
           type: string
           enum: [cancellation_requested]
+    GuideQueuedRunAccepted:
+      type: object
+      required:
+        - runId
+        - status
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [interrupt_requested]
     Error:
       type: object
       required:

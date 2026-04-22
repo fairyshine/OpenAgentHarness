@@ -56,6 +56,44 @@ function readComparableMessageId(message: Pick<Message, "id">) {
   return message.id.startsWith("live:") ? message.id.slice("live:".length) : message.id;
 }
 
+function parseComparableTimestamp(value: string | undefined) {
+  const timestamp = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : Number.NaN;
+}
+
+function resolveRunDisplayAnchorTimestamp(messages: Message[], events: SessionEventContract[]) {
+  const earliestMessageTimestamp = messages.reduce((current, message) => {
+    const timestamp = parseComparableTimestamp(message.createdAt);
+    if (!Number.isFinite(timestamp)) {
+      return current;
+    }
+    return Number.isFinite(current) ? Math.min(current, timestamp) : timestamp;
+  }, Number.NaN);
+
+  const executionTimestamp = events.reduce((current, event) => {
+    const isExecutionAnchor =
+      event.event === "run.started" ||
+      (event.event === "queue.updated" && event.data.action === "dequeued");
+    if (!isExecutionAnchor) {
+      return current;
+    }
+
+    const timestamp = parseComparableTimestamp(event.createdAt);
+    if (!Number.isFinite(timestamp)) {
+      return current;
+    }
+    return Number.isFinite(current) ? Math.min(current, timestamp) : timestamp;
+  }, Number.NaN);
+
+  if (Number.isFinite(earliestMessageTimestamp) && Number.isFinite(executionTimestamp)) {
+    return Math.max(earliestMessageTimestamp, executionTimestamp);
+  }
+  if (Number.isFinite(executionTimestamp)) {
+    return executionTimestamp;
+  }
+  return earliestMessageTimestamp;
+}
+
 function isToolOnlyAssistantMessage(message: Message) {
   if (message.role !== "assistant" || typeof message.content === "string") {
     return false;
@@ -200,7 +238,24 @@ function projectRunConversation(messages: Message[], events: SessionEventContrac
       !isStreamedAssistantTextMessage(message, deltaMessageIds)
   );
 
-  return [...projected, ...fallbackMessages];
+  if (projected.length === 0 || fallbackMessages.length === 0) {
+    return [...fallbackMessages, ...projected];
+  }
+
+  const firstProjectedMessageIndex = messages.findIndex(
+    (message) => seenProjectedMessageIds.has(readComparableMessageId(message)) || isStreamedAssistantTextMessage(message, deltaMessageIds)
+  );
+  if (firstProjectedMessageIndex <= 0) {
+    return [...projected, ...fallbackMessages];
+  }
+
+  const leadingFallbackMessages = messages
+    .slice(0, firstProjectedMessageIndex)
+    .filter((message) => fallbackMessages.some((candidate) => candidate.id === message.id));
+  const leadingFallbackIds = new Set(leadingFallbackMessages.map((message) => message.id));
+  const trailingFallbackMessages = fallbackMessages.filter((message) => !leadingFallbackIds.has(message.id));
+
+  return [...leadingFallbackMessages, ...projected, ...trailingFallbackMessages];
 }
 
 function buildProjectedMessageFeed(params: {
@@ -243,14 +298,32 @@ function buildProjectedMessageFeed(params: {
   }
 
   const projectedRuns = new Map<string, Message[]>();
+  const runDisplayAnchorTimestamps = new Map<string, number>();
   for (const [runId, runMessages] of messagesByRunId) {
     const runEvents = eventsByRunId.get(runId) ?? [];
     projectedRuns.set(runId, projectRunConversation(runMessages, runEvents));
+    runDisplayAnchorTimestamps.set(runId, resolveRunDisplayAnchorTimestamp(runMessages, runEvents));
   }
+
+  const orderedFeedEntries = [...mergedMessages].sort((left, right) => {
+    const leftTimestamp = left.runId
+      ? (runDisplayAnchorTimestamps.get(left.runId) ?? parseComparableTimestamp(left.createdAt))
+      : parseComparableTimestamp(left.createdAt);
+    const rightTimestamp = right.runId
+      ? (runDisplayAnchorTimestamps.get(right.runId) ?? parseComparableTimestamp(right.createdAt))
+      : parseComparableTimestamp(right.createdAt);
+    const timestampComparison =
+      Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp) ? leftTimestamp - rightTimestamp : 0;
+    if (timestampComparison !== 0) {
+      return timestampComparison;
+    }
+
+    return compareMessagesChronologically(left, right);
+  });
 
   const seenRunIds = new Set<string>();
   const projectedFeed: Message[] = [];
-  for (const message of mergedMessages) {
+  for (const message of orderedFeedEntries) {
     if (!message.runId) {
       projectedFeed.push(message);
       continue;
@@ -269,6 +342,7 @@ function buildProjectedMessageFeed(params: {
 
 export function buildRuntimeViewModel(params: {
   messages: Message[];
+  queuedMessageIds: ReadonlySet<string>;
   runSteps: RunStep[];
   deferredEvents: SessionEventContract[];
   liveMessagesByKey: Record<string, LiveConversationMessageRecord>;
@@ -278,14 +352,16 @@ export function buildRuntimeViewModel(params: {
   selectedEventId: string;
   sessionId: string;
 }) {
+  const visibleMessages = params.messages.filter((message) => !params.queuedMessageIds.has(message.id));
   const modelCallTraces = params.runSteps.map(toModelCallTrace).filter((trace): trace is ModelCallTrace => trace !== null);
   const firstModelCallTrace = modelCallTraces[0] ?? null;
   const latestModelCallTrace = modelCallTraces.at(-1) ?? null;
   const selectedModelCallTrace = modelCallTraces.find((trace) => trace.id === params.selectedTraceId) ?? firstModelCallTrace;
   const composedSystemMessages = firstModelCallTrace?.input.messages.filter((message) => message.role === "system") ?? [];
-  const storedMessageCounts = countMessagesByRole(params.messages);
+  const storedMessageCounts = countMessagesByRole(visibleMessages);
   const latestModelMessageCounts = countMessagesByRole(latestModelCallTrace?.input.messages ?? []);
-  const selectedSessionMessage = params.messages.find((message) => message.id === params.selectedMessageId) ?? params.messages[0] ?? null;
+  const selectedSessionMessage =
+    visibleMessages.find((message) => message.id === params.selectedMessageId) ?? visibleMessages[0] ?? null;
   const selectedMessageSystemMessages = resolveMessageSystemMessages(selectedSessionMessage, modelCallTraces);
   const selectedRunStep = params.runSteps.find((step) => step.id === params.selectedStepId) ?? params.runSteps[0] ?? null;
   const selectedSessionEvent =
@@ -300,9 +376,9 @@ export function buildRuntimeViewModel(params: {
   const resolvedModelRefs = uniqueStrings(
     modelCallTraces.map((trace) => trace.input.canonicalModelRef).filter((value): value is string => Boolean(value))
   );
-  const persistedMessagesById = new Map(params.messages.map((message) => [message.id, message]));
+  const persistedMessagesById = new Map(visibleMessages.map((message) => [message.id, message]));
   const persistedToolRefKeys = new Set(
-    params.messages.flatMap((message) =>
+    visibleMessages.flatMap((message) =>
       contentToolRefs(message.content).map((ref) => `${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`)
     )
   );
@@ -339,7 +415,7 @@ export function buildRuntimeViewModel(params: {
     return liveMessage ? [liveMessage] : [];
   });
   const messageFeed = buildProjectedMessageFeed({
-    messages: params.messages,
+    messages: visibleMessages,
     deferredEvents: params.deferredEvents,
     liveMessages
   });

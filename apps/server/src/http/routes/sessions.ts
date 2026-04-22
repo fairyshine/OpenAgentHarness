@@ -5,11 +5,13 @@ import {
   batchRequeueRunsResponseSchema,
   cancelRunAcceptedSchema,
   createMessageRequestSchema,
+  guideQueuedRunAcceptedSchema,
   messageAcceptedSchema,
   messageListQuerySchema,
   messagePageSchema,
   pageQuerySchema,
   requeueRunAcceptedSchema,
+  sessionQueueSchema,
   runEventsQuerySchema,
   runPageSchema,
   runStepPageSchema,
@@ -69,6 +71,12 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: AppDep
     const query = pageQuerySchema.parse(request.query);
     const page = await dependencies.runtimeService.listSessionRuns(params.sessionId, query.pageSize, query.cursor);
     return reply.send(runPageSchema.parse(page));
+  });
+
+  app.get("/api/v1/sessions/:sessionId/queue", async (request, reply) => {
+    const params = createParamsSchema("sessionId").parse(request.params);
+    const queue = await dependencies.runtimeService.listSessionQueuedRuns(params.sessionId);
+    return reply.send(sessionQueueSchema.parse(queue));
   });
 
   app.post("/api/v1/sessions/:sessionId/messages", async (request, reply) => {
@@ -186,6 +194,15 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: AppDep
     const params = createParamsSchema("runId").parse(request.params);
     const result = await dependencies.runtimeService.cancelRun(params.runId);
     return reply.status(202).send(cancelRunAcceptedSchema.parse(result));
+  });
+
+  app.post("/api/v1/runs/:runId/guide", async (request, reply) => {
+    const params = createParamsSchema("runId").parse(request.params);
+    const caller = toCallerContext(request);
+    const run = await dependencies.runtimeService.getRun(params.runId);
+    assertWorkspaceAccess(caller, run.workspaceId);
+    const result = await dependencies.runtimeService.guideQueuedRun(params.runId);
+    return reply.status(202).send(guideQueuedRunAcceptedSchema.parse(result));
   });
 
   app.post("/api/v1/runs/:runId/requeue", async (request, reply) => {

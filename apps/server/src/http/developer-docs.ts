@@ -91,11 +91,13 @@ export function buildApiIndex(request: FastifyRequest) {
       routes: [
         "POST /api/v1/sessions/{sessionId}/messages",
         "GET /api/v1/sessions/{sessionId}/messages",
+        "GET /api/v1/sessions/{sessionId}/queue",
         "GET /api/v1/sessions/{sessionId}/runs",
         "GET /api/v1/sessions/{sessionId}/events",
         "GET /api/v1/runs/{runId}",
         "GET /api/v1/runs/{runId}/steps",
         "POST /api/v1/runs/{runId}/cancel",
+        "POST /api/v1/runs/{runId}/guide",
         "POST /api/v1/runs/{runId}/requeue",
         "POST /api/v1/runs/requeue"
       ]
@@ -580,10 +582,11 @@ curl ${escapeHtml(JSON.stringify(apiIndex))}</pre>
           </article>
           <article class="subcard">
             <h3>Send Work Into A Session</h3>
-            <p>Create a session, post a message, then follow run state and event streaming. Message submission is non-interrupting by default; pass <code>runningRunBehavior: "interrupt"</code> only when you explicitly want to cancel the active run first.</p>
+            <p>Create a session, post a message, then follow run state and event streaming. Message submission is non-interrupting by default; pass <code>runningRunBehavior: "interrupt"</code> only when you explicitly want to cancel the active run first. Queued follow-up messages are available as a server-side resource.</p>
             <ul>
               <li><code>POST /api/v1/workspaces/{workspaceId}/sessions</code></li>
               <li><code>POST /api/v1/sessions/{sessionId}/messages</code></li>
+              <li><code>GET /api/v1/sessions/{sessionId}/queue</code></li>
               <li><code>GET /api/v1/sessions/{sessionId}/events</code></li>
             </ul>
           </article>
@@ -858,6 +861,8 @@ export function buildDeveloperDocsHtml(request: FastifyRequest): string {
           <li>Read <code>/api/v1</code> to see the route families exposed by this concrete server.</li>
           <li>List workspaces with <code>GET /api/v1/workspaces</code>.</li>
           <li>Create or pick a session, then send a message with <code>POST /api/v1/sessions/{sessionId}/messages</code>. By default, the new run queues behind any active run in that session.</li>
+          <li>Read the ordered service-side follow-up queue with <code>GET /api/v1/sessions/{sessionId}/queue</code>.</li>
+          <li>If a queued message should jump ahead, call <code>POST /api/v1/runs/{runId}/guide</code>.</li>
           <li>Follow live state over <code>GET /api/v1/sessions/{sessionId}/events</code>.</li>
         </ol>
       </section>
@@ -880,8 +885,10 @@ export function buildDeveloperDocsHtml(request: FastifyRequest): string {
             <ul class="route-list">
               <li><code>POST /api/v1/workspaces/{workspaceId}/sessions</code> Create a session</li>
               <li><code>POST /api/v1/sessions/{sessionId}/messages</code> Queue a new user message by default; pass <code>runningRunBehavior: "interrupt"</code> to cancel the active run first</li>
+              <li><code>GET /api/v1/sessions/{sessionId}/queue</code> List the ordered service-side follow-up queue</li>
               <li><code>GET /api/v1/sessions/{sessionId}/runs</code> Inspect runs</li>
               <li><code>GET /api/v1/runs/{runId}/steps</code> Inspect run steps</li>
+              <li><code>POST /api/v1/runs/{runId}/guide</code> Promote a queued message and request interruption of the active run</li>
               <li><code>POST /api/v1/runs/{runId}/requeue</code> Manually requeue a quarantined recovery run</li>
               <li><code>POST /api/v1/runs/requeue</code> Batch requeue recovery runs with per-item results</li>
             </ul>

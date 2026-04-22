@@ -51,6 +51,10 @@ const OBJECT_MTIME_METADATA_KEY = "oah-mtime-ms";
 
 const DEFAULT_MANAGED_PATHS = Object.keys(DEFAULT_KEY_PREFIXES) as ManagedPathKey[];
 
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
 function normalizePrefix(prefix: string): string {
   return prefix.replace(/^\/+|\/+$/g, "");
 }
@@ -117,14 +121,29 @@ function parseObjectMtimeMs(metadata: Record<string, string> | undefined): numbe
 async function collectLocalDirectorySnapshot(rootDir: string, options?: DirectorySyncOptions): Promise<LocalDirectorySnapshot> {
   const files = new Map<string, { absolutePath: string; size: number; mtimeMs: number }>();
   const emptyDirectories = new Set<string>();
-  const rootExists = await stat(rootDir).catch(() => null);
+  const rootExists = await stat(rootDir).catch((error) => {
+    if (isNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  });
 
   if (!rootExists?.isDirectory()) {
     return { files, emptyDirectories };
   }
 
   const walk = async (directory: string): Promise<void> => {
-    const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name));
+    const entries = await readdir(directory, { withFileTypes: true }).catch((error) => {
+      if (isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    });
+    if (!entries) {
+      return;
+    }
+
+    entries.sort((left, right) => left.name.localeCompare(right.name));
     let visibleChildren = 0;
 
     for (const entry of entries) {
@@ -144,7 +163,16 @@ async function collectLocalDirectorySnapshot(rootDir: string, options?: Director
       }
 
       if (entry.isFile()) {
-        const entryStat = await stat(absolutePath);
+        const entryStat = await stat(absolutePath).catch((error) => {
+          if (isNotFoundError(error)) {
+            return null;
+          }
+          throw error;
+        });
+        if (!entryStat?.isFile()) {
+          continue;
+        }
+
         files.set(relativePath, {
           absolutePath,
           size: entryStat.size,
@@ -211,13 +239,27 @@ export function shouldExcludeWorkspaceBackingStoreRelativePath(relativePath: str
 }
 
 async function pruneEmptyDirectories(rootDir: string): Promise<void> {
-  const rootExists = await stat(rootDir).catch(() => null);
+  const rootExists = await stat(rootDir).catch((error) => {
+    if (isNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  });
   if (!rootExists?.isDirectory()) {
     return;
   }
 
   const walk = async (directory: string): Promise<boolean> => {
-    const entries = await readdir(directory, { withFileTypes: true });
+    const entries = await readdir(directory, { withFileTypes: true }).catch((error) => {
+      if (isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    });
+    if (!entries) {
+      return false;
+    }
+
     let hasChildren = false;
     for (const entry of entries) {
       const absolutePath = path.join(directory, entry.name);
@@ -707,9 +749,17 @@ export async function syncLocalDirectoryToRemote(
       continue;
     }
 
-    await store.putObject(buildRemoteKey(remotePrefix, relativePath), await readFile(file.absolutePath), {
-      mtimeMs: file.mtimeMs
+    const body = await readFile(file.absolutePath).catch((error) => {
+      if (isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
     });
+    if (!body) {
+      continue;
+    }
+
+    await store.putObject(buildRemoteKey(remotePrefix, relativePath), body, { mtimeMs: file.mtimeMs });
   }
 
   for (const relativePath of snapshot.emptyDirectories) {

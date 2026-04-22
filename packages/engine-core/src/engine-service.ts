@@ -53,6 +53,7 @@ import {
   type ActionRunAcceptedResult,
   type CancelRunResult,
   type RequeueRunResult,
+  type MessageAcceptedResult,
   type CreateSessionMessageParams,
   type CreateSessionParams,
   type UpdateSessionParams,
@@ -96,6 +97,7 @@ export class EngineService {
   readonly #runRepository: EngineServiceOptions["runRepository"];
   readonly #runStepRepository: EngineServiceOptions["runStepRepository"];
   readonly #sessionEventStore: EngineServiceOptions["sessionEventStore"];
+  readonly #sessionPendingRunQueueRepository: EngineServiceOptions["sessionPendingRunQueueRepository"];
   readonly #runQueue: EngineServiceOptions["runQueue"];
   readonly #toolCallAuditRepository: EngineServiceOptions["toolCallAuditRepository"];
   readonly #workspaceArchiveRepository: EngineServiceOptions["workspaceArchiveRepository"];
@@ -139,6 +141,7 @@ export class EngineService {
     this.#runRepository = options.runRepository;
     this.#runStepRepository = options.runStepRepository;
     this.#sessionEventStore = options.sessionEventStore;
+    this.#sessionPendingRunQueueRepository = options.sessionPendingRunQueueRepository;
     this.#runQueue = options.runQueue;
     this.#toolCallAuditRepository = options.toolCallAuditRepository;
     this.#workspaceArchiveRepository = options.workspaceArchiveRepository;
@@ -361,6 +364,7 @@ export class EngineService {
       messageRepository: this.#messageRepository,
       runRepository: this.#runRepository,
       runStepRepository: this.#runStepRepository,
+      sessionPendingRunQueueRepository: this.#sessionPendingRunQueueRepository,
       workspaceArchiveRepository: this.#workspaceArchiveRepository,
       modelInputs: this.#modelInputs,
       engineMessageSync: this.#engineMessageSync,
@@ -400,7 +404,8 @@ export class EngineService {
       resolveModelForRun: (workspace, modelRef) => this.#modelInputs.resolveModelForRun(workspace, modelRef),
       appendEvent: (input) => this.#engineLifecycle.appendEvent(input),
       getRun: (runId) => this.getRun(runId),
-      enqueueRun: (sessionId, runId, options) => this.#engineLifecycle.enqueueRun(sessionId, runId, options)
+      enqueueRun: (sessionId, runId, options) => this.#engineLifecycle.enqueueRun(sessionId, runId, options),
+      dispatchNextQueuedRun: (sessionId) => this.#sessionRuntime.dispatchNextQueuedRun(sessionId)
     });
   }
 
@@ -602,15 +607,15 @@ export class EngineService {
     return this.#sessionRuntime.listSessionRuns(sessionId, pageSize, cursor);
   }
 
+  async listSessionQueuedRuns(sessionId: string): Promise<import("./types.js").SessionQueuedRunListResult> {
+    return this.#sessionRuntime.listSessionQueuedRuns(sessionId);
+  }
+
   async listRunSteps(runId: string, pageSize = 100, cursor?: string): Promise<RunStepListResult> {
     return this.#sessionRuntime.listRunSteps(runId, pageSize, cursor);
   }
 
-  async createSessionMessage({ sessionId, caller, input }: CreateSessionMessageParams): Promise<{
-    messageId: string;
-    runId: string;
-    status: "queued";
-  }> {
+  async createSessionMessage({ sessionId, caller, input }: CreateSessionMessageParams): Promise<MessageAcceptedResult> {
     return this.#sessionRuntime.createSessionMessage({ sessionId, caller, input });
   }
 
@@ -669,6 +674,10 @@ export class EngineService {
 
   async requeueRun(runId: string, requestedBy?: string): Promise<RequeueRunResult> {
     return this.#runRecovery.requeueRun(runId, requestedBy);
+  }
+
+  async guideQueuedRun(runId: string): Promise<import("./types.js").GuideQueuedRunResult> {
+    return this.#sessionRuntime.guideQueuedRun(runId);
   }
 
   async recoverRunAfterDrainTimeout(

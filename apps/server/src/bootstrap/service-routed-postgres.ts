@@ -19,6 +19,8 @@ import type {
   Session,
   SessionEvent,
   SessionEventStore,
+  SessionPendingRunQueueEntry,
+  SessionPendingRunQueueRepository,
   SessionRepository,
   ToolCallAuditRecord,
   ToolCallAuditRepository,
@@ -52,6 +54,7 @@ export interface ServiceRoutedPostgresRuntimePersistence {
   runRepository: RunRepository;
   runStepRepository: RunStepRepository;
   sessionEventStore: SessionEventStore;
+  sessionPendingRunQueueRepository: SessionPendingRunQueueRepository;
   toolCallAuditRepository: ToolCallAuditRepository;
   hookRunAuditRepository: HookRunAuditRepository;
   artifactRepository: ArtifactRepository;
@@ -1036,6 +1039,38 @@ class RoutedRunStepRepository implements RunStepRepository {
   }
 }
 
+class RoutedSessionPendingRunQueueRepository implements SessionPendingRunQueueRepository {
+  constructor(private readonly router: ServiceBackendRouter) {}
+
+  async enqueue(input: {
+    sessionId: string;
+    runId: string;
+    createdAt: string;
+  }): Promise<SessionPendingRunQueueEntry> {
+    return (await this.router.getBackendForSessionId(input.sessionId)).sessionPendingRunQueueRepository.enqueue(input);
+  }
+
+  async listBySessionId(sessionId: string): Promise<SessionPendingRunQueueEntry[]> {
+    return (await this.router.getBackendForSessionId(sessionId)).sessionPendingRunQueueRepository.listBySessionId(sessionId);
+  }
+
+  async getByRunId(runId: string): Promise<SessionPendingRunQueueEntry | null> {
+    return (await this.router.getBackendForRunId(runId)).sessionPendingRunQueueRepository.getByRunId(runId);
+  }
+
+  async promote(runId: string): Promise<void> {
+    await (await this.router.getBackendForRunId(runId)).sessionPendingRunQueueRepository.promote(runId);
+  }
+
+  async dequeueNext(sessionId: string): Promise<SessionPendingRunQueueEntry | null> {
+    return (await this.router.getBackendForSessionId(sessionId)).sessionPendingRunQueueRepository.dequeueNext(sessionId);
+  }
+
+  async remove(runId: string): Promise<void> {
+    await (await this.router.getBackendForRunId(runId)).sessionPendingRunQueueRepository.remove(runId);
+  }
+}
+
 class RoutedSessionEventStore implements SessionEventStore {
   constructor(private readonly router: ServiceBackendRouter) {}
 
@@ -1215,6 +1250,7 @@ export async function createServiceRoutedPostgresRuntimePersistence(
     runRepository: new RoutedRunRepository(router),
     runStepRepository: new RoutedRunStepRepository(router),
     sessionEventStore: new RoutedSessionEventStore(router),
+    sessionPendingRunQueueRepository: new RoutedSessionPendingRunQueueRepository(router),
     toolCallAuditRepository: new RoutedToolCallAuditRepository(router),
     hookRunAuditRepository: new RoutedHookRunAuditRepository(router),
     artifactRepository: new RoutedArtifactRepository(router),

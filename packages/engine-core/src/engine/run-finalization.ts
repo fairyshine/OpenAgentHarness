@@ -36,6 +36,7 @@ export interface RunFinalizationServiceDependencies {
     run: Run,
     eventName: "run_completed" | "run_failed"
   ) => Promise<void>;
+  dispatchNextQueuedRun: (sessionId: string) => Promise<string | undefined>;
   buildGeneratedMessageMetadata: (
     workspace: WorkspaceRecord,
     agentName: string,
@@ -56,6 +57,7 @@ export class RunFinalizationService {
   readonly #markRunCancelled: RunFinalizationServiceDependencies["markRunCancelled"];
   readonly #recordSystemStep: RunFinalizationServiceDependencies["recordSystemStep"];
   readonly #runLifecycleHooks: RunFinalizationServiceDependencies["runLifecycleHooks"];
+  readonly #dispatchNextQueuedRun: RunFinalizationServiceDependencies["dispatchNextQueuedRun"];
   readonly #buildGeneratedMessageMetadata: RunFinalizationServiceDependencies["buildGeneratedMessageMetadata"];
   readonly #nowIso: RunFinalizationServiceDependencies["nowIso"];
 
@@ -70,6 +72,7 @@ export class RunFinalizationService {
     this.#markRunCancelled = dependencies.markRunCancelled;
     this.#recordSystemStep = dependencies.recordSystemStep;
     this.#runLifecycleHooks = dependencies.runLifecycleHooks;
+    this.#dispatchNextQueuedRun = dependencies.dispatchNextQueuedRun;
     this.#buildGeneratedMessageMetadata = dependencies.buildGeneratedMessageMetadata;
     this.#nowIso = dependencies.nowIso;
   }
@@ -142,6 +145,7 @@ export class RunFinalizationService {
     });
 
     await this.#runLifecycleHooks(input.workspace, input.session, updatedRun, "run_completed");
+    await this.#dispatchNextQueuedRun(input.session.id);
   }
 
   async finalizeTimedOutRun(input: {
@@ -171,6 +175,9 @@ export class RunFinalizationService {
       ...(timedOutRun.errorMessage ? { errorMessage: timedOutRun.errorMessage } : {})
     });
     await this.#runLifecycleHooks(input.workspace, input.session, timedOutRun, "run_failed");
+    if (timedOutRun.sessionId) {
+      await this.#dispatchNextQueuedRun(timedOutRun.sessionId);
+    }
   }
 
   async finalizeCancelledRun(input: {
@@ -179,6 +186,7 @@ export class RunFinalizationService {
   }): Promise<void> {
     if (input.session) {
       await this.#markRunCancelled(input.session.id, await this.#getRun(input.runId));
+      await this.#dispatchNextQueuedRun(input.session.id);
       return;
     }
 
@@ -189,6 +197,9 @@ export class RunFinalizationService {
     await this.#recordSystemStep(cancelledRun, "run.cancelled", {
       status: cancelledRun.status
     });
+    if (cancelledRun.sessionId) {
+      await this.#dispatchNextQueuedRun(cancelledRun.sessionId);
+    }
   }
 
   async finalizeFailedRun(input: {
@@ -230,6 +241,9 @@ export class RunFinalizationService {
     });
 
     await this.#runLifecycleHooks(input.workspace, input.session, failedRun, "run_failed");
+    if (failedRun.sessionId) {
+      await this.#dispatchNextQueuedRun(failedRun.sessionId);
+    }
     return failedRun;
   }
 }

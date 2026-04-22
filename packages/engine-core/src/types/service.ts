@@ -24,6 +24,7 @@ import type {
   RunQueue,
   RunRepository,
   RunStepRepository,
+  SessionPendingRunQueueRepository,
   EngineMessageRepository,
   SessionEventStore,
   SessionRepository,
@@ -62,6 +63,7 @@ export interface EngineServiceOptions {
   runRepository: RunRepository;
   runStepRepository: RunStepRepository;
   sessionEventStore: SessionEventStore;
+  sessionPendingRunQueueRepository: SessionPendingRunQueueRepository;
   runQueue?: RunQueue | undefined;
   toolCallAuditRepository?: ToolCallAuditRepository | undefined;
   hookRunAuditRepository?: HookRunAuditRepository | undefined;
@@ -126,6 +128,32 @@ export interface ActionRunAcceptedResult {
   status: "queued";
   actionName: string;
   sessionId?: string | undefined;
+}
+
+export interface MessageAcceptedResult {
+  messageId: string;
+  runId: string;
+  status: "queued";
+  delivery?: "active_run" | "session_queue" | undefined;
+  queuedPosition?: number | undefined;
+  createdAt?: string | undefined;
+}
+
+export interface SessionQueuedRunListItem {
+  runId: string;
+  messageId: string;
+  content: string;
+  createdAt: string;
+  position: number;
+}
+
+export interface SessionQueuedRunListResult {
+  items: SessionQueuedRunListItem[];
+}
+
+export interface GuideQueuedRunResult {
+  runId: string;
+  status: "interrupt_requested";
 }
 
 export interface EngineMessageListResult {

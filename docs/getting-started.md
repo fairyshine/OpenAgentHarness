@@ -48,7 +48,7 @@ pnpm dev:web
 1. `oah-api`、`oah-controller`、`oah-sandbox` 三个服务都启动成功
 2. 浏览器能打开 `http://localhost:5174`
 3. 在控制台发送消息，Run 从 `queued` 进入执行状态
-4. 如果当前 Run 还在执行，再发一条消息会先出现在输入框上方的队列里；如果希望立即打断当前 Run，可以点击 `引导`
+4. 如果当前 Run 还在执行，再发一条消息会先通过服务端 `/api/v1/sessions/{sessionId}/queue` 出现在输入框上方的队列里；如果希望立即打断当前 Run，可以点击 `引导`，底层会调用 `/api/v1/runs/{runId}/guide`
 
 !!! tip
     如果后端地址不是默认值，启动前端时指定代理目标：

@@ -21,6 +21,18 @@ export const sessionPageSchema = z.object({
   nextCursor: z.string().optional()
 });
 
+export const sessionQueuedRunSchema = z.object({
+  runId: z.string(),
+  messageId: z.string(),
+  content: z.string(),
+  createdAt: timestampSchema,
+  position: z.number().int().min(1)
+});
+
+export const sessionQueueSchema = z.object({
+  items: z.array(sessionQueuedRunSchema)
+});
+
 export const createSessionRequestSchema = z.object({
   title: z.string().optional(),
   agentName: z.string().optional(),
@@ -39,5 +51,7 @@ export const updateSessionRequestSchema = z
 
 export type Session = z.infer<typeof sessionSchema>;
 export type SessionPage = z.infer<typeof sessionPageSchema>;
+export type SessionQueuedRun = z.infer<typeof sessionQueuedRunSchema>;
+export type SessionQueue = z.infer<typeof sessionQueueSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 export type UpdateSessionRequest = z.infer<typeof updateSessionRequestSchema>;
