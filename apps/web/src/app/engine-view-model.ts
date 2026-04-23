@@ -32,9 +32,14 @@ function parseComparableTimestamp(value: string | undefined) {
   return Number.isFinite(timestamp) ? timestamp : Number.NaN;
 }
 
-function resolveRunDisplayAnchorTimestamp(messages: Message[], events: SessionEventContract[]) {
+function resolveRunDisplayAnchorTimestamp(
+  messages: Message[],
+  events: SessionEventContract[],
+  readMessageTimestamp: (message: Message) => number = (message) => parseComparableTimestamp(message.createdAt),
+  readEventTimestamp: (event: SessionEventContract) => number = (event) => parseComparableTimestamp(event.createdAt)
+) {
   const earliestMessageTimestamp = messages.reduce((current, message) => {
-    const timestamp = parseComparableTimestamp(message.createdAt);
+    const timestamp = readMessageTimestamp(message);
     if (!Number.isFinite(timestamp)) {
       return current;
     }
@@ -49,7 +54,7 @@ function resolveRunDisplayAnchorTimestamp(messages: Message[], events: SessionEv
       return current;
     }
 
-    const timestamp = parseComparableTimestamp(event.createdAt);
+    const timestamp = readEventTimestamp(event);
     if (!Number.isFinite(timestamp)) {
       return current;
     }
@@ -241,10 +246,33 @@ function buildProjectedMessageFeed(params: {
   deferredEvents: SessionEventContract[];
   liveMessages: Message[];
 }) {
-  const orderedMessages = [...params.messages].sort(compareMessagesChronologically);
   const orderedEvents = [...params.deferredEvents].sort((left, right) => readEventCursorValue(left) - readEventCursorValue(right));
   const eventsByRunId = new Map<string, SessionEventContract[]>();
   const messagesByRunId = new Map<string, Message[]>();
+  const messageTimestampById = new Map<string, number>();
+  const eventTimestampById = new Map<string, number>();
+
+  const readMessageTimestamp = (message: Message) => {
+    const cached = messageTimestampById.get(message.id);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const timestamp = parseComparableTimestamp(message.createdAt);
+    messageTimestampById.set(message.id, timestamp);
+    return timestamp;
+  };
+
+  const readEventTimestamp = (event: SessionEventContract) => {
+    const cached = eventTimestampById.get(event.id);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const timestamp = parseComparableTimestamp(event.createdAt);
+    eventTimestampById.set(event.id, timestamp);
+    return timestamp;
+  };
 
   for (const event of orderedEvents) {
     if (!event.runId) {
@@ -257,7 +285,7 @@ function buildProjectedMessageFeed(params: {
   }
 
   const mergedMessagesById = new Map<string, Message>();
-  for (const message of orderedMessages) {
+  for (const message of params.messages) {
     mergedMessagesById.set(readComparableMessageId(message), message);
   }
   for (const message of params.liveMessages) {
@@ -280,16 +308,16 @@ function buildProjectedMessageFeed(params: {
   for (const [runId, runMessages] of messagesByRunId) {
     const runEvents = eventsByRunId.get(runId) ?? [];
     projectedRuns.set(runId, projectRunConversation(runMessages, runEvents));
-    runDisplayAnchorTimestamps.set(runId, resolveRunDisplayAnchorTimestamp(runMessages, runEvents));
+    runDisplayAnchorTimestamps.set(runId, resolveRunDisplayAnchorTimestamp(runMessages, runEvents, readMessageTimestamp, readEventTimestamp));
   }
 
   const orderedFeedEntries = [...mergedMessages].sort((left, right) => {
     const leftTimestamp = left.runId
-      ? (runDisplayAnchorTimestamps.get(left.runId) ?? parseComparableTimestamp(left.createdAt))
-      : parseComparableTimestamp(left.createdAt);
+      ? (runDisplayAnchorTimestamps.get(left.runId) ?? readMessageTimestamp(left))
+      : readMessageTimestamp(left);
     const rightTimestamp = right.runId
-      ? (runDisplayAnchorTimestamps.get(right.runId) ?? parseComparableTimestamp(right.createdAt))
-      : parseComparableTimestamp(right.createdAt);
+      ? (runDisplayAnchorTimestamps.get(right.runId) ?? readMessageTimestamp(right))
+      : readMessageTimestamp(right);
     const timestampComparison =
       Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp) ? leftTimestamp - rightTimestamp : 0;
     if (timestampComparison !== 0) {
@@ -331,12 +359,44 @@ export function buildRuntimeViewModel(params: {
   sessionId: string;
 }) {
   const visibleMessages = params.messages.filter((message) => !params.queuedMessageIds.has(message.id));
-  const modelCallTraces = params.runSteps.map(toModelCallTrace).filter((trace): trace is ModelCallTrace => trace !== null);
-  const modelCallTracesById = new Map(modelCallTraces.map((trace) => [trace.id, trace] as const));
-  const modelCallTracesBySeq = new Map(modelCallTraces.map((trace) => [trace.seq, trace] as const));
+  const modelCallTraces: ModelCallTrace[] = [];
+  const modelCallTracesById = new Map<string, ModelCallTrace>();
+  const modelCallTracesBySeq = new Map<number, ModelCallTrace>();
+  const engineToolNames: string[] = [];
+  const advertisedToolNames: string[] = [];
+  const resolvedModelNameCandidates: string[] = [];
+  const resolvedModelRefCandidates: string[] = [];
+  const engineToolsByName = new Map<string, ModelCallTrace["input"]["engineTools"][number]>();
+  const toolServersByName = new Map<string, ModelCallTrace["input"]["toolServers"][number]>();
+
+  for (const step of params.runSteps) {
+    const trace = toModelCallTrace(step);
+    if (!trace) {
+      continue;
+    }
+
+    modelCallTraces.push(trace);
+    modelCallTracesById.set(trace.id, trace);
+    modelCallTracesBySeq.set(trace.seq, trace);
+    engineToolNames.push(...trace.input.engineToolNames);
+    advertisedToolNames.push(...trace.input.activeToolNames);
+    if (trace.input.model) {
+      resolvedModelNameCandidates.push(trace.input.model);
+    }
+    if (trace.input.canonicalModelRef) {
+      resolvedModelRefCandidates.push(trace.input.canonicalModelRef);
+    }
+    for (const tool of trace.input.engineTools) {
+      engineToolsByName.set(tool.name, tool);
+    }
+    for (const server of trace.input.toolServers) {
+      toolServersByName.set(server.name, server);
+    }
+  }
+
   const firstModelCallTrace = modelCallTraces[0] ?? null;
   const latestModelCallTrace = modelCallTraces.at(-1) ?? null;
-  const selectedModelCallTrace = modelCallTraces.find((trace) => trace.id === params.selectedTraceId) ?? firstModelCallTrace;
+  const selectedModelCallTrace = modelCallTracesById.get(params.selectedTraceId) ?? firstModelCallTrace;
   const composedSystemMessages = firstModelCallTrace?.input.messages.filter((message) => message.role === "system") ?? [];
   const storedMessageCounts = countMessagesByRole(visibleMessages);
   const latestModelMessageCounts = countMessagesByRole(latestModelCallTrace?.input.messages ?? []);
@@ -361,16 +421,12 @@ export function buildRuntimeViewModel(params: {
   const selectedRunStep = params.runSteps.find((step) => step.id === params.selectedStepId) ?? params.runSteps[0] ?? null;
   const selectedSessionEvent =
     params.deferredEvents.find((event) => event.id === params.selectedEventId) ?? params.deferredEvents[0] ?? null;
-  const allEngineToolNames = uniqueStrings(modelCallTraces.flatMap((trace) => trace.input.engineToolNames));
-  const allAdvertisedToolNames = uniqueStrings(modelCallTraces.flatMap((trace) => trace.input.activeToolNames));
-  const allEngineTools = [
-    ...new Map(modelCallTraces.flatMap((trace) => trace.input.engineTools).map((tool) => [tool.name, tool])).values()
-  ];
-  const allToolServers = [...new Map(modelCallTraces.flatMap((trace) => trace.input.toolServers).map((server) => [server.name, server])).values()];
-  const resolvedModelNames = uniqueStrings(modelCallTraces.map((trace) => trace.input.model).filter((value): value is string => Boolean(value)));
-  const resolvedModelRefs = uniqueStrings(
-    modelCallTraces.map((trace) => trace.input.canonicalModelRef).filter((value): value is string => Boolean(value))
-  );
+  const allEngineToolNames = uniqueStrings(engineToolNames);
+  const allAdvertisedToolNames = uniqueStrings(advertisedToolNames);
+  const allEngineTools = [...engineToolsByName.values()];
+  const allToolServers = [...toolServersByName.values()];
+  const resolvedModelNames = uniqueStrings(resolvedModelNameCandidates);
+  const resolvedModelRefs = uniqueStrings(resolvedModelRefCandidates);
   const persistedMessagesById = new Map(visibleMessages.map((message) => [message.id, message] as const));
   const persistedToolRefKeys = new Set<string>();
   for (const message of visibleMessages) {

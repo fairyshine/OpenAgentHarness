@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, useCallback, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, useEffect, useRef, useCallback, useMemo, useState, type ReactNode, type RefObject } from "react";
+import ReactMarkdown, { type Components as MarkdownComponents } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Archive, ArrowRight, Bot, ChevronRight, CornerDownRight, Folder, ImagePlus, Loader2, RefreshCw, Send, Sparkles, Square, Wrench, X } from "lucide-react";
 
@@ -18,6 +18,7 @@ import type { DraftImageAttachment } from "./composer-content";
 
 type RuntimeProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"];
 type ToolStatus = "running" | "started" | "completed" | "failed";
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -192,6 +193,8 @@ function formatToolDuration(durationMs: number | undefined) {
 const LONG_MESSAGE_COLLAPSE_CHARS = 2800;
 const LONG_MESSAGE_PREVIEW_CHARS = 1200;
 const COMPACT_SUMMARY_PREVIEW_CHARS = 900;
+const CONVERSATION_VIRTUALIZATION_THRESHOLD = 80;
+const CONVERSATION_OVERSCAN_PX = 1200;
 
 type CompactRuntimeKind = "compact_boundary" | "compact_summary";
 
@@ -222,6 +225,120 @@ function formatCompactCount(value: number | undefined, suffix: string) {
   return `${value.toLocaleString()} ${suffix}`;
 }
 
+function partitionStructuredMessageContent(content: Exclude<Message["content"], string>) {
+  const textParts: Extract<MessagePart, { type: "text" }>[] = [];
+  const imageParts: Extract<MessagePart, { type: "image" }>[] = [];
+  const reasoningParts: Extract<MessagePart, { type: "reasoning" }>[] = [];
+  const toolParts: Array<Extract<MessagePart, { type: "tool-call" }> | Extract<MessagePart, { type: "tool-result" }>> = [];
+  const approvalParts: Array<
+    Extract<MessagePart, { type: "tool-approval-request" }> | Extract<MessagePart, { type: "tool-approval-response" }>
+  > = [];
+
+  for (const part of content) {
+    switch (part.type) {
+      case "text":
+        textParts.push(part);
+        break;
+      case "image":
+        imageParts.push(part);
+        break;
+      case "reasoning":
+        reasoningParts.push(part);
+        break;
+      case "tool-call":
+      case "tool-result":
+        toolParts.push(part);
+        break;
+      case "tool-approval-request":
+      case "tool-approval-response":
+        approvalParts.push(part);
+        break;
+    }
+  }
+
+  return {
+    textParts,
+    imageParts,
+    reasoningParts,
+    toolParts,
+    approvalParts
+  };
+}
+
+function estimateMarkdownBlockHeight(text: string) {
+  const lineCount = text.split("\n").length;
+  return Math.min(720, Math.max(120, lineCount * 24 + Math.ceil(text.length / 14)));
+}
+
+function shouldDeferMarkdownRendering(text: string) {
+  return text.length > 1400 || text.includes("```") || text.includes("|");
+}
+
+function DeferredConversationBlock({
+  children,
+  estimatedHeight,
+  placeholderLabel,
+  rootMargin = "320px 0px",
+  eager = false
+}: {
+  children: ReactNode;
+  estimatedHeight: number;
+  placeholderLabel: string;
+  rootMargin?: string;
+  eager?: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [shouldRender, setShouldRender] = useState(eager);
+
+  useEffect(() => {
+    if (eager) {
+      setShouldRender(true);
+      return;
+    }
+
+    if (shouldRender) {
+      return;
+    }
+
+    const element = containerRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") {
+      setShouldRender(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldRender(true);
+          observer.disconnect();
+        }
+      },
+      {
+        rootMargin
+      }
+    );
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [eager, rootMargin, shouldRender]);
+
+  return (
+    <div ref={containerRef}>
+      {shouldRender ? (
+        children
+      ) : (
+        <div
+          className="rounded-xl border border-border/50 bg-background/40 px-3 py-2 text-xs text-muted-foreground/70"
+          style={{ minHeight: estimatedHeight }}
+        >
+          {placeholderLabel}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExpandableMarkdownText({
   text,
   isUser,
@@ -240,15 +357,38 @@ function ExpandableMarkdownText({
   const [expanded, setExpanded] = useState(false);
   const shouldCollapse = text.length > collapseThreshold;
   const preview = text.slice(0, previewChars).trimEnd();
+  const shouldDeferRichMarkdown = shouldDeferMarkdownRendering(text);
+  const markdownNode = <MarkdownText text={text} {...(isUser !== undefined ? { isUser } : {})} />;
 
   if (!shouldCollapse) {
-    return <MarkdownText text={text} {...(isUser !== undefined ? { isUser } : {})} />;
+    if (!shouldDeferRichMarkdown) {
+      return markdownNode;
+    }
+
+    return (
+      <DeferredConversationBlock
+        estimatedHeight={estimateMarkdownBlockHeight(text)}
+        placeholderLabel="Rendering message..."
+      >
+        {markdownNode}
+      </DeferredConversationBlock>
+    );
   }
 
   return (
     <div className="space-y-3">
       {expanded ? (
-        <MarkdownText text={text} {...(isUser !== undefined ? { isUser } : {})} />
+        shouldDeferRichMarkdown ? (
+          <DeferredConversationBlock
+            estimatedHeight={estimateMarkdownBlockHeight(text)}
+            placeholderLabel="Rendering message..."
+            eager={expanded}
+          >
+            {markdownNode}
+          </DeferredConversationBlock>
+        ) : (
+          markdownNode
+        )
       ) : (
         <div
           className={`rounded-xl border px-3 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${
@@ -382,7 +522,13 @@ function CompactSummaryCard({ message }: { message: Message }) {
         </div>
         <div className="mt-4 rounded-2xl border border-border/60 bg-background/70 px-4 py-3">
           {expanded ? (
-            <MarkdownText text={summaryText} />
+            <DeferredConversationBlock
+              estimatedHeight={estimateMarkdownBlockHeight(summaryText)}
+              placeholderLabel="Rendering summary..."
+              eager={summaryText.length < 1200}
+            >
+              <MarkdownText text={summaryText} />
+            </DeferredConversationBlock>
           ) : (
             <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/85">
               {preview}
@@ -406,58 +552,63 @@ function CompactSummaryCard({ message }: { message: Message }) {
 }
 
 function MarkdownText({ text, isUser }: { text: string; isUser?: boolean }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        p: ({ children }) => <p className="mb-2 last:mb-0 text-sm leading-relaxed">{children}</p>,
-        h1: ({ children }) => <h1 className="text-lg font-semibold mb-2 mt-3 first:mt-0">{children}</h1>,
-        h2: ({ children }) => <h2 className="text-base font-semibold mb-2 mt-3 first:mt-0">{children}</h2>,
-        h3: ({ children }) => <h3 className="text-sm font-semibold mb-1.5 mt-2 first:mt-0">{children}</h3>,
-        ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5 text-sm">{children}</ul>,
-        ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5 text-sm">{children}</ol>,
-        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-        code: ({ children, className }) => {
-          const isBlock = className?.includes("language-");
-          if (isBlock) {
-            return (
-              <code className="block font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
-                {children}
-              </code>
-            );
-          }
+  const markdownComponents = useMemo(
+    (): MarkdownComponents => ({
+      p: ({ children }) => <p className="mb-2 last:mb-0 text-sm leading-relaxed">{children}</p>,
+      h1: ({ children }) => <h1 className="text-lg font-semibold mb-2 mt-3 first:mt-0">{children}</h1>,
+      h2: ({ children }) => <h2 className="text-base font-semibold mb-2 mt-3 first:mt-0">{children}</h2>,
+      h3: ({ children }) => <h3 className="text-sm font-semibold mb-1.5 mt-2 first:mt-0">{children}</h3>,
+      ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5 text-sm">{children}</ul>,
+      ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5 text-sm">{children}</ol>,
+      li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+      code: ({ children, className }) => {
+        const isBlock = className?.includes("language-");
+        if (isBlock) {
           return (
-            <code className={`font-mono text-xs px-1.5 py-0.5 rounded-md ${isUser ? "bg-background/18 ring-1 ring-white/10" : "bg-muted/85 ring-1 ring-black/5"}`}>
+            <code className="block font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
               {children}
             </code>
           );
-        },
-        pre: ({ children }) => (
-          <pre className={`rounded-xl p-3 mb-2 overflow-auto text-xs font-mono leading-relaxed shadow-inner ${isUser ? "bg-background/18 ring-1 ring-white/10" : "bg-muted/55 border border-border/60"}`}>
+        }
+        return (
+          <code className={`font-mono text-xs px-1.5 py-0.5 rounded-md ${isUser ? "bg-background/18 ring-1 ring-white/10" : "bg-muted/85 ring-1 ring-black/5"}`}>
             {children}
-          </pre>
-        ),
-        blockquote: ({ children }) => (
-          <blockquote className={`border-l-2 pl-3 my-2 text-sm italic ${isUser ? "border-background/40 opacity-80" : "border-border text-muted-foreground"}`}>
-            {children}
-          </blockquote>
-        ),
-        a: ({ href, children }) => (
-          <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:opacity-80">
-            {children}
-          </a>
-        ),
-        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-        em: ({ children }) => <em className="italic">{children}</em>,
-        hr: () => <hr className="my-3 border-current opacity-20" />,
-        table: ({ children }) => (
-          <div className="overflow-auto mb-2">
-            <table className="text-xs border-collapse w-full">{children}</table>
-          </div>
-        ),
-        th: ({ children }) => <th className="border border-current/20 px-2 py-1 font-semibold text-left bg-current/5">{children}</th>,
-        td: ({ children }) => <td className="border border-current/20 px-2 py-1">{children}</td>,
-      }}
+          </code>
+        );
+      },
+      pre: ({ children }) => (
+        <pre className={`rounded-xl p-3 mb-2 overflow-auto text-xs font-mono leading-relaxed shadow-inner ${isUser ? "bg-background/18 ring-1 ring-white/10" : "bg-muted/55 border border-border/60"}`}>
+          {children}
+        </pre>
+      ),
+      blockquote: ({ children }) => (
+        <blockquote className={`border-l-2 pl-3 my-2 text-sm italic ${isUser ? "border-background/40 opacity-80" : "border-border text-muted-foreground"}`}>
+          {children}
+        </blockquote>
+      ),
+      a: ({ href, children }) => (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:opacity-80">
+          {children}
+        </a>
+      ),
+      strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+      em: ({ children }) => <em className="italic">{children}</em>,
+      hr: () => <hr className="my-3 border-current opacity-20" />,
+      table: ({ children }) => (
+        <div className="overflow-auto mb-2">
+          <table className="text-xs border-collapse w-full">{children}</table>
+        </div>
+      ),
+      th: ({ children }) => <th className="border border-current/20 px-2 py-1 font-semibold text-left bg-current/5">{children}</th>,
+      td: ({ children }) => <td className="border border-current/20 px-2 py-1">{children}</td>
+    }),
+    [isUser]
+  );
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+      components={markdownComponents}
     >
       {text}
     </ReactMarkdown>
@@ -496,10 +647,22 @@ function ToolCallBlock({
   messageMetadata?: Message["metadata"];
 }) {
   const [expanded, setExpanded] = useState(true);
-  const params = part.input ?? {};
-  const hasParams = Object.keys(params).length > 0;
   const toolMeta = readToolMeta(messageMetadata);
   const durationLabel = formatToolDuration(toolMeta.durationMs);
+  const { params, paramEntries, paramKeys, hasParams, shouldDeferParams } = useMemo(() => {
+    const params = part.input ?? {};
+    const paramEntries = Object.entries(params);
+    const paramKeys = paramEntries.map(([key]) => key);
+    return {
+      params,
+      paramEntries,
+      paramKeys,
+      hasParams: paramEntries.length > 0,
+      shouldDeferParams:
+        paramEntries.length > 0 &&
+        (paramEntries.length > 6 || paramEntries.some(([, value]) => typeof value === "string" && value.length > 400))
+    };
+  }, [part.input]);
 
   return (
     <div className="info-panel rounded-2xl overflow-hidden">
@@ -531,59 +694,65 @@ function ToolCallBlock({
         ) : null}
         {hasParams && (
           <span className="text-xs text-muted-foreground/50 truncate flex-1">
-            · {Object.keys(params).join(", ")}
+            · {paramKeys.join(", ")}
           </span>
         )}
       </button>
       {expanded && (
-        <div className="border-t border-border/40 px-4 py-3">
-          {hasParams ? (
-            <div className="space-y-2">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-2">Parameters</div>
-              {Object.entries(params).map(([key, value]) => {
-                const kind = getParamKind(value);
-                const isMultiline = typeof value === "string" && value.includes("\n");
-                return (
-                  <div key={key} className="rounded-xl border border-border/50 bg-background/40 px-3 py-2.5">
-                    <div className="flex flex-wrap items-center gap-2 mb-2">
-                      <span className="inline-flex items-center rounded-md border border-primary/15 bg-primary/5 px-2 py-0.5 text-[11px] font-mono font-semibold text-primary/90">
-                        {key}
-                      </span>
-                      <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${paramTypeBadgeClass(kind)}`}>
-                        {kind}
-                      </span>
-                    </div>
-                    <div className="text-xs font-mono text-foreground/80">
-                      {typeof value === "string" ? (
-                        isMultiline ? (
-                          <pre className={`rounded-lg border px-3 py-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto ${toneBadgeClass("sky")}`}>
-                            {value}
-                          </pre>
+        <DeferredConversationBlock
+          estimatedHeight={hasParams ? 220 : 72}
+          placeholderLabel="Rendering tool parameters..."
+          eager={!shouldDeferParams}
+        >
+          <div className="border-t border-border/40 px-4 py-3">
+            {hasParams ? (
+              <div className="space-y-2">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-2">Parameters</div>
+                {paramEntries.map(([key, value]) => {
+                  const kind = getParamKind(value);
+                  const isMultiline = typeof value === "string" && value.includes("\n");
+                  return (
+                    <div key={key} className="rounded-xl border border-border/50 bg-background/40 px-3 py-2.5">
+                      <div className="flex flex-wrap items-center gap-2 mb-2">
+                        <span className="inline-flex items-center rounded-md border border-primary/15 bg-primary/5 px-2 py-0.5 text-[11px] font-mono font-semibold text-primary/90">
+                          {key}
+                        </span>
+                        <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${paramTypeBadgeClass(kind)}`}>
+                          {kind}
+                        </span>
+                      </div>
+                      <div className="text-xs font-mono text-foreground/80">
+                        {typeof value === "string" ? (
+                          isMultiline ? (
+                            <pre className={`rounded-lg border px-3 py-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto ${toneBadgeClass("sky")}`}>
+                              {value}
+                            </pre>
+                          ) : (
+                            <span className={`inline-flex items-center rounded-md border px-2 py-1 ${toneBadgeClass("sky")}`}>
+                              <span className="opacity-50 mr-0.5">"</span>{value}<span className="opacity-50 ml-0.5">"</span>
+                            </span>
+                          )
+                        ) : typeof value === "number" ? (
+                          <span className={`inline-flex items-center rounded-md border px-2 py-1 ${toneBadgeClass("emerald")}`}>{value}</span>
+                        ) : typeof value === "boolean" ? (
+                          <span className={`inline-flex items-center rounded-md border px-2 py-1 ${toneBadgeClass("plum")}`}>{String(value)}</span>
+                        ) : value === null ? (
+                          <span className="info-inline inline-flex items-center rounded-md px-2 py-1 text-muted-foreground">null</span>
                         ) : (
-                          <span className={`inline-flex items-center rounded-md border px-2 py-1 ${toneBadgeClass("sky")}`}>
-                            <span className="opacity-50 mr-0.5">"</span>{value}<span className="opacity-50 ml-0.5">"</span>
-                          </span>
-                        )
-                      ) : typeof value === "number" ? (
-                        <span className={`inline-flex items-center rounded-md border px-2 py-1 ${toneBadgeClass("emerald")}`}>{value}</span>
-                      ) : typeof value === "boolean" ? (
-                        <span className={`inline-flex items-center rounded-md border px-2 py-1 ${toneBadgeClass("plum")}`}>{String(value)}</span>
-                      ) : value === null ? (
-                        <span className="info-inline inline-flex items-center rounded-md px-2 py-1 text-muted-foreground">null</span>
-                      ) : (
-                        <pre className="code-panel rounded-lg px-3 py-2 overflow-x-auto whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
-                          {JSON.stringify(value, null, 2)}
-                        </pre>
-                      )}
+                          <pre className="code-panel rounded-lg px-3 py-2 overflow-x-auto whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+                            {JSON.stringify(value, null, 2)}
+                          </pre>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <span className="text-xs text-muted-foreground/50 italic">no parameters</span>
-          )}
-        </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <span className="text-xs text-muted-foreground/50 italic">no parameters</span>
+            )}
+          </div>
+        </DeferredConversationBlock>
       )}
     </div>
   );
@@ -623,6 +792,7 @@ function ToolResultBlock({
   const preview = content.slice(0, 60).replace(/\n/g, " ") + (content.length > 60 ? "…" : "");
   const toolMeta = readToolMeta(messageMetadata);
   const durationLabel = formatToolDuration(toolMeta.durationMs);
+  const shouldDeferOutput = content.length > 800 || part.output?.type === "json" || part.output?.type === "error-json";
 
   return (
     <div className={isError ? "rounded-2xl border border-destructive/20 bg-destructive/5 overflow-hidden shadow-sm" : "info-panel rounded-2xl overflow-hidden"}>
@@ -660,16 +830,22 @@ function ToolResultBlock({
         </span>
       </button>
       {expanded && (
-        <div className="border-t border-border/40 px-4 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-2">Output</div>
-          <pre className={`rounded-xl border px-3 py-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-64 overflow-y-auto shadow-sm ${
-            isError
-              ? "border-destructive/20 bg-destructive/5 text-destructive/90"
-              : "code-panel"
-          }`}>
-            {content}
-          </pre>
-        </div>
+        <DeferredConversationBlock
+          estimatedHeight={Math.min(360, Math.max(120, Math.ceil(content.length / 10)))}
+          placeholderLabel="Rendering tool output..."
+          eager={!shouldDeferOutput}
+        >
+          <div className="border-t border-border/40 px-4 py-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-2">Output</div>
+            <pre className={`rounded-xl border px-3 py-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-64 overflow-y-auto shadow-sm ${
+              isError
+                ? "border-destructive/20 bg-destructive/5 text-destructive/90"
+                : "code-panel"
+            }`}>
+              {content}
+            </pre>
+          </div>
+        </DeferredConversationBlock>
       )}
     </div>
   );
@@ -986,11 +1162,10 @@ function MessageContent({
     return <ExpandableMarkdownText text={content} {...(isUser !== undefined ? { isUser } : {})} />;
   }
 
-  const textParts = content.filter((p) => p.type === "text");
-  const imageParts = content.filter((p) => p.type === "image") as Extract<MessagePart, { type: "image" }>[];
-  const reasoningParts = content.filter((p) => p.type === "reasoning") as Extract<MessagePart, { type: "reasoning" }>[];
-  const toolParts = content.filter((p) => p.type === "tool-call" || p.type === "tool-result");
-  const approvalParts = content.filter((p) => p.type === "tool-approval-request" || p.type === "tool-approval-response");
+  const { textParts, imageParts, reasoningParts, toolParts, approvalParts } = useMemo(
+    () => partitionStructuredMessageContent(content),
+    [content]
+  );
 
   return (
     <div className="space-y-2">
@@ -1081,23 +1256,29 @@ function ReasoningBlock({
         </span>
       </button>
       {expanded ? (
-        <div className={`mt-1.5 rounded-lg border px-3 py-2 ${toneBadgeClass("plum")}`}>
-          <div className="space-y-2">
-            {parts.map((part, i) =>
-              "text" in part && part.text ? (
-                <div key={i}>
-                  <ExpandableMarkdownText
-                    text={part.text}
-                    collapseThreshold={1600}
-                    previewChars={700}
-                    expandLabel="Show full reasoning"
-                    collapseLabel="Collapse reasoning"
-                  />
-                </div>
-              ) : null
-            )}
+        <DeferredConversationBlock
+          estimatedHeight={Math.min(520, Math.max(140, parts.reduce((sum, part) => sum + (part.text?.length ?? 0), 0) / 8))}
+          placeholderLabel="Rendering reasoning..."
+          eager={parts.every((part) => (part.text?.length ?? 0) < 900)}
+        >
+          <div className={`mt-1.5 rounded-lg border px-3 py-2 ${toneBadgeClass("plum")}`}>
+            <div className="space-y-2">
+              {parts.map((part, i) =>
+                "text" in part && part.text ? (
+                  <div key={i}>
+                    <ExpandableMarkdownText
+                      text={part.text}
+                      collapseThreshold={1600}
+                      previewChars={700}
+                      expandLabel="Show full reasoning"
+                      collapseLabel="Collapse reasoning"
+                    />
+                  </div>
+                ) : null
+              )}
+            </div>
           </div>
-        </div>
+        </DeferredConversationBlock>
       ) : null}
     </div>
   );
@@ -1116,10 +1297,16 @@ const ConversationMessageRow = memo(function ConversationMessageRow(props: Conve
   const isStreaming = message.id.startsWith("live:");
   const runtimeKind = readRuntimeKind(message.metadata);
   const isToolOnly = !isUser && isToolOnlyMessage(message.content);
+  const deferredRenderStyle = isStreaming
+    ? undefined
+    : ({
+        contentVisibility: "auto",
+        containIntrinsicSize: runtimeKind ? "160px" : isToolOnly ? "112px" : isUser ? "180px" : "240px"
+      } as const);
 
   if (runtimeKind === "compact_boundary") {
     return (
-      <article className="animate-fade-in py-2 md:py-3">
+      <article className="animate-fade-in py-2 md:py-3" style={deferredRenderStyle}>
         <CompactBoundaryCard message={message} />
       </article>
     );
@@ -1127,14 +1314,17 @@ const ConversationMessageRow = memo(function ConversationMessageRow(props: Conve
 
   if (runtimeKind === "compact_summary") {
     return (
-      <article className="animate-fade-in py-2 md:py-3">
+      <article className="animate-fade-in py-2 md:py-3" style={deferredRenderStyle}>
         <CompactSummaryCard message={message} />
       </article>
     );
   }
 
   return (
-    <article className={`group/message animate-fade-in flex gap-3 md:gap-4 py-2 md:py-3 ${isUser ? "flex-row-reverse" : ""}`}>
+    <article
+      className={`group/message animate-fade-in flex gap-3 md:gap-4 py-2 md:py-3 ${isUser ? "flex-row-reverse" : ""}`}
+      style={deferredRenderStyle}
+    >
       <div
         className={`flex-shrink-0 w-8 h-8 md:w-9 md:h-9 rounded-full flex items-center justify-center text-sm shadow-elegant overflow-hidden ${
           isUser ? "bg-foreground text-background text-xs font-medium" : "bg-muted"
@@ -1289,7 +1479,92 @@ type ConversationFeedProps = Pick<
   hasMoreMessages: boolean;
   loadingOlderMessages: boolean;
   onLoadOlderMessages: () => void;
+  scrollTop: number;
+  viewportHeight: number;
+  scrollViewportRef: RefObject<HTMLDivElement | null>;
 };
+
+type ConversationVirtualMessageRowProps = ConversationMessageRowProps & {
+  onHeightChange: (messageId: string, height: number) => void;
+};
+
+function estimateConversationMessageHeight(message: Message) {
+  const runtimeKind = readRuntimeKind(message.metadata);
+  if (runtimeKind === "compact_boundary") {
+    return 160;
+  }
+  if (runtimeKind === "compact_summary") {
+    return 260;
+  }
+
+  if (typeof message.content === "string") {
+    return Math.min(720, Math.max(120, estimateMarkdownBlockHeight(message.content)));
+  }
+
+  let estimate = 120;
+  for (const part of message.content) {
+    switch (part.type) {
+      case "text":
+      case "reasoning":
+        estimate += Math.min(320, Math.max(40, Math.ceil((part.text?.length ?? 0) / 10)));
+        break;
+      case "image":
+        estimate += 220;
+        break;
+      case "tool-call":
+      case "tool-result":
+        estimate += 140;
+        break;
+      case "tool-approval-request":
+      case "tool-approval-response":
+        estimate += 36;
+        break;
+    }
+  }
+
+  return Math.min(960, estimate);
+}
+
+const ConversationVirtualMessageRow = memo(function ConversationVirtualMessageRow(props: ConversationVirtualMessageRowProps) {
+  const { message, agentName, agentMode, onInspectRun, onHeightChange } = props;
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) {
+      return;
+    }
+
+    const reportHeight = () => {
+      onHeightChange(message.id, Math.ceil(element.getBoundingClientRect().height));
+    };
+
+    reportHeight();
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      reportHeight();
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [agentMode, agentName, message, onHeightChange]);
+
+  return (
+    <div ref={containerRef}>
+      <ConversationMessageRow
+        message={message}
+        {...(agentName ? { agentName } : {})}
+        {...(agentMode ? { agentMode } : {})}
+        onInspectRun={onInspectRun}
+      />
+    </div>
+  );
+});
 
 const ConversationFeed = memo(function ConversationFeed(props: ConversationFeedProps) {
   const run = useStreamStore((state) => state.run);
@@ -1297,18 +1572,11 @@ const ConversationFeed = memo(function ConversationFeed(props: ConversationFeedP
   const setSelectedRunId = useStreamStore((state) => state.setSelectedRunId);
   const setMainViewMode = useUiStore((state) => state.setMainViewMode);
   const setInspectorTab = useUiStore((state) => state.setInspectorTab);
-  const messageAgentInfoById = useMemo(
-    () =>
-      buildMessageAgentInfoIndex({
-        messages: props.messageFeed,
-        catalog: props.catalog,
-        runSteps,
-        run,
-        session: props.session,
-        sessionEvents: props.sessionEvents
-      }),
-    [props.catalog, props.messageFeed, props.session, props.sessionEvents, run, runSteps]
-  );
+  const messageListRef = useRef<HTMLDivElement | null>(null);
+  const rowHeightsRef = useRef(new Map<string, number>());
+  const [rowHeightVersion, setRowHeightVersion] = useState(0);
+  const [listTopWithinScroll, setListTopWithinScroll] = useState(0);
+  const virtualizationEnabled = props.messageFeed.length >= CONVERSATION_VIRTUALIZATION_THRESHOLD;
   const handleInspectRun = useCallback(
     (runId: string) => {
       if (!runId) {
@@ -1322,6 +1590,114 @@ const ConversationFeed = memo(function ConversationFeed(props: ConversationFeedP
       props.refreshRunStepsById(runId);
     },
     [props.refreshRunById, props.refreshRunStepsById, setInspectorTab, setMainViewMode, setSelectedRunId]
+  );
+  const updateListTopWithinScroll = useCallback(() => {
+    const scrollViewport = props.scrollViewportRef.current;
+    const listElement = messageListRef.current;
+    if (!scrollViewport || !listElement) {
+      return;
+    }
+
+    const nextTop = listElement.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top + scrollViewport.scrollTop;
+    setListTopWithinScroll((current) => (Math.abs(current - nextTop) < 1 ? current : nextTop));
+  }, [props.scrollViewportRef]);
+  const handleMessageRowHeightChange = useCallback((messageId: string, height: number) => {
+    const normalizedHeight = Math.max(72, height);
+    if (rowHeightsRef.current.get(messageId) === normalizedHeight) {
+      return;
+    }
+
+    rowHeightsRef.current.set(messageId, normalizedHeight);
+    setRowHeightVersion((current) => current + 1);
+  }, []);
+
+  useEffect(() => {
+    updateListTopWithinScroll();
+  }, [updateListTopWithinScroll, props.hasMoreMessages, props.loadingOlderMessages, props.messageFeed.length]);
+
+  useEffect(() => {
+    const scrollViewport = props.scrollViewportRef.current;
+    const listElement = messageListRef.current;
+    if (!scrollViewport || !listElement || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      updateListTopWithinScroll();
+    });
+    observer.observe(scrollViewport);
+    observer.observe(listElement);
+    return () => {
+      observer.disconnect();
+    };
+  }, [props.scrollViewportRef, updateListTopWithinScroll]);
+
+  const virtualRows = useMemo(() => {
+    if (!virtualizationEnabled) {
+      return {
+        items: props.messageFeed,
+        topSpacerHeight: 0,
+        bottomSpacerHeight: 0
+      };
+    }
+
+    const visibleTop = Math.max(0, props.scrollTop - listTopWithinScroll - CONVERSATION_OVERSCAN_PX);
+    const visibleBottom = Math.max(0, props.scrollTop - listTopWithinScroll + props.viewportHeight + CONVERSATION_OVERSCAN_PX);
+    let topSpacerHeight = 0;
+    let totalHeight = 0;
+    let renderStartIndex = 0;
+    let renderEndIndex = props.messageFeed.length;
+    let foundStart = false;
+    let foundEnd = false;
+
+    for (let index = 0; index < props.messageFeed.length; index += 1) {
+      const message = props.messageFeed[index];
+      if (!message) {
+        continue;
+      }
+
+      const estimatedHeight = rowHeightsRef.current.get(message.id) ?? estimateConversationMessageHeight(message);
+      const itemTop = totalHeight;
+      const itemBottom = itemTop + estimatedHeight;
+
+      if (!foundStart && itemBottom >= visibleTop) {
+        renderStartIndex = index;
+        topSpacerHeight = itemTop;
+        foundStart = true;
+      }
+
+      if (!foundEnd && itemTop > visibleBottom) {
+        renderEndIndex = index;
+        foundEnd = true;
+      }
+
+      totalHeight = itemBottom;
+    }
+
+    const items = props.messageFeed.slice(renderStartIndex, renderEndIndex);
+    const renderedHeight = items.reduce(
+      (sum, message) => sum + (rowHeightsRef.current.get(message.id) ?? estimateConversationMessageHeight(message)),
+      0
+    );
+
+    return {
+      items,
+      topSpacerHeight,
+      bottomSpacerHeight: Math.max(0, totalHeight - topSpacerHeight - renderedHeight)
+    };
+  }, [listTopWithinScroll, props.messageFeed, props.scrollTop, props.viewportHeight, rowHeightVersion, virtualizationEnabled]);
+  const messagesForAgentInfo = virtualizationEnabled ? virtualRows.items : props.messageFeed;
+  const messageAgentInfoById = useMemo(
+    () =>
+      buildMessageAgentInfoIndex({
+        messages: messagesForAgentInfo,
+        catalog: props.catalog,
+        runSteps,
+        run,
+        session: props.session,
+        sessionEvents: props.sessionEvents
+      }),
+    [messagesForAgentInfo, props.catalog, props.session, props.sessionEvents, run, runSteps]
   );
 
   if (!props.hasActiveSession) {
@@ -1382,18 +1758,35 @@ const ConversationFeed = memo(function ConversationFeed(props: ConversationFeedP
           </Button>
         </div>
       ) : null}
-      {props.messageFeed.map((message) => {
-        const messageAgentInfo = messageAgentInfoById.get(message.id);
-        return (
-          <ConversationMessageRow
-            key={message.id}
-            message={message}
-            {...(messageAgentInfo?.name ? { agentName: messageAgentInfo.name } : {})}
-            {...(messageAgentInfo?.mode ? { agentMode: messageAgentInfo.mode } : {})}
-            onInspectRun={handleInspectRun}
-          />
-        );
-      })}
+      <div ref={messageListRef}>
+        {virtualRows.topSpacerHeight > 0 ? <div style={{ height: virtualRows.topSpacerHeight }} aria-hidden="true" /> : null}
+        {virtualRows.items.map((message) => {
+          const messageAgentInfo = messageAgentInfoById.get(message.id);
+          if (!virtualizationEnabled) {
+            return (
+              <ConversationMessageRow
+                key={message.id}
+                message={message}
+                {...(messageAgentInfo?.name ? { agentName: messageAgentInfo.name } : {})}
+                {...(messageAgentInfo?.mode ? { agentMode: messageAgentInfo.mode } : {})}
+                onInspectRun={handleInspectRun}
+              />
+            );
+          }
+
+          return (
+            <ConversationVirtualMessageRow
+              key={message.id}
+              message={message}
+              {...(messageAgentInfo?.name ? { agentName: messageAgentInfo.name } : {})}
+              {...(messageAgentInfo?.mode ? { agentMode: messageAgentInfo.mode } : {})}
+              onInspectRun={handleInspectRun}
+              onHeightChange={handleMessageRowHeightChange}
+            />
+          );
+        })}
+        {virtualRows.bottomSpacerHeight > 0 ? <div style={{ height: virtualRows.bottomSpacerHeight }} aria-hidden="true" /> : null}
+      </div>
       {props.hasActiveSession ? <div className="h-36" aria-hidden="true" /> : null}
       <div ref={props.conversationTailRef} aria-hidden="true" />
     </>
@@ -1409,6 +1802,8 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
   const prevMessageCountRef = useRef(0);
   const restoredRef = useRef(false);
   const prependSnapshotRef = useRef<{ messageCount: number; scrollHeight: number; scrollTop: number } | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
 
   const sessionId = props.session?.id ?? "";
   const messageCount = props.messageFeed.length;
@@ -1427,10 +1822,12 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     const el = scrollContainerRef.current;
     if (!el || messageCount === 0) return;
 
+    setViewportHeight(el.clientHeight);
     const saved = scrollPositions.get(sessionId);
     if (saved != null) {
       requestAnimationFrame(() => {
         el.scrollTop = saved;
+        setScrollTop(saved);
         isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
       });
     }
@@ -1442,6 +1839,8 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+    setScrollTop(el.scrollTop);
+    setViewportHeight(el.clientHeight);
     isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
     if (sessionId) {
       scrollPositions.set(sessionId, el.scrollTop);
@@ -1473,6 +1872,7 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     const el = scrollContainerRef.current;
     if (el) {
       el.scrollTop = el.scrollHeight;
+      setScrollTop(el.scrollTop);
     }
   });
 
@@ -1489,9 +1889,26 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
 
     const heightDelta = el.scrollHeight - snapshot.scrollHeight;
     el.scrollTop = snapshot.scrollTop + Math.max(0, heightDelta);
+    setScrollTop(el.scrollTop);
     prevMessageCountRef.current = messageCount;
     prependSnapshotRef.current = null;
   }, [messageCount, props.loadingOlderMessages]);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    setViewportHeight(el.clientHeight);
+    const observer = new ResizeObserver(() => {
+      setViewportHeight(el.clientHeight);
+    });
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   const handleLoadOlderMessages = () => {
     const el = scrollContainerRef.current;
@@ -1534,6 +1951,9 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
             hasMoreMessages={props.hasMoreMessages}
             loadingOlderMessages={props.loadingOlderMessages}
             onLoadOlderMessages={handleLoadOlderMessages}
+            scrollTop={scrollTop}
+            viewportHeight={viewportHeight}
+            scrollViewportRef={scrollContainerRef}
           />
         </div>
       </div>

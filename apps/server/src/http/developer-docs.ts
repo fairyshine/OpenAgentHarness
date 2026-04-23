@@ -1,14 +1,34 @@
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { FastifyRequest } from "fastify";
 import YAML from "yaml";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
-const openApiSpecPath = path.join(repoRoot, "docs", "openapi", "openapi.yaml");
-const brandLogoPath = path.join(repoRoot, "assets", "logo-readme.png");
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+
+function resolveRuntimeAssetPath(relativePath: string): string {
+  const configuredRoot = process.env.OAH_DOCS_ROOT?.trim();
+  const candidateRoots = [
+    configuredRoot,
+    path.resolve(moduleDir, "../../../.."),
+    path.resolve(moduleDir, "../.."),
+    process.cwd()
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const root of candidateRoots) {
+    const candidatePath = path.join(root, relativePath);
+    if (existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  return path.join(candidateRoots[0] ?? process.cwd(), relativePath);
+}
+
+const openApiSpecPath = resolveRuntimeAssetPath(path.join("docs", "openapi", "openapi.yaml"));
+const brandLogoPath = resolveRuntimeAssetPath(path.join("assets", "logo-readme.png"));
 
 function loadPngDataUrl(filePath: string): string {
   try {

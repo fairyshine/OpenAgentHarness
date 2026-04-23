@@ -1,4 +1,4 @@
-import { access, mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rename, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -507,6 +507,91 @@ openai-default:
           pool: null
         }
       });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("refreshes workspace skills on session creation in single workspace mode", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-single-workspace-skill-refresh-"));
+    tempDirs.push(tempDir);
+
+    const workspaceRoot = path.join(tempDir, "repo");
+    const modelsDir = path.join(tempDir, "models");
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    await Promise.all([
+      mkdir(path.join(workspaceRoot, ".openharness"), { recursive: true }),
+      mkdir(modelsDir, { recursive: true })
+    ]);
+
+    await writeFile(path.join(workspaceRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(
+      path.join(modelsDir, "openai.yaml"),
+      `
+openai-default:
+  provider: openai
+  name: gpt-4o-mini
+`,
+      "utf8"
+    );
+
+    const runtime = await bootstrapRuntime({
+      argv: ["--workspace", workspaceRoot, "--model-dir", modelsDir, "--default-model", "openai-default"],
+      startWorker: false,
+      processKind: "api"
+    });
+
+    try {
+      const workspaceId = buildWorkspaceId("project", "repo", workspaceRoot);
+      await expect(runtime.controlPlaneEngineService.getWorkspaceRecord(workspaceId)).resolves.toMatchObject({
+        skills: {}
+      });
+
+      const skillDirectory = path.join(workspaceRoot, ".openharness", "skills", "repo-explorer");
+      const skillFile = path.join(skillDirectory, "SKILL.md");
+      await mkdir(skillDirectory, { recursive: true });
+      await writeFile(
+        skillFile,
+        `---
+name: repo-explorer
+description: Explore the repository.
+---
+
+# Repo Explorer
+
+Read the repo and summarize it.
+`,
+        "utf8"
+      );
+      const refreshedAt = new Date(Date.now() + 2_000);
+      await utimes(skillFile, refreshedAt, refreshedAt);
+
+      await runtime.controlPlaneEngineService.createSession({
+        workspaceId,
+        caller,
+        input: {}
+      });
+
+      const refreshedWorkspace = await runtime.controlPlaneEngineService.getWorkspaceRecord(workspaceId);
+      expect(refreshedWorkspace.skills["repo-explorer"]).toMatchObject({
+        name: "repo-explorer",
+        description: "Explore the repository."
+      });
+      expect(refreshedWorkspace.catalog.skills).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "repo-explorer",
+            description: "Explore the repository.",
+            exposeToLlm: true
+          })
+        ])
+      );
     } finally {
       await runtime.close();
     }

@@ -32,6 +32,11 @@ config:
       tool_dir: /var/lib/oah/tools
       skill_dir: /var/lib/oah/skills
 
+    workspace:
+      materialization:
+        idle_ttl_ms: 1800000
+        maintenance_interval_ms: 15000
+
     workers:
       standalone:
         min_replicas: {{ .Values.worker.replicaCount }}
@@ -40,12 +45,12 @@ config:
         ready_sessions_per_capacity_unit: 1
         reserved_capacity_for_subagent: 1
       controller:
-        scale_interval_ms: 2000
+        scale_interval_ms: 5000
         scale_up_window: 2
-        scale_down_window: 3
-        cooldown_ms: 5000
+        scale_down_window: 4
+        cooldown_ms: 10000
         scale_up_busy_ratio_threshold: 0.75
-        scale_up_max_ready_age_ms: 2000
+        scale_up_max_ready_age_ms: 5000
         leader_election:
           type: kubernetes
           kubernetes:
@@ -112,7 +117,7 @@ apiServer:
 
 worker:
   enabled: true
-  replicaCount: 2
+  replicaCount: 1
   minReadySeconds: 5
   terminationGracePeriodSeconds: 120
   priorityClassName: ""
@@ -150,14 +155,15 @@ worker:
   workspaceVolume:
     type: emptyDir
     mountPath: /var/lib/oah/workspaces
-    emptyDir: {}
+    emptyDir:
+      sizeLimit: 8Gi
     persistentVolumeClaim:
       claimName: ""
       readOnly: false
 
 controller:
   enabled: true
-  replicaCount: 2
+  replicaCount: 1
   minReadySeconds: 5
   terminationGracePeriodSeconds: 30
   priorityClassName: ""

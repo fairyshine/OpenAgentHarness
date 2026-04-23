@@ -36,10 +36,9 @@ function resolveUnderlyingMessageId(messageId: string) {
   }
 
   if (messageId.startsWith("segment:")) {
-    const parts = messageId.split(":");
-    if (parts.length >= 3) {
-      return parts.slice(1, -1).join(":");
-    }
+    const prefixLength = "segment:".length;
+    const suffixIndex = messageId.lastIndexOf(":");
+    return suffixIndex > prefixLength ? messageId.slice(prefixLength, suffixIndex) : messageId.slice(prefixLength);
   }
 
   return messageId;

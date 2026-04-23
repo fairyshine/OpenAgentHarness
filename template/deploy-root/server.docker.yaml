@@ -34,8 +34,8 @@ workspace:
   materialization:
     # Flush + evict the active workspace copy after 30 minutes of idleness.
     idle_ttl_ms: 1800000
-    # Check idle materialization cleanup every 5 seconds.
-    maintenance_interval_ms: 5000
+    # Check idle materialization cleanup every 15 seconds to reduce idle I/O.
+    maintenance_interval_ms: 15000
 
 llm:
   # Define this model under source/models/ before deploying.

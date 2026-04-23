@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { Download, Search, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,11 @@ const filters: Array<{ id: ConsoleFilter; label: string }> = [
   { id: "system", label: "System" }
 ];
 
+const CONSOLE_ROW_GAP_PX = 8;
+const CONSOLE_ROW_ESTIMATED_HEIGHT_PX = 72;
+const CONSOLE_ROW_EXPANDED_ESTIMATED_HEIGHT_PX = 220;
+const CONSOLE_OVERSCAN_PX = 720;
+
 function levelBadgeClass(level: RuntimeConsoleEntry["level"]) {
   switch (level) {
     case "error":
@@ -35,6 +40,42 @@ function levelBadgeClass(level: RuntimeConsoleEntry["level"]) {
   }
 }
 
+function matchesConsoleFilter(entry: RuntimeConsoleEntry, filter: ConsoleFilter) {
+  switch (filter) {
+    case "all":
+      return true;
+    case "errors":
+      return entry.level === "error" || entry.level === "warn";
+    case "runs":
+      return entry.category === "run" || entry.category === "agent";
+    case "tools":
+      return entry.category === "tool";
+    case "hooks":
+      return entry.category === "hook";
+    case "model":
+      return entry.category === "model";
+    case "system":
+      return entry.category === "system" || entry.category === "http";
+  }
+}
+
+function readConsoleEntryDetailsText(
+  entry: RuntimeConsoleEntry,
+  cache: Map<string, { details: RuntimeConsoleEntry["details"]; text: string }>
+) {
+  const cached = cache.get(entry.id);
+  if (cached && Object.is(cached.details, entry.details)) {
+    return cached.text;
+  }
+
+  const text = entry.details === undefined ? "" : prettyJson(entry.details);
+  cache.set(entry.id, {
+    details: entry.details,
+    text
+  });
+  return text;
+}
+
 interface EngineConsolePanelProps {
   isOpen: boolean;
   entries: RuntimeConsoleEntry[];
@@ -46,6 +87,10 @@ type ConsoleEntryRowProps = {
   isExpanded: boolean;
   onInspect: (entry: RuntimeConsoleEntry) => void;
   onToggleExpanded: (entryId: string) => void;
+};
+
+type ConsoleVirtualRowProps = ConsoleEntryRowProps & {
+  onHeightChange: (entryId: string, height: number) => void;
 };
 
 function ConsoleEntryRowImpl(props: ConsoleEntryRowProps) {
@@ -107,6 +152,47 @@ function areConsoleEntryRowPropsEqual(previous: ConsoleEntryRowProps, next: Cons
 
 const ConsoleEntryRow = memo(ConsoleEntryRowImpl, areConsoleEntryRowPropsEqual);
 
+const ConsoleVirtualRow = memo(function ConsoleVirtualRow(props: ConsoleVirtualRowProps) {
+  const { entry, isExpanded, onInspect, onToggleExpanded, onHeightChange } = props;
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) {
+      return;
+    }
+
+    const reportHeight = () => {
+      onHeightChange(entry.id, Math.ceil(element.getBoundingClientRect().height));
+    };
+
+    reportHeight();
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      reportHeight();
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [entry.id, isExpanded, onHeightChange]);
+
+  return (
+    <div ref={containerRef}>
+      <ConsoleEntryRow
+        entry={entry}
+        isExpanded={isExpanded}
+        onInspect={onInspect}
+        onToggleExpanded={onToggleExpanded}
+      />
+    </div>
+  );
+});
+
 function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
   const { height, onHeightChange, filter, onFilterChange, setConsoleOpen } = useUiStore(
     useShallow((state) => ({
@@ -118,12 +204,20 @@ function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
     }))
   );
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [autoScroll, setAutoScroll] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [dragging, setDragging] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [rowHeightVersion, setRowHeightVersion] = useState(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
-  const handleToggleExpanded = (entryId: string) => {
+  const detailsTextCacheRef = useRef(new Map<string, { details: RuntimeConsoleEntry["details"]; text: string }>());
+  const rowHeightsRef = useRef(new Map<string, number>());
+
+  const handleToggleExpanded = useCallback((entryId: string) => {
     setExpandedIds((current) => {
       const next = new Set(current);
       if (next.has(entryId)) {
@@ -133,27 +227,26 @@ function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
       }
       return next;
     });
-  };
+  }, []);
+
+  const handleViewportScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    setScrollTop(event.currentTarget.scrollTop);
+  }, []);
+
+  const handleRowHeightChange = useCallback((entryId: string, height: number) => {
+    const normalizedHeight = Math.max(CONSOLE_ROW_ESTIMATED_HEIGHT_PX, height);
+    if (rowHeightsRef.current.get(entryId) === normalizedHeight) {
+      return;
+    }
+
+    rowHeightsRef.current.set(entryId, normalizedHeight);
+    setRowHeightVersion((current) => current + 1);
+  }, []);
 
   const { visibleEntries, errorCount, toolEventCount } = useMemo(() => {
-    const searchQuery = search.trim().toLowerCase();
+    const searchQuery = deferredSearch.trim().toLowerCase();
     const visibleEntries = props.entries.filter((entry) => {
-      const filterMatches =
-        filter === "all"
-          ? true
-          : filter === "errors"
-            ? entry.level === "error" || entry.level === "warn"
-            : filter === "runs"
-              ? entry.category === "run" || entry.category === "agent"
-              : filter === "tools"
-                ? entry.category === "tool"
-                : filter === "hooks"
-                  ? entry.category === "hook"
-                  : filter === "model"
-                    ? entry.category === "model"
-                    : entry.category === "system" || entry.category === "http";
-
-      if (!filterMatches) {
+      if (!matchesConsoleFilter(entry, filter)) {
         return false;
       }
 
@@ -161,7 +254,7 @@ function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
         return true;
       }
 
-      const searchable = `${entry.message}\n${entry.details ? prettyJson(entry.details) : ""}`.toLowerCase();
+      const searchable = `${entry.message}\n${readConsoleEntryDetailsText(entry, detailsTextCacheRef.current)}`.toLowerCase();
       return searchable.includes(searchQuery);
     });
 
@@ -181,13 +274,98 @@ function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
       errorCount,
       toolEventCount
     };
-  }, [props.entries, filter, search]);
+  }, [deferredSearch, filter, props.entries]);
+
+  const virtualRows = useMemo(() => {
+    if (visibleEntries.length === 0) {
+      return {
+        items: [] as RuntimeConsoleEntry[],
+        topSpacerHeight: 0,
+        bottomSpacerHeight: 0
+      };
+    }
+
+    const overscanStart = Math.max(0, scrollTop - CONSOLE_OVERSCAN_PX);
+    const overscanEnd = scrollTop + viewportHeight + CONSOLE_OVERSCAN_PX;
+    let topSpacerHeight = 0;
+    let totalHeight = 0;
+    let renderStartIndex = 0;
+    let renderEndIndex = visibleEntries.length;
+    let foundStart = false;
+    let foundEnd = false;
+
+    for (let index = 0; index < visibleEntries.length; index += 1) {
+      const entry = visibleEntries[index];
+      if (!entry) {
+        continue;
+      }
+
+      const estimatedHeight =
+        rowHeightsRef.current.get(entry.id) ??
+        (expandedIds.has(entry.id) ? CONSOLE_ROW_EXPANDED_ESTIMATED_HEIGHT_PX : CONSOLE_ROW_ESTIMATED_HEIGHT_PX);
+      const itemTop = totalHeight;
+      const itemBottom = itemTop + estimatedHeight;
+
+      if (!foundStart && itemBottom >= overscanStart) {
+        renderStartIndex = index;
+        topSpacerHeight = itemTop;
+        foundStart = true;
+      }
+
+      if (!foundEnd && itemTop > overscanEnd) {
+        renderEndIndex = index;
+        foundEnd = true;
+      }
+
+      totalHeight = itemBottom + (index < visibleEntries.length - 1 ? CONSOLE_ROW_GAP_PX : 0);
+    }
+
+    if (!foundStart) {
+      renderStartIndex = Math.max(0, visibleEntries.length - 1);
+      topSpacerHeight = Math.max(0, totalHeight - CONSOLE_ROW_ESTIMATED_HEIGHT_PX);
+    }
+
+    const items = visibleEntries.slice(renderStartIndex, renderEndIndex);
+    const renderedHeight = items.reduce((sum, entry, index) => {
+      const estimatedHeight =
+        rowHeightsRef.current.get(entry.id) ??
+        (expandedIds.has(entry.id) ? CONSOLE_ROW_EXPANDED_ESTIMATED_HEIGHT_PX : CONSOLE_ROW_ESTIMATED_HEIGHT_PX);
+      return sum + estimatedHeight + (index < items.length - 1 ? CONSOLE_ROW_GAP_PX : 0);
+    }, 0);
+
+    return {
+      items,
+      topSpacerHeight,
+      bottomSpacerHeight: Math.max(0, totalHeight - topSpacerHeight - renderedHeight)
+    };
+  }, [expandedIds, rowHeightVersion, scrollTop, viewportHeight, visibleEntries]);
 
   useEffect(() => {
     if (autoScroll && props.isOpen) {
       bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     }
   }, [autoScroll, props.isOpen, visibleEntries]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    setViewportHeight(viewport.clientHeight);
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      setViewportHeight(viewport.clientHeight);
+    });
+    observer.observe(viewport);
+    return () => {
+      observer.disconnect();
+    };
+  }, [height, props.isOpen]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -250,9 +428,7 @@ function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
                 onClick={() => onFilterChange(option.id)}
                 className={cn(
                   "rounded-full border px-2.5 py-1 text-[11px] transition",
-                  filter === option.id
-                    ? "console-filter-chip-active"
-                    : "console-filter-chip"
+                  filter === option.id ? "console-filter-chip-active" : "console-filter-chip"
                 )}
               >
                 {option.label}
@@ -284,22 +460,32 @@ function EngineConsolePanelImpl(props: EngineConsolePanelProps) {
           </div>
         </div>
 
-        <ScrollArea className="min-h-0 flex-1" viewportProps={{ className: "px-2 py-2" }}>
+        <ScrollArea
+          className="min-h-0 flex-1"
+          viewportProps={{
+            className: "px-2 py-2",
+            ref: viewportRef,
+            onScroll: handleViewportScroll
+          }}
+        >
           {visibleEntries.length === 0 ? (
             <div className="flex h-full min-h-48 items-center justify-center text-sm text-muted-foreground">No console entries yet.</div>
           ) : (
-            <div className="space-y-2 pb-2 font-mono text-xs">
-              {visibleEntries.map((entry) => {
-                return (
-                  <ConsoleEntryRow
+            <div className="pb-2 font-mono text-xs">
+              {virtualRows.topSpacerHeight > 0 ? <div style={{ height: virtualRows.topSpacerHeight }} aria-hidden="true" /> : null}
+              <div className="space-y-2">
+                {virtualRows.items.map((entry) => (
+                  <ConsoleVirtualRow
                     key={entry.id}
                     entry={entry}
                     isExpanded={expandedIds.has(entry.id)}
                     onInspect={props.onEntryInspect}
                     onToggleExpanded={handleToggleExpanded}
+                    onHeightChange={handleRowHeightChange}
                   />
-                );
-              })}
+                ))}
+              </div>
+              {virtualRows.bottomSpacerHeight > 0 ? <div style={{ height: virtualRows.bottomSpacerHeight }} aria-hidden="true" /> : null}
               <div ref={bottomRef} />
             </div>
           )}

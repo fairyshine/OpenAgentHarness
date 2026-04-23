@@ -10,6 +10,7 @@ const SESSION_ID = "ses_perf";
 const BASE_TIME_MS = Date.parse("2026-04-22T09:00:00.000Z");
 const RUN_COUNT = 1200;
 const LIVE_RUN_COUNT = 48;
+const VISIBLE_WINDOW_COUNT = 72;
 const ITERATIONS = 12;
 const WARMUP_ITERATIONS = 4;
 
@@ -265,6 +266,17 @@ const agentInfoIndex = buildMessageAgentInfoIndex({
   session: dataset.session,
   sessionEvents: dataset.deferredEvents
 });
+const visibleWindowMessages = viewModel.messageFeed.slice(
+  Math.max(0, viewModel.messageFeed.length - VISIBLE_WINDOW_COUNT)
+);
+const visibleWindowAgentInfoIndex = buildMessageAgentInfoIndex({
+  messages: visibleWindowMessages,
+  catalog: null,
+  runSteps: dataset.runSteps,
+  run: null,
+  session: dataset.session,
+  sessionEvents: dataset.deferredEvents
+});
 
 const combinedMetrics = measure("runtime+agent-index", ITERATIONS, () => {
   const nextViewModel = buildRuntimeViewModel({
@@ -321,6 +333,19 @@ const agentIndexMetrics = measure("message-agent-index", ITERATIONS, () => {
   return nextAgentInfoIndex.size;
 });
 
+const visibleWindowAgentIndexMetrics = measure("agent-index-visible", ITERATIONS, () => {
+  const nextAgentInfoIndex = buildMessageAgentInfoIndex({
+    messages: visibleWindowMessages,
+    catalog: null,
+    runSteps: dataset.runSteps,
+    run: null,
+    session: dataset.session,
+    sessionEvents: dataset.deferredEvents
+  });
+
+  return nextAgentInfoIndex.size;
+});
+
 console.log("Synthetic conversation perf smoke");
 console.log(
   [
@@ -330,10 +355,12 @@ console.log(
     `runSteps=${dataset.runSteps.length}`,
     `liveMessages=${Object.keys(dataset.liveMessagesByKey).length}`,
     `feed=${viewModel.messageFeed.length}`,
-    `agentInfo=${agentInfoIndex.size}`
+    `agentInfo=${agentInfoIndex.size}`,
+    `visibleWindow=${visibleWindowMessages.length}`,
+    `visibleAgentInfo=${visibleWindowAgentInfoIndex.size}`
   ].join(" | ")
 );
-for (const metric of [projectionMetrics, agentIndexMetrics, combinedMetrics]) {
+for (const metric of [projectionMetrics, agentIndexMetrics, visibleWindowAgentIndexMetrics, combinedMetrics]) {
   console.log(
     `${metric.label.padEnd(20)} min=${formatMs(metric.min)} avg=${formatMs(metric.avg)} p95=${formatMs(metric.p95)} max=${formatMs(metric.max)} checksum=${metric.checksum}`
   );

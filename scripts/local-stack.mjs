@@ -74,31 +74,89 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForMinioHealthy() {
-  const containerId = runCapture("docker", ["compose", "-f", composeFile, "ps", "-q", "minio"]);
+function tryRunCapture(command, args, options = {}) {
+  try {
+    return runCapture(command, args, options);
+  } catch {
+    return undefined;
+  }
+}
+
+async function waitForComposeServiceHealthy(service, label = service) {
+  let containerId = "";
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    containerId = tryRunCapture("docker", ["compose", "-f", composeFile, "ps", "-q", service]) || "";
+    if (containerId) {
+      break;
+    }
+    await sleep(1000);
+  }
+
   if (!containerId) {
-    throw new Error("MinIO container id not found.");
+    throw new Error(`${label} container id not found.`);
   }
 
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const health = runCapture("docker", ["inspect", "--format", "{{.State.Health.Status}}", containerId]);
+    const health = tryRunCapture("docker", ["inspect", "--format", "{{.State.Health.Status}}", containerId]);
     if (health === "healthy") {
-      console.log("MinIO is healthy.");
+      console.log(`${label} is healthy.`);
       return;
     }
 
     if (health === "unhealthy") {
-      throw new Error("MinIO became unhealthy while waiting for startup.");
+      throw new Error(`${label} became unhealthy while waiting for startup.`);
     }
 
     await sleep(1000);
   }
 
-  throw new Error("Timed out waiting for MinIO to become healthy.");
+  throw new Error(`Timed out waiting for ${label} to become healthy.`);
 }
 
-function resetLocalRedisCoordinationState() {
-  run("docker", ["compose", "-f", composeFile, "exec", "-T", "redis", "redis-cli", "FLUSHALL"]);
+async function waitForCoreInfraHealthy() {
+  await waitForComposeServiceHealthy("postgres", "Postgres");
+  await waitForComposeServiceHealthy("redis", "Redis");
+  await waitForComposeServiceHealthy("minio", "MinIO");
+}
+
+async function ensureComposeServiceRunning(service) {
+  const containerId = tryRunCapture("docker", ["compose", "-f", composeFile, "ps", "-q", service]) || "";
+  if (containerId) {
+    const running = tryRunCapture("docker", ["inspect", "--format", "{{.State.Running}}", containerId]);
+    if (running === "true") {
+      return;
+    }
+  }
+
+  run("docker", ["compose", "-f", composeFile, "up", "-d", service]);
+}
+
+async function resetLocalRedisCoordinationState() {
+  await ensureComposeServiceRunning("redis");
+  await waitForComposeServiceHealthy("redis", "Redis");
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const flush = runMaybe("docker", ["compose", "-f", composeFile, "exec", "-T", "redis", "redis-cli", "FLUSHALL"], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    if (flush.status === 0) {
+      const stdout = (flush.stdout || "").toString().trim();
+      if (stdout) {
+        console.log(stdout);
+      }
+      return;
+    }
+
+    const stderr = (flush.stderr || "").toString().trim();
+    if (attempt === 4) {
+      console.error(stderr || "Failed to reset local Redis coordination state.");
+      process.exit(flush.status ?? 1);
+    }
+
+    console.warn(`Redis not ready for FLUSHALL yet; retrying (${attempt + 1}/5).`);
+    await ensureComposeServiceRunning("redis");
+    await sleep(1000);
+  }
 }
 
 function ensureDeployRoot() {
@@ -441,6 +499,13 @@ function dockerImageExists(imageName) {
   return result.status === 0;
 }
 
+const legacyLocalImageNames = ["openagentharness-oah:latest"];
+const serviceLocalImageNames = {
+  "oah-api": ["openagentharness-oah-api:latest"],
+  "oah-controller": ["openagentharness-oah-controller:latest"],
+  "oah-sandbox": ["openagentharness-oah-sandbox:latest"]
+};
+
 function ensureDockerBuildBaseImages() {
   if (process.env.OAH_DOCKER_BUILD_BASE_IMAGE && process.env.OAH_DOCKER_RUNTIME_BASE_IMAGE) {
     console.log(
@@ -491,11 +556,17 @@ function ensureDockerBuildBaseImages() {
 }
 
 function hasLocalOahImage(services = []) {
-  if (dockerImageExists("openagentharness-oah:latest")) {
+  if (legacyLocalImageNames.some((imageName) => dockerImageExists(imageName))) {
     return true;
   }
 
-  return services.every((service) => dockerImageExists(`${composeProjectName}-${service}:latest`));
+  return services.every((service) => {
+    const candidateImages = [
+      ...(serviceLocalImageNames[service] ?? []),
+      `${composeProjectName}-${service}:latest`
+    ];
+    return candidateImages.some((imageName) => dockerImageExists(imageName));
+  });
 }
 
 async function up() {
@@ -506,9 +577,9 @@ async function up() {
   ensureRcloneVolumeDriverResponsive();
 
   run("docker", ["compose", "-f", composeFile, "up", "-d", "postgres", "redis", "minio"]);
-  await waitForMinioHealthy();
+  await waitForCoreInfraHealthy();
   recreateReadonlyObjectStorageVolumes();
-  resetLocalRedisCoordinationState();
+  await resetLocalRedisCoordinationState();
   run("pnpm", ["storage:sync"]);
 
   const initialSandboxReplicaCount = Math.max(
@@ -556,7 +627,7 @@ async function up() {
     process.exit(buildResult.status ?? 1);
   }
 
-  console.warn("Build failed, but a local openagentharness-oah image exists. Falling back to --no-build.");
+  console.warn("Build failed, but reusable local OAH image(s) exist. Falling back to --no-build.");
   run("docker", [
     "compose",
     "-f",

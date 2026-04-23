@@ -46,9 +46,14 @@ type ControlPlaneRuntimeKernel = Pick<
 
 export interface ControlPlaneRuntimeOperations extends ControlPlaneRuntimeKernel {}
 
+interface WorkspaceDefinitionRefresher {
+  refreshWorkspaceDefinition(workspaceId: string): Promise<void> | void;
+}
+
 export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations {
   readonly #workspaceActivityTracker?: WorkspaceActivityTracker | undefined;
   readonly #workspacePrewarmer?: WorkspacePrewarmer | undefined;
+  readonly #workspaceDefinitionRefresher?: WorkspaceDefinitionRefresher | undefined;
   readonly #logger?: EngineLogger | undefined;
   readonly #getSessionRecord: EngineService["getSession"];
   readonly #getRunRecord: EngineService["getRun"];
@@ -98,11 +103,13 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     options?: {
       workspaceActivityTracker?: WorkspaceActivityTracker | undefined;
       workspacePrewarmer?: WorkspacePrewarmer | undefined;
+      workspaceDefinitionRefresher?: WorkspaceDefinitionRefresher | undefined;
       logger?: EngineLogger | undefined;
     }
   ) {
     this.#workspaceActivityTracker = options?.workspaceActivityTracker;
     this.#workspacePrewarmer = options?.workspacePrewarmer;
+    this.#workspaceDefinitionRefresher = options?.workspaceDefinitionRefresher;
     this.#logger = options?.logger;
     this.#getSessionRecord = kernel.getSession.bind(kernel);
     this.#getRunRecord = kernel.getRun.bind(kernel);
@@ -193,6 +200,7 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
       await this.#touchWorkspace(workspaceId);
     };
     this.createSession = async (input) => {
+      await this.#refreshWorkspaceDefinition(input.workspaceId);
       const session = await kernel.createSession(input);
       await this.#touchWorkspace(input.workspaceId);
       this.#scheduleWorkspacePrewarm(input.workspaceId);
@@ -297,6 +305,21 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
 
   async #touchWorkspace(workspaceId: string): Promise<void> {
     await this.#workspaceActivityTracker?.touchWorkspace(workspaceId);
+  }
+
+  async #refreshWorkspaceDefinition(workspaceId: string): Promise<void> {
+    if (!this.#workspaceDefinitionRefresher) {
+      return;
+    }
+
+    try {
+      await this.#workspaceDefinitionRefresher.refreshWorkspaceDefinition(workspaceId);
+    } catch (error) {
+      this.#logger?.warn?.("Workspace definition refresh failed before session creation.", {
+        workspaceId,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   #scheduleWorkspacePrewarm(workspaceId: string): void {

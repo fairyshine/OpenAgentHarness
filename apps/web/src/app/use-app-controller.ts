@@ -44,6 +44,7 @@ import {
   serviceScopeMatches,
   toErrorSummary,
   toErrorMessage,
+  mergeSessionMessages,
   upsertSessionMessage,
   type AppRequestErrorSummary,
   type HealthReportResponse,
@@ -90,15 +91,6 @@ function buildMessagePagePath(
   }
 
   return `/api/v1/sessions/${sessionId}/messages?${query.toString()}`;
-}
-
-function mergeSessionMessages(current: Message[], incoming: Message[]) {
-  let next = current;
-  for (const message of incoming) {
-    next = upsertSessionMessage(next, message);
-  }
-
-  return next;
 }
 
 function mergeMessageCursor(current: string | null, incoming: string | undefined) {

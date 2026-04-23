@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { FSWatcher } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, readdir, stat } from "node:fs/promises";
 
 import {
   platformModelSnapshotSchema,
@@ -418,6 +418,18 @@ export function resolveWorkspaceMaterializationConfig(
   };
 }
 
+export function resolveWorkspaceRegistryPollingConfig(): { enabled: boolean; intervalMs: number } {
+  const latencyFirst = parseBooleanEnv("OAH_LATENCY_FIRST_PROFILE", false);
+  const intervalMs = parseNonNegativeIntEnv(
+    "OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS",
+    latencyFirst ? 2_000 : 15_000
+  );
+  return {
+    enabled: intervalMs > 0,
+    intervalMs
+  };
+}
+
 function parseStaleRunRecoveryStrategyEnv(
   name: string,
   fallback: "fail" | "requeue_running" | "requeue_all"
@@ -745,6 +757,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   let sandboxHost: SandboxHost | undefined;
   const modelDir = config.paths.model_dir;
   const toolDir = config.paths.tool_dir;
+  const workspaceDefinitionRefreshes = new Map<string, Promise<void>>();
   const logModelLoadError = (filePath: string, error: unknown): void => {
     console.error(`[oah-bootstrap] Failed to load model definition from ${filePath}; skipping entry.`, error);
   };
@@ -779,6 +792,133 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       } as Parameters<typeof discoverWorkspace>[2])
     );
   }
+
+  async function readLatestPathMtimeMs(targetPath: string): Promise<number | undefined> {
+    const entry = await stat(targetPath).catch(() => null);
+    if (!entry) {
+      return undefined;
+    }
+
+    let latest = Number(entry.mtimeMs);
+    if (!entry.isDirectory()) {
+      return latest;
+    }
+
+    const entries = await readdir(targetPath, { withFileTypes: true }).catch(() => []);
+    for (const child of entries) {
+      const childLatest = await readLatestPathMtimeMs(path.join(targetPath, child.name));
+      if (typeof childLatest === "number" && Number.isFinite(childLatest) && childLatest > latest) {
+        latest = childLatest;
+      }
+    }
+
+    return latest;
+  }
+
+  async function readLatestWorkspaceDefinitionMtimeMs(rootPath: string): Promise<number | undefined> {
+    const candidates = [
+      path.join(rootPath, "AGENTS.md"),
+      path.join(rootPath, ".openharness", "settings.yaml"),
+      path.join(rootPath, ".openharness", "agents"),
+      path.join(rootPath, ".openharness", "actions"),
+      path.join(rootPath, ".openharness", "skills"),
+      path.join(rootPath, ".openharness", "tools"),
+      path.join(rootPath, ".openharness", "hooks"),
+      path.join(rootPath, ".openharness", "models")
+    ];
+    let latest: number | undefined;
+
+    for (const candidate of candidates) {
+      const candidateLatest = await readLatestPathMtimeMs(candidate);
+      if (typeof candidateLatest === "number" && Number.isFinite(candidateLatest) && (latest === undefined || candidateLatest > latest)) {
+        latest = candidateLatest;
+      }
+    }
+
+    return latest;
+  }
+
+  function mergeRefreshedWorkspaceRecord(
+    workspace: WorkspaceRecord,
+    discovered: WorkspaceRecord,
+    updatedAt: string
+  ): WorkspaceRecord {
+    return {
+      ...discovered,
+      id: workspace.id,
+      name: workspace.name,
+      executionPolicy: workspace.executionPolicy,
+      status: workspace.status,
+      createdAt: workspace.createdAt,
+      updatedAt,
+      historyMirrorEnabled: workspace.historyMirrorEnabled,
+      ...(workspace.ownerId ? { ownerId: workspace.ownerId } : {}),
+      ...(workspace.serviceName ? { serviceName: workspace.serviceName } : {}),
+      ...(workspace.runtime ? { runtime: workspace.runtime } : {}),
+      ...(workspace.externalRef ? { externalRef: workspace.externalRef } : {})
+    } as WorkspaceRecord;
+  }
+
+  async function withWorkspaceDefinitionTimestamp(workspace: WorkspaceRecord): Promise<WorkspaceRecord> {
+    const latestDefinitionMtimeMs = await readLatestWorkspaceDefinitionMtimeMs(workspace.rootPath);
+    if (latestDefinitionMtimeMs === undefined) {
+      return workspace;
+    }
+
+    const currentUpdatedAtMs = Date.parse(workspace.updatedAt);
+    if (Number.isFinite(currentUpdatedAtMs) && latestDefinitionMtimeMs <= currentUpdatedAtMs) {
+      return workspace;
+    }
+
+    return {
+      ...workspace,
+      updatedAt: new Date(latestDefinitionMtimeMs).toISOString()
+    };
+  }
+
+  async function refreshWorkspaceDefinitionIfNeeded(workspaceId: string): Promise<void> {
+    const normalizedWorkspaceId = workspaceId.trim();
+    if (normalizedWorkspaceId.length === 0 || remoteSandboxProvider) {
+      return;
+    }
+
+    const existingRefresh = workspaceDefinitionRefreshes.get(normalizedWorkspaceId);
+    if (existingRefresh) {
+      return existingRefresh;
+    }
+
+    const refreshTask = (async () => {
+      const workspace = await persistence.workspaceRepository.getById(normalizedWorkspaceId);
+      if (!workspace || workspace.kind !== "project") {
+        return;
+      }
+
+      const latestDefinitionMtimeMs = await readLatestWorkspaceDefinitionMtimeMs(workspace.rootPath);
+      if (latestDefinitionMtimeMs === undefined) {
+        return;
+      }
+
+      const currentUpdatedAtMs = Date.parse(workspace.updatedAt);
+      if (Number.isFinite(currentUpdatedAtMs) && latestDefinitionMtimeMs <= currentUpdatedAtMs) {
+        return;
+      }
+
+      const discovered = await discoverWorkspaceWithEnrichedModels(workspace.rootPath, workspace.kind);
+      const refreshed = withManagedWorkspaceExternalRef(
+        mergeRefreshedWorkspaceRecord(workspace, discovered as WorkspaceRecord, new Date(latestDefinitionMtimeMs).toISOString()),
+        config,
+        objectStorageMirror
+      );
+      await persistence.workspaceRepository.upsert(refreshed);
+      visibleWorkspaceIds.add(refreshed.id);
+    })().finally(() => {
+      workspaceDefinitionRefreshes.delete(normalizedWorkspaceId);
+    });
+
+    workspaceDefinitionRefreshes.set(normalizedWorkspaceId, refreshTask);
+    await refreshTask;
+  }
+
   const discoveredWorkspaces =
     singleWorkspace !== undefined
       ? [
@@ -1093,10 +1233,11 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
 
             const latestPersistedWorkspaces =
               staleWorkspaceIds.length > 0 ? await listAllWorkspaces(persistence.workspaceRepository) : persistedWorkspaces;
-            const latestReconciledWorkspaces = reconcileDiscoveredWorkspaces(
-              latestDiscoveredWorkspaces,
-              latestPersistedWorkspaces
-            ).map((workspace) => withManagedWorkspaceExternalRef(workspace, config, objectStorageMirror));
+            const latestReconciledWorkspaces = await Promise.all(
+              reconcileDiscoveredWorkspaces(latestDiscoveredWorkspaces, latestPersistedWorkspaces).map(async (workspace) =>
+                withManagedWorkspaceExternalRef(await withWorkspaceDefinitionTimestamp(workspace), config, objectStorageMirror)
+              )
+            );
 
             await Promise.all(latestReconciledWorkspaces.map(async (workspace) => persistence.workspaceRepository.upsert(workspace)));
 
@@ -1215,13 +1356,16 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         };
   updateWatchedProjectRoots(reconciledWorkspaces);
   if (syncWorkspaceRegistry) {
+    const workspaceRegistryPolling = resolveWorkspaceRegistryPollingConfig();
     await syncWorkspaceRegistry();
-    workspaceRegistryPollTimer = setInterval(() => {
-      void syncWorkspaceRegistry().catch((error) => {
-        console.warn("Workspace registry poll sync failed.", error);
-      });
-    }, 2_000);
-    workspaceRegistryPollTimer.unref?.();
+    if (workspaceRegistryPolling.enabled) {
+      workspaceRegistryPollTimer = setInterval(() => {
+        void syncWorkspaceRegistry().catch((error) => {
+          console.warn("Workspace registry poll sync failed.", error);
+        });
+      }, workspaceRegistryPolling.intervalMs);
+      workspaceRegistryPollTimer.unref?.();
+    }
   }
   if (sandboxHost) {
     const workspaceMaterializationConfig = resolveWorkspaceMaterializationConfig(config);
@@ -1409,6 +1553,11 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       : undefined
     : undefined;
   const controlPlaneEngineService = new ControlPlaneEngineService(runtimeService, {
+    workspaceDefinitionRefresher: {
+      async refreshWorkspaceDefinition(workspaceId: string) {
+        await refreshWorkspaceDefinitionIfNeeded(workspaceId);
+      }
+    },
     ...(workspaceMaterializationManager
       ? {
           workspaceActivityTracker: {

@@ -56,23 +56,26 @@ services:
       retries: 20
 
   oah-api:
-    image: openagentharness-oah:latest
+    image: openagentharness-oah-api:latest
     build:
       context: .
       dockerfile: Dockerfile
+      target: api-runtime
       args:
         BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
         BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-node:24-bookworm-slim}
     restart: unless-stopped
     command:
       - node
-      - apps/server/dist/index.js
+      - dist/index.js
       - --config
       - /config/server.docker.yaml
       - --api-only
     environment:
       OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES: "true"
       OAH_INTERNAL_BASE_URL: "http://oah-api:8787"
+      OAH_WORKSPACE_PREWARM_ENABLED: "false"
+      OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS: "15000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,17 +98,18 @@ services:
       - oah-archives:/data/archives:ro
 
   oah-controller:
-    image: openagentharness-oah:latest
+    image: openagentharness-oah-controller:latest
     build:
       context: .
       dockerfile: Dockerfile
+      target: controller-runtime
       args:
         BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
         BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-node:24-bookworm-slim}
     restart: unless-stopped
     command:
       - node
-      - apps/controller/dist/index.js
+      - dist/index.js
       - --config
       - /config/server.docker.yaml
     depends_on:
@@ -133,10 +137,11 @@ services:
       - ${OAH_LOCAL_DEPLOY_ROOT:?set OAH_LOCAL_DEPLOY_ROOT}:${OAH_LOCAL_DEPLOY_ROOT:?set OAH_LOCAL_DEPLOY_ROOT}:ro
 
   oah-sandbox:
-    image: openagentharness-oah:latest
+    image: openagentharness-oah-sandbox:latest
     build:
       context: .
       dockerfile: Dockerfile
+      target: worker-runtime
       args:
         BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
         BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-node:24-bookworm-slim}
@@ -144,9 +149,10 @@ services:
     command:
       - sh
       - -lc
-      - export OAH_INTERNAL_BASE_URL="http://$${HOSTNAME}:8787" && exec node apps/server/dist/worker.js --config /config/server.docker.yaml
+      - export OAH_INTERNAL_BASE_URL="http://$${HOSTNAME}:8787" && exec node dist/worker.js --config /config/server.docker.yaml
     environment:
       OAH_ALLOW_PRIVATE_INTERNAL_ROUTES: "true"
+      OAH_WORKSPACE_MATERIALIZATION_MAINTENANCE_INTERVAL_MS: "15000"
     depends_on:
       postgres:
         condition: service_healthy

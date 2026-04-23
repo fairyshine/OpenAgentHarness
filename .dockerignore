@@ -4,8 +4,13 @@ node_modules
 deploy
 docs
 !docs/
+!docs/openapi/
+!docs/openapi/**
 !docs/schemas/
 !docs/schemas/**
+assets
+!assets/
+!assets/logo-readme.png
 dist
 .vite
 site
