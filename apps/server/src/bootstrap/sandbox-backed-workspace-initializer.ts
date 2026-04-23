@@ -11,6 +11,7 @@ import {
 } from "@oah/config";
 import { sandboxSchema, type CreateWorkspaceRequest } from "@oah/api-contracts";
 import { createId, type WorkspaceInitializationResult } from "@oah/engine-core";
+import { computeNativeDirectoryFingerprint, isNativeWorkspaceSyncEnabled, scanNativeLocalTree } from "@oah/native-bridge";
 
 import type { SandboxHost } from "./sandbox-host.js";
 import { enrichWorkspaceModelsWithDiscoveredMetadata } from "./model-metadata-discovery.js";
@@ -30,6 +31,19 @@ function resolveSeedUploadConcurrency(): number {
 }
 
 async function collectDirectoryFingerprint(rootPath: string): Promise<string> {
+  if (isNativeWorkspaceSyncEnabled()) {
+    try {
+      const result = await computeNativeDirectoryFingerprint({ rootDir: rootPath });
+      return result.fingerprint;
+    } catch (error) {
+      console.warn(
+        `[oah-native] Falling back to TypeScript seed fingerprint for ${rootPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
   const hash = createHash("sha1");
   const visit = async (currentPath: string): Promise<void> => {
     const entries = await readdir(currentPath, { withFileTypes: true }).catch(() => []);
@@ -162,12 +176,44 @@ async function collectDirectoryUploadPlan(input: {
   };
 }
 
+async function collectNativeDirectoryUploadPlan(input: {
+  currentLocalPath: string;
+  currentRemotePath: string;
+}): Promise<{
+  directories: string[];
+  files: Array<{ localPath: string; remotePath: string }>;
+} | undefined> {
+  if (!isNativeWorkspaceSyncEnabled()) {
+    return undefined;
+  }
+
+  try {
+    const result = await scanNativeLocalTree({
+      rootDir: input.currentLocalPath
+    });
+    return {
+      directories: result.directories.map((relativePath) => path.posix.join(input.currentRemotePath, relativePath)),
+      files: result.files.map((file) => ({
+        localPath: file.absolutePath,
+        remotePath: path.posix.join(input.currentRemotePath, file.relativePath)
+      }))
+    };
+  } catch (error) {
+    console.warn(
+      `[oah-native] Falling back to TypeScript upload plan for ${input.currentLocalPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return undefined;
+  }
+}
+
 async function uploadDirectoryTree(input: {
   currentLocalPath: string;
   currentRemotePath: string;
   sandboxHost: SandboxHost;
 }): Promise<void> {
-  const plan = await collectDirectoryUploadPlan(input);
+  const plan = (await collectNativeDirectoryUploadPlan(input)) ?? (await collectDirectoryUploadPlan(input));
   const concurrency = resolveSeedUploadConcurrency();
 
   await runWithConcurrency(plan.directories, concurrency, async (remotePath) => {

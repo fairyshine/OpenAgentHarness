@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { FSWatcher } from "node:fs";
-import { access, readdir, stat } from "node:fs/promises";
+import os from "node:os";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 
 import {
   platformModelSnapshotSchema,
@@ -793,6 +794,146 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     );
   }
 
+  interface DefinitionFsAccess {
+    stat(targetPath: string): Promise<Awaited<ReturnType<typeof stat>> | null>;
+    readdir(targetPath: string): Promise<Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>>;
+    readFile(targetPath: string): Promise<Buffer>;
+  }
+
+  async function withWorkspaceDefinitionAccess<T>(
+    workspace: WorkspaceRecord,
+    operation: (input: { rootPath: string; fs: DefinitionFsAccess }) => Promise<T>
+  ): Promise<T> {
+    const workspaceFileAccessProvider = sandboxHost?.workspaceFileAccessProvider;
+    const workspaceFileSystem = sandboxHost?.workspaceFileSystem;
+
+    if (!workspaceFileAccessProvider || !workspaceFileSystem) {
+      return operation({
+        rootPath: workspace.rootPath,
+        fs: {
+          async stat(targetPath) {
+            return stat(targetPath).catch(() => null);
+          },
+          async readdir(targetPath) {
+            return readdir(targetPath, { withFileTypes: true }).catch(() => []);
+          },
+          async readFile(targetPath) {
+            return readFile(targetPath);
+          }
+        }
+      });
+    }
+
+    const lease = await workspaceFileAccessProvider.acquire({
+      workspace,
+      access: "read"
+    });
+
+    try {
+      return await operation({
+        rootPath: lease.workspace.rootPath,
+        fs: {
+          async stat(targetPath) {
+            try {
+              const entry = await workspaceFileSystem.stat(targetPath);
+              return {
+                isDirectory: () => entry.kind === "directory",
+                isFile: () => entry.kind === "file",
+                mtimeMs: entry.mtimeMs
+              } as Awaited<ReturnType<typeof stat>>;
+            } catch {
+              return null;
+            }
+          },
+          async readdir(targetPath) {
+            const entries = await workspaceFileSystem.readdir(targetPath).catch(() => []);
+            return entries.map((entry) => ({
+              name: entry.name,
+              isDirectory: () => entry.kind === "directory",
+              isFile: () => entry.kind === "file"
+            }));
+          },
+          async readFile(targetPath) {
+            return workspaceFileSystem.readFile(targetPath);
+          }
+        }
+      });
+    } finally {
+      await lease.release({ dirty: false });
+    }
+  }
+
+  async function readLiveWorkspaceSkillNames(workspace: WorkspaceRecord): Promise<string[]> {
+    return withWorkspaceDefinitionAccess(workspace, async ({ rootPath, fs }) => {
+      const skillsRoot = path.join(rootPath, ".openharness", "skills");
+      const entries = await fs.readdir(skillsRoot);
+      const names: string[] = [];
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+
+        const skillFilePath = path.join(skillsRoot, entry.name, "SKILL.md");
+        const skillFile = await fs.stat(skillFilePath);
+        if (skillFile?.isFile()) {
+          const rawContent = (await fs.readFile(skillFilePath)).toString("utf8");
+          const frontmatterMatch = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(rawContent);
+          const frontmatterBody = frontmatterMatch?.[1] ?? "";
+          const nameMatch = /^name:\s*(.+)$/mu.exec(frontmatterBody);
+          names.push(nameMatch?.[1]?.trim() || entry.name);
+        }
+      }
+
+      return names.sort((left, right) => left.localeCompare(right));
+    });
+  }
+
+  async function copyWorkspaceDefinitionSnapshot(workspace: WorkspaceRecord): Promise<string> {
+    return withWorkspaceDefinitionAccess(workspace, async ({ rootPath, fs }) => {
+      const snapshotRoot = await mkdtemp(path.join(os.tmpdir(), "oah-workspace-definition-"));
+      const candidates = [
+        "AGENTS.md",
+        path.join(".openharness", "settings.yaml"),
+        path.join(".openharness", "agents"),
+        path.join(".openharness", "actions"),
+        path.join(".openharness", "skills"),
+        path.join(".openharness", "tools"),
+        path.join(".openharness", "hooks"),
+        path.join(".openharness", "models")
+      ];
+
+      async function copyRelativePath(relativePath: string): Promise<void> {
+        const sourcePath = path.join(rootPath, relativePath);
+        const targetPath = path.join(snapshotRoot, relativePath);
+        const entry = await fs.stat(sourcePath);
+        if (!entry) {
+          return;
+        }
+
+        if (entry.isDirectory()) {
+          await mkdir(targetPath, { recursive: true });
+          const children = await fs.readdir(sourcePath);
+          for (const child of children) {
+            await copyRelativePath(path.join(relativePath, child.name));
+          }
+          return;
+        }
+
+        if (entry.isFile()) {
+          await mkdir(path.dirname(targetPath), { recursive: true });
+          await writeFile(targetPath, await fs.readFile(sourcePath));
+        }
+      }
+
+      for (const candidate of candidates) {
+        await copyRelativePath(candidate);
+      }
+
+      return snapshotRoot;
+    });
+  }
+
   async function readLatestPathMtimeMs(targetPath: string): Promise<number | undefined> {
     const entry = await stat(targetPath).catch(() => null);
     if (!entry) {
@@ -878,7 +1019,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
 
   async function refreshWorkspaceDefinitionIfNeeded(workspaceId: string): Promise<void> {
     const normalizedWorkspaceId = workspaceId.trim();
-    if (normalizedWorkspaceId.length === 0 || remoteSandboxProvider) {
+    if (normalizedWorkspaceId.length === 0) {
       return;
     }
 
@@ -893,24 +1034,42 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         return;
       }
 
+      const liveSkillNames = await readLiveWorkspaceSkillNames(workspace);
+      const cachedSkillNames = Object.keys(workspace.skills).sort((left, right) => left.localeCompare(right));
+      const skillNamesChanged =
+        liveSkillNames.length !== cachedSkillNames.length ||
+        liveSkillNames.some((name, index) => name !== cachedSkillNames[index]);
+
       const latestDefinitionMtimeMs = await readLatestWorkspaceDefinitionMtimeMs(workspace.rootPath);
-      if (latestDefinitionMtimeMs === undefined) {
+      if (!skillNamesChanged && latestDefinitionMtimeMs === undefined) {
         return;
       }
 
       const currentUpdatedAtMs = Date.parse(workspace.updatedAt);
-      if (Number.isFinite(currentUpdatedAtMs) && latestDefinitionMtimeMs <= currentUpdatedAtMs) {
+      if (
+        !skillNamesChanged &&
+        Number.isFinite(currentUpdatedAtMs) &&
+        latestDefinitionMtimeMs !== undefined &&
+        latestDefinitionMtimeMs <= currentUpdatedAtMs
+      ) {
         return;
       }
 
-      const discovered = await discoverWorkspaceWithEnrichedModels(workspace.rootPath, workspace.kind);
-      const refreshed = withManagedWorkspaceExternalRef(
-        mergeRefreshedWorkspaceRecord(workspace, discovered as WorkspaceRecord, new Date(latestDefinitionMtimeMs).toISOString()),
-        config,
-        objectStorageMirror
-      );
-      await persistence.workspaceRepository.upsert(refreshed);
-      visibleWorkspaceIds.add(refreshed.id);
+      const discoveryRoot = remoteSandboxProvider ? await copyWorkspaceDefinitionSnapshot(workspace) : workspace.rootPath;
+      try {
+        const discovered = await discoverWorkspaceWithEnrichedModels(discoveryRoot, workspace.kind);
+        const refreshed = withManagedWorkspaceExternalRef(
+          mergeRefreshedWorkspaceRecord(workspace, discovered as WorkspaceRecord, new Date().toISOString()),
+          config,
+          objectStorageMirror
+        );
+        await persistence.workspaceRepository.upsert(refreshed);
+        visibleWorkspaceIds.add(refreshed.id);
+      } finally {
+        if (remoteSandboxProvider) {
+          await rm(discoveryRoot, { recursive: true, force: true });
+        }
+      }
     })().finally(() => {
       workspaceDefinitionRefreshes.delete(normalizedWorkspaceId);
     });

@@ -28,6 +28,7 @@
     "@oah/api-contracts": "workspace:*",
     "@oah/config": "workspace:*",
     "@oah/model-gateway": "workspace:*",
+    "@oah/native-bridge": "workspace:*",
     "@oah/engine-core": "workspace:*",
     "@oah/storage-memory": "workspace:*",
     "@oah/storage-postgres": "workspace:*",

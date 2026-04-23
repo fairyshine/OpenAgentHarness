@@ -569,7 +569,7 @@ Read the repo and summarize it.
 `,
         "utf8"
       );
-      const refreshedAt = new Date(Date.now() + 2_000);
+      const refreshedAt = new Date("2026-03-05T14:01:32.000Z");
       await utimes(skillFile, refreshedAt, refreshedAt);
 
       await runtime.controlPlaneEngineService.createSession({

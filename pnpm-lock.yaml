@@ -46,12 +46,15 @@ importers:
       '@oah/config':
         specifier: workspace:*
         version: link:../../packages/config
-      '@oah/model-gateway':
-        specifier: workspace:*
-        version: link:../../packages/model-gateway
       '@oah/engine-core':
         specifier: workspace:*
         version: link:../../packages/engine-core
+      '@oah/model-gateway':
+        specifier: workspace:*
+        version: link:../../packages/model-gateway
+      '@oah/native-bridge':
+        specifier: workspace:*
+        version: link:../../packages/native-bridge
       '@oah/storage-memory':
         specifier: workspace:*
         version: link:../../packages/storage-memory
@@ -186,6 +189,21 @@ importers:
         specifier: ^2.10.3
         version: 2.10.3
 
+  packages/engine-core:
+    dependencies:
+      ajv:
+        specifier: 8.18.0
+        version: 8.18.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.18.0)
+      drizzle-orm:
+        specifier: 0.45.2
+        version: 0.45.2(@opentelemetry/api@1.9.0)(@types/pg@8.15.5)(pg@8.16.3)
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
+
   packages/model-gateway:
     dependencies:
       '@ai-sdk/mcp':
@@ -207,20 +225,7 @@ importers:
         specifier: 6.0.141
         version: 6.0.141(zod@4.3.6)
 
-  packages/engine-core:
-    dependencies:
-      ajv:
-        specifier: 8.18.0
-        version: 8.18.0
-      ajv-formats:
-        specifier: 3.0.1
-        version: 3.0.1(ajv@8.18.0)
-      drizzle-orm:
-        specifier: 0.45.2
-        version: 0.45.2(@opentelemetry/api@1.9.0)(@types/pg@8.15.5)(pg@8.16.3)
-      zod:
-        specifier: 4.3.6
-        version: 4.3.6
+  packages/native-bridge: {}
 
   packages/storage-memory:
     dependencies:

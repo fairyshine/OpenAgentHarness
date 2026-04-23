@@ -11,6 +11,13 @@ import {
   S3Client
 } from "@aws-sdk/client-s3";
 import type { ServerConfig } from "@oah/config";
+import {
+  computeNativeDirectoryFingerprint,
+  isNativeWorkspaceSyncEnabled,
+  planNativeLocalToRemote,
+  planNativeRemoteToLocal,
+  scanNativeLocalTree
+} from "@oah/native-bridge";
 
 export type ManagedPathKey = "workspace" | "runtime" | "model" | "tool" | "skill";
 type ObjectStorageConfig = NonNullable<ServerConfig["object_storage"]> & {
@@ -277,6 +284,22 @@ async function collectLocalDirectorySnapshot(rootDir: string, options?: Director
   return { files, emptyDirectories };
 }
 
+function createSnapshotFromNativeScan(input: Awaited<ReturnType<typeof scanNativeLocalTree>>): LocalDirectorySnapshot {
+  return {
+    files: new Map(
+      input.files.map((file) => [
+        file.relativePath,
+        {
+          absolutePath: file.absolutePath,
+          size: file.size,
+          mtimeMs: file.mtimeMs
+        }
+      ])
+    ),
+    emptyDirectories: new Set(input.emptyDirectories)
+  };
+}
+
 function createDirectoryFingerprint(snapshot: LocalDirectorySnapshot): string {
   const hash = createHash("sha1");
   for (const [relativePath, file] of [...snapshot.files.entries()].sort(([left], [right]) => left.localeCompare(right))) {
@@ -288,8 +311,178 @@ function createDirectoryFingerprint(snapshot: LocalDirectorySnapshot): string {
   return hash.digest("hex");
 }
 
+function resolveNativeFingerprintExcludes(options?: DirectorySyncOptions): string[] | undefined {
+  const exclude = options?.excludeRelativePath;
+  if (!exclude) {
+    return [];
+  }
+
+  if (exclude === shouldExcludeWorkspaceMirrorRelativePath) {
+    return [".openharness"];
+  }
+
+  if (exclude === shouldExcludeWorkspaceBackingStoreRelativePath) {
+    return [".openharness/state", ".openharness/__materialized__"];
+  }
+
+  return undefined;
+}
+
+function buildNormalizedRemoteEntryMap(
+  remotePrefix: string,
+  remoteEntries: ObjectStorageEntry[],
+  options?: DirectorySyncOptions
+): Map<string, ObjectStorageEntry> {
+  const remoteByRelativePath = new Map<string, ObjectStorageEntry>();
+  for (const entry of remoteEntries) {
+    const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
+    if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
+      continue;
+    }
+    if (options?.excludeRelativePath?.(relativePath)) {
+      continue;
+    }
+    remoteByRelativePath.set(relativePath || "/", entry);
+  }
+
+  return remoteByRelativePath;
+}
+
 export async function computeLocalDirectoryFingerprint(rootDir: string, options?: DirectorySyncOptions): Promise<string> {
+  const nativeExcludes = resolveNativeFingerprintExcludes(options);
+  if (isNativeWorkspaceSyncEnabled() && nativeExcludes !== undefined) {
+    try {
+      const result = await computeNativeDirectoryFingerprint({
+        rootDir,
+        ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {})
+      });
+      return result.fingerprint;
+    } catch (error) {
+      console.warn(
+        `[oah-native] Falling back to TypeScript directory fingerprint for ${rootDir}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
   return createDirectoryFingerprint(await collectLocalDirectorySnapshot(rootDir, options));
+}
+
+async function collectNativeSnapshotIfAvailable(
+  rootDir: string,
+  options?: DirectorySyncOptions
+): Promise<{ snapshot: LocalDirectorySnapshot; fingerprint: string } | undefined> {
+  const nativeExcludes = resolveNativeFingerprintExcludes(options);
+  if (!isNativeWorkspaceSyncEnabled() || nativeExcludes === undefined) {
+    return undefined;
+  }
+
+  try {
+    const result = await scanNativeLocalTree({
+      rootDir,
+      ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {})
+    });
+    return {
+      snapshot: createSnapshotFromNativeScan(result),
+      fingerprint: result.fingerprint
+    };
+  } catch (error) {
+    console.warn(
+      `[oah-native] Falling back to TypeScript local snapshot for ${rootDir}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return undefined;
+  }
+}
+
+async function collectNativeLocalToRemotePlanIfAvailable(
+  localDir: string,
+  remotePrefix: string,
+  remoteEntries: ObjectStorageEntry[],
+  options?: DirectorySyncOptions
+): Promise<Awaited<ReturnType<typeof planNativeLocalToRemote>> | undefined> {
+  const nativeExcludes = resolveNativeFingerprintExcludes(options);
+  if (!isNativeWorkspaceSyncEnabled() || nativeExcludes === undefined) {
+    return undefined;
+  }
+
+  try {
+    return await planNativeLocalToRemote({
+      rootDir: localDir,
+      ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {}),
+      remoteEntries: remoteEntries
+        .map((entry) => {
+          const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
+          if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
+            return undefined;
+          }
+          if (options?.excludeRelativePath?.(relativePath)) {
+            return undefined;
+          }
+          return {
+            relativePath: relativePath || "/",
+            key: entry.key,
+            size: entry.size,
+            ...(entry.lastModified ? { lastModifiedMs: entry.lastModified.getTime() } : {}),
+            isDirectory: entry.key.endsWith("/")
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
+    });
+  } catch (error) {
+    console.warn(
+      `[oah-native] Falling back to TypeScript local->remote planning for ${localDir}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return undefined;
+  }
+}
+
+async function collectNativeRemoteToLocalPlanIfAvailable(
+  localDir: string,
+  remotePrefix: string,
+  remoteEntries: ObjectStorageEntry[],
+  options?: DirectorySyncOptions
+): Promise<Awaited<ReturnType<typeof planNativeRemoteToLocal>> | undefined> {
+  const nativeExcludes = resolveNativeFingerprintExcludes(options);
+  if (!isNativeWorkspaceSyncEnabled() || nativeExcludes === undefined) {
+    return undefined;
+  }
+
+  try {
+    return await planNativeRemoteToLocal({
+      rootDir: localDir,
+      ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {}),
+      remoteEntries: remoteEntries
+        .map((entry) => {
+          const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
+          if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
+            return undefined;
+          }
+          if (options?.excludeRelativePath?.(relativePath)) {
+            return undefined;
+          }
+          return {
+            relativePath: relativePath || "/",
+            key: entry.key,
+            size: entry.size,
+            ...(entry.lastModified ? { lastModifiedMs: entry.lastModified.getTime() } : {}),
+            isDirectory: entry.key.endsWith("/")
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
+    });
+  } catch (error) {
+    console.warn(
+      `[oah-native] Falling back to TypeScript remote->local planning for ${localDir}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return undefined;
+  }
 }
 
 async function removeUnexpectedLocalEntries(
@@ -935,7 +1128,8 @@ export async function syncRemotePrefixToLocal(
   await removeUnexpectedLocalEntries(localDir, new Set(remoteFiles.keys()), remoteDirectories, options);
 
   const concurrency = resolveDirectorySyncConcurrency();
-  const orderedDirectories = [...remoteDirectories].sort((left, right) => {
+  const nativePlan = await collectNativeRemoteToLocalPlanIfAvailable(localDir, remotePrefix, entries, options);
+  const orderedDirectories = nativePlan?.directoriesToCreate ?? [...remoteDirectories].sort((left, right) => {
     const depthDifference = left.split("/").length - right.split("/").length;
     return depthDifference !== 0 ? depthDifference : left.localeCompare(right);
   });
@@ -948,8 +1142,22 @@ export async function syncRemotePrefixToLocal(
     await mkdir(targetPath, { recursive: true });
   });
 
-  await runWithConcurrency([...remoteFiles.entries()], concurrency, async ([relativePath, entry]) => {
-    const targetPath = path.join(localDir, relativePath);
+  const nativeDownloadCandidates =
+    nativePlan?.downloadCandidates.map((candidate) => ({
+      relativePath: candidate.relativePath,
+      targetPath: candidate.targetPath,
+      entry: remoteFiles.get(candidate.relativePath)
+    })) ??
+    [...remoteFiles.entries()].map(([relativePath, entry]) => ({
+      relativePath,
+      targetPath: path.join(localDir, relativePath),
+      entry
+    }));
+
+  await runWithConcurrency(nativeDownloadCandidates, concurrency, async ({ targetPath, entry }) => {
+    if (!entry) {
+      return;
+    }
     const existing = await statIfExists(targetPath);
     if (existing && !existing.isFile()) {
       await rm(targetPath, { recursive: true, force: true });
@@ -980,6 +1188,46 @@ export async function syncRemotePrefixToLocal(
       await utimes(targetPath, preservedDate, preservedDate);
     }
   });
+
+  if (nativePlan) {
+    await runWithConcurrency(nativePlan.infoCheckCandidates, concurrency, async (candidate) => {
+      const entry = remoteFiles.get(candidate.relativePath);
+      if (!entry) {
+        return;
+      }
+
+      const targetPath = candidate.targetPath;
+      const existing = await statIfExists(targetPath);
+      if (existing && !existing.isFile()) {
+        await rm(targetPath, { recursive: true, force: true });
+      }
+
+      await mkdir(path.dirname(targetPath), { recursive: true });
+
+      const currentFile = existing?.isFile() ? existing : null;
+      if (currentFile && currentFile.size === entry.size) {
+        const objectInfo = await store.getObjectInfo?.(entry.key);
+        const targetMtimeMs = resolveTargetMtimeMs({
+          metadata: objectInfo?.metadata,
+          lastModified: objectInfo?.lastModified ?? entry.lastModified
+        });
+        if (typeof targetMtimeMs === "number" && Math.trunc(currentFile.mtimeMs) === targetMtimeMs) {
+          return;
+        }
+      }
+
+      const object = await store.getObject(entry.key);
+      await writeFile(targetPath, object.body);
+      const targetMtimeMs = resolveTargetMtimeMs({
+        metadata: object.metadata,
+        lastModified: entry.lastModified
+      });
+      if (typeof targetMtimeMs === "number") {
+        const preservedDate = new Date(targetMtimeMs);
+        await utimes(targetPath, preservedDate, preservedDate);
+      }
+    });
+  }
 }
 
 export async function syncLocalDirectoryToRemote(
@@ -991,22 +1239,96 @@ export async function syncLocalDirectoryToRemote(
   options?: DirectorySyncOptions
 ): Promise<DirectorySyncResult> {
   logger?.(`syncing local changes in ${localDir} back to object storage (${(label ?? remotePrefix) || "."})`);
-  const [snapshot, remoteEntries] = await Promise.all([collectLocalDirectorySnapshot(localDir, options), store.listEntries(remotePrefix)]);
-  const localFingerprint = createDirectoryFingerprint(snapshot);
-
-  const remoteByRelativePath = new Map<string, ObjectStorageEntry>();
-  for (const entry of remoteEntries) {
-    const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
-    if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
-      continue;
-    }
-    remoteByRelativePath.set(relativePath || "/", entry);
-  }
-
-  const seenRemoteRelativePaths = new Set<string>();
+  const remoteEntries = await store.listEntries(remotePrefix);
+  const remoteByRelativePath = buildNormalizedRemoteEntryMap(remotePrefix, remoteEntries, options);
   let uploadedFileCount = 0;
   let createdEmptyDirectoryCount = 0;
   const concurrency = resolveDirectorySyncConcurrency();
+  const nativePlan = await collectNativeLocalToRemotePlanIfAvailable(localDir, remotePrefix, remoteEntries, options);
+
+  if (nativePlan) {
+    await runWithConcurrency(nativePlan.uploadCandidates, concurrency, async (candidate) => {
+      const body = await readFile(candidate.absolutePath).catch((error) => {
+        if (isNotFoundError(error)) {
+          return null;
+        }
+        throw error;
+      });
+      if (!body) {
+        return;
+      }
+
+      await store.putObject(buildRemoteKey(remotePrefix, candidate.relativePath), body, { mtimeMs: candidate.mtimeMs });
+      uploadedFileCount += 1;
+    });
+
+    await runWithConcurrency(nativePlan.infoCheckCandidates, concurrency, async (candidate) => {
+      const remoteEntry = remoteByRelativePath.get(candidate.relativePath);
+      if (!remoteEntry || remoteEntry.key.endsWith("/")) {
+        const body = await readFile(candidate.absolutePath).catch((error) => {
+          if (isNotFoundError(error)) {
+            return null;
+          }
+          throw error;
+        });
+        if (!body) {
+          return;
+        }
+
+        await store.putObject(buildRemoteKey(remotePrefix, candidate.relativePath), body, { mtimeMs: candidate.mtimeMs });
+        uploadedFileCount += 1;
+        return;
+      }
+
+      const remoteInfo = await store.getObjectInfo?.(remoteEntry.key);
+      const remoteMtimeMs = resolveTargetMtimeMs({
+        metadata: remoteInfo?.metadata,
+        lastModified: remoteInfo?.lastModified ?? remoteEntry.lastModified
+      });
+      if (typeof remoteMtimeMs === "number" && remoteMtimeMs === Math.trunc(candidate.mtimeMs)) {
+        return;
+      }
+      if (!remoteInfo && remoteEntry.lastModified && remoteEntry.lastModified.getTime() >= Math.trunc(candidate.mtimeMs)) {
+        return;
+      }
+
+      const body = await readFile(candidate.absolutePath).catch((error) => {
+        if (isNotFoundError(error)) {
+          return null;
+        }
+        throw error;
+      });
+      if (!body) {
+        return;
+      }
+
+      await store.putObject(buildRemoteKey(remotePrefix, candidate.relativePath), body, { mtimeMs: candidate.mtimeMs });
+      uploadedFileCount += 1;
+    });
+
+    await runWithConcurrency(nativePlan.emptyDirectoriesToCreate, concurrency, async (relativePath) => {
+      await store.putObject(`${buildRemoteKey(remotePrefix, relativePath)}/`, Buffer.alloc(0));
+      createdEmptyDirectoryCount += 1;
+    });
+
+    if (nativePlan.keysToDelete.length > 0) {
+      await store.deleteObjects(nativePlan.keysToDelete);
+    }
+
+    await pruneEmptyDirectories(localDir);
+    return {
+      localFingerprint: nativePlan.fingerprint,
+      uploadedFileCount,
+      deletedRemoteCount: nativePlan.keysToDelete.length,
+      createdEmptyDirectoryCount
+    };
+  }
+
+  const nativeSnapshot = await collectNativeSnapshotIfAvailable(localDir, options);
+  const snapshot = nativeSnapshot?.snapshot ?? (await collectLocalDirectorySnapshot(localDir, options));
+  const localFingerprint = nativeSnapshot?.fingerprint ?? createDirectoryFingerprint(snapshot);
+
+  const seenRemoteRelativePaths = new Set<string>();
 
   await runWithConcurrency([...snapshot.files.entries()], concurrency, async ([relativePath, file]) => {
     const remoteEntry = remoteByRelativePath.get(relativePath);

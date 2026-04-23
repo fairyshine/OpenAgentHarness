@@ -9,6 +9,7 @@
     { "path": "./packages/storage-postgres" },
     { "path": "./packages/storage-redis" },
     { "path": "./packages/model-gateway" },
+    { "path": "./packages/native-bridge" },
     { "path": "./apps/cli" },
     { "path": "./apps/server" },
     { "path": "./apps/worker" },

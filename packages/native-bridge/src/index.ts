@@ -1,0 +1,20 @@
+export {
+  NativeWorkspaceSyncBridgeError,
+  computeNativeDirectoryFingerprint,
+  isNativeWorkspaceSyncEnabled,
+  planNativeLocalToRemote,
+  resolveWorkspaceSyncBinary,
+  scanNativeLocalTree,
+  runWorkspaceSyncVersion,
+  type NativeDirectoryFingerprintInput,
+  type NativeDirectoryFingerprintResult,
+  type NativePlanLocalToRemoteResult,
+  type NativePlanDownloadCandidate,
+  type NativePlanRemoteEntry,
+  type NativePlanUploadCandidate,
+  type NativePlanRemoteToLocalResult,
+  planNativeRemoteToLocal,
+  type NativeScanLocalTreeResult,
+  type NativeScannedFileEntry,
+  type NativeWorkspaceSyncVersionResult
+} from "./workspace-sync.js";

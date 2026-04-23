@@ -13,6 +13,7 @@ assets
 !assets/logo-readme.png
 dist
 .vite
+native/target
 site
 tests
 tmp
