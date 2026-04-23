@@ -15,6 +15,7 @@ import {
   addRecentId,
   buildAuthHeaders,
   buildUrl,
+  compareSavedSessionsByRecency,
   createHttpRequestError,
   isNotFoundError,
   pathLeaf,
@@ -160,10 +161,10 @@ export function useNavigationActions(params: {
     params.navigation.setSavedSessions((current) => {
       const existingIndex = current.findIndex((entry) => entry.id === sessionRecord.id);
       if (existingIndex >= 0) {
-        return current.map((entry, index) => (index === existingIndex ? { ...entry, ...nextRecord } : entry));
+        return current.map((entry, index) => (index === existingIndex ? { ...entry, ...nextRecord } : entry)).sort(compareSavedSessionsByRecency);
       }
 
-      return [...current, nextRecord].slice(-48);
+      return [...current, nextRecord].sort(compareSavedSessionsByRecency).slice(0, 48);
     });
   }
 
@@ -639,7 +640,7 @@ export function useNavigationActions(params: {
             }
           }
 
-          return next;
+          return next.sort(compareSavedSessionsByRecency);
         });
         params.navigation.setRecentWorkspaces((current) => current.filter((entry) => visibleWorkspaceIds.has(entry)));
         params.navigation.setRecentSessions((current) =>

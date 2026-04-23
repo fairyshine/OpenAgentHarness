@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { Session, Workspace, WorkspaceCatalog } from "@oah/api-contracts";
 
 import {
+  compareSavedNavigationItemsDesc,
+  compareSavedSessionsByRecency,
   storageKeys,
   usePersistentState,
   type SavedSessionRecord,
@@ -38,13 +40,17 @@ export function useNavigationState() {
     window.localStorage.removeItem("oah.web.savedSessions");
   }, []);
 
-  const orderedSavedWorkspaces = savedWorkspaces;
+  const orderedSavedWorkspaces = useMemo(() => [...savedWorkspaces].sort(compareSavedNavigationItemsDesc), [savedWorkspaces]);
   const sessionsByWorkspaceId = useMemo(() => {
     const next = new Map<string, SavedSessionRecord[]>();
     for (const entry of savedSessions) {
       const group = next.get(entry.workspaceId) ?? [];
       group.push(entry);
       next.set(entry.workspaceId, group);
+    }
+
+    for (const [workspaceId, group] of next) {
+      next.set(workspaceId, [...group].sort(compareSavedSessionsByRecency));
     }
 
     return next;

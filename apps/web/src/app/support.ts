@@ -1180,6 +1180,20 @@ function compareSavedNavigationItemsDesc<T extends { id: string; lastOpenedAt?: 
   return right.id.localeCompare(left.id);
 }
 
+function compareSavedSessionsByRecency(left: SavedSessionRecord, right: SavedSessionRecord) {
+  const activityComparison = compareIsoTimestampDesc(left.lastRunAt ?? left.createdAt, right.lastRunAt ?? right.createdAt);
+  if (activityComparison !== 0) {
+    return activityComparison;
+  }
+
+  const createdAtComparison = compareIsoTimestampDesc(left.createdAt, right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
+
+  return right.id.localeCompare(left.id);
+}
+
 function isTerminalRunEvent(event: string) {
   return event === "run.completed" || event === "run.failed" || event === "run.cancelled";
 }
@@ -1691,6 +1705,7 @@ export {
   filterStable,
   compareIsoTimestampDesc,
   compareSavedNavigationItemsDesc,
+  compareSavedSessionsByRecency,
   isTerminalRunEvent,
   isTerminalRunStatus,
   formatTimestamp,
