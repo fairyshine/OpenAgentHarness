@@ -1,5 +1,7 @@
 import { access, readFile, readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type {
   ActionCatalogItem,
@@ -44,12 +46,32 @@ export function createAjv() {
 const schemaCache = new Map<string, Promise<unknown>>();
 const schemaValidatorCache = new Map<string, Promise<ValidateFunction<unknown>>>();
 
+function resolveRuntimeAssetFileUrl(relativePath: string): URL {
+  const normalizedRelativePath = path.posix.normalize(relativePath.replaceAll("\\", "/")).replace(/^(\.\.\/)+/u, "");
+  const configuredRoot = process.env.OAH_DOCS_ROOT?.trim();
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidateRoots = [
+    configuredRoot,
+    process.cwd(),
+    path.resolve(moduleDir, "../../..")
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const root of candidateRoots) {
+    const candidatePath = path.join(root, normalizedRelativePath);
+    if (existsSync(candidatePath)) {
+      return pathToFileURL(candidatePath);
+    }
+  }
+
+  return new URL(relativePath, import.meta.url);
+}
+
 export function isDefined<T>(value: T | undefined): value is T {
   return value !== undefined;
 }
 
 export async function loadSchema<T>(relativePath: string): Promise<T> {
-  const fileUrl = new URL(relativePath, import.meta.url);
+  const fileUrl = resolveRuntimeAssetFileUrl(relativePath);
   const cacheKey = fileUrl.toString();
   let cached = schemaCache.get(cacheKey);
   if (!cached) {
@@ -61,7 +83,7 @@ export async function loadSchema<T>(relativePath: string): Promise<T> {
 }
 
 export async function loadSchemaValidator<T>(relativePath: string): Promise<ValidateFunction<T>> {
-  const fileUrl = new URL(relativePath, import.meta.url);
+  const fileUrl = resolveRuntimeAssetFileUrl(relativePath);
   const cacheKey = fileUrl.toString();
   let cached = schemaValidatorCache.get(cacheKey);
   if (!cached) {

@@ -53,6 +53,7 @@ WORKDIR /app
 FROM runtime-base AS api-runtime
 
 COPY --from=build /opt/oah/server /app
+COPY --from=build /app/docs/schemas /app/docs/schemas
 COPY --from=build /app/docs/openapi /app/docs/openapi
 COPY --from=build /app/assets/logo-readme.png /app/assets/logo-readme.png
 
@@ -63,6 +64,7 @@ CMD ["node", "dist/index.js", "--config", "/etc/oah/server.yaml"]
 FROM runtime-base AS worker-runtime
 
 COPY --from=build /opt/oah/server /app
+COPY --from=build /app/docs/schemas /app/docs/schemas
 COPY --from=build /app/docs/openapi /app/docs/openapi
 COPY --from=build /app/assets/logo-readme.png /app/assets/logo-readme.png
 
@@ -90,6 +92,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /opt/oah/controller /app
+COPY --from=build /app/docs/schemas /app/docs/schemas
 
 EXPOSE 8788
 
