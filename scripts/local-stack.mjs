@@ -274,13 +274,13 @@ function prepareDockerServerConfigs() {
     sourceConfig.workers?.embedded && typeof sourceConfig.workers.embedded === "object"
       ? sourceConfig.workers.embedded
       : {
-          min_count: 2,
-          max_count: 4,
-          scale_interval_ms: 1000,
+          min_count: 1,
+          max_count: 2,
+          scale_interval_ms: 3000,
           scale_up_window: 2,
-          scale_down_window: 2,
-          cooldown_ms: 1000,
-          reserved_capacity_for_subagent: 1
+          scale_down_window: 3,
+          cooldown_ms: 4000,
+          reserved_capacity_for_subagent: 0
         };
   const configuredSandboxFleet = sourceConfig.sandbox?.fleet;
   const parsedReplicaOverride = Number.parseInt(process.env.OAH_LOCAL_SANDBOX_REPLICAS || "", 10);

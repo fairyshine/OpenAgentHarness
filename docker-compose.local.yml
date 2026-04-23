@@ -72,6 +72,7 @@ services:
       - /config/server.docker.yaml
       - --api-only
     environment:
+      NODE_OPTIONS: "--max-old-space-size=256"
       OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES: "true"
       OAH_INTERNAL_BASE_URL: "http://oah-api:8787"
       OAH_WORKSPACE_PREWARM_ENABLED: "false"
@@ -120,6 +121,7 @@ services:
       minio:
         condition: service_healthy
     environment:
+      NODE_OPTIONS: "--max-old-space-size=128"
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
       OAH_DOCKER_API_CONFIG: ${OAH_DOCKER_API_CONFIG}
       OAH_DOCKER_CONTROLLER_CONFIG: ${OAH_DOCKER_CONTROLLER_CONFIG}
@@ -151,6 +153,7 @@ services:
       - -lc
       - export OAH_INTERNAL_BASE_URL="http://$${HOSTNAME}:8787" && exec node dist/worker.js --config /config/server.docker.yaml
     environment:
+      NODE_OPTIONS: "--max-old-space-size=384"
       OAH_ALLOW_PRIVATE_INTERNAL_ROUTES: "true"
       OAH_WORKSPACE_MATERIALIZATION_MAINTENANCE_INTERVAL_MS: "15000"
     depends_on:
