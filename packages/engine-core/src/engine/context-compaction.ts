@@ -18,9 +18,20 @@ const COMPACT_SYSTEM_PROMPT = [
   "Write plain text only. Do not address the user. Do not mention compaction."
 ].join(" ");
 
+function buildCompactSystemPrompt(customInstructions?: string): string {
+  const trimmed = customInstructions?.trim();
+  if (!trimmed) {
+    return COMPACT_SYSTEM_PROMPT;
+  }
+
+  return `${COMPACT_SYSTEM_PROMPT} Follow these additional instructions for this manual compaction: ${trimmed}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+type CompactSystemMessage = Extract<Message, { role: "system" }>;
 
 function readNumericMetadataValue(metadata: Record<string, unknown> | undefined, keys: string[]): number | undefined {
   if (!metadata) {
@@ -292,6 +303,15 @@ export interface ContextCompactionServiceDependencies {
   buildEngineMessagesForSession: (sessionId: string, persistedMessages?: Message[]) => Promise<EngineMessage[]>;
 }
 
+export interface ContextCompactionResult {
+  engineMessages: EngineMessage[];
+  compacted: boolean;
+  reason?: "insufficient_history" | "summary_empty" | undefined;
+  boundaryMessageId?: string | undefined;
+  summaryMessageId?: string | undefined;
+  summarizedMessageCount?: number | undefined;
+}
+
 export class ContextCompactionService implements ContextPreparationModule {
   readonly name = "compact";
   readonly #logger?: EngineLogger | undefined;
@@ -335,14 +355,52 @@ export class ContextCompactionService implements ContextPreparationModule {
     messages: Message[];
     engineMessages: EngineMessage[];
   }): Promise<EngineMessage[]> {
+    const result = await this.#compactContext({
+      ...input,
+      force: false,
+      compactionSource: "auto"
+    });
+    return result.engineMessages;
+  }
+
+  async compactSessionContext(input: {
+    workspace: WorkspaceRecord;
+    session: Session;
+    run: Run;
+    activeAgentName: string;
+    messages: Message[];
+    engineMessages: EngineMessage[];
+    instructions?: string | undefined;
+  }): Promise<ContextCompactionResult> {
+    return this.#compactContext({
+      ...input,
+      force: true,
+      compactionSource: "manual"
+    });
+  }
+
+  async #compactContext(input: {
+    workspace: WorkspaceRecord;
+    session: Session;
+    run: Run;
+    activeAgentName: string;
+    messages: Message[];
+    engineMessages: EngineMessage[];
+    force: boolean;
+    compactionSource: "auto" | "manual";
+    instructions?: string | undefined;
+  }): Promise<ContextCompactionResult> {
     const engineMessages = input.engineMessages;
     const ephemeralNotes = engineMessages.filter((message) => isTransientMemoryContextNote(message));
     const compactionSourceMessages =
       ephemeralNotes.length > 0 ? engineMessages.filter((message) => !isTransientMemoryContextNote(message)) : engineMessages;
     const resolvedModel = this.#resolveRunModel(input.workspace, input.session, input.run, input.activeAgentName);
     const contextWindowTokens = readContextWindowTokens(resolvedModel);
-    if (!contextWindowTokens) {
-      return engineMessages;
+    if (!contextWindowTokens && !input.force) {
+      return {
+        engineMessages,
+        compacted: false
+      };
     }
 
     const compactProjection = this.#projector.projectToCompact(compactionSourceMessages, {
@@ -367,15 +425,24 @@ export class ContextCompactionService implements ContextPreparationModule {
       estimateCompactTokenUsage(compactProjection.messages),
       estimateChatMessageTokenUsage(estimatedModelContextMessages)
     );
-    const compactThresholdTokens = readCompactThresholdTokens(resolvedModel, contextWindowTokens);
-    if (estimatedInputTokens < compactThresholdTokens) {
-      return engineMessages;
+    const compactThresholdTokens = contextWindowTokens
+      ? readCompactThresholdTokens(resolvedModel, contextWindowTokens)
+      : undefined;
+    if (!input.force && compactThresholdTokens && estimatedInputTokens < compactThresholdTokens) {
+      return {
+        engineMessages,
+        compacted: false
+      };
     }
 
     const engineMessagesById = new Map(compactionSourceMessages.map((message) => [message.id, message]));
     const groups = groupMessagesForCompaction(compactProjection.messages, engineMessagesById);
     if (groups.length <= 1) {
-      return engineMessages;
+      return {
+        engineMessages,
+        compacted: false,
+        reason: "insufficient_history"
+      };
     }
 
     const configuredRecentGroupCount = readRecentGroupCount(resolvedModel);
@@ -384,26 +451,30 @@ export class ContextCompactionService implements ContextPreparationModule {
       0,
       estimatedInputTokens - estimateCompactTokenUsage(compactProjection.messages)
     );
-    const reserveTokens = readCompactionReserveTokens(contextWindowTokens);
     const maxKeepRecentGroupCount = Math.max(1, Math.min(configuredRecentGroupCount, groups.length - 1));
     let keepRecentGroupCount = maxKeepRecentGroupCount;
     let estimatedPostCompactTokens =
-      estimatedPromptOverheadTokens +
-      recentGroupTokenUsage.slice(-keepRecentGroupCount).reduce((sum, value) => sum + value, 0) +
-      COMPACT_SUMMARY_MAX_TOKENS +
-      reserveTokens;
-    while (keepRecentGroupCount > 1 && estimatedPostCompactTokens >= compactThresholdTokens) {
-      keepRecentGroupCount -= 1;
-      estimatedPostCompactTokens =
-        estimatedPromptOverheadTokens +
-        recentGroupTokenUsage.slice(-keepRecentGroupCount).reduce((sum, value) => sum + value, 0) +
-        COMPACT_SUMMARY_MAX_TOKENS +
-        reserveTokens;
+      estimatedPromptOverheadTokens + recentGroupTokenUsage.slice(-keepRecentGroupCount).reduce((sum, value) => sum + value, 0) + COMPACT_SUMMARY_MAX_TOKENS;
+    if (contextWindowTokens && compactThresholdTokens) {
+      const reserveTokens = readCompactionReserveTokens(contextWindowTokens);
+      estimatedPostCompactTokens += reserveTokens;
+      while (keepRecentGroupCount > 1 && estimatedPostCompactTokens >= compactThresholdTokens) {
+        keepRecentGroupCount -= 1;
+        estimatedPostCompactTokens =
+          estimatedPromptOverheadTokens +
+          recentGroupTokenUsage.slice(-keepRecentGroupCount).reduce((sum, value) => sum + value, 0) +
+          COMPACT_SUMMARY_MAX_TOKENS +
+          reserveTokens;
+      }
     }
 
     const messagesToSummarize = groups.slice(0, -keepRecentGroupCount).flat();
     if (messagesToSummarize.length === 0) {
-      return engineMessages;
+      return {
+        engineMessages,
+        compacted: false,
+        reason: "insufficient_history"
+      };
     }
 
     const summarySourceMessages = messagesToSummarize.map(compactMessageToChatMessage);
@@ -415,8 +486,10 @@ export class ContextCompactionService implements ContextPreparationModule {
       "before_context_compact",
       {
         messages: summarySourceMessages,
-        contextWindowTokens,
-        compactThresholdTokens,
+        compactedBy: input.compactionSource,
+        ...(input.instructions ? { instructions: input.instructions } : {}),
+        ...(contextWindowTokens ? { contextWindowTokens } : {}),
+        ...(compactThresholdTokens ? { compactThresholdTokens } : {}),
         estimatedInputTokens,
         estimatedPostCompactTokens,
         summarizedMessageCount: messagesToSummarize.length,
@@ -438,7 +511,7 @@ export class ContextCompactionService implements ContextPreparationModule {
         messages: [
           {
             role: "system",
-            content: COMPACT_SYSTEM_PROMPT
+            content: buildCompactSystemPrompt(input.compactionSource === "manual" ? input.instructions : undefined)
           },
           {
             role: "user",
@@ -448,9 +521,13 @@ export class ContextCompactionService implements ContextPreparationModule {
       });
       const summaryText = summaryResponse.text.trim();
       if (!summaryText) {
-        return engineMessages;
+        return {
+          engineMessages,
+          compacted: false,
+          reason: "summary_empty"
+        };
       }
-      let boundaryMessage: Message = {
+      let boundaryMessage: CompactSystemMessage = {
         id: this.#createId("msg"),
         sessionId: input.session.id,
         runId: input.run.id,
@@ -461,9 +538,9 @@ export class ContextCompactionService implements ContextPreparationModule {
           source: "engine",
           eligibleForModelContext: false,
           extra: {
-            compactedBy: "auto",
-            contextWindowTokens,
-            compactThresholdTokens,
+            compactedBy: input.compactionSource,
+            ...(contextWindowTokens ? { contextWindowTokens } : {}),
+            ...(compactThresholdTokens ? { compactThresholdTokens } : {}),
             estimatedInputTokens,
             estimatedPostCompactTokens,
             summarizedMessageCount: messagesToSummarize.length,
@@ -474,7 +551,7 @@ export class ContextCompactionService implements ContextPreparationModule {
         },
         createdAt: this.#nowIso()
       };
-      let summaryMessage: Message = {
+      let summaryMessage: CompactSystemMessage = {
         id: this.#createId("msg"),
         sessionId: input.session.id,
         runId: input.run.id,
@@ -487,9 +564,9 @@ export class ContextCompactionService implements ContextPreparationModule {
           summaryForBoundaryId: boundaryMessage.id,
           eligibleForModelContext: true,
           extra: {
-            compactedBy: "auto",
-            contextWindowTokens,
-            compactThresholdTokens,
+            compactedBy: input.compactionSource,
+            ...(contextWindowTokens ? { contextWindowTokens } : {}),
+            ...(compactThresholdTokens ? { compactThresholdTokens } : {}),
             estimatedInputTokens,
             estimatedPostCompactTokens,
             summarizedMessageCount: messagesToSummarize.length,
@@ -507,6 +584,8 @@ export class ContextCompactionService implements ContextPreparationModule {
         "after_context_compact",
         {
           summaryText,
+          compactedBy: input.compactionSource,
+          ...(input.instructions ? { instructions: input.instructions } : {}),
           boundaryMessage: {
             content: boundaryMessage.content,
             metadata: boundaryMessage.metadata
@@ -515,8 +594,8 @@ export class ContextCompactionService implements ContextPreparationModule {
             content: summaryMessage.content,
             metadata: summaryMessage.metadata
           },
-          contextWindowTokens,
-          compactThresholdTokens,
+          ...(contextWindowTokens ? { contextWindowTokens } : {}),
+          ...(compactThresholdTokens ? { compactThresholdTokens } : {}),
           estimatedInputTokens,
           estimatedPostCompactTokens,
           summarizedMessageCount: messagesToSummarize.length,
@@ -573,6 +652,7 @@ export class ContextCompactionService implements ContextPreparationModule {
         data: {
           runId: input.run.id,
           messageId: boundaryMessage.id,
+          role: boundaryMessage.role,
           content: boundaryMessage.content,
           ...(boundaryMessage.metadata ? { metadata: boundaryMessage.metadata } : {})
         }
@@ -585,6 +665,7 @@ export class ContextCompactionService implements ContextPreparationModule {
         data: {
           runId: input.run.id,
           messageId: summaryMessage.id,
+          role: summaryMessage.role,
           content: summaryMessage.content,
           ...(summaryMessage.metadata ? { metadata: summaryMessage.metadata } : {})
         }
@@ -593,10 +674,12 @@ export class ContextCompactionService implements ContextPreparationModule {
       input.messages.push(boundaryMessage, summaryMessage);
       await this.#scheduleEngineMessageSync(input.session.id);
       await this.#recordSystemStep(input.run, "context_compact", {
+        compactionSource: input.compactionSource,
+        ...(input.instructions ? { instructions: input.instructions } : {}),
         boundaryMessageId: boundaryMessage.id,
         summaryMessageId: summaryMessage.id,
-        contextWindowTokens,
-        compactThresholdTokens,
+        ...(contextWindowTokens ? { contextWindowTokens } : {}),
+        ...(compactThresholdTokens ? { compactThresholdTokens } : {}),
         estimatedInputTokens,
         estimatedPostCompactTokens,
         summarizedMessageCount: messagesToSummarize.length,
@@ -606,17 +689,30 @@ export class ContextCompactionService implements ContextPreparationModule {
         summaryUsage: isRecord(summaryResponse.usage) ? summaryResponse.usage : undefined
       });
 
-      return mergeEphemeralContextNotes(
-        await this.#buildEngineMessagesForSession(input.session.id, input.messages),
-        ephemeralNotes
-      );
+      return {
+        engineMessages: mergeEphemeralContextNotes(
+          await this.#buildEngineMessagesForSession(input.session.id, input.messages),
+          ephemeralNotes
+        ),
+        compacted: true,
+        boundaryMessageId: boundaryMessage.id,
+        summaryMessageId: summaryMessage.id,
+        summarizedMessageCount: messagesToSummarize.length
+      };
     } catch (error) {
-      this.#logger?.warn?.("Runtime auto-compaction failed; continuing with un-compacted context.", {
-        sessionId: input.session.id,
-        runId: input.run.id,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      return engineMessages;
+      if (input.compactionSource === "auto") {
+        this.#logger?.warn?.("Runtime auto-compaction failed; continuing with un-compacted context.", {
+          sessionId: input.session.id,
+          runId: input.run.id,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+        return {
+          engineMessages,
+          compacted: false
+        };
+      }
+
+      throw error;
     }
   }
 }

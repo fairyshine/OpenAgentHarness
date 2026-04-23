@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { Message, RunStep, SessionEventContract } from "@oah/api-contracts";
 
 import { buildRuntimeViewModel } from "../apps/web/src/app/engine-view-model";
-import { hasDisplayableRunMessages } from "../apps/web/src/app/support";
+import {
+  buildMessageRecord,
+  hasDisplayableRunMessages,
+  inferCompletedMessageRole
+} from "../apps/web/src/app/support";
 
 function createModelCallStep(input: Partial<RunStep> = {}): RunStep {
   return {
@@ -102,6 +106,28 @@ describe("buildRuntimeViewModel", () => {
     });
 
     expect(hasDisplayableRunMessages([emptyAssistantMessage], "run_1")).toBe(false);
+  });
+
+  it("reconstructs compact system messages from completed events", () => {
+    const eventData = {
+      role: "system",
+      content: "Compacted summary"
+    } satisfies Record<string, unknown>;
+
+    const message = buildMessageRecord({
+      id: "msg_compact_summary",
+      sessionId: "ses_1",
+      runId: "run_1",
+      role: inferCompletedMessageRole(eventData),
+      content: "Compacted summary",
+      createdAt: "2026-04-07T00:00:02.000Z"
+    });
+
+    expect(message).toMatchObject({
+      id: "msg_compact_summary",
+      role: "system",
+      content: "Compacted summary"
+    });
   });
 
   it("prefers the persisted message system prompt snapshot for the selected message", () => {

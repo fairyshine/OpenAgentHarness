@@ -55,6 +55,7 @@ import {
 import {
   type ActionRunAcceptedResult,
   type CancelRunResult,
+  type CompactSessionParams,
   type RequeueRunResult,
   type MessageAcceptedResult,
   type CreateSessionMessageParams,
@@ -73,6 +74,7 @@ import {
   type WorkspaceFileSystem,
   type RunStepListResult,
   type SessionListResult,
+  type SessionCompactResult,
   type WorkspaceListResult,
   type RunListResult,
   type WorkspaceRecord
@@ -124,6 +126,7 @@ export class EngineService {
   readonly #engineLifecycle: EngineLifecycleService;
   readonly #modelInputs: ModelInputService;
   readonly #contextPreparation: ContextPreparationPipeline;
+  readonly #contextCompaction: ContextCompactionService;
   readonly #sessionMemory: SessionMemoryService;
   readonly #workspaceMemory: WorkspaceMemoryService;
   readonly #engineMessageProjector: EngineMessageProjector;
@@ -211,7 +214,7 @@ export class EngineService {
         this.#applyContextHooks(workspace, session, run, eventName, messages),
       collapseLeadingSystemMessages: (messages) => collapseLeadingSystemMessages(messages)
     });
-    const contextCompaction = new ContextCompactionService({
+    this.#contextCompaction = new ContextCompactionService({
       logger: this.#logger,
       messageRepository: this.#messageRepository,
       modelGateway: this.#modelGateway,
@@ -266,7 +269,7 @@ export class EngineService {
     this.#contextPreparation = new ContextPreparationPipeline({
       buildEngineMessagesForSession: (sessionId, persistedMessages) =>
         this.#engineMessageSync.buildEngineMessagesForSession(sessionId, persistedMessages),
-      modules: [this.#sessionMemory, this.#workspaceMemory, contextCompaction]
+      modules: [this.#sessionMemory, this.#workspaceMemory, this.#contextCompaction]
     });
     this.#modelRunExecutor = new ModelRunExecutor({
       logger: this.#logger,
@@ -650,6 +653,157 @@ export class EngineService {
 
   async listSessionQueuedRuns(sessionId: string): Promise<import("./types.js").SessionQueuedRunListResult> {
     return this.#sessionRuntime.listSessionQueuedRuns(sessionId);
+  }
+
+  async compactSession({ sessionId, caller, input }: CompactSessionParams): Promise<SessionCompactResult> {
+    const session = await this.getSession(sessionId);
+    const workspace = await this.getWorkspaceRecord(session.workspaceId);
+    const instructions = input?.instructions?.trim() || undefined;
+    const [runs, pendingRuns] = await Promise.all([
+      this.#runRepository.listBySessionId(sessionId),
+      this.#sessionPendingRunQueueRepository.listBySessionId(sessionId)
+    ]);
+    const pendingRunIds = new Set(pendingRuns.map((entry) => entry.runId));
+    const hasActiveRun = runs.some(
+      (run) =>
+        (run.status === "queued" || run.status === "running" || run.status === "waiting_tool") &&
+        !pendingRunIds.has(run.id) &&
+        !run.cancelRequestedAt
+    );
+    if (hasActiveRun || pendingRuns.length > 0) {
+      throw new AppError(
+        409,
+        "session_busy",
+        `Session ${sessionId} has active or queued runs and cannot be compacted manually.`
+      );
+    }
+
+    const startedAt = nowIso();
+    const run: Run = {
+      id: createId("run"),
+      workspaceId: workspace.id,
+      sessionId: session.id,
+      initiatorRef: caller.subjectRef,
+      triggerType: "system",
+      triggerRef: "compact",
+      agentName: session.activeAgentName,
+      effectiveAgentName: session.activeAgentName,
+      switchCount: 0,
+      status: "running",
+      createdAt: startedAt,
+      startedAt,
+      heartbeatAt: startedAt,
+      ...(instructions
+        ? {
+            metadata: {
+              instructions
+            }
+          }
+        : {})
+    };
+
+    await this.#runRepository.create(run);
+    await this.#runSteps.recordSystemStep(run, "run.started", {
+      status: run.status
+    });
+    await this.#engineLifecycle.appendEvent({
+      sessionId: session.id,
+      runId: run.id,
+      event: "run.started",
+      data: {
+        runId: run.id,
+        sessionId: session.id,
+        status: run.status
+      }
+    });
+
+    try {
+      const messages = await this.#messageRepository.listBySessionId(session.id);
+      const engineMessages = await this.#engineMessageSync.buildEngineMessagesForSession(session.id, messages);
+      const compacted = await this.#contextCompaction.compactSessionContext({
+        workspace,
+        session,
+        run,
+        activeAgentName: session.activeAgentName,
+        messages,
+        engineMessages,
+        instructions
+      });
+      if (!compacted.compacted) {
+        await this.#runSteps.recordSystemStep(run, "context_compact_skipped", {
+          ...(instructions ? { instructions } : {}),
+          ...(compacted.reason ? { reason: compacted.reason } : {})
+        });
+      }
+
+      const completedAt = nowIso();
+      const completedRun = await this.#runState.setRunStatus(run, "completed", {
+        endedAt: completedAt,
+        heartbeatAt: completedAt
+      });
+      await this.#runSteps.recordSystemStep(completedRun, "run.completed", {
+        status: completedRun.status
+      });
+      await this.#sessionRepository.update({
+        ...session,
+        lastRunAt: completedAt,
+        updatedAt: completedAt
+      });
+      await this.#engineLifecycle.appendEvent({
+        sessionId: session.id,
+        runId: completedRun.id,
+        event: "run.completed",
+        data: {
+          runId: completedRun.id,
+          sessionId: session.id,
+          status: completedRun.status
+        }
+      });
+
+      return {
+        runId: completedRun.id,
+        status: "completed",
+        compacted: compacted.compacted,
+        ...(compacted.reason ? { reason: compacted.reason } : {}),
+        ...(compacted.boundaryMessageId ? { boundaryMessageId: compacted.boundaryMessageId } : {}),
+        ...(compacted.summaryMessageId ? { summaryMessageId: compacted.summaryMessageId } : {}),
+        ...(typeof compacted.summarizedMessageCount === "number"
+          ? { summarizedMessageCount: compacted.summarizedMessageCount }
+          : {}),
+        createdAt: startedAt,
+        completedAt
+      };
+    } catch (error) {
+      const failedAt = nowIso();
+      const latestRun = await this.getRun(run.id).catch(() => run);
+      const failedRun =
+        latestRun.status === "failed"
+          ? latestRun
+          : await this.#runState.setRunStatus(latestRun, "failed", {
+              endedAt: failedAt,
+              heartbeatAt: failedAt,
+              errorCode: error instanceof AppError ? error.code : "session_compact_failed",
+              errorMessage: error instanceof Error ? error.message : String(error)
+            });
+      await this.#runSteps.recordSystemStep(failedRun, "run.failed", {
+        status: failedRun.status,
+        ...(failedRun.errorCode ? { errorCode: failedRun.errorCode } : {}),
+        ...(failedRun.errorMessage ? { errorMessage: failedRun.errorMessage } : {})
+      });
+      await this.#engineLifecycle.appendEvent({
+        sessionId: session.id,
+        runId: failedRun.id,
+        event: "run.failed",
+        data: {
+          runId: failedRun.id,
+          sessionId: session.id,
+          status: failedRun.status,
+          errorCode: failedRun.errorCode ?? (error instanceof AppError ? error.code : "session_compact_failed"),
+          errorMessage: failedRun.errorMessage ?? (error instanceof Error ? error.message : String(error))
+        }
+      });
+      throw error;
+    }
   }
 
   async listRunSteps(runId: string, pageSize = 100, cursor?: string): Promise<RunStepListResult> {

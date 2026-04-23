@@ -8,7 +8,7 @@
 <h1 align="center">Open Agent Harness</h1>
 
 <p align="center">
-  Headless, workspace-first agent engine for teams building agent products, internal AI platforms, and embedded copilots.
+  A headless, workspace-first agent engine for teams building internal AI platforms, agent products, and embedded copilots.
 </p>
 
 <p align="center">
@@ -17,158 +17,224 @@
 
 ---
 
-## What is Open Agent Harness?
+## What It Is
 
-Open Agent Harness is a **deployable Agent Engine** that runs agent runtimes and task execution flows. You bring your own frontend, auth, and product experience — the engine handles everything underneath.
+Open Agent Harness (OAH) is the backend runtime layer for agent systems.
 
-**Build your own agent product on top of a reusable engine, instead of rebuilding the engine itself.**
+You bring your own product surface: chat UI, auth, tenant model, product workflow, and business logic. OAH provides the execution engine underneath:
 
-> Not a ready-made chat UI. Not an identity system. Not a SaaS control plane.
-> It is the programmable kernel that sits behind all of those.
+- workspace loading and capability discovery
+- session and run orchestration
+- model/tool loop execution
+- sandbox and file/command surfaces
+- queueing, streaming, recovery, and auditability
+- local and split deployment topologies
+
+It is not a ready-made SaaS app or a polished end-user chat product.
+It is the programmable engine you can build those products on top of.
+
+## Current Status
+
+The repository is no longer just an architecture sketch. Today it already includes:
+
+- A working HTTP API for workspaces, sessions, runs, actions, sandboxes, models, storage inspection, and SSE streaming
+- A multi-process topology with `oah-api`, `oah-controller`, and sandbox-hosted standalone workers
+- A debug web console for conversation flow, trace inspection, and storage troubleshooting
+- Workspace auto-discovery for agents, models, skills, tools, actions, hooks, prompts, and project instructions
+- A deploy-root template with starter runtimes and object-storage sync flow
+- Local Docker Compose startup and a Kubernetes/Helm split-deployment skeleton
+
+If you want to evaluate OAH as an engine foundation, there is enough here today to run it, inspect it, and extend it.
+
+## What You Can Build With It
+
+OAH is a good fit when you need one reusable agent backend that can power different projects or teams:
+
+- Internal engineering copilots with repo-specific agents and tools
+- Multi-agent products where different agents share one runtime substrate
+- Embedded copilots behind an existing product UX
+- Dedicated single-workspace backends for one repo or one tenant
+- Platform teams that want a controllable runtime, not just a chat wrapper
+
+## Core Model
+
+Four concepts organize the system:
+
+| Concept | Boundary | Meaning |
+| --- | --- | --- |
+| `sandbox` | Execution host boundary | Defines the host environment that carries workspace and where file/command execution actually happens |
+| `workspace` | Capability boundary | Declares agents, models, skills, tools, actions, hooks, and prompts inside that execution environment |
+| `session` | Context boundary | A continuous conversation or collaboration thread within one workspace |
+| `run` | Execution boundary | One queued execution pass through the model/tool loop |
+
+That gives OAH a simple operating model:
+
+- sandboxes define where execution is hosted
+- workspaces define what an agent system can do inside that host boundary
+- sessions define ongoing context
+- runs execute serially within a session
+
+## What Already Works
+
+### Runtime and API
+
+- Workspace CRUD plus runtime/blueprint import and catalog inspection
+- Session creation, paged message history, and async message enqueue
+- Run lookup, step-level audit records, cancellation, queued-run `guide`, and manual `requeue`
+- Manual session compaction with persisted `compact_boundary` and `compact_summary` artifacts
+- SSE event streaming for run and session updates
+- Sandbox-compatible file and command APIs rooted at `/workspace`
+
+### Workspace Capability System
+
+OAH already understands a workspace as a composable capability bundle:
+
+- `AGENTS.md` project instructions
+- `.openharness/agents/*.md`
+- `.openharness/models/*.yaml`
+- `.openharness/actions/*/ACTION.yaml`
+- `.openharness/skills/*/SKILL.md`
+- `.openharness/tools/settings.yaml` plus local/remote MCP servers
+- `.openharness/hooks/*.yaml`
+- `.openharness/prompts.yaml` and `.openharness/settings.yaml`
+
+This makes the workspace the real customization boundary instead of global process config.
+
+### Operations and Debugging
+
+- Debug web console with streaming conversation view
+- Server-side follow-up queue surfaced in the UI, plus explicit `Guide` interruption flow
+- Inspector panels for messages, run steps, system prompt, provider calls, catalog snapshots, and records
+- Storage workbench for PostgreSQL and Redis, including `messages.content` inspection and manual queue/recovery operations
+- Health/readiness endpoints and controller metrics/snapshot surfaces
 
 ## Web Console
 
-The project ships with a debug web console for development and inspection:
+The repository ships with a debug web console for development and inspection:
 
 <p align="center">
   <img src="assets/web-console-screenshot.png" width="820" alt="Web Console Screenshot" />
 </p>
 
-The console provides:
-- **Conversation view** with streaming, tool call chips, and run tracking
-- **Queued follow-ups** so additional user messages wait above the composer while the current run is active, with an explicit `Guide` action to interrupt when desired
-- **Inspector** showing model-facing messages, tools, run steps, and engine traces
-- **Storage workbench** for PostgreSQL and Redis, including structured `messages.content` inspection
+It is intentionally built for runtime visibility, not just chatting:
 
-## Architecture
+- conversation streaming and run tracking
+- queued follow-up messages above the composer
+- run-step and tool-call inspection
+- raw message / run / session record views
+- storage debugging for PostgreSQL and Redis
 
-The engine is organized into clear layers:
+## Architecture At A Glance
 
 | Layer | Responsibility |
 | --- | --- |
-| **API Gateway** | OpenAPI entry point, parameter validation, access control, SSE streaming |
-| **Session Orchestrator** | Run creation, per-session serial scheduling, cancellation, timeout, failure recovery |
-| **Context Engine** | Assembles prompts, history, agent config, and capability catalog at run start |
-| **LLM Loop + Dispatcher** | Model inference, tool calling, routing, and result backfill |
-| **Execution Backend** | Local directory-level execution (swappable to container/VM/remote sandbox) |
-| **Storage** | PostgreSQL (source of truth) + Redis (queues, locks, SSE) + local workspace engine state |
+| API server | OpenAPI ingress, validation, caller context, SSE, routing |
+| Session/run orchestration | Per-session serial scheduling, cancellation, timeout, recovery |
+| Context engine | Prompt assembly, agent/model resolution, capability exposure |
+| LLM loop + dispatch | Model calls, tool calls, agent switching, subagent delegation |
+| Worker execution | Active workspace copy, file access, command execution, sandbox lifecycle |
+| Control plane | Placement signals, worker lifecycle, scaling and ownership governance |
+| Storage | PostgreSQL truth, Redis queues/locks/fanout, local runtime state |
 
-## Workspace-First Design
+Production direction is the explicit split topology:
 
-The **workspace** is the core customization boundary. A single engine can host many workspaces, each with its own:
+- `oah-api` for ingress and orchestration
+- `oah-controller` for control-plane logic
+- standalone workers hosted in `oah-sandbox` or a compatible sandbox backend
 
-- Agents and prompt strategies
-- Skills, actions, and tools
-- Hooks and lifecycle policies
-- Model configurations
-- Tool servers (local or remote)
+## Repository Layout
 
-Two workspaces on the same engine can behave completely differently for different teams, repos, or product scenarios.
-
-Current public workspace shape:
-
-| Workspace Kind | Description |
-| --- | --- |
-| **`project`** | The standard workspace kind. Writable execution, local file access, actions, skills, tools, and hooks all hang off the same workspace model. |
-
-## Capability Model
-
-Each capability layer stays separate so you can compose them differently per workspace:
-
-| Capability | Purpose |
-| --- | --- |
-| `agent` | Defines role, behavior, and permissions of a working persona |
-| `primary agent` / `subagent` | User-facing specialists and delegated background specialists |
-| `tool` | Built-in or external execution capabilities for agents |
-| `skill` | Reusable know-how packaged for a class of tasks |
-| `action` | Stable named tasks that users, APIs, or agents can trigger |
-| `hook` | Lifecycle interception, policy, and extension logic around engine events |
-| `context` | Controls how prompts and workspace instructions are assembled for the model |
+```text
+apps/
+  server/       # API server, worker entry, bootstrap, HTTP routes
+  controller/   # control-plane process
+  worker/       # worker package wrapper
+  web/          # debug console
+  cli/          # CLI entry
+packages/
+  engine-core/      # runtime orchestration and native tool layer
+  api-contracts/    # zod schemas and shared API types
+  model-gateway/    # model provider abstraction
+  storage-*         # postgres / redis / sqlite / memory backends
+  config/           # workspace and server config loading
+template/
+  deploy-root/      # starter OAH_DEPLOY_ROOT with runtimes/models/tools/skills layout
+docs/
+  ...               # architecture, workspace, engine, deploy, OpenAPI docs
+```
 
 ## Quick Start
 
-```bash
-# Install dependencies
-pnpm install
+### Prerequisites
 
-# Copy the bundled deploy-root template
+- Node.js `24+`
+- `pnpm` `10+`
+- Docker + Docker Compose
+
+### 1. Install dependencies
+
+```bash
+pnpm install
+```
+
+### 2. Prepare a deploy root
+
+```bash
 mkdir -p /absolute/path/to/oah-deploy-root
 cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
-
-# Add your model YAML files under /absolute/path/to/oah-deploy-root/source/models/
 export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
+```
 
-# Start the local stack (PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox)
-# This also waits for MinIO and auto-runs one storage sync.
+Then add at least one platform model YAML under:
+
+```text
+$OAH_DEPLOY_ROOT/source/models/
+```
+
+For the bundled starter runtimes, the expected default model name is:
+
+```text
+openai-default
+```
+
+### 3. Start the local stack
+
+```bash
 pnpm local:up
+```
 
-# Start the web console (in another terminal)
+This starts:
+
+- PostgreSQL
+- Redis
+- MinIO
+- `oah-api`
+- `oah-controller`
+- `oah-sandbox`
+
+The startup flow also runs one storage sync automatically.
+
+### 4. Start the web console
+
+```bash
 pnpm dev:web
 ```
 
-### Start And Stop Flow
-
-```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
-export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
-
-pnpm local:up
-```
-
-Stop everything:
-
-```bash
-cd /Users/wumengsong/Code/OpenAgentHarness
-pnpm local:down
-```
-
-### Template Deploy Root
-
-The repository ships a self-contained deploy-root template under [`template/deploy-root`](./template/deploy-root/README.md).
-
-What it contains:
-
-- `server.docker.yaml`: the local-stack server config
-- `source/models/`: platform model YAML files you provide
-- `source/runtimes/`: bundled runtime templates such as `micro-learning` and `vibe-coding`
-- `source/tools/`, `source/skills/`, `source/workspaces/`: optional deploy data
-- `scripts/sync_to_minio.py`: a standalone sync script that still works after copying the deploy root outside this repository
-
-Recommended setup:
-
-```bash
-mkdir -p /absolute/path/to/oah-deploy-root
-cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
-
-# 1. Add at least one model YAML under source/models/
-# 2. Ensure llm.default_model in server.docker.yaml matches that model name
-# 3. Optionally trim or extend source/runtimes/, source/tools/, and source/skills/
-```
-
-Two common ways to use it:
-
-- From the repository:
-  `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm local:up`
-- Outside the repository:
-  `cd /absolute/path/to/oah-deploy-root && python3 ./scripts/sync_to_minio.py --delete`
-
-If you pass a relative `OAH_DEPLOY_ROOT` such as `./template/deploy-root`, `pnpm local:up` now resolves it to an absolute path before handing it to Docker Compose.
-
-This local stack is designed for a single OAH instance on host port `8787`. If you want multiple OAH replicas later, keep the same service split and put OAH behind a reverse proxy or a K8s Service instead of binding each replica directly to the host.
-
-**Local addresses:**
+Default local addresses:
 
 | Service | URL |
 | --- | --- |
 | Web Console | `http://localhost:5174` |
-| `oah-api` | `http://127.0.0.1:8787` |
-| `oah-sandbox` internal worker | `http://127.0.0.1:8788` |
-| `oah-controller` metrics | `http://127.0.0.1:8789` |
+| API | `http://127.0.0.1:8787` |
+| Sandbox worker host | `http://127.0.0.1:8788` |
+| Controller metrics | `http://127.0.0.1:8789` |
 | MinIO Console | `http://127.0.0.1:9001` |
+
+## Other Ways To Run It
 
 ### Single Workspace Mode
 
-Run a dedicated backend for one workspace:
+Use one repo directly, without the managed multi-workspace path:
 
 ```bash
 pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- \
@@ -177,50 +243,82 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
   --default-model openai-default
 ```
 
-### Common Commands
+### Split Processes
+
+For production or production-like setups, run:
+
+- `oah-api` as API ingress
+- `oah-controller` as control plane
+- standalone workers inside `oah-sandbox`
+
+The repo already ships:
+
+- `docker-compose.local.yml`
+- Kubernetes manifests under `deploy/kubernetes/`
+- a Helm chart under `deploy/charts/open-agent-harness/`
+- a production `Dockerfile`
+- a GitHub Actions image publishing workflow
+
+## Starter Runtime Templates
+
+The deploy-root template includes two starter runtimes:
+
+- `micro-learning`
+  - short teaching loop with `learn`, `plan`, `eval`, and `research` agents
+- `vibe-coding`
+  - coding-oriented runtime with `build`, `plan`, `general`, and `explore` agents
+
+These are initialization templates for new workspaces, not the active runtime copy itself.
+
+## Common Commands
 
 ```bash
-pnpm build          # Build all packages
-pnpm test           # Run tests
-OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm storage:sync  # Push readonly source prefixes to MinIO
-OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm storage:sync -- --include-workspaces  # Also sync source/workspaces
-OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm local:up      # Start oah-api + oah-controller + oah-sandbox and auto-sync once
-pnpm local:down                                                    # Stop local Docker stack
-pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml  # Advanced: start a standalone worker (typically sandbox-hosted)
+pnpm build
+pnpm test
+pnpm dev:web
+OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm storage:sync
+OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm storage:sync -- --include-workspaces
+OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm local:up
+pnpm local:down
 ```
 
-If `server.docker.yaml` omits `workers.embedded`, `pnpm local:up` now seeds the sandbox-local worker pool with `min_count: 2` and `max_count: 4`, so background tools and subagents can overlap by default instead of collapsing to a single execution slot.
-If `workers.standalone.min_replicas` and `sandbox.fleet.min_count` are both omitted, the local stack now keeps `1` warm `oah-sandbox` replica by default so session prewarm still has a live target and first-message latency stays low. Set either value to `0` explicitly if you want local scale-to-zero behavior instead.
-
-## Who Is It For?
-
-**Good fit:**
-- Teams building internal AI platforms or agent products — developers define agent logic, users switch agents by scenario
-- Projects that need one backend serving many workspaces in parallel
-- Products that want to keep their own frontend, auth, and UX while reusing a shared runtime
-- Scenarios requiring more control than a fixed agent UI or thin local agent loop
-
-**Not the best fit:**
-- You just want a ready-made chat UI
-- You only need a tiny single-user local script
-- You don't need workspace isolation or engine lifecycle management
-
-## Use Cases
-
-| Scenario | Why it works |
-| --- | --- |
-| Internal engineering copilot | Different repos/teams share one runtime with different agent setups |
-| Multi-agent product | Developers define agent logic, users switch agents by scenario — all on one runtime |
-| Embedded copilot in an existing product | Runtime stays headless, fits behind your app |
-| Single-repo dedicated backend | `single workspace` mode gives a focused deployment path |
-
-## Documentation
+## Documentation Map
 
 | Document | Description |
 | --- | --- |
-| [Getting Started](./docs/getting-started.en.md) | Setup guide and first steps |
-| [Architecture Overview](./docs/design-overview.md) | Design principles and system architecture |
-| [Workspace Guide](./docs/workspace/README.en.md) | Workspace configuration and capabilities |
-| [Engine Internals](./docs/engine/README.en.md) | Engine lifecycle and context engine |
-| [API Reference](./docs/openapi/README.en.md) | OpenAPI specification and endpoints |
-| [Deploy Root Template](./template/deploy-root/README.md) | Starter deploy-root layout, runtimes, and model setup |
+| [Getting Started](./docs/getting-started.en.md) | Local startup and first verification |
+| [Architecture Overview](./docs/architecture-overview.en.md) | System boundaries and major layers |
+| [Workspace Guide](./docs/workspace/README.en.md) | Workspace structure and capability discovery |
+| [Engine Overview](./docs/engine/README.en.md) | Runtime lifecycle, context engine, and execution flow |
+| [API Reference](./docs/openapi/README.en.md) | REST + SSE interface docs |
+| [Deploy and Run](./docs/deploy.en.md) | Local, split, and Kubernetes deployment paths |
+| [Deploy Root Template](./template/deploy-root/README.md) | Starter `OAH_DEPLOY_ROOT` layout |
+
+## Future Vision
+
+The long-term goal is to make OAH a solid open runtime kernel for serious agent systems, not a demo stack.
+
+The direction we are already moving toward:
+
+- A stable agent-engine backend that can sit behind many different product surfaces
+- Stronger control-plane behavior for placement, warm capacity, recovery, and draining
+- A clearer sandbox-host abstraction so self-hosted sandboxes and E2B-like backends can share one contract
+- Better workspace packaging and capability distribution around runtimes, skills, tools, and models
+- More first-class operational semantics for compaction, recovery, action execution, and audit trails
+
+That vision matters because the hard part of agent products is rarely the chat box. It is the runtime discipline underneath: execution boundaries, repeatability, traceability, workspace isolation, and operational control. OAH is being shaped to solve that layer well.
+
+## Who It Is For
+
+**Good fit**
+
+- Teams building internal AI platforms or embedded copilots
+- Products that want to keep their own frontend and auth stack
+- Engineering teams that need workspace isolation and inspectable execution
+- Platform teams that want to evolve from single-node local agents to split deployments
+
+**Probably not the best fit**
+
+- You only want a ready-made chat UI
+- You need a tiny local script and nothing more
+- You do not need workspace boundaries, queueing, or runtime lifecycle management

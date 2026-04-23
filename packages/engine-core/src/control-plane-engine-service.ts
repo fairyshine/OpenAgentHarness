@@ -31,6 +31,7 @@ type ControlPlaneRuntimeKernel = Pick<
   | "listSessionMessages"
   | "listSessionRuns"
   | "listSessionQueuedRuns"
+  | "compactSession"
   | "createSessionMessage"
   | "listSessionEvents"
   | "subscribeSessionEvents"
@@ -78,6 +79,7 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
   readonly listSessionMessages: EngineService["listSessionMessages"];
   readonly listSessionRuns: EngineService["listSessionRuns"];
   readonly listSessionQueuedRuns: EngineService["listSessionQueuedRuns"];
+  readonly compactSession: EngineService["compactSession"];
   readonly createSessionMessage: EngineService["createSessionMessage"];
   readonly listSessionEvents: EngineService["listSessionEvents"];
   readonly subscribeSessionEvents: EngineService["subscribeSessionEvents"];
@@ -231,6 +233,11 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
       const queue = await kernel.listSessionQueuedRuns(sessionId);
       await this.#touchSessionWorkspace(sessionId);
       return queue;
+    };
+    this.compactSession = async (input) => {
+      const result = await kernel.compactSession(input);
+      await this.#touchSessionWorkspace(input.sessionId);
+      return result;
     };
     this.createSessionMessage = async (input) => {
       const message = await kernel.createSessionMessage(input);

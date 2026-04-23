@@ -1134,7 +1134,11 @@ function upsertSessionMessage(current: Message[], incoming: Message) {
   return [...current, incoming].sort(compareMessagesChronologically);
 }
 
-function inferCompletedMessageRole(data: Record<string, unknown>): "assistant" | "tool" {
+function inferCompletedMessageRole(data: Record<string, unknown>): "system" | "assistant" | "tool" {
+  if (data.role === "system") {
+    return "system";
+  }
+
   return typeof data.toolName === "string" && typeof data.toolCallId === "string" ? "tool" : "assistant";
 }
 

@@ -4087,4 +4087,89 @@ Use ripgrep first.
       );
     });
   });
+
+  it("manually compacts a session over HTTP", async () => {
+    activeApp = await createStartedApp();
+    const authHeaders = {
+      authorization: "Bearer token-1",
+      "content-type": "application/json"
+    };
+
+    const workspaceResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        name: "demo-manual-compact",
+        runtime: "workspace",
+        rootPath: "/tmp/demo-manual-compact"
+      })
+    });
+    const workspace = (await workspaceResponse.json()) as { id: string };
+
+    const sessionResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/sessions`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({})
+    });
+    const session = (await sessionResponse.json()) as { id: string };
+
+    const firstAcceptedResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        content: "manual compact http one"
+      })
+    });
+    const firstAccepted = (await firstAcceptedResponse.json()) as { runId: string };
+    await waitFor(async () => {
+      const runResponse = await fetch(`${activeApp.baseUrl}/api/v1/runs/${firstAccepted.runId}`, {
+        headers: {
+          authorization: "Bearer token-1"
+        }
+      });
+      const run = (await runResponse.json()) as { status: string };
+      return run.status === "completed";
+    });
+
+    const secondAcceptedResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        content: "manual compact http two"
+      })
+    });
+    const secondAccepted = (await secondAcceptedResponse.json()) as { runId: string };
+    await waitFor(async () => {
+      const runResponse = await fetch(`${activeApp.baseUrl}/api/v1/runs/${secondAccepted.runId}`, {
+        headers: {
+          authorization: "Bearer token-1"
+        }
+      });
+      const run = (await runResponse.json()) as { status: string };
+      return run.status === "completed";
+    });
+
+    const compactResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/compact`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        instructions: "Prioritize next steps and blockers."
+      })
+    });
+    const compactBody = await compactResponse.text();
+    expect(compactResponse.status).toBe(200);
+    await expect(Promise.resolve(JSON.parse(compactBody))).resolves.toMatchObject({
+      status: "completed",
+      compacted: true,
+      runId: expect.any(String)
+    });
+
+    const messagesResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages`, {
+      headers: {
+        authorization: "Bearer token-1"
+      }
+    });
+    const page = (await messagesResponse.json()) as { items: Array<{ role: string; content: unknown }> };
+    expect(page.items.some((item) => item.role === "system" && extractMessageText(item.content).length > 0)).toBe(true);
+  });
 });

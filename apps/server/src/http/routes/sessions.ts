@@ -4,6 +4,7 @@ import {
   batchRequeueRunsRequestSchema,
   batchRequeueRunsResponseSchema,
   cancelRunAcceptedSchema,
+  compactSessionRequestSchema,
   createMessageRequestSchema,
   guideQueuedRunAcceptedSchema,
   messageAcceptedSchema,
@@ -77,6 +78,17 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: AppDep
     const params = createParamsSchema("sessionId").parse(request.params);
     const queue = await dependencies.runtimeService.listSessionQueuedRuns(params.sessionId);
     return reply.send(sessionQueueSchema.parse(queue));
+  });
+
+  app.post("/api/v1/sessions/:sessionId/compact", async (request, reply) => {
+    const params = createParamsSchema("sessionId").parse(request.params);
+    const input = compactSessionRequestSchema.parse(request.body ?? {});
+    const result = await dependencies.runtimeService.compactSession({
+      sessionId: params.sessionId,
+      caller: toCallerContext(request),
+      input
+    });
+    return reply.send(result);
   });
 
   app.post(

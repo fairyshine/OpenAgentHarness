@@ -1,4 +1,5 @@
 import type {
+  CompactSessionRequest,
   CreateMessageRequest,
   CreateSessionRequest,
   CreateWorkspaceRequest,
@@ -101,6 +102,12 @@ export interface CreateSessionMessageParams {
   input: CreateMessageRequest;
 }
 
+export interface CompactSessionParams {
+  sessionId: string;
+  caller: CallerContext;
+  input?: CompactSessionRequest | undefined;
+}
+
 export interface TriggerActionRunParams {
   workspaceId: string;
   caller: CallerContext;
@@ -149,6 +156,18 @@ export interface SessionQueuedRunListItem {
 
 export interface SessionQueuedRunListResult {
   items: SessionQueuedRunListItem[];
+}
+
+export interface SessionCompactResult {
+  runId: string;
+  status: "completed";
+  compacted: boolean;
+  reason?: "insufficient_history" | "summary_empty" | undefined;
+  boundaryMessageId?: string | undefined;
+  summaryMessageId?: string | undefined;
+  summarizedMessageCount?: number | undefined;
+  createdAt: string;
+  completedAt: string;
 }
 
 export interface GuideQueuedRunResult {

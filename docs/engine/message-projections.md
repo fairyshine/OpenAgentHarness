@@ -2,46 +2,58 @@
 
 ## 目标
 
-为 runtime 建立稳定的内部消息管理方案，明确四层分层：
+为 runtime 建立稳定的内部消息管理方案，明确消息从存储到模型输入之间的分层边界。
 
-`Engine Messages → Projected Messages → Model Messages → AI SDK Messages`
+当前推荐理解方式是五层：
+
+`Persisted Message → EngineMessage → Projected Message → ChatMessage → AI SDK Message`
 
 解决的核心问题：
 
 - 持久化历史与模型上下文构建解耦
+- API 传输模型与 engine 内部语义模型解耦
 - compact / prune / handoff / resume 成为一等能力
 - transcript、debug、model-context 共享同一份底层消息真相
 - AI SDK 适配与上下文裁剪解耦
 
 ---
 
-## 四层定义
+## 五层定义
 
 | 层 | 职责 | 特点 |
 | --- | --- | --- |
-| **Engine Messages** | 内部事实来源 | 持久化、恢复、审计、projection 基础；携带 engine-only metadata |
+| **Persisted Messages** | 存储与 API 传输真相 | 稳定、通用、可持久化；不直接承担完整 runtime 语义 |
+| **Engine Messages** | runtime 语义层 | 由 Persisted Message 提升得到；显式携带 `kind` |
 | **Projected Messages** | 面向特定消费目标的视图 | 可过滤、裁剪、重排、补充 synthetic 消息 |
-| **Model Messages** | 模型上下文语义层 | 已完成上下文选择和裁剪，保留 runtime 语义 |
-| **AI SDK Messages** | 最终请求格式 | 满足 provider/SDK 格式要求，只负责序列化 |
+| **Chat Messages** | 通用模型输入格式 | role/content 结构，脱离 session/run 存储语义 |
+| **AI SDK Messages** | 最终请求格式 | 满足 provider/SDK 格式要求，只负责最后一跳序列化 |
 
-关系：`Model Messages ⊂ Projected Messages`
+关系：
+
+- `EngineMessage` 来源于 `Persisted Message`
+- `ModelMessage` 是 `ProjectedMessage` 中面向模型的一种视图
+- `ChatMessage` 是投影结果序列化后的通用输入格式
+- AI SDK / provider message 是再下一层的适配结果
 
 ```mermaid
 flowchart LR
+  PM0["Persisted Messages"]
   EM["Engine Messages"]
   PM["Projected Messages"]
-  MM["Model Messages"]
+  CM["Chat Messages"]
   SDK["AI SDK Messages"]
 
-  RM --> PM
-  PM --> MM
-  MM --> SDK
+  PM0 --> EM
+  EM --> PM
+  PM --> CM
+  CM --> SDK
 ```
 
 ---
 
 ## 为什么需要分层
 
+- 数据库存档需要稳定，runtime 语义需要可演进
 - UI transcript 要完整过程，模型上下文必须裁剪
 - compact 后需保留 summary artifact，同时可回看完整历史
 - tool result 过长时，模型用 stub，调试界面看原文
@@ -53,16 +65,243 @@ flowchart LR
 ## 运行时主链路
 
 1. 读取持久化历史
-2. 归一化为 Engine Messages
-3. 应用 projection → Model Messages
-4. 序列化为 AI SDK Messages
-5. 传给模型网关 / AI SDK
+2. 将 `Message` 提升为 `EngineMessage`
+3. 应用 projection，得到 transcript / model / compact / debug 等视图
+4. 将 model view 序列化为 `ChatMessage`
+5. 适配为 AI SDK / provider message
+6. 传给模型网关 / AI SDK
 
 关键代码位置：
 
+- 持久化消息定义：`packages/api-contracts/src/messages.ts`
+- EngineMessage 提升：`packages/engine-core/src/engine/engine-messages.ts`
 - 历史读取：`packages/engine-core/src/engine/session-history.ts`
+- Projection：`packages/engine-core/src/engine/message-projections.ts`
+- ChatMessage 序列化：`packages/engine-core/src/engine/ai-sdk-message-serializer.ts`
 - 上下文构建：`packages/engine-core/src/engine-service.ts`
-- Content 转换：`packages/engine-core/src/execution-message-content.ts`
+- Provider 适配：`packages/model-gateway/src/gateway-helpers.ts`
+
+---
+
+## 三个最容易混淆的核心类型
+
+团队日常讨论里，最值得优先区分的是这三层：
+
+- `Message`
+- `EngineMessage`
+- `ChatMessage`
+
+### 1. Persisted Message
+
+`Message` 定义在 `packages/api-contracts/src/messages.ts`，它是：
+
+- 数据库存储层的原始会话消息
+- `GET /sessions/:id/messages` 这类 API 返回值
+- session 时间线的事实记录
+
+它负责表达：
+
+- 发生了什么
+- 这条消息属于哪个 `session` / `run`
+- 消息原始 `role` / `content` / `metadata`
+
+它不负责直接表达：
+
+- 这条消息在 engine 看来到底属于哪种 runtime 语义
+- 这条消息最终是否应该进入模型上下文
+- compact / pruning / projection 后的上下文窗口
+
+一句话：`Message` 是存储与 API 层的 canonical fact model。
+
+### 2. EngineMessage
+
+`EngineMessage` 定义在 `packages/engine-core/src/engine/engine-messages.ts`，它是：
+
+- engine 内部运行时语义层
+- 由持久化 `Message` 推导 / 提升得到的对象
+- projection 的统一输入
+
+相比 `Message`，它新增的关键能力是：
+
+- 显式的 `kind`
+- 更适合 runtime 的 metadata 解释
+
+例如持久化层只是一个 `role: "system"` 的消息；到了 `EngineMessage` 层，它才会被明确识别成：
+
+- `compact_boundary`
+- `compact_summary`
+- `system_note`
+
+一句话：`EngineMessage` 不是 `Message` 的简化版，而是对 `Message` 的 runtime 语义解释。
+
+### 3. ChatMessage
+
+`ChatMessage` 同样来自 `@oah/api-contracts`，但它不再是“会话存档消息”，而是：
+
+- 面向模型输入的通用消息格式
+- 更接近 provider request 的 role/content 结构
+- 不再关心 `sessionId`、`runId`、`createdAt` 这类存储字段
+
+它负责表达：
+
+- 模型这一轮到底看到哪些消息
+- 这些消息最终用什么 role/content 形式传给网关
+
+一句话：`ChatMessage` 是模型输入层，不是存档层。
+
+---
+
+## 为什么 Persisted Message 不应该直接等于 EngineMessage
+
+很多人第一次看会直觉觉得：
+
+- `Message` 是不是就是 `EngineMessage` 的简化版？
+- 能不能合并？
+
+当前设计里，不建议这样理解。
+
+更准确的边界是：
+
+- `Message` 是原始事实
+- `EngineMessage` 是 runtime 解释
+
+这么分的原因：
+
+- 持久化 / API 合同需要稳定
+- engine 内部语义需要可演进
+- projection 需要面向运行时语义工作，而不是直接读存储模型
+- compact / resume / handoff 这类能力会持续增加内部语义类型
+
+如果把两者合并：
+
+- 持久化合同会被 runtime 内部语义污染
+- API 返回会暴露过多 engine 内部概念
+- `kind` 的演进会变成存储迁移问题
+- 外部调用方会被迫理解内部执行语义
+
+所以推荐方式是：
+
+- `Message` 保持轻量稳定
+- `metadata.runtimeKind` 作为持久化到 runtime 的桥
+- `EngineMessage.kind` 作为内部语义标准
+
+---
+
+## 在当前实现里，Persisted Message 如何得到 EngineMessage
+
+核心入口在：
+
+- `packages/engine-core/src/engine/engine-messages.ts`
+
+提升逻辑大致是：
+
+1. 读取持久化 `Message`
+2. 解析 `metadata`
+3. 如果 `metadata.runtimeKind` 存在且合法，直接用它作为 `EngineMessage.kind`
+4. 否则根据 `role + content` 推断
+
+例如：
+
+- `system` → `system_note`
+- `user` → `user_input`
+- `assistant` + `tool-call` part → `tool_call`
+- `assistant` + `reasoning` part → `assistant_reasoning`
+- `tool` → `tool_result`
+
+compact 是典型例子：
+
+- 落库时仍然是普通 `Message`
+- 通过 `metadata.runtimeKind` 记录它是 `compact_boundary` 或 `compact_summary`
+- engine 读取后再提升为对应的 `EngineMessage.kind`
+
+---
+
+## Projection Layer 的职责
+
+Projection layer 不直接操作存储模型，而是尽量操作 `EngineMessage`。
+
+原因是：
+
+- `EngineMessage.kind` 已经表达了 runtime 语义
+- 可以避免在多个地方反复猜 `metadata`
+- compact / transcript / debug / model context 可以共享同一套语义输入
+
+推荐原则：
+
+- Projection 输入：`EngineMessage[]`
+- Projection 逻辑：尽量依赖 `EngineMessage.kind`
+- 持久化桥接：只在 `Message -> EngineMessage` 这一层读 `metadata.runtimeKind`
+
+对 compact 来说，关键语义是：
+
+- `compact_boundary` 负责切历史
+- `compact_summary` 负责承接旧上下文
+
+例如 `projectToModel()` 的语义是：
+
+- 找最近的 `compact_boundary`
+- boundary 本身不进模型
+- 找关联的 `compact_summary`
+- 把 summary 放到裁切后窗口最前面
+- 再拼上 boundary 之后的 recent messages
+
+---
+
+## 当前实现里的五层对应关系
+
+| 概念 | 当前实现中的主要类型 | 主要代码位置 |
+| --- | --- | --- |
+| Persisted Message | `Message` | `packages/api-contracts/src/messages.ts` |
+| Runtime semantic message | `EngineMessage` | `packages/engine-core/src/engine/engine-messages.ts` |
+| Projection result | `TranscriptMessage` / `ModelMessage` / `CompactMessage` / `DebugMessage` | `packages/engine-core/src/engine/message-projections.ts` |
+| Provider-neutral model input | `ChatMessage` | `packages/engine-core/src/engine/ai-sdk-message-serializer.ts` |
+| Provider/SDK input | AI SDK `ModelMessage` 等 | `packages/model-gateway/src/gateway-helpers.ts` |
+
+---
+
+## 与 Claude Code 的关系
+
+Claude Code 的思路是同向的，但分层更隐式。
+
+可以粗略对照为：
+
+| OAH | Claude Code 中更接近的层 |
+| --- | --- |
+| `Message` | `Message` |
+| `EngineMessage` | `NormalizedMessage` + 一部分消息语义工具函数 |
+| Projection layer | `getMessagesAfterCompactBoundary()`、`normalizeMessagesForAPI()` 等消息处理链 |
+| `ChatMessage` / provider input | 最终 API-bound messages |
+
+参考位置：
+
+- `normalizeMessages()`：`references/claude-code-source-code/src/utils/messages.ts`
+- `normalizeMessagesForAPI()`：`references/claude-code-source-code/src/utils/messages.ts`
+- `getMessagesAfterCompactBoundary()`：`references/claude-code-source-code/src/utils/messages.ts`
+- `buildPostCompactMessages()`：`references/claude-code-source-code/src/services/compact/compact.ts`
+
+结论：
+
+- Claude Code 也不是“只有一层消息模型”
+- 它同样把“会话消息”“规范化消息”“API 输入消息”分开处理
+- OAH 单独抽出 `EngineMessage`，是更显式、更工程化的实现
+
+---
+
+## 一个更准确的心智模型
+
+推荐团队内部统一使用下面这组表述：
+
+- `Message`：数据库里的原始会话消息
+- `EngineMessage`：engine 对原始消息的 runtime 解释
+- `ProjectedMessage`：面向某个消费目标的投影视图
+- `ChatMessage`：真正送往模型的一般化输入消息
+
+最简记忆法：
+
+- `Message` 记录事实
+- `EngineMessage` 解释语义
+- Projection 选择视图
+- `ChatMessage` 进入模型
 
 ---
 

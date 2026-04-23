@@ -738,6 +738,33 @@ paths:
                 $ref: '#/components/schemas/SessionQueue'
         default:
           $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/compact:
+    post:
+      tags: [Messages]
+      summary: Manually compact a session
+      operationId: compactSession
+      description: |
+        Forces a compaction pass for the current session and persists
+        `compact_boundary` / `compact_summary` artifacts when there is enough
+        history to summarize. The request is rejected while the session still
+        has an active run or queued follow-up work.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompactSessionRequest'
+      responses:
+        '200':
+          description: Manual compaction completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionCompactResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /sessions/{sessionId}/events:
     get:
       tags: [Events]
@@ -2564,6 +2591,45 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SessionQueuedRun'
+    SessionCompactResult:
+      type: object
+      required:
+        - runId
+        - status
+        - compacted
+        - createdAt
+        - completedAt
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [completed]
+        compacted:
+          type: boolean
+        reason:
+          type: string
+          enum: [insufficient_history, summary_empty]
+        boundaryMessageId:
+          type: string
+        summaryMessageId:
+          type: string
+        summarizedMessageCount:
+          type: integer
+          minimum: 0
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        completedAt:
+          $ref: '#/components/schemas/Timestamp'
+    CompactSessionRequest:
+      type: object
+      properties:
+        instructions:
+          type: string
+          minLength: 1
+          maxLength: 8000
+          description: Optional extra instructions that apply only to this manual compaction request
+      additionalProperties: false
     CreateActionRunRequest:
       type: object
       properties:

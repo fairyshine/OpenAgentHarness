@@ -156,6 +156,40 @@ describe("runtime message projections", () => {
     ]);
   });
 
+  it("infers compact engine kinds from runtime metadata", () => {
+    const messages: Message[] = [
+      {
+        id: "msg_boundary",
+        sessionId: "sess_1",
+        runId: "run_1",
+        role: "system",
+        content: "Conversation compacted",
+        metadata: {
+          runtimeKind: "compact_boundary"
+        },
+        createdAt: "2026-04-08T00:00:00.000Z"
+      },
+      {
+        id: "msg_summary",
+        sessionId: "sess_1",
+        runId: "run_1",
+        role: "system",
+        content: "Summary of previous work",
+        metadata: {
+          runtimeKind: "compact_summary"
+        },
+        createdAt: "2026-04-08T00:00:01.000Z"
+      }
+    ];
+
+    const engineMessages = buildSessionEngineMessages({
+      messages,
+      events: []
+    });
+
+    expect(engineMessages.map((message) => message.kind)).toEqual(["compact_boundary", "compact_summary"]);
+  });
+
   it("replaces compacted tool results with a stub in model projection", () => {
     const projector = new EngineMessageProjector();
     const engineMessages: EngineMessage[] = [

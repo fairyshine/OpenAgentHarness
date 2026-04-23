@@ -2008,6 +2008,12 @@ describe("runtime service", () => {
     const compactEventMessageIds = events
       .filter((event) => event.event === "message.completed")
       .map((event) => String(event.data.messageId ?? ""));
+    const boundaryCompletedEvent = events.find(
+      (event) => event.event === "message.completed" && event.data.messageId === boundaryMessage?.id
+    );
+    const summaryCompletedEvent = events.find(
+      (event) => event.event === "message.completed" && event.data.messageId === summaryMessage?.id
+    );
     const compactInvocation = gateway.invocations.find((invocation) =>
       invocation.input.messages?.some(
         (message) =>
@@ -2036,6 +2042,8 @@ describe("runtime service", () => {
     expect(messageText(summaryMessage)).toBe("Compacted summary of prior work");
     expect(compactEventMessageIds).toContain(boundaryMessage?.id ?? "");
     expect(compactEventMessageIds).toContain(summaryMessage?.id ?? "");
+    expect(boundaryCompletedEvent?.data.role).toBe("system");
+    expect(summaryCompletedEvent?.data.role).toBe("system");
     expect(typeof compactInvocation?.input.messages?.[0]?.content).toBe("string");
     expect(String(compactInvocation?.input.messages?.[0]?.content)).toContain(
       "Summarize the earlier conversation context"
@@ -2121,6 +2129,145 @@ describe("runtime service", () => {
 
     expect(compactKinds).not.toContain("compact_boundary");
     expect(compactKinds).not.toContain("compact_summary");
+  });
+
+  it("allows manual compaction even when auto compact is disabled", async () => {
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      workspaceSettings: {
+        engine: {
+          compact: {
+            enabled: false
+          }
+        }
+      }
+    });
+    const instructions = "Emphasize open todos and unresolved blockers.";
+    gateway.generateResponseFactory = (input) => {
+      const systemPrompt = input.messages?.find((message) => message.role === "system");
+      if (
+        typeof systemPrompt?.content === "string" &&
+        systemPrompt.content.includes("Summarize the earlier conversation context")
+      ) {
+        return {
+          model: input.model ?? "openai-default",
+          text: "Manual compact summary",
+          finishReason: "stop",
+          usage: {
+            inputTokens: 8,
+            outputTokens: 4,
+            totalTokens: 12
+          }
+        };
+      }
+
+      return undefined;
+    };
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "first manual compact turn" }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(firstAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "second manual compact turn" }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(secondAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const compacted = await runtimeService.compactSession({
+      sessionId: session.id,
+      caller,
+      input: {
+        instructions
+      }
+    });
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    const summaryMessage = messages.items.find(
+      (message) =>
+        message.role === "system" &&
+        ((message.metadata as { runtimeKind?: string } | undefined)?.runtimeKind ?? "") === "compact_summary"
+    );
+
+    expect(compacted).toMatchObject({
+      status: "completed",
+      compacted: true
+    });
+    expect(messageText(summaryMessage)).toBe("Manual compact summary");
+    expect((summaryMessage?.metadata as { extra?: { compactedBy?: string } } | undefined)?.extra?.compactedBy).toBe(
+      "manual"
+    );
+    const compactInvocation = gateway.invocations.find((invocation) =>
+      invocation.input.messages?.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Summarize the earlier conversation context")
+      )
+    );
+    expect(compactInvocation?.input.messages?.some(
+      (message) =>
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.includes(instructions)
+    )).toBe(true);
+  });
+
+  it("rejects manual compaction while the session has active work", async () => {
+    const { runtimeService, workspace } = await createRuntime(100);
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "keep the session busy" }
+    });
+
+    await expect(
+      runtimeService.compactSession({
+        sessionId: session.id,
+        caller,
+        input: {}
+      })
+    ).rejects.toMatchObject({
+      code: "session_busy"
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
   });
 
   it("applies before_context_compact hooks to rewrite the summary input used for auto compaction", async () => {
