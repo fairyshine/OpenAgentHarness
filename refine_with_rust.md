@@ -99,6 +99,8 @@ Current judgment:
 - the prepared-seed cache now also reuses that local seed tar on repeated initialization, so warm self-hosted seed prep no longer rebuilds the same archive every time
 - object-store workspace flush now also reuses the `localFingerprint` returned by sync instead of rescanning the whole local tree after a successful push, extending the earlier "reuse sync fingerprint" pattern from materialization into the flush path
 - native object-store remote-to-local sync now also returns `localFingerprint`, so native-backed materialization can reuse the sync result instead of immediately rescanning the materialized tree
+- object-store sync now maintains a remote sync manifest for file `mtime` and size, letting both TS and native push/pull paths replace many per-file `HeadObject` probes with a single manifest read on repeated syncs
+- object-store sync now also supports an aggressive tar-bundle sidecar cache: push can write `.oah-sync-bundle.tar`, and cold pull/materialization can hydrate from that bundle before normal sync reconciliation
 
 ### 2. Archive Export
 
@@ -199,6 +201,8 @@ Practical conclusion:
 - because Docker runtime images now default to native persistent mode, these gains are positioned on the actual main deployment path rather than only behind a manual env toggle
 - the object-store-backed materialization path now also avoids one redundant full local fingerprint scan after flush, which directly reduces local filesystem walk / hash work on dirty workspace eviction and close paths
 - the native object-store materialization path now also avoids the extra post-sync local fingerprint scan, bringing the same "sync computes the fingerprint once" behavior to both TS and native-backed restore flows
+- repeated object-store sync now has a new aggressive fast path: when the remote sync manifest is present, unchanged files can often skip per-file metadata probes entirely on both push and pull, which should reduce request count and object-store round trips on warm sync workloads
+- cold object-store materialization and pull now also have a bundle-first fast path available, which trades one larger object download plus local tar extraction for many small object fetches on larger workspace restores
 
 ## Archive Export
 

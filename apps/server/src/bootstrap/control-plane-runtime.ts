@@ -108,6 +108,7 @@ export async function prepareControlPlaneRuntime(options: {
   redisWorkspaceLeaseRegistry?: WorkspaceLeaseRegistryLike | undefined;
   redisWorkspacePlacementRegistry?: WorkspacePlacementRegistryLike | undefined;
   pollingConfig: { enabled: boolean; intervalMs: number };
+  workspaceModelMetadataDiscovery: "eager" | "background";
   getPlatformAgents(): Promise<PlatformAgentRegistry>;
   logWorkspaceDiscoveryError(rootPath: string, kind: "project", error: unknown): void;
   discoverWorkspaceWithEnrichedModels(rootPath: string, kind: "project"): Promise<WorkspaceRecord>;
@@ -146,6 +147,8 @@ export async function prepareControlPlaneRuntime(options: {
   let workspaceRegistrySyncPromise: Promise<void> | undefined;
   let lastWorkspaceRegistrySyncAt = 0;
   let workspaceRegistryPollTimer: NodeJS.Timeout | undefined;
+  let workspaceMetadataHydrationTimer: NodeJS.Timeout | undefined;
+  let workspaceMetadataHydrationPromise: Promise<void> | undefined;
   let workspaceSyncTimer: NodeJS.Timeout | undefined;
   let watchedProjectRoots = new Map<string, FSWatcher>();
 
@@ -205,6 +208,69 @@ export async function prepareControlPlaneRuntime(options: {
         ...orphanWorkspaceIds
       ].join(", ")}`
     );
+  }
+
+  async function refreshWorkspaceDefinitionsForPlatformModelsNow(): Promise<void> {
+    if (options.remoteSandboxProvider || !options.enableControlPlaneFacade) {
+      return;
+    }
+
+    const currentWorkspaces = await options.listRepositoryWorkspaces(options.persistence.workspaceRepository);
+    const refreshedWorkspaces = await Promise.all(
+      currentWorkspaces.map(async (workspace) => {
+        try {
+          const discovered = await options.discoverWorkspaceWithEnrichedModels(workspace.rootPath, workspace.kind);
+          return {
+            ...discovered,
+            id: workspace.id,
+            name: workspace.name,
+            executionPolicy: workspace.executionPolicy,
+            status: workspace.status,
+            createdAt: workspace.createdAt,
+            updatedAt: workspace.updatedAt,
+            historyMirrorEnabled: workspace.historyMirrorEnabled,
+            ...(workspace.serviceName ? { serviceName: workspace.serviceName } : {}),
+            ...(workspace.externalRef ? { externalRef: workspace.externalRef } : {})
+          } as WorkspaceRecord;
+        } catch (error) {
+          console.warn(`[oah-bootstrap] Failed to refresh workspace ${workspace.id} after platform model reload.`, error);
+          return workspace;
+        }
+      })
+    ).then((workspaces) => workspaces.map((workspace) => options.applyManagedWorkspaceExternalRef(workspace)));
+
+    await Promise.all(refreshedWorkspaces.map(async (workspace) => options.persistence.workspaceRepository.upsert(workspace)));
+    visibleWorkspaceIds.clear();
+    refreshedWorkspaces.forEach((workspace) => {
+      visibleWorkspaceIds.add(workspace.id);
+    });
+    updateWatchedProjectRoots(refreshedWorkspaces);
+  }
+
+  function scheduleWorkspaceModelMetadataHydration(delayMs = 0): void {
+    if (options.workspaceModelMetadataDiscovery !== "background") {
+      return;
+    }
+
+    if (options.remoteSandboxProvider || !options.enableControlPlaneFacade) {
+      return;
+    }
+
+    if (workspaceMetadataHydrationTimer || workspaceMetadataHydrationPromise) {
+      return;
+    }
+
+    workspaceMetadataHydrationTimer = setTimeout(() => {
+      workspaceMetadataHydrationTimer = undefined;
+      workspaceMetadataHydrationPromise = refreshWorkspaceDefinitionsForPlatformModelsNow()
+        .catch((error) => {
+          console.warn("Workspace model metadata hydration failed.", error);
+        })
+        .finally(() => {
+          workspaceMetadataHydrationPromise = undefined;
+        });
+    }, Math.max(0, delayMs));
+    workspaceMetadataHydrationTimer.unref?.();
   }
 
   async function refreshWorkspaceDefinitionIfNeeded(workspaceId: string): Promise<void> {
@@ -306,6 +372,10 @@ export async function prepareControlPlaneRuntime(options: {
             options.logWorkspaceDiscoveryError(rootPath, "project", error);
           }
         }).then(async (workspaces) => {
+          if (options.workspaceModelMetadataDiscovery !== "eager") {
+            return workspaces;
+          }
+
           const { enrichWorkspaceModelsWithDiscoveredMetadata } = await loadModelMetadataDiscoveryModule();
           return Promise.all(workspaces.map((workspace) => enrichWorkspaceModelsWithDiscoveredMetadata(workspace)));
         })
@@ -354,6 +424,7 @@ export async function prepareControlPlaneRuntime(options: {
       });
       await clearOrphanedWorkspaceCoordination(latestReconciledWorkspaces, "workspace_registry_sync");
       updateWatchedProjectRoots(latestReconciledWorkspaces);
+      scheduleWorkspaceModelMetadataHydration();
       lastWorkspaceRegistrySyncAt = Date.now();
     })().finally(() => {
       workspaceRegistrySyncPromise = undefined;
@@ -445,42 +516,10 @@ export async function prepareControlPlaneRuntime(options: {
           workspaceRegistryPollTimer.unref?.();
         }
       }
+      scheduleWorkspaceModelMetadataHydration();
     },
     async refreshWorkspaceDefinitionsForPlatformModels() {
-      if (options.remoteSandboxProvider || !options.enableControlPlaneFacade) {
-        return;
-      }
-
-      const currentWorkspaces = await options.listRepositoryWorkspaces(options.persistence.workspaceRepository);
-      const refreshedWorkspaces = await Promise.all(
-        currentWorkspaces.map(async (workspace) => {
-          try {
-            const discovered = await options.discoverWorkspaceWithEnrichedModels(workspace.rootPath, workspace.kind);
-            return {
-              ...discovered,
-              id: workspace.id,
-              name: workspace.name,
-              executionPolicy: workspace.executionPolicy,
-              status: workspace.status,
-              createdAt: workspace.createdAt,
-              updatedAt: workspace.updatedAt,
-              historyMirrorEnabled: workspace.historyMirrorEnabled,
-              ...(workspace.serviceName ? { serviceName: workspace.serviceName } : {}),
-              ...(workspace.externalRef ? { externalRef: workspace.externalRef } : {})
-            } as WorkspaceRecord;
-          } catch (error) {
-            console.warn(`[oah-bootstrap] Failed to refresh workspace ${workspace.id} after platform model reload.`, error);
-            return workspace;
-          }
-        })
-      ).then((workspaces) => workspaces.map((workspace) => options.applyManagedWorkspaceExternalRef(workspace)));
-
-      await Promise.all(refreshedWorkspaces.map(async (workspace) => options.persistence.workspaceRepository.upsert(workspace)));
-      visibleWorkspaceIds.clear();
-      refreshedWorkspaces.forEach((workspace) => {
-        visibleWorkspaceIds.add(workspace.id);
-      });
-      updateWatchedProjectRoots(refreshedWorkspaces);
+      await refreshWorkspaceDefinitionsForPlatformModelsNow();
     },
     createControlPlaneEngineService(input) {
       if (!options.enableControlPlaneFacade) {
@@ -509,6 +548,9 @@ export async function prepareControlPlaneRuntime(options: {
     async close() {
       if (workspaceSyncTimer) {
         clearTimeout(workspaceSyncTimer);
+      }
+      if (workspaceMetadataHydrationTimer) {
+        clearTimeout(workspaceMetadataHydrationTimer);
       }
       if (workspaceRegistryPollTimer) {
         clearInterval(workspaceRegistryPollTimer);

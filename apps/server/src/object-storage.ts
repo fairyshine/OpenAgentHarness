@@ -1,5 +1,7 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -75,6 +77,16 @@ interface DirectorySyncOptions {
   preserveTopLevelNames?: string[] | undefined;
 }
 
+interface DirectorySyncManifestFileEntry {
+  size: number;
+  mtimeMs: number;
+}
+
+interface DirectorySyncManifestDocument {
+  version: 1;
+  files: Record<string, DirectorySyncManifestFileEntry>;
+}
+
 interface ManagedPathMapping {
   key: ManagedPathKey;
   localDir: string;
@@ -89,7 +101,13 @@ const DEFAULT_KEY_PREFIXES: Record<ManagedPathKey, string> = {
   skill: "skill"
 };
 const OBJECT_MTIME_METADATA_KEY = "oah-mtime-ms";
+const INTERNAL_SYNC_MANIFEST_RELATIVE_PATH = ".oah-sync-manifest.json";
+const INTERNAL_SYNC_BUNDLE_RELATIVE_PATH = ".oah-sync-bundle.tar";
 const DEFAULT_DIRECTORY_SYNC_CONCURRENCY = 8;
+const DEFAULT_OBJECT_STORAGE_BUNDLE_MODE = "auto";
+const DEFAULT_OBJECT_STORAGE_BUNDLE_MIN_FILE_COUNT = 16;
+const DEFAULT_OBJECT_STORAGE_BUNDLE_MIN_TOTAL_BYTES = 128 * 1024;
+const DEFAULT_OBJECT_STORAGE_BUNDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 const DEFAULT_MANAGED_PATHS = Object.keys(DEFAULT_KEY_PREFIXES) as ManagedPathKey[];
 
@@ -132,6 +150,13 @@ function shouldIgnoreRelativePath(relativePath: string): boolean {
     return false;
   }
 
+  if (normalized === INTERNAL_SYNC_MANIFEST_RELATIVE_PATH) {
+    return true;
+  }
+  if (normalized === INTERNAL_SYNC_BUNDLE_RELATIVE_PATH) {
+    return true;
+  }
+
   const segments = normalized.split("/");
   if (segments.some((segment) => segment === "__pycache__")) {
     return true;
@@ -160,6 +185,255 @@ function parseObjectMtimeMs(metadata: Record<string, string> | undefined): numbe
   return Math.trunc(parsed);
 }
 
+function isDirectorySyncManifestFileEntry(value: unknown): value is DirectorySyncManifestFileEntry {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "size" in value &&
+    typeof value.size === "number" &&
+    Number.isFinite(value.size) &&
+    value.size >= 0 &&
+    "mtimeMs" in value &&
+    typeof value.mtimeMs === "number" &&
+    Number.isFinite(value.mtimeMs) &&
+    value.mtimeMs > 0
+  );
+}
+
+function buildDirectorySyncManifestFromFiles(
+  files: Iterable<{ relativePath: string; size: number; mtimeMs: number }>
+): DirectorySyncManifestDocument {
+  const normalizedFiles = [...files]
+    .map((file) => ({
+      relativePath: normalizeRelativePath(file.relativePath),
+      size: file.size,
+      mtimeMs: Math.trunc(file.mtimeMs)
+    }))
+    .filter((file) => file.relativePath.length > 0 && !shouldIgnoreRelativePath(file.relativePath))
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+
+  return {
+    version: 1,
+    files: Object.fromEntries(
+      normalizedFiles.map((file) => [
+        file.relativePath,
+        {
+          size: file.size,
+          mtimeMs: file.mtimeMs
+        } satisfies DirectorySyncManifestFileEntry
+      ])
+    )
+  };
+}
+
+async function loadRemoteDirectorySyncManifest(
+  store: DirectoryObjectStore,
+  remotePrefix: string,
+  remoteEntries?: Iterable<ObjectStorageEntry>
+): Promise<Map<string, DirectorySyncManifestFileEntry>> {
+  try {
+    const manifestKey = buildRemoteKey(remotePrefix, INTERNAL_SYNC_MANIFEST_RELATIVE_PATH);
+    if (remoteEntries) {
+      const manifestPresent = [...remoteEntries].some((entry) => entry.key === manifestKey);
+      if (!manifestPresent) {
+        return new Map();
+      }
+    }
+    const manifestObject = await store.getObject(manifestKey);
+    const parsed = JSON.parse(manifestObject.body.toString("utf8")) as Partial<DirectorySyncManifestDocument>;
+    if (parsed.version !== 1 || typeof parsed.files !== "object" || parsed.files === null) {
+      return new Map();
+    }
+
+    return new Map(
+      Object.entries(parsed.files)
+        .map(([relativePath, entry]) => [normalizeRelativePath(relativePath), entry] as const)
+        .filter(
+          (entry): entry is readonly [string, DirectorySyncManifestFileEntry] =>
+            entry[0].length > 0 && isDirectorySyncManifestFileEntry(entry[1])
+        )
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+async function writeRemoteDirectorySyncManifest(input: {
+  store: DirectoryObjectStore;
+  remotePrefix: string;
+  files: Iterable<{ relativePath: string; size: number; mtimeMs: number }>;
+  existingManifest?: Map<string, DirectorySyncManifestFileEntry> | undefined;
+}): Promise<void> {
+  const manifest = buildDirectorySyncManifestFromFiles(input.files);
+  const normalizedEntries = new Map(
+    Object.entries(manifest.files).map(([relativePath, entry]) => [normalizeRelativePath(relativePath), entry] as const)
+  );
+  const manifestKey = buildRemoteKey(input.remotePrefix, INTERNAL_SYNC_MANIFEST_RELATIVE_PATH);
+
+  if (normalizedEntries.size === 0) {
+    await input.store.deleteObjects([manifestKey]);
+    return;
+  }
+
+  if (
+    input.existingManifest &&
+    input.existingManifest.size === normalizedEntries.size &&
+    [...normalizedEntries.entries()].every(([relativePath, entry]) => {
+      const existing = input.existingManifest?.get(relativePath);
+      return existing?.size === entry.size && existing.mtimeMs === entry.mtimeMs;
+    })
+  ) {
+    return;
+  }
+
+  await input.store.putObject(
+    manifestKey,
+    Buffer.from(`${JSON.stringify(manifest)}\n`, "utf8")
+  );
+}
+
+function shouldAttemptObjectStorageBundle(input: {
+  files: Iterable<{ size: number }>;
+}): boolean {
+  const mode = resolveObjectStorageBundleMode();
+  if (mode === "off") {
+    return false;
+  }
+
+  let fileCount = 0;
+  let totalBytes = 0;
+  for (const file of input.files) {
+    fileCount += 1;
+    totalBytes += file.size;
+  }
+
+  if (fileCount === 0) {
+    return false;
+  }
+  if (mode === "force") {
+    return true;
+  }
+
+  return fileCount >= DEFAULT_OBJECT_STORAGE_BUNDLE_MIN_FILE_COUNT || totalBytes >= DEFAULT_OBJECT_STORAGE_BUNDLE_MIN_TOTAL_BYTES;
+}
+
+async function isDirectoryEmpty(rootDir: string): Promise<boolean> {
+  const rootExists = await stat(rootDir).catch((error) => {
+    if (isNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  });
+  if (!rootExists) {
+    return true;
+  }
+  if (!rootExists.isDirectory()) {
+    return false;
+  }
+
+  return (await readdir(rootDir)).length === 0;
+}
+
+async function buildObjectStorageBundle(input: {
+  localDir: string;
+  snapshot: LocalDirectorySnapshot;
+}): Promise<Buffer> {
+  const bundleRoot = await mkdtemp(path.join(os.tmpdir(), "oah-object-store-bundle-"));
+  const listPath = path.join(bundleRoot, "bundle-files.txt");
+  const bundlePath = path.join(bundleRoot, "bundle.tar");
+  const timeoutMs = resolveObjectStorageBundleTimeoutMs();
+
+  try {
+    const fileList = [
+      ...[...input.snapshot.files.keys()].sort((left, right) => left.localeCompare(right)),
+      ...[...input.snapshot.emptyDirectories].sort((left, right) => left.localeCompare(right))
+    ];
+    await writeFile(listPath, Buffer.from(fileList.join("\0"), "utf8"));
+    await runLocalProcess({
+      executable: "tar",
+      args: ["-cf", bundlePath, "--null", "-T", listPath, "-C", input.localDir],
+      timeoutMs
+    });
+    return readFile(bundlePath);
+  } finally {
+    await rm(bundleRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function maybeWriteObjectStorageBundle(input: {
+  store: DirectoryObjectStore;
+  remotePrefix: string;
+  localDir: string;
+  options?: DirectorySyncOptions | undefined;
+  logger?: ((message: string) => void) | undefined;
+}): Promise<void> {
+  const nativeSnapshot = await collectNativeSnapshotIfAvailable(input.localDir, input.options);
+  const snapshot = nativeSnapshot?.snapshot ?? (await collectLocalDirectorySnapshot(input.localDir, input.options));
+  const files = [...snapshot.files.entries()].map(([relativePath, file]) => ({
+    relativePath,
+    size: file.size,
+    mtimeMs: file.mtimeMs
+  }));
+  if (!shouldAttemptObjectStorageBundle({ files })) {
+    await input.store.deleteObjects([buildRemoteKey(input.remotePrefix, INTERNAL_SYNC_BUNDLE_RELATIVE_PATH)]).catch(() => undefined);
+    return;
+  }
+
+  const bundleBytes = await buildObjectStorageBundle({
+    localDir: input.localDir,
+    snapshot
+  });
+  await input.store.putObject(buildRemoteKey(input.remotePrefix, INTERNAL_SYNC_BUNDLE_RELATIVE_PATH), bundleBytes);
+  input.logger?.(
+    `[oah-object-storage] wrote sync bundle ${INTERNAL_SYNC_BUNDLE_RELATIVE_PATH} for ${(input.remotePrefix || ".").trim() || "."}`
+  );
+}
+
+async function maybeHydrateFromObjectStorageBundle(input: {
+  store: DirectoryObjectStore;
+  remotePrefix: string;
+  localDir: string;
+  remoteEntries: ObjectStorageEntry[];
+  logger?: ((message: string) => void) | undefined;
+}): Promise<boolean> {
+  const bundleEntry = input.remoteEntries.find(
+    (entry) => entry.key === buildRemoteKey(input.remotePrefix, INTERNAL_SYNC_BUNDLE_RELATIVE_PATH)
+  );
+  if (!bundleEntry) {
+    return false;
+  }
+  if (!shouldAttemptObjectStorageBundle({ files: input.remoteEntries.filter((entry) => !entry.key.endsWith("/")) })) {
+    return false;
+  }
+  if (!(await isDirectoryEmpty(input.localDir))) {
+    return false;
+  }
+
+  const bundleRoot = await mkdtemp(path.join(os.tmpdir(), "oah-object-store-bundle-extract-"));
+  const bundlePath = path.join(bundleRoot, "bundle.tar");
+  const timeoutMs = resolveObjectStorageBundleTimeoutMs();
+  try {
+    await mkdir(input.localDir, { recursive: true });
+    const bundle = await input.store.getObject(bundleEntry.key);
+    await writeFile(bundlePath, bundle.body);
+    await runLocalProcess({
+      executable: "tar",
+      args: ["-xf", bundlePath, "-C", input.localDir],
+      timeoutMs
+    });
+    input.logger?.(
+      `[oah-object-storage] hydrated ${(input.remotePrefix || ".").trim() || "."} from sync bundle ${INTERNAL_SYNC_BUNDLE_RELATIVE_PATH}`
+    );
+    return true;
+  } catch {
+    await rm(input.localDir, { recursive: true, force: true }).catch(() => undefined);
+    await mkdir(input.localDir, { recursive: true }).catch(() => undefined);
+    return false;
+  } finally {
+    await rm(bundleRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 function resolveDirectorySyncConcurrency(): number {
   const raw = process.env.OAH_OBJECT_STORAGE_SYNC_CONCURRENCY;
   if (!raw || raw.trim().length === 0) {
@@ -168,6 +442,73 @@ function resolveDirectorySyncConcurrency(): number {
 
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DIRECTORY_SYNC_CONCURRENCY;
+}
+
+function resolveObjectStorageBundleMode(): "off" | "auto" | "force" {
+  const raw = process.env.OAH_OBJECT_STORAGE_SYNC_BUNDLE?.trim().toLowerCase();
+  if (!raw) {
+    return DEFAULT_OBJECT_STORAGE_BUNDLE_MODE as "auto";
+  }
+
+  if (["0", "false", "off", "no", "disabled"].includes(raw)) {
+    return "off";
+  }
+
+  if (["1", "true", "on", "yes", "enabled", "force"].includes(raw)) {
+    return "force";
+  }
+
+  return "auto";
+}
+
+function resolveObjectStorageBundleTimeoutMs(): number {
+  const raw = process.env.OAH_OBJECT_STORAGE_SYNC_BUNDLE_TIMEOUT_MS?.trim();
+  if (!raw) {
+    return DEFAULT_OBJECT_STORAGE_BUNDLE_TIMEOUT_MS;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_OBJECT_STORAGE_BUNDLE_TIMEOUT_MS;
+}
+
+async function runLocalProcess(input: {
+  executable: string;
+  args: string[];
+  cwd?: string | undefined;
+  timeoutMs?: number | undefined;
+}): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(input.executable, input.args, {
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stderr = "";
+    let timeoutTriggered = false;
+    const timeoutHandle = setTimeout(() => {
+      timeoutTriggered = true;
+      child.kill("SIGTERM");
+    }, input.timeoutMs ?? DEFAULT_OBJECT_STORAGE_BUNDLE_TIMEOUT_MS);
+
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-32_768);
+    });
+    child.on("error", (error) => {
+      clearTimeout(timeoutHandle);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timeoutHandle);
+      if (timeoutTriggered) {
+        reject(new Error(`Process timed out after ${input.timeoutMs ?? DEFAULT_OBJECT_STORAGE_BUNDLE_TIMEOUT_MS}ms.`));
+        return;
+      }
+      if ((code ?? 0) !== 0) {
+        reject(new Error(stderr.trim() || `Process exited with code ${code ?? 0}.`));
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 async function runWithConcurrency<T>(
@@ -1394,6 +1735,14 @@ export async function syncRemotePrefixToLocal(
   options?: DirectorySyncOptions
 ): Promise<RemoteToLocalDirectorySyncResult> {
   logger?.(`syncing ${(label ?? remotePrefix) || "."} from object storage into ${localDir}`);
+  const prefetchedEntries = await store.listEntries(remotePrefix);
+  await maybeHydrateFromObjectStorageBundle({
+    store,
+    remotePrefix,
+    localDir,
+    remoteEntries: prefetchedEntries,
+    logger
+  });
   const nativeResult = await syncNativeRemotePrefixToLocalIfAvailable(store, remotePrefix, localDir, options);
   if (nativeResult) {
     return nativeResult;
@@ -1409,7 +1758,8 @@ export async function syncRemotePrefixToLocal(
       remotePrefix
     },
     action: async (): Promise<RemoteToLocalDirectorySyncResult> => {
-      const entries = await store.listEntries(remotePrefix);
+      const entries = prefetchedEntries;
+      const syncManifest = await loadRemoteDirectorySyncManifest(store, remotePrefix, entries);
       await mkdir(localDir, { recursive: true });
 
       const remoteDirectories = new Set<string>();
@@ -1489,6 +1839,20 @@ export async function syncRemotePrefixToLocal(
         const currentFile = existing?.isFile() ? existing : null;
         let resolvedMtimeMs: number | undefined;
         if (currentFile && currentFile.size === input.entry.size) {
+          const manifestEntry = syncManifest.get(input.relativePath);
+          if (
+            manifestEntry &&
+            manifestEntry.size === input.entry.size &&
+            isMaterializedMtimeMatch(currentFile.mtimeMs, manifestEntry.mtimeMs)
+          ) {
+            fingerprintFiles.push({
+              relativePath: input.relativePath,
+              size: input.entry.size,
+              mtimeMs: Math.trunc(currentFile.mtimeMs)
+            });
+            return;
+          }
+
           const objectInfo = await store.getObjectInfo?.(input.entry.key);
           resolvedMtimeMs = resolveTargetMtimeMs({
             metadata: objectInfo?.metadata,
@@ -1584,11 +1948,18 @@ export async function syncLocalDirectoryToRemote(
   logger?.(`syncing local changes in ${localDir} back to object storage (${(label ?? remotePrefix) || "."})`);
   const nativeSyncResult = await syncNativeLocalDirectoryToRemoteIfAvailable(store, remotePrefix, localDir, options);
   if (nativeSyncResult) {
+    await maybeWriteObjectStorageBundle({
+      store,
+      remotePrefix,
+      localDir,
+      options,
+      logger
+    });
     await pruneEmptyDirectories(localDir);
     return nativeSyncResult;
   }
 
-  return observeNativeWorkspaceSyncOperation({
+  const result = await observeNativeWorkspaceSyncOperation({
     operation: "sync_local_to_remote",
     implementation: "ts",
     target: localDir,
@@ -1599,6 +1970,7 @@ export async function syncLocalDirectoryToRemote(
     },
     action: async () => {
       const remoteEntries = await store.listEntries(remotePrefix);
+      const syncManifest = await loadRemoteDirectorySyncManifest(store, remotePrefix, remoteEntries);
       const remoteByRelativePath = buildNormalizedRemoteEntryMap(remotePrefix, remoteEntries, options);
       let uploadedFileCount = 0;
       let createdEmptyDirectoryCount = 0;
@@ -1639,6 +2011,15 @@ export async function syncLocalDirectoryToRemote(
             return;
           }
 
+          const manifestEntry = syncManifest.get(candidate.relativePath);
+          if (
+            manifestEntry &&
+            manifestEntry.size === candidate.size &&
+            manifestEntry.mtimeMs === Math.trunc(candidate.mtimeMs)
+          ) {
+            return;
+          }
+
           const remoteInfo = await store.getObjectInfo?.(remoteEntry.key);
           const remoteMtimeMs = resolveTargetMtimeMs({
             metadata: remoteInfo?.metadata,
@@ -1674,7 +2055,16 @@ export async function syncLocalDirectoryToRemote(
           await store.deleteObjects(nativePlan.keysToDelete);
         }
 
-        await pruneEmptyDirectories(localDir);
+        await writeRemoteDirectorySyncManifest({
+          store,
+          remotePrefix,
+          existingManifest: syncManifest,
+          files: [...nativePlan.uploadCandidates, ...nativePlan.infoCheckCandidates].map((candidate) => ({
+            relativePath: candidate.relativePath,
+            size: candidate.size,
+            mtimeMs: candidate.mtimeMs
+          }))
+        });
         return {
           localFingerprint: nativePlan.fingerprint,
           uploadedFileCount,
@@ -1693,6 +2083,15 @@ export async function syncLocalDirectoryToRemote(
         const remoteEntry = remoteByRelativePath.get(relativePath);
         seenRemoteRelativePaths.add(relativePath);
         if (remoteEntry && !remoteEntry.key.endsWith("/") && remoteEntry.size === file.size) {
+          const manifestEntry = syncManifest.get(relativePath);
+          if (
+            manifestEntry &&
+            manifestEntry.size === file.size &&
+            manifestEntry.mtimeMs === Math.trunc(file.mtimeMs)
+          ) {
+            return;
+          }
+
           const remoteInfo = await store.getObjectInfo?.(remoteEntry.key);
           const remoteMtimeMs = resolveTargetMtimeMs({
             metadata: remoteInfo?.metadata,
@@ -1744,7 +2143,16 @@ export async function syncLocalDirectoryToRemote(
         await store.deleteObjects(keysToDelete);
       }
 
-      await pruneEmptyDirectories(localDir);
+      await writeRemoteDirectorySyncManifest({
+        store,
+        remotePrefix,
+        existingManifest: syncManifest,
+        files: [...snapshot.files.entries()].map(([relativePath, file]) => ({
+          relativePath,
+          size: file.size,
+          mtimeMs: file.mtimeMs
+        }))
+      });
       return {
         localFingerprint,
         uploadedFileCount,
@@ -1753,4 +2161,13 @@ export async function syncLocalDirectoryToRemote(
       };
     }
   });
+  await maybeWriteObjectStorageBundle({
+    store,
+    remotePrefix,
+    localDir,
+    options,
+    logger
+  });
+  await pruneEmptyDirectories(localDir);
+  return result;
 }

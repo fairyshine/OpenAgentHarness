@@ -1,4 +1,4 @@
-ARG BASE_BUILD_IMAGE=node:24-bookworm
+ARG BASE_BUILD_IMAGE=mirror.gcr.io/library/node:24-bookworm-slim
 ARG BASE_RUNTIME_IMAGE=debian:bookworm-slim
 ARG BASE_EXECUTION_LITE_IMAGE=node:24-alpine
 ARG BASE_EXECUTION_LITE_RUNTIME_IMAGE=alpine:3.22
@@ -167,9 +167,10 @@ RUN --mount=type=cache,id=oah-native-lite-cargo-registry,target=/usr/local/cargo
 
 FROM native-build-lite AS native-build
 
-FROM deps AS node-runtime-binary
+FROM ${BASE_BUILD_IMAGE} AS node-runtime-binary
 
-RUN strip --strip-unneeded /usr/local/bin/node
+# Keep the Debian Node runtime as-is so local rebuilds avoid an extra apt/strip hop.
+# This trades a slightly larger binary for much faster incremental image builds.
 
 FROM ${BASE_EXECUTION_LITE_IMAGE} AS node-runtime-binary-lite
 
@@ -183,6 +184,8 @@ FROM debian:bookworm-slim AS docker-cli-build
 RUN apt-get update \
   && apt-get install -y --no-install-recommends docker.io \
   && rm -rf /var/lib/apt/lists/*
+
+FROM docker:cli AS docker-cli-build-lite
 
 FROM docker/compose-bin:v${DOCKER_COMPOSE_VERSION} AS docker-compose-bin
 
@@ -200,6 +203,18 @@ WORKDIR /app
 
 COPY --from=node-runtime-binary /usr/local/bin/node /usr/local/bin/node
 
+FROM ${BASE_EXECUTION_LITE_RUNTIME_IMAGE} AS runtime-common-lite
+
+ENV NODE_ENV=production
+
+RUN apk add --no-cache ca-certificates libgcc libstdc++ \
+  && mkdir -p /etc/oah \
+  && mkdir -p /usr/libexec/docker/cli-plugins
+
+WORKDIR /app
+
+COPY --from=node-runtime-binary-lite /usr/local/bin/node /usr/local/bin/node
+
 FROM runtime-common AS runtime-execution-base
 
 ENV OAH_DOCS_ROOT=/app
@@ -216,18 +231,14 @@ RUN mkdir -p /var/lib/oah/workspaces \
   && mkdir -p /app/native \
   && printf '%s\n' '{"type":"module"}' > /app/package.json
 
-FROM ${BASE_EXECUTION_LITE_RUNTIME_IMAGE} AS runtime-execution-lite-base
+FROM runtime-common-lite AS runtime-execution-lite-base
 
-ENV NODE_ENV=production
 ENV OAH_DOCS_ROOT=/app
 ENV OAH_NATIVE_WORKSPACE_SYNC=1
 ENV OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT=1
 ENV OAH_NATIVE_WORKSPACE_SYNC_BINARY=/app/native/oah-workspace-sync
 
-WORKDIR /app
-
-RUN apk add --no-cache ca-certificates libgcc libstdc++ \
-  && mkdir -p /var/lib/oah/workspaces \
+RUN mkdir -p /var/lib/oah/workspaces \
   && mkdir -p /var/lib/oah/runtimes \
   && mkdir -p /var/lib/oah/models \
   && mkdir -p /var/lib/oah/tools \
@@ -235,8 +246,6 @@ RUN apk add --no-cache ca-certificates libgcc libstdc++ \
   && mkdir -p /var/lib/oah/archives \
   && mkdir -p /app/native \
   && printf '%s\n' '{"type":"module"}' > /app/package.json
-
-COPY --from=node-runtime-binary-lite /usr/local/bin/node /usr/local/bin/node
 
 FROM runtime-execution-base AS api-runtime
 
@@ -293,10 +302,35 @@ EXPOSE 8788
 
 CMD ["node", "dist/index.js", "--config", "/etc/oah/server.yaml"]
 
+FROM runtime-common-lite AS controller-runtime-lite
+
+ENV OAH_DOCS_ROOT=/app
+
+COPY --from=controller-deploy /opt/oah/controller /app
+COPY docs/schemas/server-config.schema.json /app/docs/schemas/server-config.schema.json
+
+EXPOSE 8788
+
+CMD ["node", "dist/index.js", "--config", "/etc/oah/server.yaml"]
+
 FROM runtime-common AS compose-scaler-runtime
 
 COPY --from=docker-cli-build /usr/bin/docker /usr/bin/docker
 COPY --from=docker-compose-bin /docker-compose /usr/libexec/docker/cli-plugins/docker-compose
+
+RUN chmod +x /usr/bin/docker /usr/libexec/docker/cli-plugins/docker-compose \
+  && docker compose version
+
+COPY --from=compose-scaler-deploy /opt/oah/compose-scaler /app
+
+EXPOSE 8790
+
+CMD ["node", "dist/index.js"]
+
+FROM runtime-common-lite AS compose-scaler-runtime-lite
+
+COPY --from=docker-cli-build-lite /usr/local/bin/docker /usr/bin/docker
+COPY --from=docker-cli-build-lite /usr/local/libexec/docker/cli-plugins/docker-compose /usr/libexec/docker/cli-plugins/docker-compose
 
 RUN chmod +x /usr/bin/docker /usr/libexec/docker/cli-plugins/docker-compose \
   && docker compose version

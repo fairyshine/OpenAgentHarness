@@ -62,7 +62,7 @@ services:
       dockerfile: Dockerfile
       target: ${OAH_DOCKER_API_TARGET:-api-runtime}
       args:
-        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-mirror.gcr.io/library/node:24-bookworm-slim}
         BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-debian:bookworm-slim}
         BASE_EXECUTION_LITE_IMAGE: ${OAH_DOCKER_EXECUTION_LITE_IMAGE:-node:24-alpine}
     restart: unless-stopped
@@ -106,9 +106,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: controller-runtime
+      target: ${OAH_DOCKER_CONTROLLER_TARGET:-controller-runtime-lite}
       args:
-        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-mirror.gcr.io/library/node:24-bookworm-slim}
         BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-debian:bookworm-slim}
     restart: unless-stopped
     command:
@@ -140,9 +140,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: compose-scaler-runtime
+      target: ${OAH_DOCKER_COMPOSE_SCALER_TARGET:-compose-scaler-runtime-lite}
       args:
-        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-mirror.gcr.io/library/node:24-bookworm-slim}
         BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-debian:bookworm-slim}
     restart: unless-stopped
     environment:
@@ -181,7 +181,7 @@ services:
       dockerfile: Dockerfile
       target: ${OAH_DOCKER_SANDBOX_TARGET:-worker-runtime}
       args:
-        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-mirror.gcr.io/library/node:24-bookworm-slim}
         BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-debian:bookworm-slim}
         BASE_EXECUTION_LITE_IMAGE: ${OAH_DOCKER_EXECUTION_LITE_IMAGE:-node:24-alpine}
     restart: unless-stopped

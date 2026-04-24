@@ -113,6 +113,7 @@ afterEach(async () => {
       await rm(directory, { recursive: true, force: true });
     })
   );
+  vi.unstubAllEnvs();
   vi.doUnmock("node:fs/promises");
   vi.doUnmock("@oah/native-bridge");
   vi.restoreAllMocks();
@@ -187,6 +188,7 @@ describe("object storage sync", () => {
 
     const keys = [...store.objects.keys()].sort();
     expect(keys).toEqual([
+      "workspace/demo/.oah-sync-manifest.json",
       "workspace/demo/.openharness/settings.yaml",
       "workspace/demo/README.md",
       "workspace/demo/empty-dir/"
@@ -212,7 +214,45 @@ describe("object storage sync", () => {
 
     expect(result.uploadedFileCount).toBe(0);
     expect(store.getObjectInfoCalls).toBe(1);
+    expect(store.putObjectCalls).toBe(1);
+  });
+
+  it("reuses the remote sync manifest to skip unchanged uploads without head requests", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-push-manifest-"));
+    tempDirs.push(directory);
+    const store = new FakeDirectoryObjectStore();
+    const expectedMtime = new Date("2026-04-18T08:09:10.000Z");
+
+    await writeFile(path.join(directory, "README.md"), "# synced\n", "utf8");
+    await utimes(path.join(directory, "README.md"), expectedMtime, expectedMtime);
+
+    await syncLocalDirectoryToRemote(store, "workspace/demo", directory);
+    store.getObjectCalls = 0;
+    store.getObjectInfoCalls = 0;
+    store.putObjectCalls = 0;
+
+    const result = await syncLocalDirectoryToRemote(store, "workspace/demo", directory);
+
+    expect(result.uploadedFileCount).toBe(0);
+    expect(store.getObjectCalls).toBe(1);
+    expect(store.getObjectInfoCalls).toBe(0);
     expect(store.putObjectCalls).toBe(0);
+  });
+
+  it("writes an object-storage sync bundle sidecar when forced", async () => {
+    vi.stubEnv("OAH_OBJECT_STORAGE_SYNC_BUNDLE", "1");
+
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-bundle-push-"));
+    tempDirs.push(directory);
+    const store = new FakeDirectoryObjectStore();
+
+    await mkdir(path.join(directory, "docs"), { recursive: true });
+    await writeFile(path.join(directory, "README.md"), "# synced\n", "utf8");
+    await writeFile(path.join(directory, "docs", "guide.md"), "hello\n", "utf8");
+
+    await syncLocalDirectoryToRemote(store, "workspace/demo", directory);
+
+    expect(store.objects.has("workspace/demo/.oah-sync-bundle.tar")).toBe(true);
   });
 
   it("passes configured sync concurrency into native object-storage sync execution", async () => {
@@ -330,7 +370,10 @@ describe("object storage sync", () => {
     vi.doUnmock("node:fs/promises");
     vi.resetModules();
 
-    expect([...store.objects.keys()].sort()).toEqual(["workspace/demo/README.md"]);
+    expect([...store.objects.keys()].sort()).toEqual([
+      "workspace/demo/.oah-sync-manifest.json",
+      "workspace/demo/README.md"
+    ]);
   });
 
   it("ignores files that disappear after snapshot collection but before upload", async () => {
@@ -361,7 +404,10 @@ describe("object storage sync", () => {
     vi.doUnmock("node:fs/promises");
     vi.resetModules();
 
-    expect([...store.objects.keys()].sort()).toEqual(["workspace/demo/README.md"]);
+    expect([...store.objects.keys()].sort()).toEqual([
+      "workspace/demo/.oah-sync-manifest.json",
+      "workspace/demo/README.md"
+    ]);
   });
 
   it("preserves original file mtime across local-to-remote and remote-to-local sync", async () => {
@@ -407,6 +453,51 @@ describe("object storage sync", () => {
     expect(Math.trunc((await stat(path.join(directory, "README.md"))).mtimeMs)).toBe(preservedMtime.getTime());
   });
 
+  it("reuses the remote sync manifest to skip unchanged downloads without head requests", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-pull-manifest-"));
+    tempDirs.push(directory);
+    const store = new FakeDirectoryObjectStore();
+    const preservedMtime = new Date("2026-04-18T08:09:10.000Z");
+
+    await writeFile(path.join(directory, "README.md"), "# demo\n", "utf8");
+    await utimes(path.join(directory, "README.md"), preservedMtime, preservedMtime);
+    await store.putObject("workspace/demo/README.md", Buffer.from("# demo\n"), { mtimeMs: preservedMtime.getTime() });
+
+    await syncLocalDirectoryToRemote(store, "workspace/demo", directory);
+    store.getObjectCalls = 0;
+    store.getObjectInfoCalls = 0;
+
+    await syncRemotePrefixToLocal(store, "workspace/demo", directory);
+
+    expect(store.getObjectCalls).toBe(1);
+    expect(store.getObjectInfoCalls).toBe(0);
+    expect(Math.trunc((await stat(path.join(directory, "README.md"))).mtimeMs)).toBe(preservedMtime.getTime());
+  });
+
+  it("hydrates from the object-storage sync bundle on cold pull when forced", async () => {
+    vi.stubEnv("OAH_OBJECT_STORAGE_SYNC_BUNDLE", "1");
+
+    const sourceDirectory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-bundle-source-"));
+    const targetDirectory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-bundle-target-"));
+    tempDirs.push(sourceDirectory, targetDirectory);
+    const store = new FakeDirectoryObjectStore();
+
+    await mkdir(path.join(sourceDirectory, "docs"), { recursive: true });
+    await writeFile(path.join(sourceDirectory, "README.md"), "# synced\n", "utf8");
+    await writeFile(path.join(sourceDirectory, "docs", "guide.md"), "hello\n", "utf8");
+
+    await syncLocalDirectoryToRemote(store, "workspace/demo", sourceDirectory);
+    store.getObjectCalls = 0;
+    store.getObjectInfoCalls = 0;
+
+    await syncRemotePrefixToLocal(store, "workspace/demo", targetDirectory);
+
+    await expect(readFile(path.join(targetDirectory, "README.md"), "utf8")).resolves.toBe("# synced\n");
+    await expect(readFile(path.join(targetDirectory, "docs", "guide.md"), "utf8")).resolves.toBe("hello\n");
+    expect(store.getObjectCalls).toBe(2);
+    expect(store.getObjectInfoCalls).toBe(0);
+  });
+
   it("pushes workspace roots to object storage while excluding runtime-only state", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "oah-object-storage-workspace-root-"));
     tempDirs.push(directory);
@@ -421,6 +512,7 @@ describe("object storage sync", () => {
     await syncWorkspaceRootToObjectStore(store, "workspace/demo", directory);
 
     expect([...store.objects.keys()].sort()).toEqual([
+      "workspace/demo/.oah-sync-manifest.json",
       "workspace/demo/.openharness/settings.yaml",
       "workspace/demo/README.md"
     ]);
@@ -566,6 +658,7 @@ describe("object storage sync", () => {
     });
 
     expect([...store.objects.keys()].sort()).toEqual([
+      "workspace/.oah-sync-manifest.json",
       "workspace/ws_1/.openharness/settings.yaml",
       "workspace/ws_1/README.md"
     ]);

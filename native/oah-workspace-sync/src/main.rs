@@ -22,7 +22,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha1::{Digest, Sha1};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Builder as RuntimeBuilder;
 use tokio::task::JoinSet;
 
@@ -30,6 +30,7 @@ const PROTOCOL_VERSION: u32 = 1;
 const BINARY_NAME: &str = "oah-workspace-sync";
 const BINARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 const OBJECT_MTIME_METADATA_KEY: &str = "oah-mtime-ms";
+const INTERNAL_SYNC_MANIFEST_RELATIVE_PATH: &str = ".oah-sync-manifest.json";
 
 #[derive(Parser)]
 #[command(name = BINARY_NAME, version = BINARY_VERSION, about = "Open Agent Harness native workspace sync utilities.")]
@@ -244,6 +245,25 @@ struct PlanRemoteEntry {
     #[allow(dead_code)]
     last_modified_ms: Option<u128>,
     is_directory: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncManifestFileEntry {
+    size: u64,
+    mtime_ms: u128,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncManifestDocument {
+    version: u32,
+    files: BTreeMap<String, SyncManifestFileEntry>,
+}
+
+struct RemoteEntryListing {
+    entries: Vec<PlanRemoteEntry>,
+    has_sync_manifest: bool,
 }
 
 #[derive(Serialize)]
@@ -1205,6 +1225,10 @@ fn should_ignore_relative_path(relative_path: &str) -> bool {
         return false;
     }
 
+    if normalize_relative_path(relative_path) == INTERNAL_SYNC_MANIFEST_RELATIVE_PATH {
+        return true;
+    }
+
     let segments: Vec<&str> = relative_path.split('/').collect();
     if segments.iter().any(|segment| *segment == "__pycache__") {
         return true;
@@ -1409,6 +1433,31 @@ fn resolve_empty_remote_directories(
         })
         .cloned()
         .collect()
+}
+
+fn build_sync_manifest(files: &[(String, u64, u128)]) -> SyncManifestDocument {
+    let mut entries = files
+        .iter()
+        .filter_map(|(relative_path, size, mtime_ms)| {
+            let normalized = normalize_relative_path(relative_path);
+            if normalized.is_empty() || should_ignore_relative_path(&normalized) {
+                return None;
+            }
+            Some((
+                normalized,
+                SyncManifestFileEntry {
+                    size: *size,
+                    mtime_ms: *mtime_ms,
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    SyncManifestDocument {
+        version: 1,
+        files: entries.into_iter().collect(),
+    }
 }
 
 fn create_local_to_remote_plan(
@@ -1655,10 +1704,11 @@ async fn list_remote_entries(
     client: &S3Client,
     config: &NativeObjectStoreConfig,
     remote_prefix: &str,
-) -> Result<Vec<PlanRemoteEntry>, String> {
+) -> Result<RemoteEntryListing, String> {
     let normalized_prefix = normalize_relative_path(remote_prefix);
     let mut continuation_token = None;
     let mut entries = Vec::new();
+    let mut has_sync_manifest = false;
 
     loop {
         let mut request = client
@@ -1681,6 +1731,13 @@ async fn list_remote_entries(
             let Some(relative_path) = relative_path_from_remote_key(&normalized_prefix, key) else {
                 continue;
             };
+            if normalize_relative_path(&relative_path) == INTERNAL_SYNC_MANIFEST_RELATIVE_PATH {
+                has_sync_manifest = true;
+                continue;
+            }
+            if should_ignore_relative_path(&relative_path) {
+                continue;
+            }
 
             entries.push(PlanRemoteEntry {
                 relative_path,
@@ -1703,7 +1760,76 @@ async fn list_remote_entries(
         }
     }
 
-    Ok(entries)
+    Ok(RemoteEntryListing {
+        entries,
+        has_sync_manifest,
+    })
+}
+
+async fn load_remote_sync_manifest(
+    client: &S3Client,
+    config: &NativeObjectStoreConfig,
+    remote_prefix: &str,
+    has_sync_manifest: bool,
+) -> Result<BTreeMap<String, SyncManifestFileEntry>, String> {
+    if !has_sync_manifest {
+        return Ok(BTreeMap::new());
+    }
+
+    let key = build_remote_path(remote_prefix, INTERNAL_SYNC_MANIFEST_RELATIVE_PATH);
+    let response = match client
+        .get_object()
+        .bucket(&config.bucket)
+        .key(&key)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return Ok(BTreeMap::new()),
+    };
+
+    let mut body = response.body.into_async_read();
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes)
+        .await
+        .map_err(|error| format!("Failed to read sync manifest {key}: {error}"))?;
+    let document = serde_json::from_slice::<SyncManifestDocument>(&bytes)
+        .map_err(|error| format!("Failed to parse sync manifest {key}: {error}"))?;
+    if document.version != 1 {
+        return Ok(BTreeMap::new());
+    }
+
+    Ok(document
+        .files
+        .into_iter()
+        .filter_map(|(relative_path, entry)| {
+            let normalized = normalize_relative_path(&relative_path);
+            if normalized.is_empty() || should_ignore_relative_path(&normalized) {
+                return None;
+            }
+            Some((normalized, entry))
+        })
+        .collect())
+}
+
+async fn write_remote_sync_manifest(
+    client: &S3Client,
+    config: &NativeObjectStoreConfig,
+    remote_prefix: &str,
+    files: &[(String, u64, u128)],
+) -> Result<(), String> {
+    let key = build_remote_path(remote_prefix, INTERNAL_SYNC_MANIFEST_RELATIVE_PATH);
+    let body = serde_json::to_vec(&build_sync_manifest(files))
+        .map_err(|error| format!("Failed to serialize sync manifest {key}: {error}"))?;
+    client
+        .put_object()
+        .bucket(&config.bucket)
+        .key(&key)
+        .body(ByteStream::from(body))
+        .send()
+        .await
+        .map_err(|error| format!("Failed to write sync manifest {key}: {error}"))?;
+    Ok(())
 }
 
 async fn upload_local_file(
@@ -1906,8 +2032,19 @@ async fn sync_remote_to_local(
     let snapshot = collect_snapshot(&root_dir, &excludes)?;
 
     let client = create_s3_client(&request.object_store);
-    let remote_entries =
+    let remote_listing =
         list_remote_entries(&client, &request.object_store, &request.remote_prefix).await?;
+    let remote_entries = remote_listing.entries;
+    let sync_manifest =
+        Arc::new(
+            load_remote_sync_manifest(
+                &client,
+                &request.object_store,
+                &request.remote_prefix,
+                remote_listing.has_sync_manifest,
+            )
+            .await?,
+        );
     let explicit_remote_directories = remote_entries
         .iter()
         .filter(|entry| entry.is_directory)
@@ -1985,18 +2122,35 @@ async fn sync_remote_to_local(
 
     let client_for_info_checks = client.clone();
     let object_store_for_info_checks = request.object_store.clone();
+    let sync_manifest_for_info_checks = Arc::clone(&sync_manifest);
     let info_checked_candidates = process_with_concurrency(
         plan.info_check_candidates.clone(),
         max_concurrency,
         move |candidate| {
             let client = client_for_info_checks.clone();
             let object_store = object_store_for_info_checks.clone();
+            let sync_manifest = Arc::clone(&sync_manifest_for_info_checks);
             async move {
                 let target_path = PathBuf::from(&candidate.target_path);
                 let existing = prepare_local_file_target(&target_path).await?;
 
                 let should_download: Result<(bool, Option<u128>), String> = match existing {
                     Some(metadata) if metadata.len() == candidate.size => {
+                        if let Some(manifest_entry) = sync_manifest.get(&candidate.relative_path) {
+                            let local_mtime_ms =
+                                metadata.modified().ok().and_then(system_time_to_mtime_ms);
+                            if manifest_entry.size == candidate.size
+                                && local_mtime_ms == Some(manifest_entry.mtime_ms)
+                            {
+                                return Ok((
+                                    candidate.relative_path,
+                                    candidate.size,
+                                    manifest_entry.mtime_ms,
+                                    false,
+                                ));
+                            }
+                        }
+
                         let head = client
                             .head_object()
                             .bucket(&object_store.bucket)
@@ -2086,8 +2240,19 @@ async fn sync_local_to_remote(
     let local_fingerprint = create_fingerprint(&snapshot);
 
     let client = create_s3_client(&request.object_store);
-    let remote_entries =
+    let remote_listing =
         list_remote_entries(&client, &request.object_store, &request.remote_prefix).await?;
+    let remote_entries = remote_listing.entries;
+    let sync_manifest =
+        Arc::new(
+            load_remote_sync_manifest(
+                &client,
+                &request.object_store,
+                &request.remote_prefix,
+                remote_listing.has_sync_manifest,
+            )
+            .await?,
+        );
     let remote_entries_by_relative_path = remote_entries
         .iter()
         .cloned()
@@ -2126,6 +2291,7 @@ async fn sync_local_to_remote(
     let object_store_for_info_checks = request.object_store.clone();
     let remote_prefix_for_info_checks = request.remote_prefix.clone();
     let remote_entries_for_info_checks = Arc::clone(&remote_entries_by_relative_path);
+    let sync_manifest_for_info_checks = Arc::clone(&sync_manifest);
     let info_checked_candidates = process_with_concurrency(
         plan.info_check_candidates.clone(),
         max_concurrency,
@@ -2134,12 +2300,21 @@ async fn sync_local_to_remote(
             let object_store = object_store_for_info_checks.clone();
             let remote_prefix = remote_prefix_for_info_checks.clone();
             let remote_entries = Arc::clone(&remote_entries_for_info_checks);
+            let sync_manifest = Arc::clone(&sync_manifest_for_info_checks);
             async move {
                 let remote_entry = remote_entries.get(&candidate.relative_path).cloned();
                 let should_upload = match remote_entry {
                     None => true,
                     Some(remote_entry) if remote_entry.is_directory => true,
                     Some(remote_entry) => {
+                        if let Some(manifest_entry) = sync_manifest.get(&candidate.relative_path) {
+                            if manifest_entry.size == candidate.size
+                                && manifest_entry.mtime_ms == candidate.mtime_ms
+                            {
+                                return Ok(false);
+                            }
+                        }
+
                         let head = client
                             .head_object()
                             .bucket(&object_store.bucket)
@@ -2248,6 +2423,25 @@ async fn sync_local_to_remote(
             .await
             .map_err(|error| format!("Failed to delete S3 objects: {error}"))?;
     }
+
+    write_remote_sync_manifest(
+        &client,
+        &request.object_store,
+        &request.remote_prefix,
+        &plan
+            .upload_candidates
+            .iter()
+            .chain(plan.info_check_candidates.iter())
+            .map(|candidate| {
+                (
+                    candidate.relative_path.clone(),
+                    candidate.size,
+                    candidate.mtime_ms,
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+    .await?;
 
     Ok(SyncLocalToRemoteResponse {
         ok: true,

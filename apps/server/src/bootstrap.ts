@@ -661,6 +661,8 @@ export interface RuntimeAssemblyProfile {
   enableControlPlaneFacade: boolean;
 }
 
+type WorkspaceModelMetadataDiscoveryMode = "eager" | "background";
+
 export function resolveRuntimeAssemblyProfile(options: {
   processKind: "api" | "worker";
   startWorker: boolean;
@@ -726,6 +728,24 @@ export function shouldManageWorkspaceRegistry(options: {
   remoteSandboxProvider: boolean;
 }): boolean {
   return options.processKind !== "worker" && !options.hasSingleWorkspace && !options.remoteSandboxProvider;
+}
+
+function resolveWorkspaceModelMetadataDiscoveryMode(options: {
+  processKind: "api" | "worker";
+  hasSingleWorkspace: boolean;
+  managesWorkspaceRegistry: boolean;
+}): WorkspaceModelMetadataDiscoveryMode {
+  if (options.processKind !== "api") {
+    return "eager";
+  }
+
+  if (options.hasSingleWorkspace || !options.managesWorkspaceRegistry) {
+    return "eager";
+  }
+
+  // Multi-workspace API boot favors a lighter control-plane start and hydrates
+  // workspace model metadata after readiness.
+  return "background";
 }
 
 function resolveInternalBaseUrl(
@@ -858,6 +878,11 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     hasSingleWorkspace: singleWorkspace !== undefined,
     remoteSandboxProvider
   });
+  const workspaceModelMetadataDiscoveryMode = resolveWorkspaceModelMetadataDiscoveryMode({
+    processKind,
+    hasSingleWorkspace: singleWorkspace !== undefined,
+    managesWorkspaceRegistry
+  });
   const objectStorageMirrorConfig = config.object_storage
     ? resolveObjectStorageMirrorConfig(config.object_storage)
     : undefined;
@@ -909,7 +934,8 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     modelDir,
     stateDir: path.join(resolveRuntimeStateDir(config.paths), "platform-models"),
     defaultModel: config.llm.default_model,
-    metadataDiscovery: processKind === "worker" ? "background" : "eager",
+    // Prefer cached metadata on boot and let live discovery hydrate after readiness.
+    metadataDiscovery: "background",
     onLoadError: ({ filePath, error }) => {
       logModelLoadError(filePath, error);
     },
@@ -929,16 +955,30 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     };
     return platformAgents;
   }
-  async function discoverWorkspaceWithEnrichedModels(rootPath: string, kind: "project") {
+  async function discoverWorkspaceDefinition(
+    rootPath: string,
+    kind: "project",
+    options?: { enrichModelMetadata?: boolean | undefined }
+  ): Promise<WorkspaceRecord> {
     const { discoverWorkspace } = await loadConfigWorkspaceModule();
-    return (await loadModelMetadataDiscoveryModule()).enrichWorkspaceModelsWithDiscoveredMetadata(
-      await discoverWorkspace(rootPath, kind, {
-        platformModels: models,
-        platformAgents: await getPlatformAgents(),
-        platformSkillDir: config.paths.skill_dir,
-        platformToolDir: toolDir
-      } as Parameters<typeof discoverWorkspace>[2])
-    );
+    const discovered = (await discoverWorkspace(rootPath, kind, {
+      platformModels: models,
+      platformAgents: await getPlatformAgents(),
+      platformSkillDir: config.paths.skill_dir,
+      platformToolDir: toolDir
+    } as Parameters<typeof discoverWorkspace>[2])) as WorkspaceRecord;
+
+    if (!options?.enrichModelMetadata) {
+      return discovered;
+    }
+
+    return (await loadModelMetadataDiscoveryModule()).enrichWorkspaceModelsWithDiscoveredMetadata(discovered);
+  }
+
+  async function discoverWorkspaceWithEnrichedModels(rootPath: string, kind: "project") {
+    return discoverWorkspaceDefinition(rootPath, kind, {
+      enrichModelMetadata: true
+    });
   }
 
   async function withWorkspaceDefinitionTimestamp(workspace: WorkspaceRecord): Promise<WorkspaceRecord> {
@@ -974,14 +1014,18 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           await (async () => {
             const { discoverWorkspaces } = await loadConfigWorkspaceModule();
             return discoverWorkspaces({
-            paths: config.paths,
-            platformModels: models,
-            platformAgents: await getPlatformAgents(),
-            onError: ({ rootPath, kind, error }: { rootPath: string; kind: "project"; error: unknown }) => {
-              logWorkspaceDiscoveryError(rootPath, kind, error);
-            }
-          } as Parameters<typeof discoverWorkspaces>[0]);
+              paths: config.paths,
+              platformModels: models,
+              platformAgents: await getPlatformAgents(),
+              onError: ({ rootPath, kind, error }: { rootPath: string; kind: "project"; error: unknown }) => {
+                logWorkspaceDiscoveryError(rootPath, kind, error);
+              }
+            } as Parameters<typeof discoverWorkspaces>[0]);
           })().then(async (workspaces) => {
+            if (workspaceModelMetadataDiscoveryMode !== "eager") {
+              return workspaces;
+            }
+
             const { enrichWorkspaceModelsWithDiscoveredMetadata } = await loadModelMetadataDiscoveryModule();
             return Promise.all(workspaces.map((workspace) => enrichWorkspaceModelsWithDiscoveredMetadata(workspace)));
           })
@@ -1188,6 +1232,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           ...(redisWorkspaceLeaseRegistry ? { redisWorkspaceLeaseRegistry } : {}),
           ...(redisWorkspacePlacementRegistry ? { redisWorkspacePlacementRegistry } : {}),
           pollingConfig: workspaceRegistryPolling,
+          workspaceModelMetadataDiscovery: workspaceModelMetadataDiscoveryMode,
           getPlatformAgents,
           logWorkspaceDiscoveryError,
           discoverWorkspaceWithEnrichedModels: (rootPath: string, kind: "project") =>

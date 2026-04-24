@@ -295,6 +295,7 @@ async function runCase(options: {
   try {
     await createFixture(sourceDir, options.benchmark.files, options.benchmark.sizeBytes);
 
+    console.log(`[bench-object-storage] case=${options.label} stage=seed-plan start prefix=${options.remotePrefix}`);
     const seedPlanMeasurement = await measureOperation(options.benchmark.memoryPollIntervalMs, async () => {
       if (options.nativeEnabled) {
         return planNativeSeedUpload({
@@ -308,9 +309,14 @@ async function runCase(options: {
         currentRemotePath: "/workspace"
       });
     });
+    console.log(`[bench-object-storage] case=${options.label} stage=seed-plan done ms=${Math.round(seedPlanMeasurement.durationMs)}`);
 
+    console.log(`[bench-object-storage] case=${options.label} stage=push start prefix=${options.remotePrefix}`);
     const pushMeasurement = await measureOperation(options.benchmark.memoryPollIntervalMs, async () =>
       syncLocalDirectoryToRemote(store, options.remotePrefix, sourceDir)
+    );
+    console.log(
+      `[bench-object-storage] case=${options.label} stage=push done ms=${Math.round(pushMeasurement.durationMs)} uploaded=${pushMeasurement.result.uploadedFileCount}`
     );
 
     const materializationManager = new WorkspaceMaterializationManager({
@@ -318,6 +324,7 @@ async function runCase(options: {
       workerId: `bench-${options.label}`,
       store
     });
+    console.log(`[bench-object-storage] case=${options.label} stage=materialize start prefix=${options.remotePrefix}`);
     const materializeMeasurement = await measureOperation(options.benchmark.memoryPollIntervalMs, async () => {
       const lease = await materializationManager.acquireWorkspace({
         workspace: {
@@ -336,10 +343,18 @@ async function runCase(options: {
       }
     });
     const materializedFileCount = await countLocalFiles(materializeMeasurement.result.localPath);
+    console.log(
+      `[bench-object-storage] case=${options.label} stage=materialize done ms=${Math.round(materializeMeasurement.durationMs)} files=${materializedFileCount}`
+    );
     await materializationManager.close();
 
+    console.log(`[bench-object-storage] case=${options.label} stage=pull start prefix=${options.remotePrefix}`);
     const pullMeasurement = await measureOperation(options.benchmark.memoryPollIntervalMs, async () =>
       syncRemotePrefixToLocal(store, options.remotePrefix, targetDir)
+    );
+    const pulledFileCount = await countLocalFiles(targetDir);
+    console.log(
+      `[bench-object-storage] case=${options.label} stage=pull done ms=${Math.round(pullMeasurement.durationMs)} files=${pulledFileCount}`
     );
 
     return {
@@ -354,7 +369,7 @@ async function runCase(options: {
       plannedSeedFileCount: seedPlanMeasurement.result.files.length,
       uploadedFileCount: pushMeasurement.result.uploadedFileCount,
       materializedFileCount,
-      pulledFileCount: await countLocalFiles(targetDir)
+      pulledFileCount
     };
   } finally {
     await deleteRemotePrefixFromObjectStore(store, options.remotePrefix).catch(() => undefined);
