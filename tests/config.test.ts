@@ -472,6 +472,9 @@ workers:
         project_name: openagentharness
         service: oah-sandbox
         command: docker-compose
+        endpoint: http://oah-compose-scaler:8790
+        auth_token: local-token
+        timeout_ms: 4500
 llm:
   default_model: openai-default
 `,
@@ -513,7 +516,10 @@ llm:
           compose_file: "/tmp/oah/docker-compose.local.yml",
           project_name: "openagentharness",
           service: "oah-sandbox",
-          command: "docker-compose"
+          command: "docker-compose",
+          endpoint: "http://oah-compose-scaler:8790",
+          auth_token: "local-token",
+          timeout_ms: 4500
         }
       }
     });

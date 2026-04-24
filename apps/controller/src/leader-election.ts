@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import * as http from "node:http";
 import * as https from "node:https";
 
-import type { ServerConfig } from "@oah/config";
+import type { ServerConfig } from "@oah/config-server-control";
 
 export interface ControllerLeaderElectionStatus {
   running: boolean;

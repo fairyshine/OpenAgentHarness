@@ -14,6 +14,9 @@ importers:
       '@types/pg':
         specifier: 8.15.5
         version: 8.15.5
+      esbuild:
+        specifier: 0.27.4
+        version: 0.27.4
       tsx:
         specifier: 4.21.0
         version: 4.21.0
@@ -26,11 +29,20 @@ importers:
 
   apps/cli: {}
 
+  apps/compose-scaler:
+    dependencies:
+      '@oah/scale-target-control':
+        specifier: workspace:*
+        version: link:../../packages/scale-target-control
+
   apps/controller:
     dependencies:
-      '@oah/config':
+      '@oah/config-server-control':
         specifier: workspace:*
-        version: link:../../packages/config
+        version: link:../../packages/config-server-control
+      '@oah/scale-target-control':
+        specifier: workspace:*
+        version: link:../../packages/scale-target-control
       '@oah/storage-redis-control':
         specifier: workspace:*
         version: link:../../packages/storage-redis-control
@@ -189,6 +201,18 @@ importers:
         specifier: ^2.10.3
         version: 2.10.3
 
+  packages/config-server-control:
+    dependencies:
+      ajv:
+        specifier: 8.18.0
+        version: 8.18.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.18.0)
+      yaml:
+        specifier: 2.8.3
+        version: 2.8.3
+
   packages/engine-core:
     dependencies:
       ajv:
@@ -226,6 +250,12 @@ importers:
         version: 6.0.141(zod@4.3.6)
 
   packages/native-bridge: {}
+
+  packages/scale-target-control:
+    dependencies:
+      '@oah/config-server-control':
+        specifier: workspace:*
+        version: link:../config-server-control
 
   packages/storage-memory:
     dependencies:

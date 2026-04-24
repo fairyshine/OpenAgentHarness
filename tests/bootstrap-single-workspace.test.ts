@@ -10,10 +10,12 @@ import { createE2BCompatibleSandboxHost } from "../apps/server/src/bootstrap/e2b
 
 import {
   bootstrapRuntime,
-  cleanupWorkspaceLocalArtifacts,
+  cleanupWorkspaceLocalArtifacts
+} from "../apps/server/src/bootstrap.ts";
+import {
   findManagedWorkspaceIdsToDelete,
   reconcileDiscoveredWorkspaces
-} from "../apps/server/src/bootstrap.ts";
+} from "../apps/server/src/bootstrap/workspace-registry.ts";
 
 const tempDirs: string[] = [];
 

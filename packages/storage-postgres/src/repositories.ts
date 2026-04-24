@@ -960,6 +960,45 @@ export class PostgresWorkspaceArchiveRepository implements WorkspaceArchiveRepos
     return rows.map(toWorkspaceArchiveRecord);
   }
 
+  async forEachByArchiveDate(
+    archiveDate: string,
+    visitor: (archive: WorkspaceArchiveRecord) => Promise<void> | void,
+    options?: {
+      pageSize?: number | undefined;
+    }
+  ): Promise<number> {
+    const pageSize = Math.max(1, options?.pageSize ?? 4);
+    let offset = 0;
+    let count = 0;
+
+    while (true) {
+      const rows = await this.db
+        .select()
+        .from(archives)
+        .where(eq(archives.archiveDate, archiveDate))
+        .orderBy(asc(archives.archivedAt), asc(archives.id))
+        .limit(pageSize)
+        .offset(offset);
+
+      if (rows.length === 0) {
+        break;
+      }
+
+      for (const row of rows) {
+        await visitor(toWorkspaceArchiveRecord(row));
+        count += 1;
+      }
+
+      if (rows.length < pageSize) {
+        break;
+      }
+
+      offset += rows.length;
+    }
+
+    return count;
+  }
+
   async markExported(ids: string[], input: { exportedAt: string; exportPath: string }): Promise<void> {
     if (ids.length === 0) {
       return;

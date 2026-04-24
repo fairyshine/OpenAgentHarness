@@ -21,6 +21,8 @@ import { nowIso } from "@oah/engine-core";
 import {
   inspectNativeArchiveExportDirectory,
   isNativeArchiveExportEnabled,
+  resolveDefaultNativeArchiveExportWorkerCount,
+  shouldPreferNativeArchiveExportBundle,
   writeNativeArchiveBundle,
   writeNativeArchiveChecksum
 } from "./native-archive-export.js";
@@ -366,61 +368,69 @@ async function writeArchiveChecksumWithFallback(exportPath: string, checksumPath
   }
 }
 
+const ARCHIVE_EXPORT_STREAM_PAGE_SIZE = 4;
+
+type ArchiveBundleProducer = (visitor: (archive: WorkspaceArchiveRecord) => Promise<void>) => Promise<string[]>;
+
+interface ArchiveBundleWriteSummary {
+  archiveIds: string[];
+  archiveCount: number;
+}
+
+async function runWithConcurrencyLimit<T>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  const normalizedConcurrency = Math.max(1, Math.min(concurrency, items.length || 1));
+
+  await Promise.all(
+    Array.from({ length: normalizedConcurrency }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= items.length) {
+          return;
+        }
+
+        await worker(items[index]!);
+      }
+    })
+  );
+}
+
 async function writeArchiveBundleWithFallback(input: {
   outputPath: string;
   archiveDate: string;
   exportPath: string;
   exportedAt: string;
-  archives: WorkspaceArchiveRecord[];
-}): Promise<void> {
-  if (!isNativeArchiveExportEnabled()) {
-    const db = new DatabaseSync(input.outputPath);
-    try {
-      applyArchiveSchema(db);
-      const statements = createArchiveInsertStatements(db);
-      db.exec("begin immediate");
-      try {
-        insertArchiveRows(statements, input.archiveDate, input.exportPath, input.exportedAt, input.archives);
-        db.exec("commit");
-      } catch (error) {
-        db.exec("rollback");
-        throw error;
-      }
-    } finally {
-      db.close();
-    }
-    return;
+  produceArchives: ArchiveBundleProducer;
+  preferNative: boolean;
+}): Promise<ArchiveBundleWriteSummary> {
+  if (!input.preferNative || !isNativeArchiveExportEnabled()) {
+    return writeArchiveBundleTypeScript(input);
   }
 
   try {
-    await writeNativeArchiveBundle({
+    const result = await writeNativeArchiveBundle({
       outputPath: input.outputPath,
       archiveDate: input.archiveDate,
       exportPath: input.exportPath,
       exportedAt: input.exportedAt,
-      archives: input.archives
+      produceArchives: async (writer) => input.produceArchives((archive) => writer.writeArchive(archive))
     });
+    return {
+      archiveIds: result.archiveIds,
+      archiveCount: result.archiveCount
+    };
   } catch (error) {
     console.warn(
       `[oah-native] Falling back to TypeScript archive bundle write for ${input.archiveDate}: ${
         error instanceof Error ? error.message : String(error)
       }`
     );
-    const db = new DatabaseSync(input.outputPath);
-    try {
-      applyArchiveSchema(db);
-      const statements = createArchiveInsertStatements(db);
-      db.exec("begin immediate");
-      try {
-        insertArchiveRows(statements, input.archiveDate, input.exportPath, input.exportedAt, input.archives);
-        db.exec("commit");
-      } catch (fallbackError) {
-        db.exec("rollback");
-        throw fallbackError;
-      }
-    } finally {
-      db.close();
-    }
+    return writeArchiveBundleTypeScript(input);
   }
 }
 
@@ -651,40 +661,86 @@ function insertArtifactRows(
   }
 }
 
-function insertArchiveRows(
-  statements: ArchiveInsertStatements,
+function insertArchiveManifestRow(
+  statement: ArchiveInsertStatements["manifest"],
   archiveDate: string,
+  timezone: string,
+  exportedAt: string,
+  archiveCount: number
+): void {
+  statement.run(archiveDate, timezone, exportedAt, archiveCount);
+}
+
+function insertArchiveRow(
+  statements: ArchiveInsertStatements,
   exportPath: string,
   exportedAt: string,
-  archives: WorkspaceArchiveRecord[]
+  archive: WorkspaceArchiveRecord
 ): void {
-  statements.manifest.run(archiveDate, archives[0]?.timezone ?? "UTC", exportedAt, archives.length);
+  statements.archive.run(
+    archive.id,
+    archive.workspaceId,
+    archive.scopeType,
+    archive.scopeId,
+    archive.archiveDate,
+    archive.archivedAt,
+    archive.deletedAt,
+    archive.timezone,
+    exportedAt,
+    exportPath,
+    archive.workspace.name,
+    archive.workspace.rootPath,
+    jsonText(archive.workspace)
+  );
 
-  for (const archive of archives) {
-    statements.archive.run(
-      archive.id,
-      archive.workspaceId,
-      archive.scopeType,
-      archive.scopeId,
-      archive.archiveDate,
-      archive.archivedAt,
-      archive.deletedAt,
-      archive.timezone,
-      exportedAt,
-      exportPath,
-      archive.workspace.name,
-      archive.workspace.rootPath,
-      jsonText(archive.workspace)
-    );
+  insertSessionRows(statements.session, archive.id, archive.sessions);
+  insertRunRows(statements.run, archive.id, archive.runs);
+  insertMessageRows(statements.message, archive.id, archive.messages);
+  insertEngineMessageRows(statements.engineMessage, archive.id, archive.engineMessages);
+  insertRunStepRows(statements.runStep, archive.id, archive.runSteps);
+  insertToolCallRows(statements.toolCall, archive.id, archive.toolCalls);
+  insertHookRunRows(statements.hookRun, archive.id, archive.hookRuns);
+  insertArtifactRows(statements.artifact, archive.id, archive.artifacts);
+}
 
-    insertSessionRows(statements.session, archive.id, archive.sessions);
-    insertRunRows(statements.run, archive.id, archive.runs);
-    insertMessageRows(statements.message, archive.id, archive.messages);
-    insertEngineMessageRows(statements.engineMessage, archive.id, archive.engineMessages);
-    insertRunStepRows(statements.runStep, archive.id, archive.runSteps);
-    insertToolCallRows(statements.toolCall, archive.id, archive.toolCalls);
-    insertHookRunRows(statements.hookRun, archive.id, archive.hookRuns);
-    insertArtifactRows(statements.artifact, archive.id, archive.artifacts);
+async function writeArchiveBundleTypeScript(input: {
+  outputPath: string;
+  archiveDate: string;
+  exportPath: string;
+  exportedAt: string;
+  produceArchives: ArchiveBundleProducer;
+}): Promise<ArchiveBundleWriteSummary> {
+  const db = new DatabaseSync(input.outputPath);
+  try {
+    applyArchiveSchema(db);
+    const statements = createArchiveInsertStatements(db);
+    const archiveIds: string[] = [];
+    let archiveCount = 0;
+    let timezone = "UTC";
+
+    db.exec("begin immediate");
+    try {
+      const producedArchiveIds = await input.produceArchives(async (archive) => {
+        if (archiveCount === 0) {
+          timezone = archive.timezone;
+        }
+        archiveCount += 1;
+        insertArchiveRow(statements, input.exportPath, input.exportedAt, archive);
+      });
+      archiveIds.push(...producedArchiveIds);
+      insertArchiveManifestRow(statements.manifest, input.archiveDate, timezone, input.exportedAt, archiveCount);
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+
+    return {
+      archiveIds,
+      archiveCount
+    };
+  } finally {
+    db.close();
   }
 }
 
@@ -748,8 +804,18 @@ export class WorkspaceArchiveExporter {
       const now = nowIso();
       const today = formatArchiveDate(now, this.#timeZone);
       const pendingArchiveDates = await this.#repository.listPendingArchiveDates(today, this.#batchLimit);
-      for (const archiveDate of pendingArchiveDates) {
-        await this.#exportArchiveDate(archiveDate);
+      const preferNativeBundle = shouldPreferNativeArchiveExportBundle(pendingArchiveDates.length);
+      const archiveExportConcurrency = preferNativeBundle
+        ? Math.max(1, Math.min(resolveDefaultNativeArchiveExportWorkerCount(), pendingArchiveDates.length || 1))
+        : 1;
+      if (archiveExportConcurrency > 1 && pendingArchiveDates.length > 1) {
+        await runWithConcurrencyLimit(pendingArchiveDates, archiveExportConcurrency, async (archiveDate) => {
+          await this.#exportArchiveDate(archiveDate, preferNativeBundle);
+        });
+      } else {
+        for (const archiveDate of pendingArchiveDates) {
+          await this.#exportArchiveDate(archiveDate, preferNativeBundle);
+        }
       }
 
       const exportedPruneBefore = shiftArchiveDate(now, this.#timeZone, -(this.#exportedRetentionDays - 1));
@@ -811,12 +877,37 @@ export class WorkspaceArchiveExporter {
     }
   }
 
-  async #exportArchiveDate(archiveDate: string): Promise<void> {
-    const archives = await this.#repository.listByArchiveDate(archiveDate);
-    if (archives.length === 0) {
-      return;
+  async #produceArchiveDate(archiveDate: string, visitor: (archive: WorkspaceArchiveRecord) => Promise<void>): Promise<string[]> {
+    const archiveIds: string[] = [];
+    const repository = this.#repository as WorkspaceArchiveRepository & {
+      forEachByArchiveDate?: (
+        archiveDate: string,
+        visitor: (archive: WorkspaceArchiveRecord) => Promise<void> | void,
+        options?: { pageSize?: number | undefined }
+      ) => Promise<number>;
+    };
+
+    const handleArchive = async (archive: WorkspaceArchiveRecord) => {
+      archiveIds.push(archive.id);
+      await visitor(archive);
+    };
+
+    if (repository.forEachByArchiveDate) {
+      await repository.forEachByArchiveDate(archiveDate, handleArchive, {
+        pageSize: ARCHIVE_EXPORT_STREAM_PAGE_SIZE
+      });
+      return archiveIds;
     }
 
+    const archives = await this.#repository.listByArchiveDate(archiveDate);
+    for (const archive of archives) {
+      await handleArchive(archive);
+    }
+
+    return archiveIds;
+  }
+
+  async #exportArchiveDate(archiveDate: string, preferNativeBundle: boolean): Promise<void> {
     const exportPath = archiveExportDbPath(this.#exportRoot, archiveDate);
     const tempPath = `${exportPath}.tmp`;
     const checksumPath = archiveChecksumPath(exportPath);
@@ -825,26 +916,31 @@ export class WorkspaceArchiveExporter {
     await mkdir(path.dirname(exportPath), { recursive: true });
     await rm(tempPath, { force: true });
 
-    await writeArchiveBundleWithFallback({
+    const bundle = await writeArchiveBundleWithFallback({
       outputPath: tempPath,
       archiveDate,
       exportPath,
       exportedAt,
-      archives
+      produceArchives: async (visitor) => this.#produceArchiveDate(archiveDate, visitor),
+      preferNative: preferNativeBundle
     });
+    if (bundle.archiveCount === 0) {
+      await rm(tempPath, { force: true });
+      return;
+    }
 
     await rm(exportPath, { force: true });
     await rename(tempPath, exportPath);
     await writeArchiveChecksumWithFallback(exportPath, checksumPath);
     await this.#repository.markExported(
-      archives.map((archive) => archive.id),
+      bundle.archiveIds,
       {
         exportedAt,
         exportPath
       }
     );
     this.#logger.info?.(
-      `Exported ${archives.length} workspace archives for ${archiveDate} to ${exportPath} with checksum ${path.basename(checksumPath)}.`
+      `Exported ${bundle.archiveCount} workspace archives for ${archiveDate} to ${exportPath} with checksum ${path.basename(checksumPath)}.`
     );
   }
 }

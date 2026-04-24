@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { execSync } from "node:child_process";
 
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -56,6 +58,11 @@ function resolveProxyTarget(): string {
     return process.env.OAH_WEB_PROXY_TARGET.trim();
   }
 
+  const dockerPublishedTarget = resolveLocalDockerApiProxyTarget();
+  if (dockerPublishedTarget) {
+    return dockerPublishedTarget;
+  }
+
   const repoRoot = path.resolve(__dirname, "../..");
   const configuredPath = process.env.OAH_CONFIG?.trim();
   const candidateConfigPaths = [
@@ -85,6 +92,71 @@ function resolveProxyTarget(): string {
   }
 
   return "http://127.0.0.1:8787";
+}
+
+function resolveLocalDockerApiProxyTarget(): string | undefined {
+  try {
+    const output = execSync("docker ps --format '{{.Names}}\\t{{.Ports}}'", {
+      cwd: path.resolve(__dirname, "../.."),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+
+    for (const rawLine of output.split(/\r?\n/u)) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+
+      const [name, ports = ""] = line.split("\t");
+      if (!/oah-api/u.test(name)) {
+        continue;
+      }
+
+      const publishedPortMatch = ports.match(/(?:127\.0\.0\.1|0\.0\.0\.0|\[::\]):(\d+)->8787\/tcp/u);
+      if (publishedPortMatch) {
+        const host =
+          ports.includes("0.0.0.0:") || ports.includes("[::]:")
+            ? resolveNonLoopbackHost() ?? "127.0.0.1"
+            : "127.0.0.1";
+        return `http://${host}:${publishedPortMatch[1]}`;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function resolveNonLoopbackHost(): string | undefined {
+  const interfaces = os.networkInterfaces();
+  const preferred: string[] = [];
+  const fallback: string[] = [];
+
+  function isPreferredAddress(name: string, address: string): boolean {
+    return (
+      /^(en|eth|wlan)/u.test(name) &&
+      (/^10\./u.test(address) || /^192\.168\./u.test(address) || /^172\.(1[6-9]|2\d|3[0-1])\./u.test(address))
+    );
+  }
+
+  for (const [name, entries] of Object.entries(interfaces)) {
+    for (const entry of entries ?? []) {
+      if (entry.family !== "IPv4" || entry.internal) {
+        continue;
+      }
+
+      if (isPreferredAddress(name, entry.address)) {
+        preferred.push(entry.address);
+        continue;
+      }
+
+      fallback.push(entry.address);
+    }
+  }
+
+  return preferred[0] ?? fallback[0];
 }
 
 const proxyTarget = resolveProxyTarget();

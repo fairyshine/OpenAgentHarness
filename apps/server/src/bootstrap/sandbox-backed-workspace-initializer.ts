@@ -6,13 +6,7 @@ import path from "node:path";
 import { sandboxSchema, type CreateWorkspaceRequest } from "@oah/api-contracts";
 import { discoverWorkspace, initializeWorkspaceFromRuntime, type DiscoveredAgent, type PlatformModelRegistry } from "@oah/config";
 import { createId, type WorkspaceInitializationResult } from "@oah/engine-core";
-import {
-  computeNativeDirectoryFingerprint,
-  computeNativeDirectoryFingerprintBatch,
-  isNativeWorkspaceSyncEnabled,
-  planNativeSeedUpload,
-  syncNativeLocalToSandboxHttp
-} from "@oah/native-bridge";
+import * as nativeBridge from "@oah/native-bridge";
 
 import {
   observeNativeWorkspaceSyncOperation,
@@ -25,6 +19,13 @@ const SANDBOX_WORKSPACE_ROOT = "/workspace";
 const DEFAULT_SEED_UPLOAD_CONCURRENCY = 8;
 const preparedSeedCache = new Map<string, Promise<{ preparedWorkspaceRoot: string; discovered: WorkspaceInitializationResult }>>();
 
+export const nativeWorkspaceSyncAdapter = {
+  isEnabled: nativeBridge.isNativeWorkspaceSyncEnabled,
+  computeDirectoryFingerprint: nativeBridge.computeNativeDirectoryFingerprint,
+  planSeedUpload: nativeBridge.planNativeSeedUpload,
+  syncLocalToSandboxHttp: nativeBridge.syncNativeLocalToSandboxHttp
+};
+
 function resolveSeedUploadConcurrency(): number {
   const raw = process.env.OAH_SANDBOX_SEED_UPLOAD_CONCURRENCY;
   if (!raw || raw.trim().length === 0) {
@@ -36,14 +37,14 @@ function resolveSeedUploadConcurrency(): number {
 }
 
 async function collectDirectoryFingerprint(rootPath: string): Promise<string> {
-  if (isNativeWorkspaceSyncEnabled()) {
+  if (nativeWorkspaceSyncAdapter.isEnabled()) {
     try {
       const result = await observeNativeWorkspaceSyncOperation({
         operation: "fingerprint",
         implementation: "rust",
         target: rootPath,
         logFailure: false,
-        action: () => computeNativeDirectoryFingerprint({ rootDir: rootPath })
+        action: () => nativeWorkspaceSyncAdapter.computeDirectoryFingerprint({ rootDir: rootPath })
       });
       return result.fingerprint;
     } catch (error) {
@@ -122,34 +123,32 @@ async function buildPreparedSeedCacheKey(input: {
   ] as const;
 
   const directoryFingerprints = new Map<string, string>();
-  if (isNativeWorkspaceSyncEnabled()) {
+  if (nativeWorkspaceSyncAdapter.isEnabled()) {
     try {
-      const result = await observeNativeWorkspaceSyncOperation({
-        operation: "fingerprint_batch",
-        implementation: "rust",
-        target: runtimeRoot,
-        logFailure: false,
-        metadata: {
-          directoryCount: fingerprintInputs.length
-        },
-        action: () =>
-          computeNativeDirectoryFingerprintBatch({
-            directories: fingerprintInputs.map((entry) => ({ rootDir: entry.rootDir }))
-          })
-      });
-      for (let index = 0; index < fingerprintInputs.length; index += 1) {
-        const inputEntry = fingerprintInputs[index];
-        const resultEntry = result.results[index];
-        if (!inputEntry) {
-          continue;
-        }
-        if (resultEntry?.rootDir === inputEntry.rootDir) {
-          directoryFingerprints.set(inputEntry.key, resultEntry.fingerprint);
-        }
+      const results = await Promise.all(
+        fingerprintInputs.map(async (entry) => {
+          const result = await observeNativeWorkspaceSyncOperation({
+            operation: "fingerprint",
+            implementation: "rust",
+            target: entry.rootDir,
+            logFailure: false,
+            metadata: {
+              fingerprintKey: entry.key
+            },
+            action: () => nativeWorkspaceSyncAdapter.computeDirectoryFingerprint({ rootDir: entry.rootDir })
+          });
+          return {
+            key: entry.key,
+            fingerprint: result.fingerprint
+          };
+        })
+      );
+      for (const result of results) {
+        directoryFingerprints.set(result.key, result.fingerprint);
       }
     } catch (error) {
       recordNativeWorkspaceSyncFallback({
-        operation: "fingerprint_batch",
+        operation: "fingerprint",
         target: runtimeRoot,
         error,
         metadata: {
@@ -252,7 +251,7 @@ async function collectNativeDirectoryUploadPlan(input: {
   directories: string[];
   files: Array<{ localPath: string; remotePath: string; mtimeMs?: number | undefined }>;
 } | undefined> {
-  if (!isNativeWorkspaceSyncEnabled()) {
+  if (!nativeWorkspaceSyncAdapter.isEnabled()) {
     return undefined;
   }
 
@@ -266,7 +265,7 @@ async function collectNativeDirectoryUploadPlan(input: {
         remoteRootPath: input.currentRemotePath
       },
       action: () =>
-        planNativeSeedUpload({
+        nativeWorkspaceSyncAdapter.planSeedUpload({
           rootDir: input.currentLocalPath,
           remoteBasePath: input.currentRemotePath
         })
@@ -361,7 +360,7 @@ async function uploadDirectoryTreeToSelfHostedSandboxNative(input: {
       maxConcurrency
     },
     action: () =>
-      syncNativeLocalToSandboxHttp({
+      nativeWorkspaceSyncAdapter.syncLocalToSandboxHttp({
         rootDir: input.currentLocalPath,
         remoteRootPath: input.currentRemotePath,
         maxConcurrency,
@@ -405,7 +404,7 @@ async function uploadWorkspaceSeed(input: {
         await input.sandboxHost.workspaceFileSystem.mkdir(lease.workspace.rootPath, { recursive: true });
       }
     });
-    if (input.selfHostedSandbox && isNativeWorkspaceSyncEnabled()) {
+    if (input.selfHostedSandbox && nativeWorkspaceSyncAdapter.isEnabled()) {
       try {
         await uploadDirectoryTreeToSelfHostedSandboxNative({
           currentLocalPath: input.stagingWorkspaceRoot,

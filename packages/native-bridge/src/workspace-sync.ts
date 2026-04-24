@@ -4,6 +4,7 @@ import { resolveWorkspaceSyncBinary } from "./resolve-binary.js";
 
 const NATIVE_PROTOCOL_VERSION = 1;
 const DEFAULT_NATIVE_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_NATIVE_WORKSPACE_SYNC_WORKER_COUNT = 1;
 
 function readBooleanEnv(name: string): boolean {
   const value = process.env[name]?.trim().toLowerCase();
@@ -171,7 +172,274 @@ export class NativeWorkspaceSyncBridgeError extends Error {
   }
 }
 
-async function runNativeWorkspaceSyncCommand<TResponse extends NativeCommandSuccessResponse>(
+interface NativeWorkspaceSyncWorkerRequest {
+  requestId: string;
+  command: string;
+  payload?: Record<string, unknown>;
+}
+
+interface NativeWorkspaceSyncWorkerSuccessResponse extends NativeCommandSuccessResponse {
+  requestId: string;
+}
+
+interface NativeWorkspaceSyncWorkerFailureResponse extends NativeCommandFailureResponse {
+  requestId: string;
+}
+
+let nativeWorkspaceSyncWorkerPoolPromise: Promise<NativeWorkspaceSyncWorkerPool> | undefined;
+let nativeWorkspaceSyncRequestSequence = 0;
+const nativeWorkspaceSyncStdinStreams = new WeakSet<object>();
+
+function resolveNativeWorkspaceSyncWorkerCount(): number {
+  const explicit = process.env.OAH_NATIVE_WORKSPACE_SYNC_WORKERS?.trim();
+  if (!explicit) {
+    return DEFAULT_NATIVE_WORKSPACE_SYNC_WORKER_COUNT;
+  }
+
+  const parsed = Number.parseInt(explicit, 10);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : DEFAULT_NATIVE_WORKSPACE_SYNC_WORKER_COUNT;
+}
+
+function isPersistentNativeWorkspaceSyncEnabled(): boolean {
+  return readBooleanEnv("OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT");
+}
+
+function getNativeWorkspaceSyncStdin(child: ReturnType<typeof spawn>) {
+  const stdin = child.stdin;
+  if (!stdin) {
+    child.kill("SIGTERM");
+    throw new NativeWorkspaceSyncBridgeError(
+      "Native workspace sync stdin stream is unavailable.",
+      "native_stdin_unavailable"
+    );
+  }
+  if (!nativeWorkspaceSyncStdinStreams.has(stdin)) {
+    stdin.on("error", () => {
+      // Errors are surfaced through the write callback and worker close handling.
+    });
+    nativeWorkspaceSyncStdinStreams.add(stdin);
+  }
+  if (stdin.destroyed || stdin.writableEnded || !stdin.writable) {
+    throw new NativeWorkspaceSyncBridgeError(
+      "Native workspace sync stdin stream is not writable.",
+      "native_stdin_unavailable"
+    );
+  }
+  return stdin;
+}
+
+async function writeNativeWorkspaceSyncPayload(child: ReturnType<typeof spawn>, payload: string): Promise<void> {
+  const stdin = getNativeWorkspaceSyncStdin(child);
+  await new Promise<void>((resolve, reject) => {
+    stdin.write(payload, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+class NativeWorkspaceSyncWorker {
+  readonly #child: ReturnType<typeof spawn>;
+  readonly #pendingResponses = new Map<
+    string,
+    {
+      resolve: (response: NativeWorkspaceSyncWorkerSuccessResponse) => void;
+      reject: (error: Error) => void;
+      timeoutHandle: ReturnType<typeof setTimeout>;
+    }
+  >();
+  readonly #queueStart = Promise.resolve();
+  #queue = this.#queueStart;
+  #stdoutBuffer = "";
+  #stderrBuffer = "";
+  #closed = false;
+
+  constructor(child: ReturnType<typeof spawn>, onTerminated?: (error: NativeWorkspaceSyncBridgeError) => void) {
+    this.#child = child;
+
+    if (!child.stdout || !child.stderr) {
+      child.kill("SIGTERM");
+      throw new NativeWorkspaceSyncBridgeError(
+        "Native workspace sync worker stdio streams are unavailable.",
+        "native_worker_stdio_unavailable"
+      );
+    }
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      this.#stdoutBuffer += chunk.toString();
+      void this.#drainStdoutBuffer();
+    });
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      this.#stderrBuffer = `${this.#stderrBuffer}${chunk.toString()}`.slice(-32_768);
+    });
+    child.on("error", (error) => {
+      const workerError = new NativeWorkspaceSyncBridgeError(
+        `Native workspace sync worker failed: ${error instanceof Error ? error.message : String(error)}`,
+        "native_worker_failed"
+      );
+      onTerminated?.(workerError);
+      this.#failAllPending(workerError);
+    });
+    child.on("close", (code) => {
+      this.#closed = true;
+      const workerError = new NativeWorkspaceSyncBridgeError(
+        `Native workspace sync worker exited with code ${code ?? 0}.${this.#stderrBuffer ? ` ${this.#stderrBuffer.trim()}` : ""}`,
+        "native_worker_exited"
+      );
+      onTerminated?.(workerError);
+      this.#failAllPending(workerError);
+    });
+  }
+
+  async runCommand<TResponse extends NativeCommandSuccessResponse>(
+    command: string,
+    payload?: Record<string, unknown>
+  ): Promise<TResponse> {
+    const run = async (): Promise<TResponse> => {
+      if (this.#closed) {
+        throw new NativeWorkspaceSyncBridgeError("Native workspace sync worker is no longer available.", "native_worker_closed");
+      }
+
+      const requestId = `workspace-sync-${Date.now()}-${nativeWorkspaceSyncRequestSequence += 1}`;
+      const responsePromise = new Promise<NativeWorkspaceSyncWorkerSuccessResponse>((resolve, reject) => {
+        const timeoutHandle = setTimeout(() => {
+          this.#pendingResponses.delete(requestId);
+          reject(
+            new NativeWorkspaceSyncBridgeError(
+              `Native workspace sync worker command ${command} timed out after ${DEFAULT_NATIVE_TIMEOUT_MS}ms.`,
+              "native_command_timeout"
+            )
+          );
+        }, DEFAULT_NATIVE_TIMEOUT_MS);
+        this.#pendingResponses.set(requestId, {
+          resolve,
+          reject,
+          timeoutHandle
+        });
+      });
+
+      try {
+        const request: NativeWorkspaceSyncWorkerRequest = {
+          requestId,
+          command,
+          ...(payload !== undefined ? { payload } : {})
+        };
+        await writeNativeWorkspaceSyncPayload(this.#child, `${JSON.stringify(request)}\n`);
+        const response = await responsePromise;
+        return response as TResponse;
+      } catch (error) {
+        const pending = this.#pendingResponses.get(requestId);
+        if (pending) {
+          clearTimeout(pending.timeoutHandle);
+        }
+        this.#pendingResponses.delete(requestId);
+        throw error;
+      }
+    };
+
+    const resultPromise = this.#queue.then(run, run);
+    this.#queue = resultPromise.then(
+      () => undefined,
+      () => undefined
+    );
+    return resultPromise;
+  }
+
+  async #drainStdoutBuffer(): Promise<void> {
+    while (true) {
+      const newlineIndex = this.#stdoutBuffer.indexOf("\n");
+      if (newlineIndex < 0) {
+        return;
+      }
+
+      const line = this.#stdoutBuffer.slice(0, newlineIndex).trim();
+      this.#stdoutBuffer = this.#stdoutBuffer.slice(newlineIndex + 1);
+      if (!line) {
+        continue;
+      }
+
+      const response = parseJsonPayload<NativeWorkspaceSyncWorkerSuccessResponse | NativeWorkspaceSyncWorkerFailureResponse>(
+        line,
+        "stdout"
+      );
+      const pending = this.#pendingResponses.get(response.requestId);
+      if (!pending) {
+        continue;
+      }
+      clearTimeout(pending.timeoutHandle);
+      this.#pendingResponses.delete(response.requestId);
+
+      if (response.ok) {
+        pending.resolve(response);
+        continue;
+      }
+
+      pending.reject(
+        new NativeWorkspaceSyncBridgeError(
+          response.message ?? `Native workspace sync worker request ${response.requestId} failed.`,
+          response.code ?? "native_worker_request_failed"
+        )
+      );
+    }
+  }
+
+  #failAllPending(error: Error): void {
+    for (const pending of this.#pendingResponses.values()) {
+      clearTimeout(pending.timeoutHandle);
+      pending.reject(error);
+    }
+    this.#pendingResponses.clear();
+  }
+}
+
+class NativeWorkspaceSyncWorkerPool {
+  #nextWorkerIndex = 0;
+
+  constructor(private readonly workers: NativeWorkspaceSyncWorker[]) {}
+
+  async runCommand<TResponse extends NativeCommandSuccessResponse>(
+    command: string,
+    payload?: Record<string, unknown>
+  ): Promise<TResponse> {
+    const worker = this.workers[this.#nextWorkerIndex % this.workers.length];
+    this.#nextWorkerIndex += 1;
+    if (!worker) {
+      throw new NativeWorkspaceSyncBridgeError("Native workspace sync worker pool is empty.", "native_worker_unavailable");
+    }
+    return worker.runCommand<TResponse>(command, payload);
+  }
+}
+
+async function getNativeWorkspaceSyncWorkerPool(): Promise<NativeWorkspaceSyncWorkerPool> {
+  const binary = resolveWorkspaceSyncBinary();
+  if (!binary) {
+    throw new NativeWorkspaceSyncBridgeError(
+      "Native workspace sync binary was not found. Set OAH_NATIVE_WORKSPACE_SYNC_BINARY or build native/oah-workspace-sync.",
+      "native_binary_missing"
+    );
+  }
+
+  nativeWorkspaceSyncWorkerPoolPromise ??= Promise.resolve(
+    new NativeWorkspaceSyncWorkerPool(
+      Array.from({ length: resolveNativeWorkspaceSyncWorkerCount() }, () =>
+        new NativeWorkspaceSyncWorker(
+          spawn(binary, ["serve"], {
+            stdio: ["pipe", "pipe", "pipe"]
+          }),
+          () => {
+            nativeWorkspaceSyncWorkerPoolPromise = undefined;
+          }
+        )
+      )
+    )
+  );
+  return nativeWorkspaceSyncWorkerPoolPromise;
+}
+
+async function runNativeWorkspaceSyncCommandOnce<TResponse extends NativeCommandSuccessResponse>(
   args: string[],
   payload?: Record<string, unknown>
 ): Promise<TResponse> {
@@ -240,6 +508,30 @@ async function runNativeWorkspaceSyncCommand<TResponse extends NativeCommandSucc
   }
 
   return response;
+}
+
+async function runNativeWorkspaceSyncCommand<TResponse extends NativeCommandSuccessResponse>(
+  args: string[],
+  payload?: Record<string, unknown>
+): Promise<TResponse> {
+  if (
+    isPersistentNativeWorkspaceSyncEnabled() &&
+    args.length === 1 &&
+    (args[0] === "sync-local-to-remote" || args[0] === "sync-remote-to-local")
+  ) {
+    try {
+      const workerPool = await getNativeWorkspaceSyncWorkerPool();
+      return await workerPool.runCommand<TResponse>(args[0]!, payload);
+    } catch (error) {
+      console.warn(
+        `[oah-native] Falling back to one-shot native workspace sync for ${args.join(" ")}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  return runNativeWorkspaceSyncCommandOnce<TResponse>(args, payload);
 }
 
 export function isNativeWorkspaceSyncEnabled(): boolean {

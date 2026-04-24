@@ -1,6 +1,5 @@
 import path from "node:path";
-import type { FSWatcher } from "node:fs";
-import { access, rm } from "node:fs/promises";
+import { access } from "node:fs/promises";
 
 import {
   platformModelSnapshotSchema,
@@ -9,31 +8,18 @@ import {
   type ReadinessReport
 } from "@oah/api-contracts";
 import type { ServerConfig } from "@oah/config";
-import {
-  AppError,
-  ControlPlaneEngineService,
-  ExecutionEngineService,
-  EngineService,
-  createId
-} from "@oah/engine-core";
 import type {
-  ControlPlaneRuntimeOperations,
-  ExecutionRuntimeOperations,
   EngineLogger,
   SandboxHostProviderKind,
   WorkspacePrewarmer,
   WorkspaceRecord
-} from "@oah/engine-core";
+} from "../../../packages/engine-core/src/types.js";
+import { AppError } from "../../../packages/engine-core/src/errors.js";
+import { ExecutionEngineService, type ExecutionRuntimeOperations } from "../../../packages/engine-core/src/execution-engine-service.js";
+import { EngineService } from "../../../packages/engine-core/src/engine-service.js";
+import { createId } from "../../../packages/engine-core/src/utils.js";
+import type { ControlPlaneRuntimeOperations } from "../../../packages/engine-core/src/control-plane-engine-service.js";
 import { AiSdkModelGateway } from "@oah/model-gateway";
-import { createSQLiteRuntimePersistence } from "@oah/storage-sqlite";
-import {
-  FanoutSessionEventStore,
-  createRedisWorkerRegistry,
-  createRedisWorkspacePlacementRegistry,
-  createRedisWorkspaceLeaseRegistry,
-  createRedisSessionEventBus,
-  createRedisSessionRunQueue
-} from "@oah/storage-redis";
 import type { WorkspaceMaterializationManager } from "./bootstrap/workspace-materialization.js";
 import type { SandboxHost } from "./bootstrap/sandbox-host.js";
 import { describeSandboxTopology } from "./sandbox-topology.js";
@@ -63,24 +49,7 @@ import {
   parseSingleWorkspaceOptions,
   shouldStartEmbeddedWorker
 } from "./bootstrap/engine-process.js";
-import {
-  describeQueuedRunWithScopedVisibility,
-  ScopedRunRepository,
-  ScopedSessionRepository,
-  ScopedWorkspaceRepository
-} from "./bootstrap/scoped-repositories.js";
-import {
-  discoverProjectWorkspaces,
-  findManagedWorkspaceIdsToDelete,
-  hasPersistedWorkspaceListing,
-  hasWorkspaceSnapshotListing,
-  isManagedWorkspace,
-  isManagedWorkspaceRoot,
-  listAllWorkspaces,
-  openFsWatcher,
-  reconcileDiscoveredWorkspaces,
-  type PlatformAgentRegistry
-} from "./bootstrap/workspace-registry.js";
+import type { PlatformAgentRegistry } from "./bootstrap/workspace-registry.js";
 import {
   cleanupWorkspaceLocalArtifacts,
   resolveArchiveExportRoot,
@@ -105,6 +74,9 @@ let sandboxBackedWorkspaceInitializerModulePromise:
 let platformAgentsModulePromise: Promise<typeof import("./platform-agents.js")> | undefined;
 let serviceRoutedPostgresModulePromise: Promise<typeof import("./bootstrap/service-routed-postgres.js")> | undefined;
 let adminCapabilitiesModulePromise: Promise<typeof import("./bootstrap/admin-capabilities.js")> | undefined;
+let sqliteStorageModulePromise: Promise<typeof import("@oah/storage-sqlite")> | undefined;
+let redisStorageModulePromise: Promise<typeof import("@oah/storage-redis")> | undefined;
+let controlPlaneRuntimeModulePromise: Promise<typeof import("./bootstrap/control-plane-runtime.js")> | undefined;
 
 function loadConfigWorkspaceModule(): Promise<typeof import("@oah/config/workspace")> {
   configWorkspaceModulePromise ??= import("@oah/config/workspace").catch(async () => {
@@ -162,6 +134,21 @@ function loadServiceRoutedPostgresModule(): Promise<typeof import("./bootstrap/s
 function loadAdminCapabilitiesModule(): Promise<typeof import("./bootstrap/admin-capabilities.js")> {
   adminCapabilitiesModulePromise ??= import("./bootstrap/admin-capabilities.js");
   return adminCapabilitiesModulePromise;
+}
+
+function loadSQLiteStorageModule(): Promise<typeof import("@oah/storage-sqlite")> {
+  sqliteStorageModulePromise ??= import("@oah/storage-sqlite");
+  return sqliteStorageModulePromise;
+}
+
+function loadRedisStorageModule(): Promise<typeof import("@oah/storage-redis")> {
+  redisStorageModulePromise ??= import("@oah/storage-redis");
+  return redisStorageModulePromise;
+}
+
+function loadControlPlaneRuntimeModule(): Promise<typeof import("./bootstrap/control-plane-runtime.js")> {
+  controlPlaneRuntimeModulePromise ??= import("./bootstrap/control-plane-runtime.js");
+  return controlPlaneRuntimeModulePromise;
 }
 
 function hasRemoteErrorCode(error: unknown, code: string): boolean {
@@ -379,7 +366,6 @@ export {
   shouldStartInlineWorker
 } from "./bootstrap/engine-process.js";
 export { resolveEmbeddedWorkerPoolConfig, resolveWorkerMode } from "./bootstrap/worker-host.js";
-export { findManagedWorkspaceIdsToDelete, reconcileDiscoveredWorkspaces } from "./bootstrap/workspace-registry.js";
 
 export interface BootstrapOptions {
   argv?: string[] | undefined;
@@ -600,6 +586,45 @@ function isRemoteSandboxProvider(config: Pick<ServerConfig, "sandbox">): boolean
   return provider === "self_hosted" || provider === "e2b";
 }
 
+function runtimeHasPersistedWorkspaceListing(
+  value: unknown
+): value is {
+  listPersistedWorkspaces(): Promise<WorkspaceRecord[]>;
+} {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { listPersistedWorkspaces?: unknown }).listPersistedWorkspaces === "function"
+  );
+}
+
+function runtimeHasWorkspaceSnapshotListing(
+  value: unknown
+): value is {
+  listWorkspaceSnapshots(candidates: WorkspaceRecord[]): Promise<WorkspaceRecord[]>;
+} {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { listWorkspaceSnapshots?: unknown }).listWorkspaceSnapshots === "function"
+  );
+}
+
+async function listRepositoryWorkspaces(
+  repository: Pick<import("@oah/engine-core").WorkspaceRepository, "list">
+): Promise<WorkspaceRecord[]> {
+  const workspaces: WorkspaceRecord[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const page = await repository.list(100, cursor);
+    workspaces.push(...page);
+    cursor = page.length === 100 ? String((cursor ? Number.parseInt(cursor, 10) : 0) + 100) : undefined;
+  } while (cursor);
+
+  return workspaces;
+}
+
 export interface RuntimeAssemblyProfile {
   id: "api_control_plane" | "api_embedded_runtime" | "worker_executor";
   executionServicesMode: "eager" | "lazy";
@@ -814,7 +839,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   let sandboxHost: SandboxHost | undefined;
   const modelDir = config.paths.model_dir;
   const toolDir = config.paths.tool_dir;
-  const workspaceDefinitionRefreshes = new Map<string, Promise<void>>();
   const logModelLoadError = (filePath: string, error: unknown): void => {
     console.error(`[oah-bootstrap] Failed to load model definition from ${filePath}; skipping entry.`, error);
   };
@@ -822,6 +846,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     console.error(`[oah-bootstrap] Failed to discover ${kind} workspace at ${rootPath}; skipping workspace.`, error);
   };
   let modelGateway: AiSdkModelGateway | undefined;
+  let refreshWorkspaceDefinitionsForPlatformModels = async (): Promise<void> => undefined;
   const platformModelService = await createPlatformModelCatalogService({
     modelDir,
     stateDir: path.join(resolveRuntimeStateDir(config.paths), "platform-models"),
@@ -857,27 +882,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     );
   }
 
-  function mergeRefreshedWorkspaceRecord(
-    workspace: WorkspaceRecord,
-    discovered: WorkspaceRecord,
-    updatedAt: string
-  ): WorkspaceRecord {
-    return {
-      ...discovered,
-      id: workspace.id,
-      name: workspace.name,
-      executionPolicy: workspace.executionPolicy,
-      status: workspace.status,
-      createdAt: workspace.createdAt,
-      updatedAt,
-      historyMirrorEnabled: workspace.historyMirrorEnabled,
-      ...(workspace.ownerId ? { ownerId: workspace.ownerId } : {}),
-      ...(workspace.serviceName ? { serviceName: workspace.serviceName } : {}),
-      ...(workspace.runtime ? { runtime: workspace.runtime } : {}),
-      ...(workspace.externalRef ? { externalRef: workspace.externalRef } : {})
-    } as WorkspaceRecord;
-  }
-
   async function withWorkspaceDefinitionTimestamp(workspace: WorkspaceRecord): Promise<WorkspaceRecord> {
     const { readLatestWorkspaceDefinitionMtimeMs } = await loadWorkspaceDefinitionHelpersModule();
     const latestDefinitionMtimeMs = await readLatestWorkspaceDefinitionMtimeMs(workspace.rootPath);
@@ -894,83 +898,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       ...workspace,
       updatedAt: new Date(latestDefinitionMtimeMs).toISOString()
     };
-  }
-
-  async function refreshWorkspaceDefinitionIfNeeded(workspaceId: string): Promise<void> {
-    const normalizedWorkspaceId = workspaceId.trim();
-    if (normalizedWorkspaceId.length === 0) {
-      return;
-    }
-
-    const existingRefresh = workspaceDefinitionRefreshes.get(normalizedWorkspaceId);
-    if (existingRefresh) {
-      return existingRefresh;
-    }
-
-    const refreshTask = (async () => {
-      const {
-        copyWorkspaceDefinitionSnapshot,
-        readLatestWorkspaceDefinitionMtimeMs,
-        readLiveWorkspaceSkillNames
-      } = await loadWorkspaceDefinitionHelpersModule();
-      const workspace = await persistence.workspaceRepository.getById(normalizedWorkspaceId);
-      if (!workspace || workspace.kind !== "project") {
-        return;
-      }
-
-      const liveSkillNames = await readLiveWorkspaceSkillNames({
-        workspace,
-        workspaceFileAccessProvider: sandboxHost?.workspaceFileAccessProvider,
-        workspaceFileSystem: sandboxHost?.workspaceFileSystem
-      });
-      const cachedSkillNames = Object.keys(workspace.skills).sort((left, right) => left.localeCompare(right));
-      const skillNamesChanged =
-        liveSkillNames.length !== cachedSkillNames.length ||
-        liveSkillNames.some((name, index) => name !== cachedSkillNames[index]);
-
-      const latestDefinitionMtimeMs = await readLatestWorkspaceDefinitionMtimeMs(workspace.rootPath);
-      if (!skillNamesChanged && latestDefinitionMtimeMs === undefined) {
-        return;
-      }
-
-      const currentUpdatedAtMs = Date.parse(workspace.updatedAt);
-      if (
-        !skillNamesChanged &&
-        Number.isFinite(currentUpdatedAtMs) &&
-        latestDefinitionMtimeMs !== undefined &&
-        latestDefinitionMtimeMs <= currentUpdatedAtMs
-      ) {
-        return;
-      }
-
-      const discoveryRoot =
-        remoteSandboxProvider
-          ? await copyWorkspaceDefinitionSnapshot({
-              workspace,
-              workspaceFileAccessProvider: sandboxHost?.workspaceFileAccessProvider,
-              workspaceFileSystem: sandboxHost?.workspaceFileSystem
-            })
-          : workspace.rootPath;
-      try {
-        const discovered = await discoverWorkspaceWithEnrichedModels(discoveryRoot, workspace.kind);
-        const refreshed = withManagedWorkspaceExternalRef(
-          mergeRefreshedWorkspaceRecord(workspace, discovered as WorkspaceRecord, new Date().toISOString()),
-          config,
-          objectStorageMirror
-        );
-        await persistence.workspaceRepository.upsert(refreshed);
-        visibleWorkspaceIds.add(refreshed.id);
-      } finally {
-        if (remoteSandboxProvider) {
-          await rm(discoveryRoot, { recursive: true, force: true });
-        }
-      }
-    })().finally(() => {
-      workspaceDefinitionRefreshes.delete(normalizedWorkspaceId);
-    });
-
-    workspaceDefinitionRefreshes.set(normalizedWorkspaceId, refreshTask);
-    await refreshTask;
   }
 
   const discoveredWorkspaces =
@@ -1002,7 +929,10 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           withManagedWorkspaceExternalRef(workspace as WorkspaceRecord, config, objectStorageMirror)
         );
   const postgresConfigured = Boolean(config.storage.postgres_url && config.storage.postgres_url.trim().length > 0);
+  const redisConfigured = Boolean(config.storage.redis_url && config.storage.redis_url.trim().length > 0);
   const sqliteShadowRoot = resolveSqliteShadowRoot(config.paths);
+  const sqliteStorageModule = postgresConfigured ? undefined : await loadSQLiteStorageModule();
+  const redisStorageModule = redisConfigured ? await loadRedisStorageModule() : undefined;
   const persistence = postgresConfigured
     ? await (await loadServiceRoutedPostgresModule()).createServiceRoutedPostgresRuntimePersistence({
         connectionString: config.storage.postgres_url!
@@ -1011,14 +941,14 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           `Configured PostgreSQL persistence is unavailable: ${error instanceof Error ? error.message : "unknown error"}`
         );
       })
-    : await createSQLiteRuntimePersistence({
+    : await sqliteStorageModule!.createSQLiteRuntimePersistence({
         shadowRoot: sqliteShadowRoot
       });
   const primaryStorageMode = "driver" in persistence && persistence.driver === "sqlite" ? "sqlite" : "postgres";
   const redisBus =
-    config.storage.redis_url && config.storage.redis_url.trim().length > 0
-      ? await createRedisSessionEventBus({
-          url: config.storage.redis_url
+    redisConfigured
+      ? await redisStorageModule!.createRedisSessionEventBus({
+          url: config.storage.redis_url!
         }).catch((error) => {
           console.warn(
             `Redis event bus unavailable (${error instanceof Error ? error.message : "unknown error"}); continuing without Redis fanout.`
@@ -1027,9 +957,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         })
       : undefined;
   const redisRawRunQueue =
-    config.storage.redis_url && config.storage.redis_url.trim().length > 0
-      ? await createRedisSessionRunQueue({
-          url: config.storage.redis_url
+    redisConfigured
+      ? await redisStorageModule!.createRedisSessionRunQueue({
+          url: config.storage.redis_url!
         }).catch((error) => {
           console.warn(
             `Redis run queue unavailable (${error instanceof Error ? error.message : "unknown error"}); continuing with in-process scheduling.`
@@ -1038,9 +968,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         })
       : undefined;
   const redisWorkerRegistry =
-    config.storage.redis_url && config.storage.redis_url.trim().length > 0
-      ? await createRedisWorkerRegistry({
-          url: config.storage.redis_url
+    redisConfigured
+      ? await redisStorageModule!.createRedisWorkerRegistry({
+          url: config.storage.redis_url!
         }).catch((error) => {
           console.warn(
             `Redis worker registry unavailable (${error instanceof Error ? error.message : "unknown error"}); continuing without worker leases.`
@@ -1049,9 +979,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         })
       : undefined;
   const redisWorkspaceLeaseRegistry =
-    config.storage.redis_url && config.storage.redis_url.trim().length > 0
-      ? await createRedisWorkspaceLeaseRegistry({
-          url: config.storage.redis_url
+    redisConfigured
+      ? await redisStorageModule!.createRedisWorkspaceLeaseRegistry({
+          url: config.storage.redis_url!
         }).catch((error: unknown) => {
           console.warn(
             `Redis workspace lease registry unavailable (${error instanceof Error ? error.message : "unknown error"}); continuing without workspace ownership leases.`
@@ -1060,9 +990,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         })
       : undefined;
   const redisWorkspacePlacementRegistry =
-    config.storage.redis_url && config.storage.redis_url.trim().length > 0
-      ? await createRedisWorkspacePlacementRegistry({
-          url: config.storage.redis_url
+    redisConfigured
+      ? await redisStorageModule!.createRedisWorkspacePlacementRegistry({
+          url: config.storage.redis_url!
         }).catch((error: unknown) => {
           console.warn(
             `Redis workspace placement registry unavailable (${error instanceof Error ? error.message : "unknown error"}); continuing without workspace placement state.`
@@ -1109,7 +1039,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       ...(redisWorkerRegistry ? { workerRegistry: redisWorkerRegistry } : {})
     });
   }
-  const redisConfigured = Boolean(config.storage.redis_url && config.storage.redis_url.trim().length > 0);
   const useSandboxBackedWorkspaceInitializer =
     remoteSandboxProvider && sandboxHost && !objectStorageBacksManagedWorkspaces(config);
   const adminCapabilities = assemblyProfile.enableAdminCapabilities
@@ -1134,30 +1063,50 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     startWorker,
     hasRedisRunQueue: Boolean(redisRunQueue)
   });
-  const persistedWorkspaceSnapshots = hasPersistedWorkspaceListing(persistence)
-    ? await persistence.listPersistedWorkspaces()
-    : hasWorkspaceSnapshotListing(persistence)
-      ? await persistence.listWorkspaceSnapshots(discoveredWorkspaces as WorkspaceRecord[])
-      : await listAllWorkspaces(persistence.workspaceRepository);
-  const bootWorkspaceCandidates =
-    singleWorkspace === undefined
-      ? !managesWorkspaceRegistry
-        ? persistedWorkspaceSnapshots
-        : [
-            ...discoveredWorkspaces,
-            ...persistedWorkspaceSnapshots.filter((workspace) => !isManagedWorkspace(workspace, config.paths))
-          ]
-      : discoveredWorkspaces;
-  const reconciledWorkspaces = reconcileDiscoveredWorkspaces(bootWorkspaceCandidates, persistedWorkspaceSnapshots).map((workspace) =>
-    withManagedWorkspaceExternalRef(workspace, config, objectStorageMirror)
-  );
-  const visibleWorkspaceIds = new Set<string>();
-  const workspaceRepository = new ScopedWorkspaceRepository(persistence.workspaceRepository, visibleWorkspaceIds);
-  const sessionRepository = new ScopedSessionRepository(persistence.sessionRepository, visibleWorkspaceIds);
-  const runRepository = new ScopedRunRepository(persistence.runRepository, visibleWorkspaceIds);
+  const workspaceRegistryPolling = resolveWorkspaceRegistryPollingConfig();
+  const controlPlaneRuntime =
+    assemblyProfile.enableControlPlaneFacade || managesWorkspaceRegistry
+      ? await (await loadControlPlaneRuntimeModule()).prepareControlPlaneRuntime({
+          config,
+          persistence: {
+            ...persistence,
+            ...(runtimeHasPersistedWorkspaceListing(persistence)
+              ? { listPersistedWorkspaces: () => persistence.listPersistedWorkspaces() }
+              : {}),
+            ...(runtimeHasWorkspaceSnapshotListing(persistence)
+              ? { listWorkspaceSnapshots: (candidates: WorkspaceRecord[]) => persistence.listWorkspaceSnapshots(candidates) }
+              : {})
+          },
+          discoveredWorkspaces: discoveredWorkspaces as WorkspaceRecord[],
+          managesWorkspaceRegistry,
+          enableControlPlaneFacade: assemblyProfile.enableControlPlaneFacade,
+          remoteSandboxProvider,
+          singleWorkspaceDefined: singleWorkspace !== undefined,
+          models,
+          toolDir,
+          sqliteShadowRoot,
+          ...(sandboxHost ? { sandboxHost } : {}),
+          ...(redisWorkspaceLeaseRegistry ? { redisWorkspaceLeaseRegistry } : {}),
+          ...(redisWorkspacePlacementRegistry ? { redisWorkspacePlacementRegistry } : {}),
+          pollingConfig: workspaceRegistryPolling,
+          getPlatformAgents,
+          logWorkspaceDiscoveryError,
+          discoverWorkspaceWithEnrichedModels: (rootPath: string, kind: "project") =>
+            discoverWorkspaceWithEnrichedModels(rootPath, kind) as Promise<WorkspaceRecord>,
+          applyManagedWorkspaceExternalRef: (workspace: WorkspaceRecord) =>
+            withManagedWorkspaceExternalRef(workspace, config, objectStorageMirror),
+          withWorkspaceDefinitionTimestamp,
+          listRepositoryWorkspaces
+        })
+      : undefined;
+  const reconciledWorkspaces = controlPlaneRuntime?.reconciledWorkspaces ?? (discoveredWorkspaces as WorkspaceRecord[]);
+  const visibleWorkspaceIds = controlPlaneRuntime?.visibleWorkspaceIds ?? new Set<string>();
+  const workspaceRepository = controlPlaneRuntime?.workspaceRepository ?? persistence.workspaceRepository;
+  const sessionRepository = controlPlaneRuntime?.sessionRepository ?? persistence.sessionRepository;
+  const runRepository = controlPlaneRuntime?.runRepository ?? persistence.runRepository;
   const primarySessionEventStore = persistence.sessionEventStore;
   const sessionEventStore = redisBus
-    ? new FanoutSessionEventStore(primarySessionEventStore, redisBus)
+    ? new redisStorageModule!.FanoutSessionEventStore(primarySessionEventStore, redisBus)
     : primarySessionEventStore;
   const runtimeDebugLogger = buildRuntimeConsoleLogger({
     enabled: true,
@@ -1171,16 +1120,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     logger: runtimeDebugLogger
   });
   modelGateway = resolvedModelGateway;
-  let workspaceRegistrySyncPromise: Promise<void> | undefined;
-  let lastWorkspaceRegistrySyncAt = 0;
-  let workspaceRegistryPollTimer: NodeJS.Timeout | undefined;
-  let watchedProjectRoots = new Map<string, FSWatcher>();
-  const rootWorkspaceWatcher =
-    managesWorkspaceRegistry
-      ? openFsWatcher(config.paths.workspace_dir, scheduleWorkspaceRegistrySync)
-      : undefined;
-  let workspaceSyncTimer: NodeJS.Timeout | undefined;
   let workspaceMaterializationMaintenanceTimer: NodeJS.Timeout | undefined;
+  refreshWorkspaceDefinitionsForPlatformModels =
+    controlPlaneRuntime?.refreshWorkspaceDefinitionsForPlatformModels ?? (async (): Promise<void> => undefined);
 
   async function clearWorkspaceCoordination(workspaceId: string): Promise<void> {
     const normalizedWorkspaceId = workspaceId.trim();
@@ -1200,210 +1142,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       );
     }
   }
-
-  async function clearOrphanedWorkspaceCoordination(
-    workspaces: Iterable<Pick<WorkspaceRecord, "id">>,
-    reason: string
-  ): Promise<void> {
-    if (!redisWorkspaceLeaseRegistry && !redisWorkspacePlacementRegistry) {
-      return;
-    }
-
-    const knownWorkspaceIds = new Set([...workspaces].map((workspace) => workspace.id));
-    const orphanWorkspaceIds = new Set<string>();
-
-    if (redisWorkspacePlacementRegistry) {
-      for (const placement of await redisWorkspacePlacementRegistry.listAll()) {
-        if (!knownWorkspaceIds.has(placement.workspaceId)) {
-          orphanWorkspaceIds.add(placement.workspaceId);
-        }
-      }
-    }
-
-    if (redisWorkspaceLeaseRegistry) {
-      for (const lease of await redisWorkspaceLeaseRegistry.listActive()) {
-        if (!knownWorkspaceIds.has(lease.workspaceId)) {
-          orphanWorkspaceIds.add(lease.workspaceId);
-        }
-      }
-    }
-
-    if (orphanWorkspaceIds.size === 0) {
-      return;
-    }
-
-    await Promise.all([...orphanWorkspaceIds].map(async (workspaceId) => clearWorkspaceCoordination(workspaceId)));
-    console.info(
-      `[oah-bootstrap] Cleared orphaned workspace coordination for ${orphanWorkspaceIds.size} workspace(s) during ${reason}: ${[
-        ...orphanWorkspaceIds
-      ].join(", ")}`
-    );
-  }
-
-  reconciledWorkspaces.forEach((workspace) => {
-    visibleWorkspaceIds.add(workspace.id);
-  });
-  await Promise.all(reconciledWorkspaces.map((workspace) => workspaceRepository.upsert(workspace)));
-  await clearOrphanedWorkspaceCoordination(reconciledWorkspaces, "bootstrap");
-
-  const syncWorkspaceRegistry =
-    managesWorkspaceRegistry
-      ? async () => {
-          const now = Date.now();
-          if (workspaceRegistrySyncPromise) {
-            return workspaceRegistrySyncPromise;
-          }
-          if (now - lastWorkspaceRegistrySyncAt < 200) {
-            return;
-          }
-
-          workspaceRegistrySyncPromise = (async () => {
-            const latestProjectWorkspaces = (
-              await discoverProjectWorkspaces({
-                workspaceDir: config.paths.workspace_dir,
-                models,
-                platformAgents: await getPlatformAgents(),
-                platformSkillDir: config.paths.skill_dir,
-                platformToolDir: toolDir,
-                onError: ({ rootPath, error }: { rootPath: string; kind: "project"; error: unknown }) => {
-                  logWorkspaceDiscoveryError(rootPath, "project", error);
-                }
-              }).then((workspaces) =>
-                Promise.all(workspaces.map((workspace) => enrichWorkspaceModelsWithDiscoveredMetadata(workspace)))
-              )
-            ).map((workspace) => withManagedWorkspaceExternalRef(workspace as WorkspaceRecord, config, objectStorageMirror));
-            const persistedWorkspaces = await listAllWorkspaces(persistence.workspaceRepository);
-            const staticWorkspaces = persistedWorkspaces.filter((workspace) => !isManagedWorkspace(workspace, config.paths));
-            const latestDiscoveredWorkspaces = [...latestProjectWorkspaces, ...staticWorkspaces];
-            const staleWorkspaceIds = findManagedWorkspaceIdsToDelete(latestDiscoveredWorkspaces, persistedWorkspaces, config.paths);
-            const staleWorkspaces = persistedWorkspaces.filter((workspace) => staleWorkspaceIds.includes(workspace.id));
-
-            await Promise.all(
-              staleWorkspaces.map(async (workspace) => {
-                const cleanup = await cleanupWorkspaceLocalArtifacts({
-                  workspace,
-                  paths: config.paths,
-                  sqliteShadowRoot
-                });
-                console.info(
-                  `[oah-bootstrap] Cleaned local artifacts for stale workspace ${workspace.id} (${cleanup.mode}): ${cleanup.removedPaths.join(", ")}`
-                );
-                await persistence.workspaceRepository.delete(workspace.id);
-              })
-            );
-
-            const latestPersistedWorkspaces =
-              staleWorkspaceIds.length > 0 ? await listAllWorkspaces(persistence.workspaceRepository) : persistedWorkspaces;
-            const latestReconciledWorkspaces = await Promise.all(
-              reconcileDiscoveredWorkspaces(latestDiscoveredWorkspaces, latestPersistedWorkspaces).map(async (workspace) =>
-                withManagedWorkspaceExternalRef(await withWorkspaceDefinitionTimestamp(workspace), config, objectStorageMirror)
-              )
-            );
-
-            await Promise.all(latestReconciledWorkspaces.map(async (workspace) => persistence.workspaceRepository.upsert(workspace)));
-
-            visibleWorkspaceIds.clear();
-            latestReconciledWorkspaces.forEach((workspace) => {
-              visibleWorkspaceIds.add(workspace.id);
-            });
-            await clearOrphanedWorkspaceCoordination(latestReconciledWorkspaces, "workspace_registry_sync");
-            updateWatchedProjectRoots(latestReconciledWorkspaces);
-            lastWorkspaceRegistrySyncAt = Date.now();
-          })().finally(() => {
-            workspaceRegistrySyncPromise = undefined;
-          });
-
-          return workspaceRegistrySyncPromise;
-        }
-      : undefined;
-
-  function updateWatchedProjectRoots(workspaces: WorkspaceRecord[]): void {
-    if (!managesWorkspaceRegistry) {
-      return;
-    }
-
-    const nextRoots = new Set(
-      workspaces
-        .filter((workspace) => workspace.kind === "project" && isManagedWorkspaceRoot(workspace.rootPath, config.paths.workspace_dir))
-        .map((workspace) => workspace.rootPath)
-    );
-
-    for (const [rootPath, watcher] of watchedProjectRoots.entries()) {
-      if (nextRoots.has(rootPath)) {
-        continue;
-      }
-
-      watcher.close();
-      watchedProjectRoots.delete(rootPath);
-    }
-
-    for (const rootPath of nextRoots) {
-      if (watchedProjectRoots.has(rootPath)) {
-        continue;
-      }
-
-      const watcher = openFsWatcher(rootPath, scheduleWorkspaceRegistrySync, true);
-      if (watcher) {
-        watchedProjectRoots.set(rootPath, watcher);
-      }
-    }
-  }
-
-  function scheduleWorkspaceRegistrySync(): void {
-    if (!syncWorkspaceRegistry) {
-      return;
-    }
-
-    if (workspaceSyncTimer) {
-      clearTimeout(workspaceSyncTimer);
-    }
-
-    workspaceSyncTimer = setTimeout(() => {
-      workspaceSyncTimer = undefined;
-      void syncWorkspaceRegistry().catch((error) => {
-        console.warn("Workspace registry sync failed.", error);
-      });
-    }, 150);
-    workspaceSyncTimer.unref?.();
-  }
-
-  async function refreshWorkspaceDefinitionsForPlatformModels(): Promise<void> {
-    if (remoteSandboxProvider || !assemblyProfile.enableControlPlaneFacade) {
-      return;
-    }
-
-    const currentWorkspaces = await listAllWorkspaces(persistence.workspaceRepository);
-    const refreshedWorkspaces = await Promise.all(
-      currentWorkspaces.map(async (workspace) => {
-        try {
-          const discovered = await discoverWorkspaceWithEnrichedModels(workspace.rootPath, workspace.kind);
-
-          return {
-            ...discovered,
-            id: workspace.id,
-            name: workspace.name,
-            executionPolicy: workspace.executionPolicy,
-            status: workspace.status,
-            createdAt: workspace.createdAt,
-            updatedAt: workspace.updatedAt,
-            historyMirrorEnabled: workspace.historyMirrorEnabled,
-            ...(workspace.serviceName ? { serviceName: workspace.serviceName } : {}),
-            ...(workspace.externalRef ? { externalRef: workspace.externalRef } : {})
-          } as WorkspaceRecord;
-        } catch (error) {
-          console.warn(`[oah-bootstrap] Failed to refresh workspace ${workspace.id} after platform model reload.`, error);
-          return workspace;
-        }
-      })
-    ).then((workspaces) => workspaces.map((workspace) => withManagedWorkspaceExternalRef(workspace, config, objectStorageMirror)));
-
-    await Promise.all(refreshedWorkspaces.map(async (workspace) => persistence.workspaceRepository.upsert(workspace)));
-    visibleWorkspaceIds.clear();
-    refreshedWorkspaces.forEach((workspace) => {
-      visibleWorkspaceIds.add(workspace.id);
-    });
-    updateWatchedProjectRoots(refreshedWorkspaces);
-  }
+  await controlPlaneRuntime?.initialize();
   const workspaceMode =
     singleWorkspace !== undefined
       ? {
@@ -1415,19 +1154,6 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         : {
           kind: "multi" as const
         };
-  updateWatchedProjectRoots(reconciledWorkspaces);
-  if (syncWorkspaceRegistry) {
-    const workspaceRegistryPolling = resolveWorkspaceRegistryPollingConfig();
-    await syncWorkspaceRegistry();
-    if (workspaceRegistryPolling.enabled) {
-      workspaceRegistryPollTimer = setInterval(() => {
-        void syncWorkspaceRegistry().catch((error) => {
-          console.warn("Workspace registry poll sync failed.", error);
-        });
-      }, workspaceRegistryPolling.intervalMs);
-      workspaceRegistryPollTimer.unref?.();
-    }
-  }
   if (sandboxHost) {
     const workspaceMaterializationConfig = resolveWorkspaceMaterializationConfig(config);
     workspaceMaterializationMaintenanceTimer = setInterval(() => {
@@ -1620,27 +1346,24 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         })
       : undefined
     : undefined;
-  const controlPlaneEngineService: ControlPlaneRuntimeOperations = assemblyProfile.enableControlPlaneFacade
-    ? new ControlPlaneEngineService(runtimeService, {
-        workspaceDefinitionRefresher: {
-          async refreshWorkspaceDefinition(workspaceId: string) {
-            await refreshWorkspaceDefinitionIfNeeded(workspaceId);
-          }
-        },
-        ...(touchWorkspaceActivity
-          ? {
-              workspaceActivityTracker: {
-                async touchWorkspace(workspaceId: string) {
-                  await touchWorkspaceActivity(workspaceId);
-                }
-              }
-            }
-          : {}),
+  const controlPlaneEngineService: ControlPlaneRuntimeOperations = controlPlaneRuntime
+    ? controlPlaneRuntime.createControlPlaneEngineService({
+        runtimeService,
+        ...(touchWorkspaceActivity ? { touchWorkspaceActivity } : {}),
         ...(workspacePrewarmer ? { workspacePrewarmer } : {}),
         ...(runtimeDebugLogger ? { logger: runtimeDebugLogger } : {})
       })
     : runtimeService;
   const executionEngineService = new ExecutionEngineService(runtimeService);
+  const describeQueuedRun = controlPlaneRuntime
+    ? (runId: string) =>
+        import("./bootstrap/scoped-repositories.js").then(({ describeQueuedRunWithScopedVisibility }) =>
+          describeQueuedRunWithScopedVisibility(persistence.runRepository, visibleWorkspaceIds, runId)
+        )
+    : async (runId: string) => {
+        const run = await persistence.runRepository.getById(runId);
+        return run ? { workspaceId: run.workspaceId } : undefined;
+      };
   const workerRuntime = assemblyProfile.enableWorkerRuntime
     ? createWorkerRuntimeControl({
         startWorker,
@@ -1651,8 +1374,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         redisRunQueue,
         redisWorkerRegistry,
         runtimeService: executionEngineService,
-        describeQueuedRun: (runId) =>
-          describeQueuedRunWithScopedVisibility(persistence.runRepository, visibleWorkspaceIds, runId),
+        describeQueuedRun,
         logger: {
           info(message) {
             console.info(message);
@@ -2005,20 +1727,10 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       await closePersistence();
       await objectStorageMirror?.close();
       await platformModelService.close();
-      if (workspaceSyncTimer) {
-        clearTimeout(workspaceSyncTimer);
-      }
-      if (workspaceRegistryPollTimer) {
-        clearInterval(workspaceRegistryPollTimer);
-      }
       if (workspaceMaterializationMaintenanceTimer) {
         clearInterval(workspaceMaterializationMaintenanceTimer);
       }
-      rootWorkspaceWatcher?.close();
-      for (const watcher of watchedProjectRoots.values()) {
-        watcher.close();
-      }
-      watchedProjectRoots.clear();
+      await controlPlaneRuntime?.close();
     }
   };
 }

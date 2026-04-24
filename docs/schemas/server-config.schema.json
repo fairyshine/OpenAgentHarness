@@ -558,6 +558,18 @@
                     "command": {
                       "type": "string",
                       "minLength": 1
+                    },
+                    "endpoint": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "auth_token": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "timeout_ms": {
+                      "type": "integer",
+                      "minimum": 100
                     }
                   }
                 }

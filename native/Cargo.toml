@@ -1,3 +1,9 @@
 [workspace]
 members = ["oah-workspace-sync", "oah-archive-export"]
 resolver = "2"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+strip = "symbols"

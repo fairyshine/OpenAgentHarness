@@ -200,7 +200,7 @@ llm:
 | `controller.scale_target.type` | string | scale target 类型，支持 `noop`、`kubernetes`、`docker_compose` |
 | `controller.scale_target.allow_scale_down` | boolean | 是否允许 controller 主动缩容 |
 | `controller.scale_target.kubernetes.*` | object | Kubernetes Deployment `/scale` 配置，包括 namespace、deployment、label_selector、api_url、token_file、ca_file、skip_tls_verify |
-| `controller.scale_target.docker_compose.*` | object | 本地 Docker Compose 缩放配置，包括 compose_file、project_name、service、command |
+| `controller.scale_target.docker_compose.*` | object | 本地 Docker Compose 缩放配置，包括 compose_file、project_name、service、command，以及可选的远端执行器 endpoint、auth_token、timeout_ms |
 
 > **tip**
 > 当前 controller 的职责边界已经固定为“只管理 sandbox fleet”。sandbox 内 worker 要开几个线程、几个 slot、是否多进程，都由 worker 自己决定并通过 registry 上报容量；controller 只消费这些观测值来决定 sandbox 副本数与放置策略。

@@ -200,7 +200,7 @@ llm:
 | `controller.scale_target.type` | string | Scale-target backend. Supports `noop`, `kubernetes`, and `docker_compose`. |
 | `controller.scale_target.allow_scale_down` | boolean | Whether the controller may actively scale down replicas. |
 | `controller.scale_target.kubernetes.*` | object | Kubernetes Deployment `/scale` target settings such as namespace, deployment, label selector, API URL, token file, CA file, and skip TLS verify. |
-| `controller.scale_target.docker_compose.*` | object | Local Docker Compose scaling settings such as compose file, project name, service, and command. |
+| `controller.scale_target.docker_compose.*` | object | Local Docker Compose scaling settings such as compose file, project name, service, command, plus optional remote executor endpoint, auth token, and timeout. |
 
 > **tip**
 > The controller boundary is now explicitly sandbox-only. How many threads, slots, or processes run inside a sandbox is owned by the worker runtime itself; the controller only consumes the observed capacity those workers publish and turns it into sandbox replica and placement decisions.

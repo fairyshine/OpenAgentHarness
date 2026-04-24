@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -149,6 +149,36 @@ const ARCHIVE_SCHEMA_STATEMENTS: [&str; 10] = [
   )"#,
 ];
 
+const INSERT_ARCHIVE_MANIFEST_SQL: &str =
+    "insert or replace into archive_manifest (archive_date, timezone, exported_at, archive_count) values (?, ?, ?, ?)";
+const INSERT_ARCHIVE_SQL: &str = r#"insert or replace into archives (
+                archive_id, workspace_id, scope_type, scope_id, archive_date, archived_at, deleted_at, timezone, exported_at, export_path, workspace_name, root_path, workspace_snapshot
+              ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#;
+const INSERT_SESSION_SQL: &str = r#"insert or replace into sessions (
+                    archive_id, id, workspace_id, subject_ref, model_ref, agent_name, active_agent_name, title, status, last_run_at, created_at, updated_at, payload
+                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#;
+const INSERT_RUN_SQL: &str = r#"insert or replace into runs (
+                    archive_id, id, workspace_id, session_id, parent_run_id, trigger_type, trigger_ref, agent_name, effective_agent_name, status, created_at, started_at, heartbeat_at, ended_at, payload
+                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#;
+const INSERT_MESSAGE_SQL: &str = r#"insert or replace into messages (
+                    archive_id, id, session_id, run_id, role, created_at, content, metadata
+                  ) values (?, ?, ?, ?, ?, ?, ?, ?)"#;
+const INSERT_RUNTIME_MESSAGE_SQL: &str = r#"insert or replace into runtime_messages (
+                    archive_id, id, session_id, run_id, role, kind, created_at, content, metadata
+                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)"#;
+const INSERT_RUN_STEP_SQL: &str = r#"insert or replace into run_steps (
+                    archive_id, id, run_id, seq, step_type, name, agent_name, status, started_at, ended_at, input, output
+                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#;
+const INSERT_TOOL_CALL_SQL: &str = r#"insert or replace into tool_calls (
+                    archive_id, id, run_id, step_id, source_type, tool_name, status, duration_ms, started_at, ended_at, request, response
+                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#;
+const INSERT_HOOK_RUN_SQL: &str = r#"insert or replace into hook_runs (
+                    archive_id, id, run_id, hook_name, event_name, status, started_at, ended_at, capabilities, patch, error_message
+                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#;
+const INSERT_ARTIFACT_SQL: &str = r#"insert or replace into artifacts (
+                    archive_id, id, run_id, type, path, content_ref, created_at, metadata
+                  ) values (?, ?, ?, ?, ?, ?, ?, ?)"#;
+
 #[derive(Parser)]
 #[command(name = BINARY_NAME, version = BINARY_VERSION, about = "Open Agent Harness native archive export utilities.")]
 struct Cli {
@@ -162,6 +192,8 @@ enum Command {
     InspectExportRoot,
     WriteChecksum,
     WriteBundle,
+    WriteBundleStream,
+    ServeWriteBundleStream,
 }
 
 #[derive(Serialize)]
@@ -227,6 +259,137 @@ struct WriteBundleRequest {
     archives: Vec<Value>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WriteBundleStreamHeader {
+    output_path: String,
+    archive_date: String,
+    export_path: String,
+    exported_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WriteBundleStreamRecord {
+    Header {
+        #[serde(rename = "outputPath")]
+        output_path: String,
+        #[serde(rename = "archiveDate")]
+        archive_date: String,
+        #[serde(rename = "exportPath")]
+        export_path: String,
+        #[serde(rename = "exportedAt")]
+        exported_at: String,
+    },
+    Archive {
+        archive: Value,
+    },
+    Session {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    Run {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    Message {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    EngineMessage {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    RunStep {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    ToolCall {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    HookRun {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    Artifact {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ServeWriteBundleStreamRecord {
+    RequestStart {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "outputPath")]
+        output_path: String,
+        #[serde(rename = "archiveDate")]
+        archive_date: String,
+        #[serde(rename = "exportPath")]
+        export_path: String,
+        #[serde(rename = "exportedAt")]
+        exported_at: String,
+    },
+    RequestEnd {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    Archive {
+        archive: Value,
+    },
+    Session {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    Run {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    Message {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    EngineMessage {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    RunStep {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    ToolCall {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    HookRun {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+    Artifact {
+        #[serde(rename = "archiveId")]
+        archive_id: String,
+        row: Value,
+    },
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WriteBundleResponse {
@@ -235,6 +398,19 @@ struct WriteBundleResponse {
     output_path: String,
     archive_date: String,
     archive_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServeWriteBundleStreamResponse {
+    ok: bool,
+    protocol_version: u32,
+    request_id: String,
+    output_path: Option<String>,
+    archive_date: Option<String>,
+    archive_count: Option<usize>,
+    code: Option<String>,
+    message: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -310,6 +486,11 @@ fn run(command: Command) -> Result<(), String> {
                 archive_count: request.archives.len(),
             })
         }
+        Command::WriteBundleStream => {
+            let response = write_bundle_stream()?;
+            write_json(&response)
+        }
+        Command::ServeWriteBundleStream => serve_write_bundle_stream(),
     }
 }
 
@@ -442,6 +623,7 @@ fn write_bundle(request: &WriteBundleRequest) -> Result<(), String> {
 
     let mut connection = Connection::open(&output_path)
         .map_err(|error| format!("Failed to open archive sqlite bundle {}: {error}", output_path.display()))?;
+    apply_archive_write_pragmas(&connection)?;
     apply_archive_schema(&connection)?;
 
     let transaction = connection
@@ -461,6 +643,355 @@ fn write_bundle(request: &WriteBundleRequest) -> Result<(), String> {
     Ok(())
 }
 
+fn write_bundle_stream() -> Result<WriteBundleResponse, String> {
+    let stdin = io::stdin();
+    write_bundle_stream_from_reader(stdin.lock())
+}
+
+struct ActiveServeWriteBundleRequest {
+    request_id: String,
+    output_path: String,
+    archive_date: String,
+    export_path: String,
+    exported_at: String,
+    connection: Connection,
+    archive_count: usize,
+    timezone: Option<String>,
+    failed: Option<(String, String)>,
+}
+
+fn serve_write_bundle_stream() -> Result<(), String> {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    serve_write_bundle_stream_from_reader(stdin.lock(), stdout.lock())
+}
+
+fn serve_write_bundle_stream_from_reader<R: BufRead, W: Write>(reader: R, mut writer: W) -> Result<(), String> {
+    let mut current_request: Option<ActiveServeWriteBundleRequest> = None;
+
+    for (index, line_result) in reader.lines().enumerate() {
+        let line = line_result.map_err(|error| format!("Failed to read stdin line {}: {error}", index + 1))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let record: ServeWriteBundleStreamRecord = serde_json::from_str(&line)
+            .map_err(|error| format!("Failed to parse archive export worker record on line {}: {error}", index + 1))?;
+
+        match record {
+            ServeWriteBundleStreamRecord::RequestStart {
+                request_id,
+                output_path,
+                archive_date,
+                export_path,
+                exported_at,
+            } => {
+                if current_request.is_some() {
+                    return Err(format!(
+                        "Received request_start for {request_id} while another archive export request is still active."
+                    ));
+                }
+
+                let connection = open_archive_bundle_connection(&output_path)?;
+                connection
+                    .execute_batch("begin immediate")
+                    .map_err(|error| format!("Failed to begin archive sqlite transaction for {request_id}: {error}"))?;
+
+                current_request = Some(ActiveServeWriteBundleRequest {
+                    request_id,
+                    output_path,
+                    archive_date,
+                    export_path,
+                    exported_at,
+                    connection,
+                    archive_count: 0,
+                    timezone: None,
+                    failed: None,
+                });
+            }
+            ServeWriteBundleStreamRecord::RequestEnd { request_id } => {
+                let mut request = current_request
+                    .take()
+                    .ok_or_else(|| format!("Received request_end for {request_id} without an active archive export request."))?;
+                if request.request_id != request_id {
+                    return Err(format!(
+                        "Received request_end for {request_id}, but the active archive export request is {}.",
+                        request.request_id
+                    ));
+                }
+
+                let response = match request.failed.take() {
+                    Some((code, message)) => {
+                        let _ = request.connection.execute_batch("rollback");
+                        ServeWriteBundleStreamResponse {
+                            ok: false,
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id,
+                            output_path: Some(request.output_path),
+                            archive_date: Some(request.archive_date),
+                            archive_count: Some(request.archive_count),
+                            code: Some(code),
+                            message: Some(message),
+                        }
+                    }
+                    None => {
+                        insert_archive_manifest_row(
+                            &request.connection,
+                            &request.archive_date,
+                            request.timezone.as_deref().unwrap_or("UTC"),
+                            &request.exported_at,
+                            request.archive_count,
+                        )?;
+                        request
+                            .connection
+                            .execute_batch("commit")
+                            .map_err(|error| format!("Failed to commit archive sqlite transaction for {}: {error}", request.request_id))?;
+                        ServeWriteBundleStreamResponse {
+                            ok: true,
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id,
+                            output_path: Some(request.output_path),
+                            archive_date: Some(request.archive_date),
+                            archive_count: Some(request.archive_count),
+                            code: None,
+                            message: None,
+                        }
+                    }
+                };
+
+                serde_json::to_writer(&mut writer, &response)
+                    .map_err(|error| format!("Failed to write archive export worker response: {error}"))?;
+                writeln!(&mut writer).map_err(|error| format!("Failed to write archive export worker newline: {error}"))?;
+                writer
+                    .flush()
+                    .map_err(|error| format!("Failed to flush archive export worker response: {error}"))?;
+            }
+            other => {
+                let request = current_request
+                    .as_mut()
+                    .ok_or_else(|| "Received archive export row data without an active request.".to_string())?;
+                if request.failed.is_some() {
+                    continue;
+                }
+
+                if let Err(error) = apply_serve_write_bundle_record(request, other) {
+                    let _ = request.connection.execute_batch("rollback");
+                    request.failed = Some(("archive_export_request_failed".to_string(), error));
+                }
+            }
+        }
+    }
+
+    if let Some(request) = current_request {
+        return Err(format!(
+            "Archive export worker reached EOF while request {} was still active.",
+            request.request_id
+        ));
+    }
+
+    Ok(())
+}
+
+fn write_bundle_stream_from_reader<R: BufRead>(reader: R) -> Result<WriteBundleResponse, String> {
+    let mut lines = reader.lines();
+
+    let header = match lines.next() {
+        None => return Err("Missing archive export stream header.".to_string()),
+        Some(line) => parse_write_bundle_stream_header(&line.map_err(|error| format!("Failed to read stdin: {error}"))?)?,
+    };
+
+    let output_path = PathBuf::from(&header.output_path);
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create archive export directory {}: {error}", parent.display()))?;
+    }
+
+    match fs::remove_file(&output_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Failed to clear previous archive bundle {}: {error}",
+                output_path.display()
+            ))
+        }
+    }
+
+    let mut connection = Connection::open(&output_path)
+        .map_err(|error| format!("Failed to open archive sqlite bundle {}: {error}", output_path.display()))?;
+    apply_archive_write_pragmas(&connection)?;
+    apply_archive_schema(&connection)?;
+
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Failed to open archive sqlite transaction: {error}"))?;
+
+    let mut archive_count = 0usize;
+    let mut timezone: Option<String> = None;
+
+    for (index, line_result) in lines.enumerate() {
+        let line = line_result.map_err(|error| format!("Failed to read stdin line {}: {error}", index + 2))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match parse_write_bundle_stream_record(&line, index + 2)? {
+            WriteBundleStreamRecord::Header { .. } => {
+                return Err(format!("Unexpected stream header record at line {}.", index + 2));
+            }
+            WriteBundleStreamRecord::Archive { archive } => {
+                if timezone.is_none() {
+                    timezone = optional_str_field(&archive, "timezone")?;
+                }
+                insert_archive_row(
+                    &transaction,
+                    &header.archive_date,
+                    &header.export_path,
+                    &header.exported_at,
+                    &archive,
+                )?;
+                archive_count += 1;
+            }
+            WriteBundleStreamRecord::Session { archive_id, row } => {
+                insert_session_row(&transaction, &archive_id, &row)?;
+            }
+            WriteBundleStreamRecord::Run { archive_id, row } => {
+                insert_run_row(&transaction, &archive_id, &row)?;
+            }
+            WriteBundleStreamRecord::Message { archive_id, row } => {
+                insert_message_row(&transaction, &archive_id, &row)?;
+            }
+            WriteBundleStreamRecord::EngineMessage { archive_id, row } => {
+                insert_runtime_message_row(&transaction, &archive_id, &row)?;
+            }
+            WriteBundleStreamRecord::RunStep { archive_id, row } => {
+                insert_run_step_row(&transaction, &archive_id, &row)?;
+            }
+            WriteBundleStreamRecord::ToolCall { archive_id, row } => {
+                insert_tool_call_row(&transaction, &archive_id, &row)?;
+            }
+            WriteBundleStreamRecord::HookRun { archive_id, row } => {
+                insert_hook_run_row(&transaction, &archive_id, &row)?;
+            }
+            WriteBundleStreamRecord::Artifact { archive_id, row } => {
+                insert_artifact_row(&transaction, &archive_id, &row)?;
+            }
+        }
+    }
+
+    insert_archive_manifest_row(
+        &transaction,
+        &header.archive_date,
+        timezone.as_deref().unwrap_or("UTC"),
+        &header.exported_at,
+        archive_count,
+    )?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit archive sqlite transaction: {error}"))?;
+
+    Ok(WriteBundleResponse {
+        ok: true,
+        protocol_version: PROTOCOL_VERSION,
+        output_path: header.output_path,
+        archive_date: header.archive_date,
+        archive_count,
+    })
+}
+
+fn open_archive_bundle_connection(output_path: &str) -> Result<Connection, String> {
+    let output_path = PathBuf::from(output_path);
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create archive export directory {}: {error}", parent.display()))?;
+    }
+
+    match fs::remove_file(&output_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Failed to clear previous archive bundle {}: {error}",
+                output_path.display()
+            ))
+        }
+    }
+
+    let connection = Connection::open(&output_path)
+        .map_err(|error| format!("Failed to open archive sqlite bundle {}: {error}", output_path.display()))?;
+    connection.set_prepared_statement_cache_capacity(16);
+    apply_archive_write_pragmas(&connection)?;
+    apply_archive_schema(&connection)?;
+    Ok(connection)
+}
+
+fn apply_serve_write_bundle_record(
+    request: &mut ActiveServeWriteBundleRequest,
+    record: ServeWriteBundleStreamRecord,
+) -> Result<(), String> {
+    match record {
+        ServeWriteBundleStreamRecord::RequestStart { .. } | ServeWriteBundleStreamRecord::RequestEnd { .. } => {
+            Err("Received worker request boundary inside active archive export request.".to_string())
+        }
+        ServeWriteBundleStreamRecord::Archive { archive } => {
+            if request.timezone.is_none() {
+                request.timezone = optional_str_field(&archive, "timezone")?;
+            }
+            insert_archive_row(
+                &request.connection,
+                &request.archive_date,
+                &request.export_path,
+                &request.exported_at,
+                &archive,
+            )?;
+            request.archive_count += 1;
+            Ok(())
+        }
+        ServeWriteBundleStreamRecord::Session { archive_id, row } => insert_session_row(&request.connection, &archive_id, &row),
+        ServeWriteBundleStreamRecord::Run { archive_id, row } => insert_run_row(&request.connection, &archive_id, &row),
+        ServeWriteBundleStreamRecord::Message { archive_id, row } => {
+            insert_message_row(&request.connection, &archive_id, &row)
+        }
+        ServeWriteBundleStreamRecord::EngineMessage { archive_id, row } => {
+            insert_runtime_message_row(&request.connection, &archive_id, &row)
+        }
+        ServeWriteBundleStreamRecord::RunStep { archive_id, row } => {
+            insert_run_step_row(&request.connection, &archive_id, &row)
+        }
+        ServeWriteBundleStreamRecord::ToolCall { archive_id, row } => {
+            insert_tool_call_row(&request.connection, &archive_id, &row)
+        }
+        ServeWriteBundleStreamRecord::HookRun { archive_id, row } => {
+            insert_hook_run_row(&request.connection, &archive_id, &row)
+        }
+        ServeWriteBundleStreamRecord::Artifact { archive_id, row } => {
+            insert_artifact_row(&request.connection, &archive_id, &row)
+        }
+    }
+}
+
+fn parse_write_bundle_stream_header(line: &str) -> Result<WriteBundleStreamHeader, String> {
+    match parse_write_bundle_stream_record(line, 1)? {
+        WriteBundleStreamRecord::Header {
+            output_path,
+            archive_date,
+            export_path,
+            exported_at,
+        } => Ok(WriteBundleStreamHeader {
+            output_path,
+            archive_date,
+            export_path,
+            exported_at,
+        }),
+        _ => Err("Archive export stream must start with a header record.".to_string()),
+    }
+}
+
+fn parse_write_bundle_stream_record(line: &str, line_number: usize) -> Result<WriteBundleStreamRecord, String> {
+    serde_json::from_str(line)
+        .map_err(|error| format!("Failed to parse archive export stream record on line {line_number}: {error}"))
+}
+
 fn apply_archive_schema(connection: &Connection) -> Result<(), String> {
     for statement in ARCHIVE_SCHEMA_STATEMENTS {
         connection
@@ -468,6 +999,19 @@ fn apply_archive_schema(connection: &Connection) -> Result<(), String> {
             .map_err(|error| format!("Failed to apply archive sqlite schema: {error}"))?;
     }
 
+    Ok(())
+}
+
+fn apply_archive_write_pragmas(connection: &Connection) -> Result<(), String> {
+    connection
+        .pragma_update(None, "journal_mode", "MEMORY")
+        .map_err(|error| format!("Failed to configure archive sqlite journal_mode pragma: {error}"))?;
+    connection
+        .pragma_update(None, "synchronous", "OFF")
+        .map_err(|error| format!("Failed to configure archive sqlite synchronous pragma: {error}"))?;
+    connection
+        .pragma_update(None, "temp_store", "MEMORY")
+        .map_err(|error| format!("Failed to configure archive sqlite temp_store pragma: {error}"))?;
     Ok(())
 }
 
@@ -484,234 +1028,273 @@ fn insert_archive_rows(
         .and_then(|value| value.as_str())
         .unwrap_or("UTC");
 
-    connection
-        .execute(
-            "insert or replace into archive_manifest (archive_date, timezone, exported_at, archive_count) values (?, ?, ?, ?)",
-            params![archive_date, timezone, exported_at, archives.len() as i64],
-        )
-        .map_err(|error| format!("Failed to write archive manifest row: {error}"))?;
+    insert_archive_manifest_row(connection, archive_date, timezone, exported_at, archives.len())?;
 
     for archive in archives {
-        let archive_id = required_str_field(archive, "id", "archive")?;
-        let workspace_id = required_str_field(archive, "workspaceId", "archive")?;
-        let scope_type = required_str_field(archive, "scopeType", "archive")?;
-        let scope_id = required_str_field(archive, "scopeId", "archive")?;
-        let archived_at = required_str_field(archive, "archivedAt", "archive")?;
-        let deleted_at = required_str_field(archive, "deletedAt", "archive")?;
-        let timezone = required_str_field(archive, "timezone", "archive")?;
-        let workspace = required_value_field(archive, "workspace", "archive")?;
-        let workspace_name = required_str_field(workspace, "name", "archive.workspace")?;
-        let root_path = required_str_field(workspace, "rootPath", "archive.workspace")?;
-        let workspace_snapshot = json_text(workspace)?;
-
-        connection
-            .execute(
-                "insert or replace into archives (
-                archive_id, workspace_id, scope_type, scope_id, archive_date, archived_at, deleted_at, timezone, exported_at, export_path, workspace_name, root_path, workspace_snapshot
-              ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    archive_id,
-                    workspace_id,
-                    scope_type,
-                    scope_id,
-                    archive_date,
-                    archived_at,
-                    deleted_at,
-                    timezone,
-                    exported_at,
-                    export_path,
-                    workspace_name,
-                    root_path,
-                    workspace_snapshot
-                ],
-            )
-            .map_err(|error| format!("Failed to write archive row for {archive_id}: {error}"))?;
+        let archive_id = required_str_field(archive, "id", "archive")?.to_string();
+        insert_archive_row(connection, archive_date, export_path, exported_at, archive)?;
 
         for session in required_array_field(archive, "sessions", "archive")? {
-            connection
-                .execute(
-                    "insert or replace into sessions (
-                    archive_id, id, workspace_id, subject_ref, model_ref, agent_name, active_agent_name, title, status, last_run_at, created_at, updated_at, payload
-                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        archive_id,
-                        required_str_field(session, "id", "session")?,
-                        required_str_field(session, "workspaceId", "session")?,
-                        required_str_field(session, "subjectRef", "session")?,
-                        optional_str_field(session, "modelRef")?,
-                        optional_str_field(session, "agentName")?,
-                        required_str_field(session, "activeAgentName", "session")?,
-                        optional_str_field(session, "title")?,
-                        required_str_field(session, "status", "session")?,
-                        optional_str_field(session, "lastRunAt")?,
-                        required_str_field(session, "createdAt", "session")?,
-                        required_str_field(session, "updatedAt", "session")?,
-                        json_text(session)?
-                    ],
-                )
-                .map_err(|error| format!("Failed to write session row for archive {archive_id}: {error}"))?;
+            insert_session_row(connection, &archive_id, session)?;
         }
 
         for run in required_array_field(archive, "runs", "archive")? {
-            connection
-                .execute(
-                    "insert or replace into runs (
-                    archive_id, id, workspace_id, session_id, parent_run_id, trigger_type, trigger_ref, agent_name, effective_agent_name, status, created_at, started_at, heartbeat_at, ended_at, payload
-                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        archive_id,
-                        required_str_field(run, "id", "run")?,
-                        required_str_field(run, "workspaceId", "run")?,
-                        optional_str_field(run, "sessionId")?,
-                        optional_str_field(run, "parentRunId")?,
-                        required_str_field(run, "triggerType", "run")?,
-                        optional_str_field(run, "triggerRef")?,
-                        optional_str_field(run, "agentName")?,
-                        required_str_field(run, "effectiveAgentName", "run")?,
-                        required_str_field(run, "status", "run")?,
-                        required_str_field(run, "createdAt", "run")?,
-                        optional_str_field(run, "startedAt")?,
-                        optional_str_field(run, "heartbeatAt")?,
-                        optional_str_field(run, "endedAt")?,
-                        json_text(run)?
-                    ],
-                )
-                .map_err(|error| format!("Failed to write run row for archive {archive_id}: {error}"))?;
+            insert_run_row(connection, &archive_id, run)?;
         }
 
         for message in required_array_field(archive, "messages", "archive")? {
-            connection
-                .execute(
-                    "insert or replace into messages (
-                    archive_id, id, session_id, run_id, role, created_at, content, metadata
-                  ) values (?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        archive_id,
-                        required_str_field(message, "id", "message")?,
-                        required_str_field(message, "sessionId", "message")?,
-                        optional_str_field(message, "runId")?,
-                        required_str_field(message, "role", "message")?,
-                        required_str_field(message, "createdAt", "message")?,
-                        json_text(required_value_field(message, "content", "message")?)?,
-                        optional_json_text_non_null(message.get("metadata"))?
-                    ],
-                )
-                .map_err(|error| format!("Failed to write message row for archive {archive_id}: {error}"))?;
+            insert_message_row(connection, &archive_id, message)?;
         }
 
         for engine_message in required_array_field(archive, "engineMessages", "archive")? {
-            connection
-                .execute(
-                    "insert or replace into runtime_messages (
-                    archive_id, id, session_id, run_id, role, kind, created_at, content, metadata
-                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        archive_id,
-                        required_str_field(engine_message, "id", "engineMessage")?,
-                        required_str_field(engine_message, "sessionId", "engineMessage")?,
-                        optional_str_field(engine_message, "runId")?,
-                        required_str_field(engine_message, "role", "engineMessage")?,
-                        required_str_field(engine_message, "kind", "engineMessage")?,
-                        required_str_field(engine_message, "createdAt", "engineMessage")?,
-                        json_text(required_value_field(engine_message, "content", "engineMessage")?)?,
-                        optional_json_text_non_null(engine_message.get("metadata"))?
-                    ],
-                )
-                .map_err(|error| format!("Failed to write runtime message row for archive {archive_id}: {error}"))?;
+            insert_runtime_message_row(connection, &archive_id, engine_message)?;
         }
 
         for run_step in required_array_field(archive, "runSteps", "archive")? {
-            connection
-                .execute(
-                    "insert or replace into run_steps (
-                    archive_id, id, run_id, seq, step_type, name, agent_name, status, started_at, ended_at, input, output
-                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        archive_id,
-                        required_str_field(run_step, "id", "runStep")?,
-                        required_str_field(run_step, "runId", "runStep")?,
-                        required_i64_field(run_step, "seq", "runStep")?,
-                        required_str_field(run_step, "stepType", "runStep")?,
-                        optional_str_field(run_step, "name")?,
-                        optional_str_field(run_step, "agentName")?,
-                        required_str_field(run_step, "status", "runStep")?,
-                        optional_str_field(run_step, "startedAt")?,
-                        optional_str_field(run_step, "endedAt")?,
-                        optional_json_text_present(run_step.get("input"))?,
-                        optional_json_text_present(run_step.get("output"))?
-                    ],
-                )
-                .map_err(|error| format!("Failed to write run step row for archive {archive_id}: {error}"))?;
+            insert_run_step_row(connection, &archive_id, run_step)?;
         }
 
         for tool_call in required_array_field(archive, "toolCalls", "archive")? {
-            connection
-                .execute(
-                    "insert or replace into tool_calls (
-                    archive_id, id, run_id, step_id, source_type, tool_name, status, duration_ms, started_at, ended_at, request, response
-                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        archive_id,
-                        required_str_field(tool_call, "id", "toolCall")?,
-                        required_str_field(tool_call, "runId", "toolCall")?,
-                        optional_str_field(tool_call, "stepId")?,
-                        required_str_field(tool_call, "sourceType", "toolCall")?,
-                        required_str_field(tool_call, "toolName", "toolCall")?,
-                        required_str_field(tool_call, "status", "toolCall")?,
-                        optional_i64_field(tool_call, "durationMs")?,
-                        required_str_field(tool_call, "startedAt", "toolCall")?,
-                        required_str_field(tool_call, "endedAt", "toolCall")?,
-                        optional_json_text_non_null(tool_call.get("request"))?,
-                        optional_json_text_non_null(tool_call.get("response"))?
-                    ],
-                )
-                .map_err(|error| format!("Failed to write tool call row for archive {archive_id}: {error}"))?;
+            insert_tool_call_row(connection, &archive_id, tool_call)?;
         }
 
         for hook_run in required_array_field(archive, "hookRuns", "archive")? {
-            connection
-                .execute(
-                    "insert or replace into hook_runs (
-                    archive_id, id, run_id, hook_name, event_name, status, started_at, ended_at, capabilities, patch, error_message
-                  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        archive_id,
-                        required_str_field(hook_run, "id", "hookRun")?,
-                        required_str_field(hook_run, "runId", "hookRun")?,
-                        required_str_field(hook_run, "hookName", "hookRun")?,
-                        required_str_field(hook_run, "eventName", "hookRun")?,
-                        required_str_field(hook_run, "status", "hookRun")?,
-                        required_str_field(hook_run, "startedAt", "hookRun")?,
-                        required_str_field(hook_run, "endedAt", "hookRun")?,
-                        json_text(required_value_field(hook_run, "capabilities", "hookRun")?)?,
-                        optional_json_text_non_null(hook_run.get("patch"))?,
-                        optional_str_field(hook_run, "errorMessage")?
-                    ],
-                )
-                .map_err(|error| format!("Failed to write hook run row for archive {archive_id}: {error}"))?;
+            insert_hook_run_row(connection, &archive_id, hook_run)?;
         }
 
         for artifact in required_array_field(archive, "artifacts", "archive")? {
-            connection
-                .execute(
-                    "insert or replace into artifacts (
-                    archive_id, id, run_id, type, path, content_ref, created_at, metadata
-                  ) values (?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        archive_id,
-                        required_str_field(artifact, "id", "artifact")?,
-                        required_str_field(artifact, "runId", "artifact")?,
-                        required_str_field(artifact, "type", "artifact")?,
-                        optional_str_field(artifact, "path")?,
-                        optional_str_field(artifact, "contentRef")?,
-                        required_str_field(artifact, "createdAt", "artifact")?,
-                        optional_json_text_non_null(artifact.get("metadata"))?
-                    ],
-                )
-                .map_err(|error| format!("Failed to write artifact row for archive {archive_id}: {error}"))?;
+            insert_artifact_row(connection, &archive_id, artifact)?;
         }
     }
 
+    Ok(())
+}
+
+fn insert_archive_manifest_row(
+    connection: &Connection,
+    archive_date: &str,
+    timezone: &str,
+    exported_at: &str,
+    archive_count: usize,
+) -> Result<(), String> {
+    connection
+        .prepare_cached(INSERT_ARCHIVE_MANIFEST_SQL)
+        .map_err(|error| format!("Failed to prepare archive manifest statement: {error}"))?
+        .execute(params![archive_date, timezone, exported_at, archive_count as i64])
+        .map_err(|error| format!("Failed to write archive manifest row: {error}"))?;
+    Ok(())
+}
+
+fn insert_archive_row(
+    connection: &Connection,
+    archive_date: &str,
+    export_path: &str,
+    exported_at: &str,
+    archive: &Value,
+) -> Result<(), String> {
+    let archive_id = required_str_field(archive, "id", "archive")?;
+    let workspace_id = required_str_field(archive, "workspaceId", "archive")?;
+    let scope_type = required_str_field(archive, "scopeType", "archive")?;
+    let scope_id = required_str_field(archive, "scopeId", "archive")?;
+    let archived_at = required_str_field(archive, "archivedAt", "archive")?;
+    let deleted_at = required_str_field(archive, "deletedAt", "archive")?;
+    let timezone = required_str_field(archive, "timezone", "archive")?;
+    let workspace = required_value_field(archive, "workspace", "archive")?;
+    let workspace_name = required_str_field(workspace, "name", "archive.workspace")?;
+    let root_path = required_str_field(workspace, "rootPath", "archive.workspace")?;
+    let workspace_snapshot = json_text(workspace)?;
+
+    connection
+        .prepare_cached(INSERT_ARCHIVE_SQL)
+        .map_err(|error| format!("Failed to prepare archive row statement: {error}"))?
+        .execute(params![
+            archive_id,
+            workspace_id,
+            scope_type,
+            scope_id,
+            archive_date,
+            archived_at,
+            deleted_at,
+            timezone,
+            exported_at,
+            export_path,
+            workspace_name,
+            root_path,
+            workspace_snapshot
+        ])
+        .map_err(|error| format!("Failed to write archive row for {archive_id}: {error}"))?;
+    Ok(())
+}
+
+fn insert_session_row(connection: &Connection, archive_id: &str, session: &Value) -> Result<(), String> {
+    connection
+        .prepare_cached(INSERT_SESSION_SQL)
+        .map_err(|error| format!("Failed to prepare session row statement: {error}"))?
+        .execute(params![
+            archive_id,
+            required_str_field(session, "id", "session")?,
+            required_str_field(session, "workspaceId", "session")?,
+            required_str_field(session, "subjectRef", "session")?,
+            optional_str_field(session, "modelRef")?,
+            optional_str_field(session, "agentName")?,
+            required_str_field(session, "activeAgentName", "session")?,
+            optional_str_field(session, "title")?,
+            required_str_field(session, "status", "session")?,
+            optional_str_field(session, "lastRunAt")?,
+            required_str_field(session, "createdAt", "session")?,
+            required_str_field(session, "updatedAt", "session")?,
+            json_text(session)?
+        ])
+        .map_err(|error| format!("Failed to write session row for archive {archive_id}: {error}"))?;
+    Ok(())
+}
+
+fn insert_run_row(connection: &Connection, archive_id: &str, run: &Value) -> Result<(), String> {
+    connection
+        .prepare_cached(INSERT_RUN_SQL)
+        .map_err(|error| format!("Failed to prepare run row statement: {error}"))?
+        .execute(params![
+            archive_id,
+            required_str_field(run, "id", "run")?,
+            required_str_field(run, "workspaceId", "run")?,
+            optional_str_field(run, "sessionId")?,
+            optional_str_field(run, "parentRunId")?,
+            required_str_field(run, "triggerType", "run")?,
+            optional_str_field(run, "triggerRef")?,
+            optional_str_field(run, "agentName")?,
+            required_str_field(run, "effectiveAgentName", "run")?,
+            required_str_field(run, "status", "run")?,
+            required_str_field(run, "createdAt", "run")?,
+            optional_str_field(run, "startedAt")?,
+            optional_str_field(run, "heartbeatAt")?,
+            optional_str_field(run, "endedAt")?,
+            json_text(run)?
+        ])
+        .map_err(|error| format!("Failed to write run row for archive {archive_id}: {error}"))?;
+    Ok(())
+}
+
+fn insert_message_row(connection: &Connection, archive_id: &str, message: &Value) -> Result<(), String> {
+    connection
+        .prepare_cached(INSERT_MESSAGE_SQL)
+        .map_err(|error| format!("Failed to prepare message row statement: {error}"))?
+        .execute(params![
+            archive_id,
+            required_str_field(message, "id", "message")?,
+            required_str_field(message, "sessionId", "message")?,
+            optional_str_field(message, "runId")?,
+            required_str_field(message, "role", "message")?,
+            required_str_field(message, "createdAt", "message")?,
+            json_text(required_value_field(message, "content", "message")?)?,
+            optional_json_text_non_null(message.get("metadata"))?
+        ])
+        .map_err(|error| format!("Failed to write message row for archive {archive_id}: {error}"))?;
+    Ok(())
+}
+
+fn insert_runtime_message_row(
+    connection: &Connection,
+    archive_id: &str,
+    engine_message: &Value,
+) -> Result<(), String> {
+    connection
+        .prepare_cached(INSERT_RUNTIME_MESSAGE_SQL)
+        .map_err(|error| format!("Failed to prepare runtime message row statement: {error}"))?
+        .execute(params![
+            archive_id,
+            required_str_field(engine_message, "id", "engineMessage")?,
+            required_str_field(engine_message, "sessionId", "engineMessage")?,
+            optional_str_field(engine_message, "runId")?,
+            required_str_field(engine_message, "role", "engineMessage")?,
+            required_str_field(engine_message, "kind", "engineMessage")?,
+            required_str_field(engine_message, "createdAt", "engineMessage")?,
+            json_text(required_value_field(engine_message, "content", "engineMessage")?)?,
+            optional_json_text_non_null(engine_message.get("metadata"))?
+        ])
+        .map_err(|error| format!("Failed to write runtime message row for archive {archive_id}: {error}"))?;
+    Ok(())
+}
+
+fn insert_run_step_row(connection: &Connection, archive_id: &str, run_step: &Value) -> Result<(), String> {
+    connection
+        .prepare_cached(INSERT_RUN_STEP_SQL)
+        .map_err(|error| format!("Failed to prepare run step row statement: {error}"))?
+        .execute(params![
+            archive_id,
+            required_str_field(run_step, "id", "runStep")?,
+            required_str_field(run_step, "runId", "runStep")?,
+            required_i64_field(run_step, "seq", "runStep")?,
+            required_str_field(run_step, "stepType", "runStep")?,
+            optional_str_field(run_step, "name")?,
+            optional_str_field(run_step, "agentName")?,
+            required_str_field(run_step, "status", "runStep")?,
+            optional_str_field(run_step, "startedAt")?,
+            optional_str_field(run_step, "endedAt")?,
+            optional_json_text_present(run_step.get("input"))?,
+            optional_json_text_present(run_step.get("output"))?
+        ])
+        .map_err(|error| format!("Failed to write run step row for archive {archive_id}: {error}"))?;
+    Ok(())
+}
+
+fn insert_tool_call_row(connection: &Connection, archive_id: &str, tool_call: &Value) -> Result<(), String> {
+    connection
+        .prepare_cached(INSERT_TOOL_CALL_SQL)
+        .map_err(|error| format!("Failed to prepare tool call row statement: {error}"))?
+        .execute(params![
+            archive_id,
+            required_str_field(tool_call, "id", "toolCall")?,
+            required_str_field(tool_call, "runId", "toolCall")?,
+            optional_str_field(tool_call, "stepId")?,
+            required_str_field(tool_call, "sourceType", "toolCall")?,
+            required_str_field(tool_call, "toolName", "toolCall")?,
+            required_str_field(tool_call, "status", "toolCall")?,
+            optional_i64_field(tool_call, "durationMs")?,
+            required_str_field(tool_call, "startedAt", "toolCall")?,
+            required_str_field(tool_call, "endedAt", "toolCall")?,
+            optional_json_text_non_null(tool_call.get("request"))?,
+            optional_json_text_non_null(tool_call.get("response"))?
+        ])
+        .map_err(|error| format!("Failed to write tool call row for archive {archive_id}: {error}"))?;
+    Ok(())
+}
+
+fn insert_hook_run_row(connection: &Connection, archive_id: &str, hook_run: &Value) -> Result<(), String> {
+    connection
+        .prepare_cached(INSERT_HOOK_RUN_SQL)
+        .map_err(|error| format!("Failed to prepare hook run row statement: {error}"))?
+        .execute(params![
+            archive_id,
+            required_str_field(hook_run, "id", "hookRun")?,
+            required_str_field(hook_run, "runId", "hookRun")?,
+            required_str_field(hook_run, "hookName", "hookRun")?,
+            required_str_field(hook_run, "eventName", "hookRun")?,
+            required_str_field(hook_run, "status", "hookRun")?,
+            required_str_field(hook_run, "startedAt", "hookRun")?,
+            required_str_field(hook_run, "endedAt", "hookRun")?,
+            json_text(required_value_field(hook_run, "capabilities", "hookRun")?)?,
+            optional_json_text_non_null(hook_run.get("patch"))?,
+            optional_str_field(hook_run, "errorMessage")?
+        ])
+        .map_err(|error| format!("Failed to write hook run row for archive {archive_id}: {error}"))?;
+    Ok(())
+}
+
+fn insert_artifact_row(connection: &Connection, archive_id: &str, artifact: &Value) -> Result<(), String> {
+    connection
+        .prepare_cached(INSERT_ARTIFACT_SQL)
+        .map_err(|error| format!("Failed to prepare artifact row statement: {error}"))?
+        .execute(params![
+            archive_id,
+            required_str_field(artifact, "id", "artifact")?,
+            required_str_field(artifact, "runId", "artifact")?,
+            required_str_field(artifact, "type", "artifact")?,
+            optional_str_field(artifact, "path")?,
+            optional_str_field(artifact, "contentRef")?,
+            required_str_field(artifact, "createdAt", "artifact")?,
+            optional_json_text_non_null(artifact.get("metadata"))?
+        ])
+        .map_err(|error| format!("Failed to write artifact row for archive {archive_id}: {error}"))?;
     Ok(())
 }
 
@@ -813,107 +1396,99 @@ fn sha256_file(file_path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     use serde_json::json;
     use tempfile::tempdir;
 
-    #[test]
-    fn write_bundle_persists_expected_rows() {
-        let temp = tempdir().expect("tempdir");
-        let output_path = temp.path().join("2026-04-08.sqlite");
-        let request = WriteBundleRequest {
-            output_path: output_path.to_string_lossy().to_string(),
-            archive_date: "2026-04-08".to_string(),
-            export_path: "/exports/2026-04-08.sqlite".to_string(),
-            exported_at: "2026-04-09T00:00:00.000Z".to_string(),
-            archives: vec![json!({
-                "id": "warc_1",
+    fn sample_archive() -> Value {
+        json!({
+            "id": "warc_1",
+            "workspaceId": "ws_1",
+            "scopeType": "workspace",
+            "scopeId": "ws_1",
+            "archiveDate": "2026-04-08",
+            "archivedAt": "2026-04-08T12:00:00.000Z",
+            "deletedAt": "2026-04-08T12:00:00.000Z",
+            "timezone": "Asia/Shanghai",
+            "workspace": {
+                "id": "ws_1",
+                "name": "demo",
+                "rootPath": "/tmp/demo"
+            },
+            "sessions": [{
+                "id": "ses_1",
                 "workspaceId": "ws_1",
-                "scopeType": "workspace",
-                "scopeId": "ws_1",
-                "archiveDate": "2026-04-08",
-                "archivedAt": "2026-04-08T12:00:00.000Z",
-                "deletedAt": "2026-04-08T12:00:00.000Z",
-                "timezone": "Asia/Shanghai",
-                "workspace": {
-                    "id": "ws_1",
-                    "name": "demo",
-                    "rootPath": "/tmp/demo"
-                },
-                "sessions": [{
-                    "id": "ses_1",
-                    "workspaceId": "ws_1",
-                    "subjectRef": "dev:test",
-                    "activeAgentName": "builder",
-                    "status": "active",
-                    "createdAt": "2026-04-08T11:00:00.000Z",
-                    "updatedAt": "2026-04-08T12:00:00.000Z"
-                }],
-                "runs": [{
-                    "id": "run_1",
-                    "workspaceId": "ws_1",
-                    "sessionId": "ses_1",
-                    "triggerType": "message",
-                    "effectiveAgentName": "builder",
-                    "status": "completed",
-                    "createdAt": "2026-04-08T11:05:00.000Z"
-                }],
-                "messages": [{
-                    "id": "msg_1",
-                    "sessionId": "ses_1",
-                    "runId": "run_1",
-                    "role": "assistant",
-                    "content": "hello",
-                    "createdAt": "2026-04-08T11:06:00.000Z"
-                }],
-                "engineMessages": [{
-                    "id": "emsg_1",
-                    "sessionId": "ses_1",
-                    "runId": "run_1",
-                    "role": "assistant",
-                    "kind": "assistant_text",
-                    "content": "runtime hello",
-                    "createdAt": "2026-04-08T11:06:01.000Z"
-                }],
-                "runSteps": [{
-                    "id": "step_1",
-                    "runId": "run_1",
-                    "seq": 1,
-                    "stepType": "model",
-                    "status": "completed",
-                    "createdAt": "ignored",
-                    "input": null
-                }],
-                "toolCalls": [{
-                    "id": "tool_1",
-                    "runId": "run_1",
-                    "sourceType": "engine",
-                    "toolName": "read_file",
-                    "status": "completed",
-                    "startedAt": "2026-04-08T11:07:00.000Z",
-                    "endedAt": "2026-04-08T11:07:01.000Z"
-                }],
-                "hookRuns": [{
-                    "id": "hook_1",
-                    "runId": "run_1",
-                    "hookName": "post-run",
-                    "eventName": "run.completed",
-                    "status": "completed",
-                    "startedAt": "2026-04-08T11:08:00.000Z",
-                    "endedAt": "2026-04-08T11:08:01.000Z",
-                    "capabilities": ["patch"]
-                }],
-                "artifacts": [{
-                    "id": "artifact_1",
-                    "runId": "run_1",
-                    "type": "file",
-                    "createdAt": "2026-04-08T11:09:00.000Z"
-                }]
-            })],
-        };
+                "subjectRef": "dev:test",
+                "activeAgentName": "builder",
+                "status": "active",
+                "createdAt": "2026-04-08T11:00:00.000Z",
+                "updatedAt": "2026-04-08T12:00:00.000Z"
+            }],
+            "runs": [{
+                "id": "run_1",
+                "workspaceId": "ws_1",
+                "sessionId": "ses_1",
+                "triggerType": "message",
+                "effectiveAgentName": "builder",
+                "status": "completed",
+                "createdAt": "2026-04-08T11:05:00.000Z"
+            }],
+            "messages": [{
+                "id": "msg_1",
+                "sessionId": "ses_1",
+                "runId": "run_1",
+                "role": "assistant",
+                "content": "hello",
+                "createdAt": "2026-04-08T11:06:00.000Z"
+            }],
+            "engineMessages": [{
+                "id": "emsg_1",
+                "sessionId": "ses_1",
+                "runId": "run_1",
+                "role": "assistant",
+                "kind": "assistant_text",
+                "content": "runtime hello",
+                "createdAt": "2026-04-08T11:06:01.000Z"
+            }],
+            "runSteps": [{
+                "id": "step_1",
+                "runId": "run_1",
+                "seq": 1,
+                "stepType": "model",
+                "status": "completed",
+                "createdAt": "ignored",
+                "input": null
+            }],
+            "toolCalls": [{
+                "id": "tool_1",
+                "runId": "run_1",
+                "sourceType": "engine",
+                "toolName": "read_file",
+                "status": "completed",
+                "startedAt": "2026-04-08T11:07:00.000Z",
+                "endedAt": "2026-04-08T11:07:01.000Z"
+            }],
+            "hookRuns": [{
+                "id": "hook_1",
+                "runId": "run_1",
+                "hookName": "post-run",
+                "eventName": "run.completed",
+                "status": "completed",
+                "startedAt": "2026-04-08T11:08:00.000Z",
+                "endedAt": "2026-04-08T11:08:01.000Z",
+                "capabilities": ["patch"]
+            }],
+            "artifacts": [{
+                "id": "artifact_1",
+                "runId": "run_1",
+                "type": "file",
+                "createdAt": "2026-04-08T11:09:00.000Z"
+            }]
+        })
+    }
 
-        write_bundle(&request).expect("write bundle");
-
-        let connection = Connection::open(&output_path).expect("open written sqlite");
+    fn assert_expected_bundle_rows(output_path: &Path) {
+        let connection = Connection::open(output_path).expect("open written sqlite");
         let archive_count: i64 = connection
             .query_row(
                 "select archive_count from archive_manifest where archive_date = ?",
@@ -935,6 +1510,162 @@ mod tests {
         assert_eq!(message_content, "\"hello\"");
         assert_eq!(runtime_message_count, 1);
         assert_eq!(artifact_count, 1);
+    }
+
+    fn append_archive_rows_to_stream(stream: &mut String, archive: &Value) {
+        stream.push_str(&format!("{}\n", json!({ "type": "archive", "archive": archive })));
+        stream.push_str(&format!(
+            "{}\n",
+            json!({
+                "type": "session",
+                "archiveId": "warc_1",
+                "row": archive.get("sessions").and_then(Value::as_array).and_then(|rows| rows.first()).cloned().expect("session")
+            })
+        ));
+        stream.push_str(&format!(
+            "{}\n",
+            json!({
+                "type": "run",
+                "archiveId": "warc_1",
+                "row": archive.get("runs").and_then(Value::as_array).and_then(|rows| rows.first()).cloned().expect("run")
+            })
+        ));
+        stream.push_str(&format!(
+            "{}\n",
+            json!({
+                "type": "message",
+                "archiveId": "warc_1",
+                "row": archive.get("messages").and_then(Value::as_array).and_then(|rows| rows.first()).cloned().expect("message")
+            })
+        ));
+        stream.push_str(&format!(
+            "{}\n",
+            json!({
+                "type": "engine_message",
+                "archiveId": "warc_1",
+                "row": archive.get("engineMessages").and_then(Value::as_array).and_then(|rows| rows.first()).cloned().expect("engine message")
+            })
+        ));
+        stream.push_str(&format!(
+            "{}\n",
+            json!({
+                "type": "run_step",
+                "archiveId": "warc_1",
+                "row": archive.get("runSteps").and_then(Value::as_array).and_then(|rows| rows.first()).cloned().expect("run step")
+            })
+        ));
+        stream.push_str(&format!(
+            "{}\n",
+            json!({
+                "type": "tool_call",
+                "archiveId": "warc_1",
+                "row": archive.get("toolCalls").and_then(Value::as_array).and_then(|rows| rows.first()).cloned().expect("tool call")
+            })
+        ));
+        stream.push_str(&format!(
+            "{}\n",
+            json!({
+                "type": "hook_run",
+                "archiveId": "warc_1",
+                "row": archive.get("hookRuns").and_then(Value::as_array).and_then(|rows| rows.first()).cloned().expect("hook run")
+            })
+        ));
+        stream.push_str(&format!(
+            "{}\n",
+            json!({
+                "type": "artifact",
+                "archiveId": "warc_1",
+                "row": archive.get("artifacts").and_then(Value::as_array).and_then(|rows| rows.first()).cloned().expect("artifact")
+            })
+        ));
+    }
+
+    #[test]
+    fn write_bundle_persists_expected_rows() {
+        let temp = tempdir().expect("tempdir");
+        let output_path = temp.path().join("2026-04-08.sqlite");
+        let request = WriteBundleRequest {
+            output_path: output_path.to_string_lossy().to_string(),
+            archive_date: "2026-04-08".to_string(),
+            export_path: "/exports/2026-04-08.sqlite".to_string(),
+            exported_at: "2026-04-09T00:00:00.000Z".to_string(),
+            archives: vec![sample_archive()],
+        };
+
+        write_bundle(&request).expect("write bundle");
+        assert_expected_bundle_rows(&output_path);
+    }
+
+    #[test]
+    fn write_bundle_stream_persists_expected_rows() {
+        let temp = tempdir().expect("tempdir");
+        let output_path = temp.path().join("2026-04-08-stream.sqlite");
+        let archive = sample_archive();
+        let mut stream = String::new();
+        stream.push_str(
+            &format!(
+                "{}\n",
+                json!({
+                    "type": "header",
+                    "outputPath": output_path.to_string_lossy(),
+                    "archiveDate": "2026-04-08",
+                    "exportPath": "/exports/2026-04-08-stream.sqlite",
+                    "exportedAt": "2026-04-09T00:00:00.000Z"
+                })
+            ),
+        );
+        append_archive_rows_to_stream(&mut stream, &archive);
+
+        let response = write_bundle_stream_from_reader(Cursor::new(stream)).expect("write bundle stream");
+        assert_eq!(response.archive_count, 1);
+        assert_expected_bundle_rows(&output_path);
+    }
+
+    #[test]
+    fn serve_write_bundle_stream_processes_request_and_replies() {
+        let temp = tempdir().expect("tempdir");
+        let output_path = temp.path().join("2026-04-08-worker.sqlite");
+        let archive = sample_archive();
+        let mut input = String::new();
+        input.push_str(&format!(
+            "{}\n",
+            json!({
+                "type": "request_start",
+                "requestId": "req_1",
+                "outputPath": output_path.to_string_lossy(),
+                "archiveDate": "2026-04-08",
+                "exportPath": "/exports/2026-04-08-worker.sqlite",
+                "exportedAt": "2026-04-09T00:00:00.000Z"
+            })
+        ));
+        append_archive_rows_to_stream(&mut input, &archive);
+        input.push_str(&format!("{}\n", json!({ "type": "request_end", "requestId": "req_1" })));
+
+        let mut output = Vec::new();
+        serve_write_bundle_stream_from_reader(Cursor::new(input), &mut output).expect("serve worker request");
+
+        let response: Value = serde_json::from_slice(&output).expect("parse worker response");
+        assert_eq!(response.get("ok"), Some(&Value::Bool(true)));
+        assert_eq!(response.get("requestId"), Some(&Value::String("req_1".to_string())));
+        assert_eq!(response.get("archiveCount"), Some(&Value::Number(1.into())));
+        assert_expected_bundle_rows(&output_path);
+    }
+
+    #[test]
+    fn write_bundle_stream_record_parser_accepts_engine_message() {
+        let record = parse_write_bundle_stream_record(
+            r#"{"type":"engine_message","archiveId":"warc_1","row":{"id":"emsg_1"}}"#,
+            2,
+        )
+        .expect("parse stream record");
+
+        match record {
+            WriteBundleStreamRecord::EngineMessage { archive_id, row } => {
+                assert_eq!(archive_id, "warc_1");
+                assert_eq!(row.get("id"), Some(&Value::String("emsg_1".to_string())));
+            }
+            _ => panic!("expected engine message record"),
+        }
     }
 
     #[test]

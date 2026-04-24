@@ -1210,6 +1210,44 @@ class RoutedWorkspaceArchiveRepository implements WorkspaceArchiveRepository {
     });
   }
 
+  async forEachByArchiveDate(
+    archiveDate: string,
+    visitor: (archive: WorkspaceArchiveRecord) => Promise<void> | void,
+    options?: {
+      pageSize?: number | undefined;
+    }
+  ): Promise<number> {
+    type IterableWorkspaceArchiveRepository = WorkspaceArchiveRepository & {
+      forEachByArchiveDate?: (
+        archiveDate: string,
+        visitor: (archive: WorkspaceArchiveRecord) => Promise<void> | void,
+        options?: {
+          pageSize?: number | undefined;
+        }
+      ) => Promise<number>;
+    };
+
+    let count = 0;
+
+    for (const backend of await this.router.listKnownBackends()) {
+      const repository = backend.workspaceArchiveRepository as IterableWorkspaceArchiveRepository;
+      if (repository.forEachByArchiveDate) {
+        count += await repository.forEachByArchiveDate(archiveDate, async (archive: WorkspaceArchiveRecord) => {
+          await visitor(archive);
+        }, options);
+        continue;
+      }
+
+      const archives = await repository.listByArchiveDate(archiveDate);
+      for (const archive of archives) {
+        await visitor(archive);
+        count += 1;
+      }
+    }
+
+    return count;
+  }
+
   async markExported(ids: string[], input: { exportedAt: string; exportPath: string }): Promise<void> {
     await this.router.fanOutKnownBackends((backend) => backend.workspaceArchiveRepository.markExported(ids, input));
   }

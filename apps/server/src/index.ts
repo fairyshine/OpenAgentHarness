@@ -1,4 +1,4 @@
-import { startApiServer } from "./engine-entry.js";
+import { startApiServer } from "./api-server.js";
 
 async function main() {
   await startApiServer(process.argv.slice(2));

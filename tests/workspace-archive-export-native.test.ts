@@ -62,6 +62,9 @@ function createArchiveRecord(overrides: Partial<WorkspaceArchiveRecord> = {}): W
 }
 
 async function importExporterWithNativeMocks(overrides: {
+  isNativeArchiveExportEnabled?: (() => boolean) | undefined;
+  shouldPreferNativeArchiveExportBundle?: ((pendingArchiveDateCount: number) => boolean) | undefined;
+  resolveDefaultNativeArchiveExportWorkerCount?: (() => number) | undefined;
   inspectNativeArchiveExportDirectory?: ((input: { exportRoot: string }) => Promise<{
     ok: true;
     protocolVersion: number;
@@ -76,13 +79,15 @@ async function importExporterWithNativeMocks(overrides: {
     archiveDate: string;
     exportPath: string;
     exportedAt: string;
-    archives: WorkspaceArchiveRecord[];
+    archives?: WorkspaceArchiveRecord[] | undefined;
+    produceArchives?: ((writer: { writeArchive(archive: WorkspaceArchiveRecord): Promise<void> }) => Promise<string[]>) | undefined;
   }) => Promise<{
     ok: true;
     protocolVersion: number;
     outputPath: string;
     archiveDate: string;
     archiveCount: number;
+    archiveIds?: string[] | undefined;
   }>) | undefined;
   writeNativeArchiveChecksum?: ((input: { filePath: string; outputPath?: string | undefined }) => Promise<{
     ok: true;
@@ -100,7 +105,9 @@ async function importExporterWithNativeMocks(overrides: {
       );
     return {
       ...actual,
-      isNativeArchiveExportEnabled: () => true,
+      isNativeArchiveExportEnabled: overrides.isNativeArchiveExportEnabled ?? (() => true),
+      shouldPreferNativeArchiveExportBundle: overrides.shouldPreferNativeArchiveExportBundle ?? (() => true),
+      resolveDefaultNativeArchiveExportWorkerCount: overrides.resolveDefaultNativeArchiveExportWorkerCount ?? (() => 1),
       ...(overrides.inspectNativeArchiveExportDirectory
         ? { inspectNativeArchiveExportDirectory: overrides.inspectNativeArchiveExportDirectory }
         : {}),
@@ -114,6 +121,7 @@ async function importExporterWithNativeMocks(overrides: {
 afterEach(async () => {
   vi.doUnmock("../apps/server/src/native-archive-export.ts");
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.resetModules();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -195,15 +203,26 @@ describe("workspace archive exporter native bridge", () => {
       archiveDate: string;
       exportPath: string;
       exportedAt: string;
-      archives: WorkspaceArchiveRecord[];
+      archives?: WorkspaceArchiveRecord[] | undefined;
+      produceArchives?: ((writer: { writeArchive(archive: WorkspaceArchiveRecord): Promise<void> }) => Promise<string[]>) | undefined;
     }) => {
+      const archives: WorkspaceArchiveRecord[] = [];
+      const archiveIds =
+        input.archives?.map((archive) => archive.id) ??
+        (await input.produceArchives?.({
+          async writeArchive(archive) {
+            archives.push(archive);
+          }
+        })) ??
+        [];
       await writeFile(input.outputPath, "native bundle", "utf8");
       return {
         ok: true as const,
         protocolVersion: 1,
         outputPath: input.outputPath,
         archiveDate: input.archiveDate,
-        archiveCount: input.archives.length
+        archiveCount: archives.length,
+        archiveIds
       };
     });
     const { WorkspaceArchiveExporter } = await importExporterWithNativeMocks({
@@ -260,17 +279,222 @@ describe("workspace archive exporter native bridge", () => {
 
     const dbPath = path.join(exportRoot, "2026-04-08.sqlite");
     const checksumPath = `${dbPath}.sha256`;
-    expect(bundleSpy).toHaveBeenCalledWith({
+    expect(bundleSpy).toHaveBeenCalledTimes(1);
+    const bundleInput = bundleSpy.mock.calls[0]?.[0];
+    expect(bundleInput).toMatchObject({
       outputPath: `${dbPath}.tmp`,
       archiveDate: "2026-04-08",
       exportPath: dbPath,
-      exportedAt: expect.any(String),
-      archives: [archive]
+      exportedAt: expect.any(String)
     });
+    expect(bundleInput?.archives).toBeUndefined();
+    expect(typeof bundleInput?.produceArchives).toBe("function");
     expect(checksumSpy).toHaveBeenCalledWith({
       filePath: dbPath,
       outputPath: checksumPath
     });
     await expect(readFile(checksumPath, "utf8")).resolves.toBe("deadbeef  2026-04-08.sqlite\n");
+  });
+
+  it("keeps single-date auto exports on the TypeScript bundle path", async () => {
+    const exportRoot = await mkdtemp(path.join(tmpdir(), "oah-archive-native-auto-single-"));
+    tempDirs.push(exportRoot);
+
+    const archive = createArchiveRecord({
+      messages: [
+        {
+          id: "msg_native_auto_single_1",
+          sessionId: "ses_native_1",
+          role: "assistant",
+          content: "auto single date",
+          createdAt: "2026-04-08T11:06:00.000Z"
+        }
+      ]
+    });
+    const bundleSpy = vi.fn();
+    const checksumSpy = vi.fn(async (input: { filePath: string; outputPath?: string | undefined }) => {
+      const outputPath = input.outputPath ?? `${input.filePath}.sha256`;
+      await writeFile(outputPath, `deadbeef  ${path.basename(input.filePath)}\n`, "utf8");
+      return {
+        ok: true as const,
+        protocolVersion: 1,
+        filePath: input.filePath,
+        outputPath,
+        checksum: "deadbeef"
+      };
+    });
+    const { WorkspaceArchiveExporter } = await importExporterWithNativeMocks({
+      isNativeArchiveExportEnabled: () => true,
+      shouldPreferNativeArchiveExportBundle: () => false,
+      inspectNativeArchiveExportDirectory: vi.fn(async () => ({
+        ok: true as const,
+        protocolVersion: 1,
+        unexpectedDirectories: [],
+        leftoverTempFiles: [],
+        unexpectedFiles: [],
+        missingChecksums: [],
+        orphanChecksums: []
+      })),
+      writeNativeArchiveBundle: bundleSpy,
+      writeNativeArchiveChecksum: checksumSpy
+    });
+
+    const repository: WorkspaceArchiveRepository = {
+      async archiveWorkspace() {
+        return archive;
+      },
+      async archiveSessionTree() {
+        return archive;
+      },
+      async listPendingArchiveDates() {
+        return ["2026-04-08"];
+      },
+      async listByArchiveDate(archiveDate) {
+        return archiveDate === "2026-04-08" ? [archive] : [];
+      },
+      async markExported() {},
+      async pruneExportedBefore() {
+        return 0;
+      }
+    };
+
+    const exporter = new WorkspaceArchiveExporter({
+      repository,
+      exportRoot
+    });
+
+    await exporter.exportPending();
+    await exporter.close();
+
+    const dbPath = path.join(exportRoot, "2026-04-08.sqlite");
+    const checksumPath = `${dbPath}.sha256`;
+    expect(bundleSpy).not.toHaveBeenCalled();
+    await expect(readFile(dbPath)).resolves.toBeInstanceOf(Buffer);
+    expect(checksumSpy).toHaveBeenCalledWith({
+      filePath: dbPath,
+      outputPath: checksumPath
+    });
+  });
+
+  it("uses native bundle writing for multi-date auto exports", async () => {
+    const exportRoot = await mkdtemp(path.join(tmpdir(), "oah-archive-native-auto-multi-"));
+    tempDirs.push(exportRoot);
+
+    const archiveA = createArchiveRecord({
+      id: "warc_native_auto_1",
+      archiveDate: "2026-04-08"
+    });
+    const archiveB = createArchiveRecord({
+      id: "warc_native_auto_2",
+      workspaceId: "ws_native_2",
+      scopeId: "ws_native_2",
+      archiveDate: "2026-04-07",
+      workspace: {
+        ...createArchiveRecord().workspace,
+        id: "ws_native_2",
+        name: "native-auto-2",
+        rootPath: "/tmp/native-auto-2",
+        catalog: {
+          workspaceId: "ws_native_2",
+          agents: [],
+          models: [],
+          actions: [],
+          skills: [],
+          tools: [],
+          hooks: [],
+          nativeTools: []
+        }
+      }
+    });
+    const checksumSpy = vi.fn(async (input: { filePath: string; outputPath?: string | undefined }) => {
+      const outputPath = input.outputPath ?? `${input.filePath}.sha256`;
+      await writeFile(outputPath, `deadbeef  ${path.basename(input.filePath)}\n`, "utf8");
+      return {
+        ok: true as const,
+        protocolVersion: 1,
+        filePath: input.filePath,
+        outputPath,
+        checksum: "deadbeef"
+      };
+    });
+    const bundleSpy = vi.fn(async (input: {
+      outputPath: string;
+      archiveDate: string;
+      exportPath: string;
+      exportedAt: string;
+      archives?: WorkspaceArchiveRecord[] | undefined;
+      produceArchives?: ((writer: { writeArchive(archive: WorkspaceArchiveRecord): Promise<void> }) => Promise<string[]>) | undefined;
+    }) => {
+      const archives: WorkspaceArchiveRecord[] = [];
+      const archiveIds =
+        input.archives?.map((archive) => archive.id) ??
+        (await input.produceArchives?.({
+          async writeArchive(archive) {
+            archives.push(archive);
+          }
+        })) ??
+        [];
+      await writeFile(input.outputPath, `native bundle ${input.archiveDate}`, "utf8");
+      return {
+        ok: true as const,
+        protocolVersion: 1,
+        outputPath: input.outputPath,
+        archiveDate: input.archiveDate,
+        archiveCount: archives.length,
+        archiveIds
+      };
+    });
+    const { WorkspaceArchiveExporter } = await importExporterWithNativeMocks({
+      isNativeArchiveExportEnabled: () => true,
+      shouldPreferNativeArchiveExportBundle: (pendingArchiveDateCount) => pendingArchiveDateCount > 1,
+      resolveDefaultNativeArchiveExportWorkerCount: () => 2,
+      inspectNativeArchiveExportDirectory: vi.fn(async () => ({
+        ok: true as const,
+        protocolVersion: 1,
+        unexpectedDirectories: [],
+        leftoverTempFiles: [],
+        unexpectedFiles: [],
+        missingChecksums: [],
+        orphanChecksums: []
+      })),
+      writeNativeArchiveBundle: bundleSpy,
+      writeNativeArchiveChecksum: checksumSpy
+    });
+
+    const repository: WorkspaceArchiveRepository = {
+      async archiveWorkspace() {
+        return archiveA;
+      },
+      async archiveSessionTree() {
+        return archiveB;
+      },
+      async listPendingArchiveDates() {
+        return ["2026-04-08", "2026-04-07"];
+      },
+      async listByArchiveDate(archiveDate) {
+        if (archiveDate === "2026-04-08") {
+          return [archiveA];
+        }
+        if (archiveDate === "2026-04-07") {
+          return [archiveB];
+        }
+        return [];
+      },
+      async markExported() {},
+      async pruneExportedBefore() {
+        return 0;
+      }
+    };
+
+    const exporter = new WorkspaceArchiveExporter({
+      repository,
+      exportRoot
+    });
+
+    await exporter.exportPending();
+    await exporter.close();
+
+    expect(bundleSpy).toHaveBeenCalledTimes(2);
+    expect(bundleSpy.mock.calls.map(([input]) => input.archiveDate).sort()).toEqual(["2026-04-07", "2026-04-08"]);
   });
 });

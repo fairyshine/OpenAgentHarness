@@ -3,11 +3,13 @@ import os from "node:os";
 import path from "node:path";
 
 import * as configModule from "@oah/config";
-import * as nativeBridge from "@oah/native-bridge";
 import { createLocalWorkspaceCommandExecutor, createLocalWorkspaceFileSystem, type WorkspaceRecord } from "@oah/engine-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createSandboxBackedWorkspaceInitializer } from "../apps/server/src/bootstrap/sandbox-backed-workspace-initializer.ts";
+import {
+  createSandboxBackedWorkspaceInitializer,
+  nativeWorkspaceSyncAdapter
+} from "../apps/server/src/bootstrap/sandbox-backed-workspace-initializer.ts";
 import type { SandboxHost } from "../apps/server/src/bootstrap/sandbox-host.ts";
 
 const tempDirs: string[] = [];
@@ -255,7 +257,7 @@ describe("sandbox-backed workspace initializer", () => {
       )
     );
 
-    const nativeSyncSpy = vi.spyOn(nativeBridge, "syncNativeLocalToSandboxHttp").mockImplementation(async (input) => {
+    const nativeSyncSpy = vi.spyOn(nativeWorkspaceSyncAdapter, "syncLocalToSandboxHttp").mockImplementation(async (input) => {
       expect(input.remoteRootPath).toBe("/workspace");
       expect(input.sandbox.sandboxId).toBe("ws_remote_native_seed");
       await mkdir(path.join(remoteWorkspaceRoot, ".openharness"), { recursive: true });
@@ -273,6 +275,15 @@ describe("sandbox-backed workspace initializer", () => {
         uploadedFileCount: 3
       };
     });
+    const fingerprintSpy = vi
+      .spyOn(nativeWorkspaceSyncAdapter, "computeDirectoryFingerprint")
+      .mockImplementation(async ({ rootDir }) => ({
+        ok: true,
+        protocolVersion: 1,
+        fingerprint: `fp:${rootDir}`,
+        fileCount: 1,
+        emptyDirectoryCount: 0
+      }));
 
     const initializer = createSandboxBackedWorkspaceInitializer({
       runtimeDir,
@@ -299,6 +310,7 @@ describe("sandbox-backed workspace initializer", () => {
     expect(initialized.rootPath).toBe("/workspace");
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(nativeSyncSpy).toHaveBeenCalledTimes(1);
+    expect(fingerprintSpy).toHaveBeenCalled();
     expect(writeFileSpy).not.toHaveBeenCalled();
     await expect(readFile(path.join(remoteWorkspaceRoot, "README.md"), "utf8")).resolves.toBe("# Native seeded\n");
     await expect(readFile(path.join(remoteWorkspaceRoot, "nested", "notes.txt"), "utf8")).resolves.toBe("native path\n");

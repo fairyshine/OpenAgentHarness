@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { loadServerConfig } from "@oah/config/server-config";
+import { loadServerConfig } from "@oah/config-server-control";
 import {
   createRedisSessionRunQueue,
   createRedisWorkerRegistry,

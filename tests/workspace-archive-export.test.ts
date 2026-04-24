@@ -309,6 +309,68 @@ describe("workspace archive exporter", () => {
     }
   });
 
+  it("prefers repository per-archive iteration when available", async () => {
+    const exportRoot = await mkdtemp(path.join(tmpdir(), "oah-archive-export-stream-"));
+    tempDirs.push(exportRoot);
+
+    const archive = createArchiveRecord();
+    let forEachCalls = 0;
+    let listCalls = 0;
+
+    const repository: WorkspaceArchiveRepository & {
+      forEachByArchiveDate: (
+        archiveDate: string,
+        visitor: (archive: WorkspaceArchiveRecord) => Promise<void> | void,
+        options?: { pageSize?: number | undefined }
+      ) => Promise<number>;
+    } = {
+      async archiveWorkspace() {
+        return archive;
+      },
+      async archiveSessionTree() {
+        return archive;
+      },
+      async listPendingArchiveDates() {
+        return ["2026-04-08"];
+      },
+      async listByArchiveDate() {
+        listCalls += 1;
+        throw new Error("listByArchiveDate should not be called when forEachByArchiveDate is available");
+      },
+      async forEachByArchiveDate(archiveDate, visitor) {
+        forEachCalls += 1;
+        if (archiveDate === "2026-04-08") {
+          await visitor(archive);
+          return 1;
+        }
+        return 0;
+      },
+      async markExported() {},
+      async pruneExportedBefore() {
+        return 0;
+      }
+    };
+
+    const exporter = new WorkspaceArchiveExporter({
+      repository,
+      exportRoot
+    });
+
+    await exporter.exportPending();
+    await exporter.close();
+
+    expect(forEachCalls).toBe(1);
+    expect(listCalls).toBe(0);
+
+    const db = new DatabaseSync(path.join(exportRoot, "2026-04-08.sqlite"));
+    try {
+      const archiveCount = db.prepare("select count(*) as count from archives").get() as { count: number };
+      expect(archiveCount.count).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("prunes exported archive metadata after the retention window", async () => {
     const exportRoot = await mkdtemp(path.join(tmpdir(), "oah-archive-export-prune-"));
     tempDirs.push(exportRoot);

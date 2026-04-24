@@ -1,4 +1,4 @@
-import type { ServerConfig } from "@oah/config";
+import type { ServerConfig } from "@oah/config-server-control";
 import {
   buildRedisWorkerAffinitySummary,
   calculateRedisWorkerPoolSuggestion,

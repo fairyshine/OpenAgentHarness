@@ -30,7 +30,8 @@ import type {
   WorkspaceSystemPromptSettings
 } from "./types.js";
 
-const { Ajv2020 } = await import("ajv/dist/2020.js");
+const ajv2020Module = await import("ajv/dist/2020.js");
+const Ajv2020 = (ajv2020Module.Ajv2020 ?? ajv2020Module.default) as typeof import("ajv/dist/2020.js")["Ajv2020"];
 const addFormats = (await import("ajv-formats")).default as unknown as typeof import("ajv-formats").default;
 
 export function createAjv() {

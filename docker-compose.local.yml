@@ -121,21 +121,53 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      oah-compose-scaler:
+        condition: service_healthy
     environment:
       NODE_OPTIONS: "--max-old-space-size=80"
-      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
-      OAH_DOCKER_API_CONFIG: ${OAH_DOCKER_API_CONFIG}
-      OAH_DOCKER_CONTROLLER_CONFIG: ${OAH_DOCKER_CONTROLLER_CONFIG}
-      OAH_DOCKER_SANDBOX_CONFIG: ${OAH_DOCKER_SANDBOX_CONFIG}
       OAH_CONTROLLER_SCALE_INTERVAL_MS: "15000"
-      OAH_LOCAL_REPO_ROOT: ${OAH_LOCAL_REPO_ROOT}
-      OAH_LOCAL_DEPLOY_ROOT: ${OAH_LOCAL_DEPLOY_ROOT}
     ports:
       - "8789:8788"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ${OAH_DOCKER_CONTROLLER_CONFIG:?set OAH_DOCKER_CONTROLLER_CONFIG}:/config/server.docker.yaml:ro
+
+  oah-compose-scaler:
+    image: openagentharness-oah-compose-scaler:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: compose-scaler-runtime
+      args:
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-node:24-bookworm}
+        BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-debian:bookworm-slim}
+    restart: unless-stopped
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=64"
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
+      OAH_COMPOSE_SCALER_AUTH_TOKEN: ${OAH_LOCAL_COMPOSE_SCALER_AUTH_TOKEN}
+      OAH_COMPOSE_SCALER_COMPOSE_FILE: ${OAH_LOCAL_REPO_ROOT:?set OAH_LOCAL_REPO_ROOT}/docker-compose.local.yml
+      OAH_COMPOSE_SCALER_PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
+      OAH_COMPOSE_SCALER_SERVICE: "oah-sandbox"
+      OAH_COMPOSE_SCALER_COMMAND: "docker"
+    expose:
+      - "8790"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8790/healthz').then((res)=>process.exit(res.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 2s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${OAH_LOCAL_REPO_ROOT:?set OAH_LOCAL_REPO_ROOT}:${OAH_LOCAL_REPO_ROOT:?set OAH_LOCAL_REPO_ROOT}:ro
       - ${OAH_LOCAL_DEPLOY_ROOT:?set OAH_LOCAL_DEPLOY_ROOT}:${OAH_LOCAL_DEPLOY_ROOT:?set OAH_LOCAL_DEPLOY_ROOT}:ro

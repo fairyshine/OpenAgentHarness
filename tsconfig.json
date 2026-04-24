@@ -4,6 +4,8 @@
     { "path": "./packages/api-contracts" },
     { "path": "./packages/engine-core" },
     { "path": "./packages/config" },
+    { "path": "./packages/config-server-control" },
+    { "path": "./packages/scale-target-control" },
     { "path": "./packages/storage-memory" },
     { "path": "./packages/storage-sqlite" },
     { "path": "./packages/storage-postgres" },
@@ -14,6 +16,7 @@
     { "path": "./apps/cli" },
     { "path": "./apps/server" },
     { "path": "./apps/worker" },
-    { "path": "./apps/controller" }
+    { "path": "./apps/controller" },
+    { "path": "./apps/compose-scaler" }
   ]
 }

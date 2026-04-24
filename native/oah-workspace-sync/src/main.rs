@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::future::Future;
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -16,8 +16,10 @@ use clap::{Parser, Subcommand};
 use filetime::{set_file_mtime, FileTime};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::{Client as HttpClient, Url};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use sha1::{Digest, Sha1};
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Builder as RuntimeBuilder;
@@ -38,6 +40,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Version,
+    Serve,
     Fingerprint,
     FingerprintBatch,
     ScanLocalTree,
@@ -165,6 +168,14 @@ struct ErrorResponse {
     protocol_version: u32,
     code: &'static str,
     message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerRequest {
+    request_id: String,
+    command: String,
+    payload: Option<Value>,
 }
 
 #[derive(Default)]
@@ -352,143 +363,49 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Version => write_json(&VersionResponse {
-            ok: true,
-            protocol_version: PROTOCOL_VERSION,
-            name: BINARY_NAME,
-            version: BINARY_VERSION,
-        }),
+        Command::Version => write_json_value(&handle_command("version", None, None)?),
+        Command::Serve => serve(),
         Command::Fingerprint => {
-            let request: FingerprintRequest = read_json_stdin()?;
-            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
-            let snapshot = collect_snapshot(&PathBuf::from(request.root_dir), &excludes)?;
-            let fingerprint = create_fingerprint(&snapshot);
-            write_json(&FingerprintResponse {
-                ok: true,
-                protocol_version: PROTOCOL_VERSION,
-                fingerprint,
-                file_count: snapshot.files.len(),
-                empty_directory_count: snapshot.empty_directories.len(),
-            })
+            write_json_value(&handle_command("fingerprint", Some(read_json_stdin_value()?), None)?)
         }
         Command::FingerprintBatch => {
-            let request: FingerprintBatchRequest = read_json_stdin()?;
-            let mut results = Vec::with_capacity(request.directories.len());
-            for directory in request.directories {
-                let excludes = normalize_exclude_paths(directory.exclude_relative_paths);
-                let snapshot = collect_snapshot(&PathBuf::from(&directory.root_dir), &excludes)?;
-                results.push(FingerprintBatchEntry {
-                    root_dir: directory.root_dir,
-                    fingerprint: create_fingerprint(&snapshot),
-                    file_count: snapshot.files.len(),
-                    empty_directory_count: snapshot.empty_directories.len(),
-                });
-            }
-            write_json(&FingerprintBatchResponse {
-                ok: true,
-                protocol_version: PROTOCOL_VERSION,
-                results,
-            })
+            write_json_value(&handle_command("fingerprint-batch", Some(read_json_stdin_value()?), None)?)
         }
         Command::ScanLocalTree => {
-            let request: FingerprintRequest = read_json_stdin()?;
-            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
-            let snapshot = collect_snapshot(&PathBuf::from(request.root_dir), &excludes)?;
-            let fingerprint = create_fingerprint(&snapshot);
-            write_json(&ScanLocalTreeResponse {
-                ok: true,
-                protocol_version: PROTOCOL_VERSION,
-                fingerprint,
-                files: snapshot
-                    .files
-                    .into_iter()
-                    .map(|file| ScanFileEntry {
-                        relative_path: file.relative_path,
-                        absolute_path: file.absolute_path,
-                        size: file.size,
-                        mtime_ms: file.mtime_ms,
-                    })
-                    .collect(),
-                directories: snapshot.directories.into_iter().collect(),
-                empty_directories: snapshot.empty_directories.into_iter().collect(),
-            })
+            write_json_value(&handle_command("scan-local-tree", Some(read_json_stdin_value()?), None)?)
         }
         Command::PlanLocalToRemote => {
-            let request: PlanLocalToRemoteRequest = read_json_stdin()?;
-            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
-            let snapshot = collect_snapshot(&PathBuf::from(request.root_dir), &excludes)?;
-            let fingerprint = create_fingerprint(&snapshot);
-            let plan = create_local_to_remote_plan(&snapshot, request.remote_entries);
-            write_json(&PlanLocalToRemoteResponse {
-                ok: true,
-                protocol_version: PROTOCOL_VERSION,
-                fingerprint,
-                upload_candidates: plan.upload_candidates,
-                info_check_candidates: plan.info_check_candidates,
-                empty_directories_to_create: plan.empty_directories_to_create,
-                keys_to_delete: plan.keys_to_delete,
-            })
+            write_json_value(&handle_command("plan-local-to-remote", Some(read_json_stdin_value()?), None)?)
         }
         Command::SyncLocalToRemote => {
-            let request: SyncLocalToRemoteRequest = read_json_stdin()?;
-            let runtime = RuntimeBuilder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("Failed to initialize async runtime: {error}"))?;
-            let response = runtime.block_on(sync_local_to_remote(request))?;
-            write_json(&response)
+            let runtime = build_runtime()?;
+            write_json_value(&handle_command(
+                "sync-local-to-remote",
+                Some(read_json_stdin_value()?),
+                Some(&runtime),
+            )?)
         }
         Command::PlanRemoteToLocal => {
-            let request: PlanLocalToRemoteRequest = read_json_stdin()?;
-            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
-            let root_dir = PathBuf::from(&request.root_dir);
-            let snapshot = collect_snapshot(&root_dir, &excludes)?;
-            let plan = create_remote_to_local_plan(
-                &root_dir,
-                &snapshot,
-                request.remote_entries,
-                normalize_exclude_paths(request.preserve_top_level_names),
-            );
-            write_json(&PlanRemoteToLocalResponse {
-                ok: true,
-                protocol_version: PROTOCOL_VERSION,
-                remove_paths: plan.remove_paths,
-                directories_to_create: plan.directories_to_create,
-                download_candidates: plan.download_candidates,
-                info_check_candidates: plan.info_check_candidates,
-            })
+            write_json_value(&handle_command("plan-remote-to-local", Some(read_json_stdin_value()?), None)?)
         }
         Command::SyncRemoteToLocal => {
-            let request: SyncRemoteToLocalRequest = read_json_stdin()?;
-            let runtime = RuntimeBuilder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("Failed to initialize async runtime: {error}"))?;
-            let response = runtime.block_on(sync_remote_to_local(request))?;
-            write_json(&response)
+            let runtime = build_runtime()?;
+            write_json_value(&handle_command(
+                "sync-remote-to-local",
+                Some(read_json_stdin_value()?),
+                Some(&runtime),
+            )?)
         }
         Command::PlanSeedUpload => {
-            let request: PlanSeedUploadRequest = read_json_stdin()?;
-            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
-            let snapshot = collect_snapshot(&PathBuf::from(request.root_dir), &excludes)?;
-            let fingerprint = create_fingerprint(&snapshot);
-            let plan = create_seed_upload_plan(&snapshot, &request.remote_base_path);
-            write_json(&PlanSeedUploadResponse {
-                ok: true,
-                protocol_version: PROTOCOL_VERSION,
-                fingerprint,
-                directories: plan.directories,
-                files: plan.files,
-            })
+            write_json_value(&handle_command("plan-seed-upload", Some(read_json_stdin_value()?), None)?)
         }
         Command::SyncLocalToSandboxHttp => {
-            let request: SyncLocalToSandboxHttpRequest = read_json_stdin()?;
-            let runtime = RuntimeBuilder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("Failed to initialize async runtime: {error}"))?;
-            let response = runtime.block_on(sync_local_to_sandbox_http(request))?;
-            write_json(&response)
+            let runtime = build_runtime()?;
+            write_json_value(&handle_command(
+                "sync-local-to-sandbox-http",
+                Some(read_json_stdin_value()?),
+                Some(&runtime),
+            )?)
         }
     }
 }
@@ -512,6 +429,13 @@ struct SeedUploadPlan {
     files: Vec<PlanSeedUploadFile>,
 }
 
+fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
+    RuntimeBuilder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("Failed to initialize async runtime: {error}"))
+}
+
 fn read_json_stdin<T: for<'de> Deserialize<'de>>() -> Result<T, String> {
     let mut input = String::new();
     io::stdin()
@@ -521,10 +445,248 @@ fn read_json_stdin<T: for<'de> Deserialize<'de>>() -> Result<T, String> {
         .map_err(|error| format!("Failed to decode stdin JSON: {error}"))
 }
 
+fn read_json_stdin_value() -> Result<Value, String> {
+    read_json_stdin::<Value>()
+}
+
 fn write_json<T: Serialize>(payload: &T) -> Result<(), String> {
     let rendered = serde_json::to_string(payload)
         .map_err(|error| format!("Failed to serialize JSON response: {error}"))?;
     println!("{rendered}");
+    Ok(())
+}
+
+fn write_json_value(payload: &Value) -> Result<(), String> {
+    write_json(payload)
+}
+
+fn parse_payload<T: DeserializeOwned>(payload: Option<Value>, command: &str) -> Result<T, String> {
+    let payload = payload.ok_or_else(|| format!("Missing JSON payload for command {command}"))?;
+    serde_json::from_value(payload)
+        .map_err(|error| format!("Failed to decode JSON payload for command {command}: {error}"))
+}
+
+fn serialize_json_value<T: Serialize>(payload: &T) -> Result<Value, String> {
+    serde_json::to_value(payload)
+        .map_err(|error| format!("Failed to serialize command response: {error}"))
+}
+
+fn handle_command(
+    command: &str,
+    payload: Option<Value>,
+    runtime: Option<&tokio::runtime::Runtime>,
+) -> Result<Value, String> {
+    match command {
+        "version" => serialize_json_value(&VersionResponse {
+            ok: true,
+            protocol_version: PROTOCOL_VERSION,
+            name: BINARY_NAME,
+            version: BINARY_VERSION,
+        }),
+        "fingerprint" => {
+            let request: FingerprintRequest = parse_payload(payload, command)?;
+            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
+            let snapshot = collect_snapshot(&PathBuf::from(request.root_dir), &excludes)?;
+            serialize_json_value(&FingerprintResponse {
+                ok: true,
+                protocol_version: PROTOCOL_VERSION,
+                fingerprint: create_fingerprint(&snapshot),
+                file_count: snapshot.files.len(),
+                empty_directory_count: snapshot.empty_directories.len(),
+            })
+        }
+        "fingerprint-batch" => {
+            let request: FingerprintBatchRequest = parse_payload(payload, command)?;
+            let mut results = Vec::with_capacity(request.directories.len());
+            for directory in request.directories {
+                let excludes = normalize_exclude_paths(directory.exclude_relative_paths);
+                let snapshot = collect_snapshot(&PathBuf::from(&directory.root_dir), &excludes)?;
+                results.push(FingerprintBatchEntry {
+                    root_dir: directory.root_dir,
+                    fingerprint: create_fingerprint(&snapshot),
+                    file_count: snapshot.files.len(),
+                    empty_directory_count: snapshot.empty_directories.len(),
+                });
+            }
+            serialize_json_value(&FingerprintBatchResponse {
+                ok: true,
+                protocol_version: PROTOCOL_VERSION,
+                results,
+            })
+        }
+        "scan-local-tree" => {
+            let request: FingerprintRequest = parse_payload(payload, command)?;
+            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
+            let snapshot = collect_snapshot(&PathBuf::from(request.root_dir), &excludes)?;
+            serialize_json_value(&ScanLocalTreeResponse {
+                ok: true,
+                protocol_version: PROTOCOL_VERSION,
+                fingerprint: create_fingerprint(&snapshot),
+                files: snapshot
+                    .files
+                    .into_iter()
+                    .map(|file| ScanFileEntry {
+                        relative_path: file.relative_path,
+                        absolute_path: file.absolute_path,
+                        size: file.size,
+                        mtime_ms: file.mtime_ms,
+                    })
+                    .collect(),
+                directories: snapshot.directories.into_iter().collect(),
+                empty_directories: snapshot.empty_directories.into_iter().collect(),
+            })
+        }
+        "plan-local-to-remote" => {
+            let request: PlanLocalToRemoteRequest = parse_payload(payload, command)?;
+            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
+            let snapshot = collect_snapshot(&PathBuf::from(request.root_dir), &excludes)?;
+            let fingerprint = create_fingerprint(&snapshot);
+            let plan = create_local_to_remote_plan(&snapshot, request.remote_entries);
+            serialize_json_value(&PlanLocalToRemoteResponse {
+                ok: true,
+                protocol_version: PROTOCOL_VERSION,
+                fingerprint,
+                upload_candidates: plan.upload_candidates,
+                info_check_candidates: plan.info_check_candidates,
+                empty_directories_to_create: plan.empty_directories_to_create,
+                keys_to_delete: plan.keys_to_delete,
+            })
+        }
+        "sync-local-to-remote" => {
+            let request: SyncLocalToRemoteRequest = parse_payload(payload, command)?;
+            let runtime = runtime
+                .ok_or_else(|| "Async runtime is required for sync-local-to-remote.".to_string())?;
+            serialize_json_value(&runtime.block_on(sync_local_to_remote(request))?)
+        }
+        "plan-remote-to-local" => {
+            let request: PlanLocalToRemoteRequest = parse_payload(payload, command)?;
+            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
+            let root_dir = PathBuf::from(&request.root_dir);
+            let snapshot = collect_snapshot(&root_dir, &excludes)?;
+            let plan = create_remote_to_local_plan(
+                &root_dir,
+                &snapshot,
+                request.remote_entries,
+                normalize_exclude_paths(request.preserve_top_level_names),
+            );
+            serialize_json_value(&PlanRemoteToLocalResponse {
+                ok: true,
+                protocol_version: PROTOCOL_VERSION,
+                remove_paths: plan.remove_paths,
+                directories_to_create: plan.directories_to_create,
+                download_candidates: plan.download_candidates,
+                info_check_candidates: plan.info_check_candidates,
+            })
+        }
+        "sync-remote-to-local" => {
+            let request: SyncRemoteToLocalRequest = parse_payload(payload, command)?;
+            let runtime = runtime
+                .ok_or_else(|| "Async runtime is required for sync-remote-to-local.".to_string())?;
+            serialize_json_value(&runtime.block_on(sync_remote_to_local(request))?)
+        }
+        "plan-seed-upload" => {
+            let request: PlanSeedUploadRequest = parse_payload(payload, command)?;
+            let excludes = normalize_exclude_paths(request.exclude_relative_paths);
+            let snapshot = collect_snapshot(&PathBuf::from(request.root_dir), &excludes)?;
+            let fingerprint = create_fingerprint(&snapshot);
+            let plan = create_seed_upload_plan(&snapshot, &request.remote_base_path);
+            serialize_json_value(&PlanSeedUploadResponse {
+                ok: true,
+                protocol_version: PROTOCOL_VERSION,
+                fingerprint,
+                directories: plan.directories,
+                files: plan.files,
+            })
+        }
+        "sync-local-to-sandbox-http" => {
+            let request: SyncLocalToSandboxHttpRequest = parse_payload(payload, command)?;
+            let runtime = runtime
+                .ok_or_else(|| "Async runtime is required for sync-local-to-sandbox-http.".to_string())?;
+            serialize_json_value(&runtime.block_on(sync_local_to_sandbox_http(request))?)
+        }
+        _ => Err(format!("Unknown command: {command}")),
+    }
+}
+
+fn command_requires_runtime(command: &str) -> bool {
+    matches!(
+        command,
+        "sync-local-to-remote" | "sync-remote-to-local" | "sync-local-to-sandbox-http"
+    )
+}
+
+fn handle_worker_request(
+    request: WorkerRequest,
+    runtime: &mut Option<tokio::runtime::Runtime>,
+) -> Value {
+    let runtime_ref = if command_requires_runtime(&request.command) {
+        if runtime.is_none() {
+            match build_runtime() {
+                Ok(created_runtime) => {
+                    *runtime = Some(created_runtime);
+                }
+                Err(error) => {
+                    return serde_json::json!({
+                        "ok": false,
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "requestId": request.request_id,
+                        "code": "native_workspace_sync_failed",
+                        "message": error
+                    });
+                }
+            }
+        }
+        runtime.as_ref()
+    } else {
+        None
+    };
+
+    match handle_command(&request.command, request.payload, runtime_ref) {
+        Ok(mut payload) => {
+            if let Value::Object(map) = &mut payload {
+                map.insert("requestId".to_string(), Value::String(request.request_id));
+            }
+            payload
+        }
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": request.request_id,
+            "code": "native_workspace_sync_failed",
+            "message": error
+        }),
+    }
+}
+
+fn serve() -> Result<(), String> {
+    let mut runtime = None;
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let reader = BufReader::new(stdin.lock());
+    let mut writer = BufWriter::new(stdout.lock());
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("Failed to read worker request: {error}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let request = serde_json::from_str::<WorkerRequest>(&line)
+            .map_err(|error| format!("Failed to decode worker request JSON: {error}"))?;
+        let response = handle_worker_request(request, &mut runtime);
+        let rendered = serde_json::to_string(&response)
+            .map_err(|error| format!("Failed to serialize worker response JSON: {error}"))?;
+        writer
+            .write_all(rendered.as_bytes())
+            .map_err(|error| format!("Failed to write worker response: {error}"))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|error| format!("Failed to write worker response newline: {error}"))?;
+        writer
+            .flush()
+            .map_err(|error| format!("Failed to flush worker response: {error}"))?;
+    }
+
     Ok(())
 }
 
@@ -1989,5 +2151,48 @@ mod tests {
         );
         assert_eq!(build_remote_path("", "/nested/file.txt"), "nested/file.txt");
         assert_eq!(build_remote_path("/seed/workspace/", ""), "seed/workspace");
+    }
+
+    #[test]
+    fn worker_request_executes_version_command_and_includes_request_id() {
+        let mut runtime = None;
+        let response = handle_worker_request(
+            WorkerRequest {
+                request_id: "req_1".to_string(),
+                command: "version".to_string(),
+                payload: None,
+            },
+            &mut runtime,
+        );
+
+        assert_eq!(response.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            response.get("requestId").and_then(Value::as_str),
+            Some("req_1")
+        );
+        assert_eq!(response.get("name").and_then(Value::as_str), Some(BINARY_NAME));
+    }
+
+    #[test]
+    fn worker_request_reports_unknown_command_error() {
+        let mut runtime = None;
+        let response = handle_worker_request(
+            WorkerRequest {
+                request_id: "req_2".to_string(),
+                command: "unknown".to_string(),
+                payload: None,
+            },
+            &mut runtime,
+        );
+
+        assert_eq!(response.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            response.get("requestId").and_then(Value::as_str),
+            Some("req_2")
+        );
+        assert!(response
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("Unknown command")));
     }
 }

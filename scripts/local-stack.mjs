@@ -263,6 +263,7 @@ function prepareDockerServerConfigs() {
   const generatedApiConfigPath = path.join(generatedDir, "api.generated.yaml");
   const generatedControllerConfigPath = path.join(generatedDir, "controller.generated.yaml");
   const generatedSandboxConfigPath = path.join(generatedDir, "sandbox.generated.yaml");
+  const composeScalerAuthToken = "oah-local-compose-scaler";
   const sourceConfig = YAML.parse(readFileSync(sourceConfigPath, "utf8")) ?? {};
   if (objectStorageBacksManagedWorkspaces(sourceConfig.object_storage)) {
     console.log(
@@ -343,7 +344,10 @@ function prepareDockerServerConfigs() {
             compose_file: composeFile,
             project_name: composeProjectName,
             service: "oah-sandbox",
-            command: "docker"
+            command: "docker",
+            endpoint: "http://oah-compose-scaler:8790",
+            auth_token: composeScalerAuthToken,
+            timeout_ms: 5000
           }
         }
       }
@@ -379,6 +383,7 @@ function prepareDockerServerConfigs() {
   process.env.OAH_LOCAL_SANDBOX_INITIAL_REPLICA_COUNT = String(initialSandboxReplicaCount);
   process.env.OAH_LOCAL_REPO_ROOT = repoRoot;
   process.env.OAH_LOCAL_DEPLOY_ROOT = deployRoot;
+  process.env.OAH_LOCAL_COMPOSE_SCALER_AUTH_TOKEN = composeScalerAuthToken;
   process.env.COMPOSE_PROJECT_NAME = composeProjectName;
 }
 
@@ -463,7 +468,7 @@ function recreateReadonlyObjectStorageVolumes() {
     "Recreating readonly object-storage volumes to avoid rclone plugin path restore drift after docker/plugin restarts."
   );
 
-  runMaybe("docker", ["compose", "-f", composeFile, "rm", "-sf", "oah-sandbox", "oah-controller", "oah-api"]);
+  runMaybe("docker", ["compose", "-f", composeFile, "rm", "-sf", "oah-sandbox", "oah-controller", "oah-compose-scaler", "oah-api"]);
 
   for (const volumeKey of readonlyObjectStorageVolumeKeys) {
     const volumeName = composeVolumeName(volumeKey);
@@ -503,6 +508,7 @@ const legacyLocalImageNames = ["openagentharness-oah:latest"];
 const serviceLocalImageNames = {
   "oah-api": ["openagentharness-oah-api:latest"],
   "oah-controller": ["openagentharness-oah-controller:latest"],
+  "oah-compose-scaler": ["openagentharness-oah-compose-scaler:latest"],
   "oah-sandbox": ["openagentharness-oah-sandbox:latest"]
 };
 
@@ -588,7 +594,9 @@ async function up() {
   );
   const sandboxScaleArgs = initialSandboxReplicaCount > 0 ? ["--scale", `oah-sandbox=${initialSandboxReplicaCount}`] : [];
   const appServices =
-    initialSandboxReplicaCount > 0 ? ["oah-sandbox", "oah-controller", "oah-api"] : ["oah-controller", "oah-api"];
+    initialSandboxReplicaCount > 0
+      ? ["oah-sandbox", "oah-compose-scaler", "oah-controller", "oah-api"]
+      : ["oah-compose-scaler", "oah-controller", "oah-api"];
 
   if (["1", "true", "yes"].includes((process.env.OAH_SKIP_BUILD || "").toLowerCase())) {
     console.warn("OAH_SKIP_BUILD is set. Starting OAH with --no-build.");

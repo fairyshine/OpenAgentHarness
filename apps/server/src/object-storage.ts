@@ -58,6 +58,13 @@ export interface DirectorySyncResult {
   createdEmptyDirectoryCount: number;
 }
 
+export interface RemoteToLocalDirectorySyncResult {
+  localFingerprint?: string | undefined;
+  removedPathCount: number;
+  createdDirectoryCount: number;
+  downloadedFileCount: number;
+}
+
 interface LocalDirectorySnapshot {
   files: Map<string, { absolutePath: string; size: number; mtimeMs: number }>;
   emptyDirectories: Set<string>;
@@ -319,6 +326,41 @@ function createDirectoryFingerprint(snapshot: LocalDirectorySnapshot): string {
     hash.update(`dir:${relativePath}\n`);
   }
   return hash.digest("hex");
+}
+
+function createDirectoryFingerprintFromEntries(input: {
+  files: Array<{ relativePath: string; size: number; mtimeMs: number }>;
+  emptyDirectories: Iterable<string>;
+}): string {
+  const hash = createHash("sha1");
+  for (const file of [...input.files].sort((left, right) => left.relativePath.localeCompare(right.relativePath))) {
+    hash.update(`file:${file.relativePath}:${file.size}:${Math.trunc(file.mtimeMs)}\n`);
+  }
+  for (const relativePath of [...input.emptyDirectories].sort((left, right) => left.localeCompare(right))) {
+    hash.update(`dir:${relativePath}\n`);
+  }
+  return hash.digest("hex");
+}
+
+function resolveEmptyRemoteDirectories(input: {
+  explicitDirectories: Iterable<string>;
+  filePaths: Iterable<string>;
+}): string[] {
+  const explicitDirectories = [...input.explicitDirectories]
+    .map((relativePath) => normalizeRelativePath(relativePath))
+    .filter((relativePath) => relativePath.length > 0)
+    .sort((left, right) => left.localeCompare(right));
+  const filePaths = [...input.filePaths]
+    .map((relativePath) => normalizeRelativePath(relativePath))
+    .filter((relativePath) => relativePath.length > 0);
+
+  return explicitDirectories.filter((candidate) => {
+    const childPrefix = `${candidate}/`;
+    return (
+      !filePaths.some((relativePath) => relativePath.startsWith(childPrefix)) &&
+      !explicitDirectories.some((relativePath) => relativePath !== candidate && relativePath.startsWith(childPrefix))
+    );
+  });
 }
 
 function resolveNativeFingerprintExcludes(options?: DirectorySyncOptions): string[] | undefined {
@@ -595,20 +637,20 @@ async function syncNativeRemotePrefixToLocalIfAvailable(
   remotePrefix: string,
   localDir: string,
   options?: DirectorySyncOptions
-): Promise<boolean> {
+): Promise<RemoteToLocalDirectorySyncResult | undefined> {
   const nativeExcludes = resolveNativeFingerprintExcludes(options);
   if (!isNativeWorkspaceSyncEnabled() || nativeExcludes === undefined) {
-    return false;
+    return undefined;
   }
 
   const nativeObjectStore = store.getNativeWorkspaceSyncConfig?.();
   if (!nativeObjectStore) {
-    return false;
+    return undefined;
   }
 
   try {
     const concurrency = resolveDirectorySyncConcurrency();
-    await observeNativeWorkspaceSyncOperation({
+    const result = await observeNativeWorkspaceSyncOperation({
       operation: "sync_remote_to_local",
       implementation: "rust",
       target: localDir,
@@ -627,7 +669,11 @@ async function syncNativeRemotePrefixToLocalIfAvailable(
           ...(options?.preserveTopLevelNames ? { preserveTopLevelNames: options.preserveTopLevelNames } : {})
         })
     });
-    return true;
+    return {
+      removedPathCount: result.removedPathCount,
+      createdDirectoryCount: result.createdDirectoryCount,
+      downloadedFileCount: result.downloadedFileCount
+    };
   } catch (error) {
     recordNativeWorkspaceSyncFallback({
       operation: "sync_remote_to_local",
@@ -635,7 +681,7 @@ async function syncNativeRemotePrefixToLocalIfAvailable(
       error,
       metadata: { remotePrefix }
     });
-    return false;
+    return undefined;
   }
 }
 
@@ -644,7 +690,7 @@ async function removeUnexpectedLocalEntries(
   remoteFiles: Set<string>,
   remoteDirectories: Set<string>,
   options?: DirectorySyncOptions
-): Promise<void> {
+): Promise<number> {
   const rootExists = await stat(rootDir).catch((error) => {
     if (isNotFoundError(error)) {
       return null;
@@ -653,8 +699,10 @@ async function removeUnexpectedLocalEntries(
   });
   if (!rootExists?.isDirectory()) {
     await mkdir(rootDir, { recursive: true });
-    return;
+    return 0;
   }
+
+  let removedCount = 0;
 
   const walk = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true }).catch((error) => {
@@ -677,6 +725,7 @@ async function removeUnexpectedLocalEntries(
 
       if (shouldIgnoreRelativePath(relativePath)) {
         await rm(absolutePath, { recursive: true, force: true });
+        removedCount += 1;
         continue;
       }
 
@@ -698,6 +747,7 @@ async function removeUnexpectedLocalEntries(
         });
         if (remainingEntries && remainingEntries.length === 0) {
           await rm(absolutePath, { recursive: true, force: true });
+          removedCount += 1;
         }
         continue;
       }
@@ -708,11 +758,13 @@ async function removeUnexpectedLocalEntries(
 
       if (!remoteFiles.has(relativePath)) {
         await rm(absolutePath, { recursive: true, force: true });
+        removedCount += 1;
       }
     }
   };
 
   await walk(rootDir);
+  return removedCount;
 }
 
 async function statIfExists(targetPath: string) {
@@ -1333,10 +1385,11 @@ export async function syncRemotePrefixToLocal(
   logger?: (message: string) => void,
   label?: string,
   options?: DirectorySyncOptions
-): Promise<void> {
+): Promise<RemoteToLocalDirectorySyncResult> {
   logger?.(`syncing ${(label ?? remotePrefix) || "."} from object storage into ${localDir}`);
-  if (await syncNativeRemotePrefixToLocalIfAvailable(store, remotePrefix, localDir, options)) {
-    return;
+  const nativeResult = await syncNativeRemotePrefixToLocalIfAvailable(store, remotePrefix, localDir, options);
+  if (nativeResult) {
+    return nativeResult;
   }
 
   return observeNativeWorkspaceSyncOperation({
@@ -1348,11 +1401,12 @@ export async function syncRemotePrefixToLocal(
     metadata: {
       remotePrefix
     },
-    action: async () => {
+    action: async (): Promise<RemoteToLocalDirectorySyncResult> => {
       const entries = await store.listEntries(remotePrefix);
       await mkdir(localDir, { recursive: true });
 
       const remoteDirectories = new Set<string>();
+      const explicitRemoteDirectories = new Set<string>();
       const remoteFiles = new Map<string, ObjectStorageEntry>();
 
       for (const entry of entries) {
@@ -1370,6 +1424,7 @@ export async function syncRemotePrefixToLocal(
 
         if (entry.key.endsWith("/")) {
           addDirectoryWithParents(relativePath, remoteDirectories);
+          explicitRemoteDirectories.add(relativePath);
           continue;
         }
 
@@ -1382,26 +1437,84 @@ export async function syncRemotePrefixToLocal(
 
       const concurrency = resolveDirectorySyncConcurrency();
       const nativePlan = await collectNativeRemoteToLocalPlanIfAvailable(localDir, remotePrefix, entries, options);
+      let removedPathCount = 0;
       if (nativePlan) {
         await runWithConcurrency(nativePlan.removePaths, concurrency, async (targetPath) => {
           await rm(targetPath, { recursive: true, force: true });
         });
+        removedPathCount = nativePlan.removePaths.length;
       } else {
-        await removeUnexpectedLocalEntries(localDir, new Set(remoteFiles.keys()), remoteDirectories, options);
+        removedPathCount = await removeUnexpectedLocalEntries(localDir, new Set(remoteFiles.keys()), remoteDirectories, options);
       }
 
       const orderedDirectories = nativePlan?.directoriesToCreate ?? [...remoteDirectories].sort((left, right) => {
         const depthDifference = left.split("/").length - right.split("/").length;
         return depthDifference !== 0 ? depthDifference : left.localeCompare(right);
       });
+      let createdDirectoryCount = 0;
       await runWithConcurrency(orderedDirectories, concurrency, async (relativePath) => {
         const targetPath = path.join(localDir, relativePath);
         const existing = await statIfExists(targetPath);
         if (existing && !existing.isDirectory()) {
           await rm(targetPath, { recursive: true, force: true });
         }
+        if (!existing?.isDirectory()) {
+          createdDirectoryCount += 1;
+        }
         await mkdir(targetPath, { recursive: true });
       });
+
+      const fingerprintFiles: Array<{ relativePath: string; size: number; mtimeMs: number }> = [];
+      let downloadedFileCount = 0;
+
+      const syncRemoteFile = async (input: {
+        relativePath: string;
+        targetPath: string;
+        entry: ObjectStorageEntry;
+      }): Promise<void> => {
+        const existing = await statIfExists(input.targetPath);
+        if (existing && !existing.isFile()) {
+          await rm(input.targetPath, { recursive: true, force: true });
+        }
+
+        await mkdir(path.dirname(input.targetPath), { recursive: true });
+
+        const currentFile = existing?.isFile() ? existing : null;
+        let resolvedMtimeMs: number | undefined;
+        if (currentFile && currentFile.size === input.entry.size) {
+          const objectInfo = await store.getObjectInfo?.(input.entry.key);
+          resolvedMtimeMs = resolveTargetMtimeMs({
+            metadata: objectInfo?.metadata,
+            lastModified: objectInfo?.lastModified ?? input.entry.lastModified
+          });
+          if (typeof resolvedMtimeMs === "number" && Math.trunc(currentFile.mtimeMs) === resolvedMtimeMs) {
+            fingerprintFiles.push({
+              relativePath: input.relativePath,
+              size: input.entry.size,
+              mtimeMs: resolvedMtimeMs
+            });
+            return;
+          }
+        }
+
+        const object = await store.getObject(input.entry.key);
+        await writeFile(input.targetPath, object.body);
+        downloadedFileCount += 1;
+        resolvedMtimeMs =
+          resolveTargetMtimeMs({
+            metadata: object.metadata,
+            lastModified: input.entry.lastModified
+          }) ?? Math.trunc(input.entry.lastModified?.getTime() ?? Date.now());
+        if (typeof resolvedMtimeMs === "number") {
+          const preservedDate = new Date(resolvedMtimeMs);
+          await utimes(input.targetPath, preservedDate, preservedDate);
+        }
+        fingerprintFiles.push({
+          relativePath: input.relativePath,
+          size: input.entry.size,
+          mtimeMs: resolvedMtimeMs
+        });
+      };
 
       const nativeDownloadCandidates =
         nativePlan?.downloadCandidates.map((candidate) => ({
@@ -1415,39 +1528,11 @@ export async function syncRemotePrefixToLocal(
           entry
         }));
 
-      await runWithConcurrency(nativeDownloadCandidates, concurrency, async ({ targetPath, entry }) => {
-        if (!entry) {
+      await runWithConcurrency(nativeDownloadCandidates, concurrency, async ({ relativePath, targetPath, entry }) => {
+        if (!entry || !relativePath) {
           return;
         }
-        const existing = await statIfExists(targetPath);
-        if (existing && !existing.isFile()) {
-          await rm(targetPath, { recursive: true, force: true });
-        }
-
-        await mkdir(path.dirname(targetPath), { recursive: true });
-
-        const currentFile = existing?.isFile() ? existing : null;
-        if (currentFile && currentFile.size === entry.size) {
-          const objectInfo = await store.getObjectInfo?.(entry.key);
-          const targetMtimeMs = resolveTargetMtimeMs({
-            metadata: objectInfo?.metadata,
-            lastModified: objectInfo?.lastModified ?? entry.lastModified
-          });
-          if (typeof targetMtimeMs === "number" && Math.trunc(currentFile.mtimeMs) === targetMtimeMs) {
-            return;
-          }
-        }
-
-        const object = await store.getObject(entry.key);
-        await writeFile(targetPath, object.body);
-        const targetMtimeMs = resolveTargetMtimeMs({
-          metadata: object.metadata,
-          lastModified: entry.lastModified
-        });
-        if (typeof targetMtimeMs === "number") {
-          const preservedDate = new Date(targetMtimeMs);
-          await utimes(targetPath, preservedDate, preservedDate);
-        }
+        await syncRemoteFile({ relativePath, targetPath, entry });
       });
 
       if (nativePlan) {
@@ -1456,39 +1541,26 @@ export async function syncRemotePrefixToLocal(
           if (!entry) {
             return;
           }
-
-          const targetPath = candidate.targetPath;
-          const existing = await statIfExists(targetPath);
-          if (existing && !existing.isFile()) {
-            await rm(targetPath, { recursive: true, force: true });
-          }
-
-          await mkdir(path.dirname(targetPath), { recursive: true });
-
-          const currentFile = existing?.isFile() ? existing : null;
-          if (currentFile && currentFile.size === entry.size) {
-            const objectInfo = await store.getObjectInfo?.(entry.key);
-            const targetMtimeMs = resolveTargetMtimeMs({
-              metadata: objectInfo?.metadata,
-              lastModified: objectInfo?.lastModified ?? entry.lastModified
-            });
-            if (typeof targetMtimeMs === "number" && Math.trunc(currentFile.mtimeMs) === targetMtimeMs) {
-              return;
-            }
-          }
-
-          const object = await store.getObject(entry.key);
-          await writeFile(targetPath, object.body);
-          const targetMtimeMs = resolveTargetMtimeMs({
-            metadata: object.metadata,
-            lastModified: entry.lastModified
+          await syncRemoteFile({
+            relativePath: candidate.relativePath,
+            targetPath: candidate.targetPath,
+            entry
           });
-          if (typeof targetMtimeMs === "number") {
-            const preservedDate = new Date(targetMtimeMs);
-            await utimes(targetPath, preservedDate, preservedDate);
-          }
         });
       }
+
+      return {
+        localFingerprint: createDirectoryFingerprintFromEntries({
+          files: fingerprintFiles,
+          emptyDirectories: resolveEmptyRemoteDirectories({
+            explicitDirectories: explicitRemoteDirectories,
+            filePaths: remoteFiles.keys()
+          })
+        }),
+        removedPathCount,
+        createdDirectoryCount,
+        downloadedFileCount
+      };
     }
   });
 }

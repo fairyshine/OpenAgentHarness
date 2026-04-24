@@ -128,6 +128,13 @@ export interface WorkspaceArchiveRepository {
   }): Promise<WorkspaceArchiveRecord>;
   listPendingArchiveDates(beforeArchiveDate: string, limit: number): Promise<string[]>;
   listByArchiveDate(archiveDate: string): Promise<WorkspaceArchiveRecord[]>;
+  forEachByArchiveDate?(
+    archiveDate: string,
+    visitor: (archive: WorkspaceArchiveRecord) => Promise<void> | void,
+    options?: {
+      pageSize?: number | undefined;
+    }
+  ): Promise<number>;
   markExported(ids: string[], input: { exportedAt: string; exportPath: string }): Promise<void>;
   pruneExportedBefore(beforeArchiveDate: string, limit: number): Promise<number>;
 }

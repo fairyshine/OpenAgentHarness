@@ -25,15 +25,15 @@ import {
   summarizeStandaloneWorkerFleet
 } from "../apps/controller/src/controller.ts";
 import {
-  createDockerComposeWorkerReplicaTarget,
-  createKubernetesWorkerReplicaTarget,
-  resolveWorkerReplicaTargetConfig
-} from "../apps/controller/src/scale-target.ts";
-import {
   createControllerObservabilityServer,
   renderControllerMetrics
 } from "../apps/controller/src/observability.ts";
-
+import {
+  createDockerComposeWorkerReplicaTarget,
+  createKubernetesWorkerReplicaTarget,
+  createWorkerReplicaTarget,
+  resolveWorkerReplicaTargetConfig
+} from "../packages/scale-target-control/src/index.ts";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -1941,7 +1941,10 @@ describe("controller", () => {
               compose_file: "/tmp/oah/docker-compose.local.yml",
               project_name: "openagentharness",
               service: "oah-sandbox",
-              command: "docker"
+              command: "docker",
+              endpoint: "http://oah-compose-scaler:8790",
+              auth_token: "local-token",
+              timeout_ms: 4500
             }
           }
         }
@@ -1958,7 +1961,12 @@ describe("controller", () => {
         composeFile: "/tmp/oah/docker-compose.local.yml",
         projectName: "openagentharness",
         service: "oah-sandbox",
-        command: "docker"
+        command: "docker",
+        remote: {
+          endpoint: "http://oah-compose-scaler:8790",
+          authToken: "local-token",
+          timeoutMs: 4500
+        }
       }
     });
   });
@@ -2712,6 +2720,99 @@ describe("controller", () => {
           "oah-sandbox"
         ],
         cwd: "/tmp/oah"
+      }
+    ]);
+  });
+
+  it("reconciles docker-compose replicas through a remote executor", async () => {
+    const requests: Array<{
+      url: string;
+      method: string;
+      headers: Record<string, string>;
+      body?: string | undefined;
+      timeoutMs?: number | undefined;
+    }> = [];
+    const target = createWorkerReplicaTarget(
+      {
+        type: "docker_compose",
+        allowScaleDown: true,
+        dockerCompose: {
+          composeFile: "/tmp/oah/docker-compose.local.yml",
+          projectName: "openagentharness",
+          service: "oah-sandbox",
+          command: "docker",
+          remote: {
+            endpoint: "http://oah-compose-scaler:8790",
+            authToken: "local-token",
+            timeoutMs: 4200
+          }
+        }
+      },
+      {
+        httpRequest: async (input) => {
+          requests.push(input);
+          return {
+            status: 200,
+            body: {
+              kind: "docker_compose",
+              attempted: true,
+              applied: true,
+              desiredReplicas: 3,
+              observedReplicas: 2,
+              appliedReplicas: 3,
+              outcome: "scaled",
+              at: "2026-04-15T00:00:00.000Z",
+              message: "scaled"
+            },
+            text: ""
+          };
+        }
+      }
+    );
+
+    const result = await target.reconcile({
+      timestamp: "2026-04-15T00:00:00.000Z",
+      reason: "scale_up",
+      desiredReplicas: 3,
+      suggestedReplicas: 3,
+      activeReplicas: 2,
+      activeSlots: 2,
+      busySlots: 2
+    });
+
+    expect(result).toEqual({
+      kind: "docker_compose",
+      attempted: true,
+      applied: true,
+      desiredReplicas: 3,
+      observedReplicas: 2,
+      appliedReplicas: 3,
+      outcome: "scaled",
+      at: "2026-04-15T00:00:00.000Z",
+      message: "scaled"
+    });
+    expect(requests).toEqual([
+      {
+        url: "http://oah-compose-scaler:8790/reconcile",
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          authorization: "Bearer local-token"
+        },
+        body: JSON.stringify({
+          input: {
+            timestamp: "2026-04-15T00:00:00.000Z",
+            reason: "scale_up",
+            desiredReplicas: 3,
+            suggestedReplicas: 3,
+            activeReplicas: 2,
+            activeSlots: 2,
+            busySlots: 2
+          },
+          allowScaleDown: true
+        }),
+        timeoutMs: 4200
       }
     ]);
   });

@@ -3,8 +3,8 @@ import { watch, type FSWatcher } from "node:fs";
 import { readdir } from "node:fs/promises";
 
 import type { ServerConfig } from "@oah/config";
-import { parseCursor } from "@oah/engine-core";
-import type { WorkspaceRecord, WorkspaceRepository } from "@oah/engine-core";
+import { parseCursor } from "../../../../packages/engine-core/src/utils.js";
+import type { WorkspaceRecord, WorkspaceRepository } from "../../../../packages/engine-core/src/types.js";
 
 export type PlatformAgentRegistry = Record<string, import("@oah/config").DiscoveredAgent>;
 type DiscoveredWorkspace = import("@oah/config").DiscoveredWorkspace;
@@ -12,7 +12,9 @@ type DiscoveredWorkspace = import("@oah/config").DiscoveredWorkspace;
 let workspaceConfigModulePromise: Promise<typeof import("@oah/config/workspace")> | undefined;
 
 function loadWorkspaceConfigModule(): Promise<typeof import("@oah/config/workspace")> {
-  workspaceConfigModulePromise ??= import("@oah/config/workspace");
+  workspaceConfigModulePromise ??= import("@oah/config/workspace").catch(async () => {
+    return import("../../../../packages/config/dist/workspace.js");
+  });
   return workspaceConfigModulePromise;
 }
 

@@ -164,6 +164,9 @@ export interface ServerConfig {
                   project_name?: string | undefined;
                   service?: string | undefined;
                   command?: string | undefined;
+                  endpoint?: string | undefined;
+                  auth_token?: string | undefined;
+                  timeout_ms?: number | undefined;
                 }
               | undefined;
           }

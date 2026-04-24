@@ -596,6 +596,24 @@ function createInMemoryPostgresPersistence(label: string, options?: { supportRou
       async listByArchiveDate(archiveDate: string) {
         return [...archives.values()].filter((archive) => archive.archiveDate === archiveDate);
       },
+      async forEachByArchiveDate(
+        archiveDate: string,
+        visitor: (archive: WorkspaceArchiveRecord) => Promise<void> | void
+      ) {
+        const items = [...archives.values()]
+          .filter((archive) => archive.archiveDate === archiveDate)
+          .sort((left, right) => {
+            if (left.archivedAt !== right.archivedAt) {
+              return left.archivedAt.localeCompare(right.archivedAt);
+            }
+
+            return left.id.localeCompare(right.id);
+          });
+        for (const archive of items) {
+          await visitor(archive);
+        }
+        return items.length;
+      },
       async markExported(ids: string[], input: { exportedAt: string; exportPath: string }) {
         for (const id of ids) {
           const existing = archives.get(id);
@@ -813,6 +831,98 @@ describe("service routed postgres persistence", () => {
         lastRunAt: "2026-01-01T00:03:00.000Z"
       })
     ]);
+
+    await persistence.close();
+  });
+
+  it("iterates archives across routed backends when per-archive iteration is available", async () => {
+    const defaultBackend = createInMemoryPostgresPersistence("default", { supportRoutingRegistry: true });
+    const serviceBackend = createInMemoryPostgresPersistence("svc-acme");
+
+    const persistence = await createServiceRoutedPostgresRuntimePersistence({
+      connectionString: "postgres://oah:oah@127.0.0.1:5432/OAH",
+      async persistenceFactory(options) {
+        if (options.connectionString === "postgres://oah:oah@127.0.0.1:5432/OAH") {
+          return defaultBackend as never;
+        }
+
+        if (options.connectionString === "postgres://oah:oah@127.0.0.1:5432/OAH-acme-app") {
+          return serviceBackend as never;
+        }
+
+        throw new Error(`Unexpected connection string: ${options.connectionString}`);
+      }
+    });
+
+    const defaultWorkspace: WorkspaceRecord = {
+      id: "ws_archive_default",
+      name: "archive default",
+      rootPath: "/tmp/ws_archive_default",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: true,
+      settings: {},
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_archive_default",
+        actions: [],
+        agents: [],
+        hooks: [],
+        models: [],
+        skills: [],
+        tools: []
+      }
+    };
+    const serviceWorkspace: WorkspaceRecord = {
+      ...defaultWorkspace,
+      id: "ws_archive_service",
+      name: "archive service",
+      rootPath: "/tmp/ws_archive_service",
+      serviceName: "acme-app",
+      catalog: {
+        workspaceId: "ws_archive_service",
+        actions: [],
+        agents: [],
+        hooks: [],
+        models: [],
+        skills: [],
+        tools: []
+      }
+    };
+
+    await persistence.workspaceRepository.create(serviceWorkspace);
+
+    const archiveA = await persistence.workspaceArchiveRepository.archiveWorkspace({
+      workspace: defaultWorkspace,
+      archiveDate: "2026-04-08",
+      archivedAt: "2026-04-08T10:00:00.000Z",
+      deletedAt: "2026-04-08T10:00:00.000Z",
+      timezone: "UTC"
+    });
+    const archiveB = await persistence.workspaceArchiveRepository.archiveWorkspace({
+      workspace: serviceWorkspace,
+      archiveDate: "2026-04-08",
+      archivedAt: "2026-04-08T11:00:00.000Z",
+      deletedAt: "2026-04-08T11:00:00.000Z",
+      timezone: "UTC"
+    });
+
+    const visited: string[] = [];
+    const count = await persistence.workspaceArchiveRepository.forEachByArchiveDate?.("2026-04-08", async (archive) => {
+      visited.push(archive.id);
+    });
+
+    expect(count).toBe(2);
+    expect(visited).toEqual([archiveA.id, archiveB.id]);
 
     await persistence.close();
   });

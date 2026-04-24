@@ -10,7 +10,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@oah/config": "workspace:*",
+    "@oah/config-server-control": "workspace:*",
+    "@oah/scale-target-control": "workspace:*",
     "@oah/storage-redis-control": "workspace:*"
   }
 }
