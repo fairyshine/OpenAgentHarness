@@ -1,6 +1,6 @@
 ARG BASE_BUILD_IMAGE=node:24-bookworm
 ARG BASE_RUNTIME_IMAGE=debian:bookworm-slim
-ARG BASE_RUST_IMAGE=rust:1.87-bookworm
+ARG BASE_RUST_IMAGE=rust:1.95-bookworm
 ARG DOCKER_COMPOSE_VERSION=2.40.3
 
 FROM ${BASE_BUILD_IMAGE} AS deps
@@ -81,7 +81,7 @@ COPY native ./
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
   --mount=type=cache,target=/tmp/oah-native-target \
-  cargo build --release -p oah-workspace-sync --target-dir /tmp/oah-native-target \
+  cargo build --locked --release -p oah-workspace-sync --target-dir /tmp/oah-native-target \
   && cp /tmp/oah-native-target/release/oah-workspace-sync /usr/local/bin/oah-workspace-sync
 
 FROM deps AS node-runtime-binary

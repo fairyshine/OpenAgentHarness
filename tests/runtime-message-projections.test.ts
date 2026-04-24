@@ -684,4 +684,55 @@ describe("runtime message projections", () => {
       await rm(workspaceRoot, { recursive: true, force: true });
     }
   });
+
+  it("loads explicit image attachments with spaces and smart quotes in the filename", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-message-serializer-smart-quotes-"));
+    try {
+      const fileName = "“Children at the Beach” by Alexei Zaitsev.jpg";
+      await writeFile(
+        path.join(workspaceRoot, fileName),
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0a4AAAAASUVORK5CYII=",
+          "base64"
+        )
+      );
+
+      const serializer = new ModelMessageSerializer({
+        workspaceFileSystem: createLocalWorkspaceFileSystem()
+      });
+      const serialized = await serializer.toAiSdkMessages(
+        [
+          {
+            view: "model",
+            role: "user",
+            semanticType: "user_input",
+            sourceMessageIds: ["msg_user"],
+            content: "@“Children at the Beach” by Alexei Zaitsev.jpg 图片里画了什么"
+          }
+        ],
+        {
+          workspace: createWorkspaceRecord(workspaceRoot)
+        }
+      );
+
+      expect(serialized).toEqual([
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "@“Children at the Beach” by Alexei Zaitsev.jpg 图片里画了什么"
+            },
+            {
+              type: "image",
+              image: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0a4AAAAASUVORK5CYII=",
+              mediaType: "image/jpeg"
+            }
+          ]
+        }
+      ]);
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
 });

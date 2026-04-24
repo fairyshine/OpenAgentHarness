@@ -23,12 +23,22 @@ const IMAGE_FILE_EXTENSIONS = new Set([
   ".heif"
 ]);
 const TRAILING_PATH_PUNCTUATION = /[)\]}>.,!?;:，。！？；：、）》】]+$/u;
-const WORKSPACE_IMAGE_PATH_PATTERNS = [
+const WORKSPACE_IMPLICIT_ATTACHMENT_PATH_PATTERNS = [
   /!\[[^\]]*\]\((<[^>\n]+>|[^)\n]+)\)/gimu,
   /`([^`\n]+\.[A-Za-z0-9]+)`/gimu,
   /"([^"\n]+\.[A-Za-z0-9]+)"/gimu,
   /'([^'\n]+\.[A-Za-z0-9]+)'/gimu,
   /((?:\.{1,2}\/|\/)?(?:[^\s"'`()\[\]{}<>]+\/)*[^\s"'`()\[\]{}<>]+\.[A-Za-z0-9]+)/gimu
+] as const;
+const WORKSPACE_EXPLICIT_ATTACHMENT_REFERENCE_PATTERN =
+  /(^|[\s([{<"'“‘])@((?:[^@\n])+?\.[A-Za-z0-9]+)/gmu;
+const WRAPPER_PAIRS = [
+  ["<", ">"],
+  ['"', '"'],
+  ["'", "'"],
+  ["`", "`"],
+  ["“", "”"],
+  ["‘", "’"]
 ] as const;
 
 type UserMessageContent = Extract<Message, { role: "user" }>["content"];
@@ -47,8 +57,10 @@ function isUserTextPart(part: UserMessagePart): part is Extract<UserMessagePart,
 
 function stripWrapper(value: string): string {
   const trimmed = value.trim();
-  if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
-    return trimmed.slice(1, -1).trim();
+  for (const [start, end] of WRAPPER_PAIRS) {
+    if (trimmed.startsWith(start) && trimmed.endsWith(end) && trimmed.length >= start.length + end.length) {
+      return trimmed.slice(start.length, trimmed.length - end.length).trim();
+    }
   }
 
   return trimmed;
@@ -97,7 +109,19 @@ function collectWorkspaceAttachmentCandidates(text: string): WorkspaceAttachment
   const orderedCandidates: WorkspaceAttachmentCandidate[] = [];
   const seenCandidates = new Set<string>();
 
-  for (const pattern of WORKSPACE_IMAGE_PATH_PATTERNS) {
+  for (const match of text.matchAll(WORKSPACE_EXPLICIT_ATTACHMENT_REFERENCE_PATTERN)) {
+    const normalized = normalizeWorkspaceAttachmentCandidate(match[2] ?? "");
+    const candidate = normalized ? toWorkspaceAttachmentCandidate(`@${normalized}`) : null;
+    const dedupeKey = candidate ? `${candidate.explicitAttachment ? "explicit" : "implicit"}:${candidate.path}` : null;
+    if (!candidate || !dedupeKey || seenCandidates.has(dedupeKey)) {
+      continue;
+    }
+
+    seenCandidates.add(dedupeKey);
+    orderedCandidates.push(candidate);
+  }
+
+  for (const pattern of WORKSPACE_IMPLICIT_ATTACHMENT_PATH_PATTERNS) {
     for (const match of text.matchAll(pattern)) {
       const capturedValue =
         match.slice(1).find((value): value is string => typeof value === "string" && value.trim().length > 0) ??
