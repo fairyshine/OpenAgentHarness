@@ -23,6 +23,11 @@ import {
   type NativeWorkspaceSyncObjectStoreConfig
 } from "@oah/native-bridge";
 
+import {
+  observeNativeWorkspaceSyncOperation,
+  recordNativeWorkspaceSyncFallback
+} from "./observability/native-workspace-sync.js";
+
 export type ManagedPathKey = "workspace" | "runtime" | "model" | "tool" | "skill";
 type ObjectStorageConfig = NonNullable<ServerConfig["object_storage"]> & {
   managed_paths?: ManagedPathKey[] | undefined;
@@ -365,21 +370,35 @@ export async function computeLocalDirectoryFingerprint(rootDir: string, options?
   const nativeExcludes = resolveNativeFingerprintExcludes(options);
   if (isNativeWorkspaceSyncEnabled() && nativeExcludes !== undefined) {
     try {
-      const result = await computeNativeDirectoryFingerprint({
-        rootDir,
-        ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {})
+      const result = await observeNativeWorkspaceSyncOperation({
+        operation: "fingerprint",
+        implementation: "rust",
+        target: rootDir,
+        logFailure: false,
+        action: () =>
+          computeNativeDirectoryFingerprint({
+            rootDir,
+            ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {})
+          })
       });
       return result.fingerprint;
     } catch (error) {
-      console.warn(
-        `[oah-native] Falling back to TypeScript directory fingerprint for ${rootDir}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      recordNativeWorkspaceSyncFallback({
+        operation: "fingerprint",
+        target: rootDir,
+        error
+      });
     }
   }
 
-  return createDirectoryFingerprint(await collectLocalDirectorySnapshot(rootDir, options));
+  return observeNativeWorkspaceSyncOperation({
+    operation: "fingerprint",
+    implementation: "ts",
+    target: rootDir,
+    logSuccess: false,
+    logFailure: false,
+    action: async () => createDirectoryFingerprint(await collectLocalDirectorySnapshot(rootDir, options))
+  });
 }
 
 async function collectNativeSnapshotIfAvailable(
@@ -392,20 +411,27 @@ async function collectNativeSnapshotIfAvailable(
   }
 
   try {
-    const result = await scanNativeLocalTree({
-      rootDir,
-      ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {})
+    const result = await observeNativeWorkspaceSyncOperation({
+      operation: "scan",
+      implementation: "rust",
+      target: rootDir,
+      logFailure: false,
+      action: () =>
+        scanNativeLocalTree({
+          rootDir,
+          ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {})
+        })
     });
     return {
       snapshot: createSnapshotFromNativeScan(result),
       fingerprint: result.fingerprint
     };
   } catch (error) {
-    console.warn(
-      `[oah-native] Falling back to TypeScript local snapshot for ${rootDir}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    recordNativeWorkspaceSyncFallback({
+      operation: "scan",
+      target: rootDir,
+      error
+    });
     return undefined;
   }
 }
@@ -422,34 +448,41 @@ async function collectNativeLocalToRemotePlanIfAvailable(
   }
 
   try {
-    return await planNativeLocalToRemote({
-      rootDir: localDir,
-      ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {}),
-      remoteEntries: remoteEntries
-        .map((entry) => {
-          const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
-          if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
-            return undefined;
-          }
-          if (options?.excludeRelativePath?.(relativePath)) {
-            return undefined;
-          }
-          return {
-            relativePath: relativePath || "/",
-            key: entry.key,
-            size: entry.size,
-            ...(entry.lastModified ? { lastModifiedMs: entry.lastModified.getTime() } : {}),
-            isDirectory: entry.key.endsWith("/")
-          };
+    return await observeNativeWorkspaceSyncOperation({
+      operation: "plan_local_to_remote",
+      implementation: "rust",
+      target: localDir,
+      logFailure: false,
+      action: () =>
+        planNativeLocalToRemote({
+          rootDir: localDir,
+          ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {}),
+          remoteEntries: remoteEntries
+            .map((entry) => {
+              const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
+              if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
+                return undefined;
+              }
+              if (options?.excludeRelativePath?.(relativePath)) {
+                return undefined;
+              }
+              return {
+                relativePath: relativePath || "/",
+                key: entry.key,
+                size: entry.size,
+                ...(entry.lastModified ? { lastModifiedMs: entry.lastModified.getTime() } : {}),
+                isDirectory: entry.key.endsWith("/")
+              };
+            })
+            .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
         })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
     });
   } catch (error) {
-    console.warn(
-      `[oah-native] Falling back to TypeScript local->remote planning for ${localDir}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    recordNativeWorkspaceSyncFallback({
+      operation: "plan_local_to_remote",
+      target: localDir,
+      error
+    });
     return undefined;
   }
 }
@@ -472,19 +505,31 @@ async function syncNativeLocalDirectoryToRemoteIfAvailable(
 
   try {
     const concurrency = resolveDirectorySyncConcurrency();
-    return await syncNativeLocalToRemote({
-      rootDir: localDir,
-      remotePrefix,
-      objectStore: nativeObjectStore,
-      maxConcurrency: concurrency,
-      ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {})
+    return await observeNativeWorkspaceSyncOperation({
+      operation: "sync_local_to_remote",
+      implementation: "rust",
+      target: localDir,
+      logFailure: false,
+      metadata: {
+        remotePrefix,
+        maxConcurrency: concurrency
+      },
+      action: () =>
+        syncNativeLocalToRemote({
+          rootDir: localDir,
+          remotePrefix,
+          objectStore: nativeObjectStore,
+          maxConcurrency: concurrency,
+          ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {})
+        })
     });
   } catch (error) {
-    console.warn(
-      `[oah-native] Falling back to TypeScript local->remote sync for ${localDir}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    recordNativeWorkspaceSyncFallback({
+      operation: "sync_local_to_remote",
+      target: localDir,
+      error,
+      metadata: { remotePrefix }
+    });
     return undefined;
   }
 }
@@ -501,35 +546,46 @@ async function collectNativeRemoteToLocalPlanIfAvailable(
   }
 
   try {
-    return await planNativeRemoteToLocal({
-      rootDir: localDir,
-      ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {}),
-      ...(options?.preserveTopLevelNames ? { preserveTopLevelNames: options.preserveTopLevelNames } : {}),
-      remoteEntries: remoteEntries
-        .map((entry) => {
-          const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
-          if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
-            return undefined;
-          }
-          if (options?.excludeRelativePath?.(relativePath)) {
-            return undefined;
-          }
-          return {
-            relativePath: relativePath || "/",
-            key: entry.key,
-            size: entry.size,
-            ...(entry.lastModified ? { lastModifiedMs: entry.lastModified.getTime() } : {}),
-            isDirectory: entry.key.endsWith("/")
-          };
+    return await observeNativeWorkspaceSyncOperation({
+      operation: "plan_remote_to_local",
+      implementation: "rust",
+      target: localDir,
+      logFailure: false,
+      metadata: {
+        remotePrefix
+      },
+      action: () =>
+        planNativeRemoteToLocal({
+          rootDir: localDir,
+          ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {}),
+          ...(options?.preserveTopLevelNames ? { preserveTopLevelNames: options.preserveTopLevelNames } : {}),
+          remoteEntries: remoteEntries
+            .map((entry) => {
+              const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
+              if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
+                return undefined;
+              }
+              if (options?.excludeRelativePath?.(relativePath)) {
+                return undefined;
+              }
+              return {
+                relativePath: relativePath || "/",
+                key: entry.key,
+                size: entry.size,
+                ...(entry.lastModified ? { lastModifiedMs: entry.lastModified.getTime() } : {}),
+                isDirectory: entry.key.endsWith("/")
+              };
+            })
+            .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
         })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
     });
   } catch (error) {
-    console.warn(
-      `[oah-native] Falling back to TypeScript remote->local planning for ${localDir}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    recordNativeWorkspaceSyncFallback({
+      operation: "plan_remote_to_local",
+      target: localDir,
+      error,
+      metadata: { remotePrefix }
+    });
     return undefined;
   }
 }
@@ -552,21 +608,33 @@ async function syncNativeRemotePrefixToLocalIfAvailable(
 
   try {
     const concurrency = resolveDirectorySyncConcurrency();
-    await syncNativeRemoteToLocal({
-      rootDir: localDir,
-      remotePrefix,
-      objectStore: nativeObjectStore,
-      maxConcurrency: concurrency,
-      ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {}),
-      ...(options?.preserveTopLevelNames ? { preserveTopLevelNames: options.preserveTopLevelNames } : {})
+    await observeNativeWorkspaceSyncOperation({
+      operation: "sync_remote_to_local",
+      implementation: "rust",
+      target: localDir,
+      logFailure: false,
+      metadata: {
+        remotePrefix,
+        maxConcurrency: concurrency
+      },
+      action: () =>
+        syncNativeRemoteToLocal({
+          rootDir: localDir,
+          remotePrefix,
+          objectStore: nativeObjectStore,
+          maxConcurrency: concurrency,
+          ...(nativeExcludes.length > 0 ? { excludeRelativePaths: nativeExcludes } : {}),
+          ...(options?.preserveTopLevelNames ? { preserveTopLevelNames: options.preserveTopLevelNames } : {})
+        })
     });
     return true;
   } catch (error) {
-    console.warn(
-      `[oah-native] Falling back to TypeScript remote->local sync for ${localDir}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    recordNativeWorkspaceSyncFallback({
+      operation: "sync_remote_to_local",
+      target: localDir,
+      error,
+      metadata: { remotePrefix }
+    });
     return false;
   }
 }
@@ -1042,8 +1110,18 @@ export class ObjectStorageMirrorController {
     if (isNativeWorkspaceSyncEnabled() && nativeInputs.every((entry) => entry !== undefined)) {
       try {
         const resolvedInputs = nativeInputs;
-        const result = await computeNativeDirectoryFingerprintBatch({
-          directories: resolvedInputs.map((entry) => entry.input)
+        const result = await observeNativeWorkspaceSyncOperation({
+          operation: "fingerprint_batch",
+          implementation: "rust",
+          target: "object-storage-mirror",
+          logFailure: false,
+          metadata: {
+            directoryCount: resolvedInputs.length
+          },
+          action: () =>
+            computeNativeDirectoryFingerprintBatch({
+              directories: resolvedInputs.map((entry) => entry.input)
+            })
         });
         for (let index = 0; index < resolvedInputs.length; index += 1) {
           const nativeInput = resolvedInputs[index];
@@ -1059,11 +1137,14 @@ export class ObjectStorageMirrorController {
           return fingerprints;
         }
       } catch (error) {
-        console.warn(
-          `[oah-native] Falling back to per-directory mirror fingerprints: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
+        recordNativeWorkspaceSyncFallback({
+          operation: "fingerprint_batch",
+          target: "object-storage-mirror",
+          error,
+          metadata: {
+            directoryCount: mappings.length
+          }
+        });
       }
     }
 
@@ -1258,146 +1339,158 @@ export async function syncRemotePrefixToLocal(
     return;
   }
 
-  const entries = await store.listEntries(remotePrefix);
-  await mkdir(localDir, { recursive: true });
+  return observeNativeWorkspaceSyncOperation({
+    operation: "sync_remote_to_local",
+    implementation: "ts",
+    target: localDir,
+    logSuccess: false,
+    logFailure: false,
+    metadata: {
+      remotePrefix
+    },
+    action: async () => {
+      const entries = await store.listEntries(remotePrefix);
+      await mkdir(localDir, { recursive: true });
 
-  const remoteDirectories = new Set<string>();
-  const remoteFiles = new Map<string, ObjectStorageEntry>();
+      const remoteDirectories = new Set<string>();
+      const remoteFiles = new Map<string, ObjectStorageEntry>();
 
-  for (const entry of entries) {
-    const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
-    if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
-      continue;
-    }
-    if (options?.excludeRelativePath?.(relativePath)) {
-      continue;
-    }
+      for (const entry of entries) {
+        const relativePath = relativePathFromRemoteKey(remotePrefix, entry.key);
+        if (relativePath === undefined || shouldIgnoreRelativePath(relativePath)) {
+          continue;
+        }
+        if (options?.excludeRelativePath?.(relativePath)) {
+          continue;
+        }
 
-    if (!relativePath) {
-      continue;
-    }
+        if (!relativePath) {
+          continue;
+        }
 
-    if (entry.key.endsWith("/")) {
-      addDirectoryWithParents(relativePath, remoteDirectories);
-      continue;
-    }
+        if (entry.key.endsWith("/")) {
+          addDirectoryWithParents(relativePath, remoteDirectories);
+          continue;
+        }
 
-    remoteFiles.set(relativePath, entry);
-    const parentDirectory = normalizeRelativePath(path.posix.dirname(relativePath));
-    if (parentDirectory && parentDirectory !== ".") {
-      addDirectoryWithParents(parentDirectory, remoteDirectories);
-    }
-  }
-
-  const concurrency = resolveDirectorySyncConcurrency();
-  const nativePlan = await collectNativeRemoteToLocalPlanIfAvailable(localDir, remotePrefix, entries, options);
-  if (nativePlan) {
-    await runWithConcurrency(nativePlan.removePaths, concurrency, async (targetPath) => {
-      await rm(targetPath, { recursive: true, force: true });
-    });
-  } else {
-    await removeUnexpectedLocalEntries(localDir, new Set(remoteFiles.keys()), remoteDirectories, options);
-  }
-
-  const orderedDirectories = nativePlan?.directoriesToCreate ?? [...remoteDirectories].sort((left, right) => {
-    const depthDifference = left.split("/").length - right.split("/").length;
-    return depthDifference !== 0 ? depthDifference : left.localeCompare(right);
-  });
-  await runWithConcurrency(orderedDirectories, concurrency, async (relativePath) => {
-    const targetPath = path.join(localDir, relativePath);
-    const existing = await statIfExists(targetPath);
-    if (existing && !existing.isDirectory()) {
-      await rm(targetPath, { recursive: true, force: true });
-    }
-    await mkdir(targetPath, { recursive: true });
-  });
-
-  const nativeDownloadCandidates =
-    nativePlan?.downloadCandidates.map((candidate) => ({
-      relativePath: candidate.relativePath,
-      targetPath: candidate.targetPath,
-      entry: remoteFiles.get(candidate.relativePath)
-    })) ??
-    [...remoteFiles.entries()].map(([relativePath, entry]) => ({
-      relativePath,
-      targetPath: path.join(localDir, relativePath),
-      entry
-    }));
-
-  await runWithConcurrency(nativeDownloadCandidates, concurrency, async ({ targetPath, entry }) => {
-    if (!entry) {
-      return;
-    }
-    const existing = await statIfExists(targetPath);
-    if (existing && !existing.isFile()) {
-      await rm(targetPath, { recursive: true, force: true });
-    }
-
-    await mkdir(path.dirname(targetPath), { recursive: true });
-
-    const currentFile = existing?.isFile() ? existing : null;
-    if (currentFile && currentFile.size === entry.size) {
-      const objectInfo = await store.getObjectInfo?.(entry.key);
-      const targetMtimeMs = resolveTargetMtimeMs({
-        metadata: objectInfo?.metadata,
-        lastModified: objectInfo?.lastModified ?? entry.lastModified
-      });
-      if (typeof targetMtimeMs === "number" && Math.trunc(currentFile.mtimeMs) === targetMtimeMs) {
-        return;
-      }
-    }
-
-    const object = await store.getObject(entry.key);
-    await writeFile(targetPath, object.body);
-    const targetMtimeMs = resolveTargetMtimeMs({
-      metadata: object.metadata,
-      lastModified: entry.lastModified
-    });
-    if (typeof targetMtimeMs === "number") {
-      const preservedDate = new Date(targetMtimeMs);
-      await utimes(targetPath, preservedDate, preservedDate);
-    }
-  });
-
-  if (nativePlan) {
-    await runWithConcurrency(nativePlan.infoCheckCandidates, concurrency, async (candidate) => {
-      const entry = remoteFiles.get(candidate.relativePath);
-      if (!entry) {
-        return;
-      }
-
-      const targetPath = candidate.targetPath;
-      const existing = await statIfExists(targetPath);
-      if (existing && !existing.isFile()) {
-        await rm(targetPath, { recursive: true, force: true });
-      }
-
-      await mkdir(path.dirname(targetPath), { recursive: true });
-
-      const currentFile = existing?.isFile() ? existing : null;
-      if (currentFile && currentFile.size === entry.size) {
-        const objectInfo = await store.getObjectInfo?.(entry.key);
-        const targetMtimeMs = resolveTargetMtimeMs({
-          metadata: objectInfo?.metadata,
-          lastModified: objectInfo?.lastModified ?? entry.lastModified
-        });
-        if (typeof targetMtimeMs === "number" && Math.trunc(currentFile.mtimeMs) === targetMtimeMs) {
-          return;
+        remoteFiles.set(relativePath, entry);
+        const parentDirectory = normalizeRelativePath(path.posix.dirname(relativePath));
+        if (parentDirectory && parentDirectory !== ".") {
+          addDirectoryWithParents(parentDirectory, remoteDirectories);
         }
       }
 
-      const object = await store.getObject(entry.key);
-      await writeFile(targetPath, object.body);
-      const targetMtimeMs = resolveTargetMtimeMs({
-        metadata: object.metadata,
-        lastModified: entry.lastModified
-      });
-      if (typeof targetMtimeMs === "number") {
-        const preservedDate = new Date(targetMtimeMs);
-        await utimes(targetPath, preservedDate, preservedDate);
+      const concurrency = resolveDirectorySyncConcurrency();
+      const nativePlan = await collectNativeRemoteToLocalPlanIfAvailable(localDir, remotePrefix, entries, options);
+      if (nativePlan) {
+        await runWithConcurrency(nativePlan.removePaths, concurrency, async (targetPath) => {
+          await rm(targetPath, { recursive: true, force: true });
+        });
+      } else {
+        await removeUnexpectedLocalEntries(localDir, new Set(remoteFiles.keys()), remoteDirectories, options);
       }
-    });
-  }
+
+      const orderedDirectories = nativePlan?.directoriesToCreate ?? [...remoteDirectories].sort((left, right) => {
+        const depthDifference = left.split("/").length - right.split("/").length;
+        return depthDifference !== 0 ? depthDifference : left.localeCompare(right);
+      });
+      await runWithConcurrency(orderedDirectories, concurrency, async (relativePath) => {
+        const targetPath = path.join(localDir, relativePath);
+        const existing = await statIfExists(targetPath);
+        if (existing && !existing.isDirectory()) {
+          await rm(targetPath, { recursive: true, force: true });
+        }
+        await mkdir(targetPath, { recursive: true });
+      });
+
+      const nativeDownloadCandidates =
+        nativePlan?.downloadCandidates.map((candidate) => ({
+          relativePath: candidate.relativePath,
+          targetPath: candidate.targetPath,
+          entry: remoteFiles.get(candidate.relativePath)
+        })) ??
+        [...remoteFiles.entries()].map(([relativePath, entry]) => ({
+          relativePath,
+          targetPath: path.join(localDir, relativePath),
+          entry
+        }));
+
+      await runWithConcurrency(nativeDownloadCandidates, concurrency, async ({ targetPath, entry }) => {
+        if (!entry) {
+          return;
+        }
+        const existing = await statIfExists(targetPath);
+        if (existing && !existing.isFile()) {
+          await rm(targetPath, { recursive: true, force: true });
+        }
+
+        await mkdir(path.dirname(targetPath), { recursive: true });
+
+        const currentFile = existing?.isFile() ? existing : null;
+        if (currentFile && currentFile.size === entry.size) {
+          const objectInfo = await store.getObjectInfo?.(entry.key);
+          const targetMtimeMs = resolveTargetMtimeMs({
+            metadata: objectInfo?.metadata,
+            lastModified: objectInfo?.lastModified ?? entry.lastModified
+          });
+          if (typeof targetMtimeMs === "number" && Math.trunc(currentFile.mtimeMs) === targetMtimeMs) {
+            return;
+          }
+        }
+
+        const object = await store.getObject(entry.key);
+        await writeFile(targetPath, object.body);
+        const targetMtimeMs = resolveTargetMtimeMs({
+          metadata: object.metadata,
+          lastModified: entry.lastModified
+        });
+        if (typeof targetMtimeMs === "number") {
+          const preservedDate = new Date(targetMtimeMs);
+          await utimes(targetPath, preservedDate, preservedDate);
+        }
+      });
+
+      if (nativePlan) {
+        await runWithConcurrency(nativePlan.infoCheckCandidates, concurrency, async (candidate) => {
+          const entry = remoteFiles.get(candidate.relativePath);
+          if (!entry) {
+            return;
+          }
+
+          const targetPath = candidate.targetPath;
+          const existing = await statIfExists(targetPath);
+          if (existing && !existing.isFile()) {
+            await rm(targetPath, { recursive: true, force: true });
+          }
+
+          await mkdir(path.dirname(targetPath), { recursive: true });
+
+          const currentFile = existing?.isFile() ? existing : null;
+          if (currentFile && currentFile.size === entry.size) {
+            const objectInfo = await store.getObjectInfo?.(entry.key);
+            const targetMtimeMs = resolveTargetMtimeMs({
+              metadata: objectInfo?.metadata,
+              lastModified: objectInfo?.lastModified ?? entry.lastModified
+            });
+            if (typeof targetMtimeMs === "number" && Math.trunc(currentFile.mtimeMs) === targetMtimeMs) {
+              return;
+            }
+          }
+
+          const object = await store.getObject(entry.key);
+          await writeFile(targetPath, object.body);
+          const targetMtimeMs = resolveTargetMtimeMs({
+            metadata: object.metadata,
+            lastModified: entry.lastModified
+          });
+          if (typeof targetMtimeMs === "number") {
+            const preservedDate = new Date(targetMtimeMs);
+            await utimes(targetPath, preservedDate, preservedDate);
+          }
+        });
+      }
+    }
+  });
 }
 
 export async function syncLocalDirectoryToRemote(
@@ -1415,33 +1508,125 @@ export async function syncLocalDirectoryToRemote(
     return nativeSyncResult;
   }
 
-  const remoteEntries = await store.listEntries(remotePrefix);
-  const remoteByRelativePath = buildNormalizedRemoteEntryMap(remotePrefix, remoteEntries, options);
-  let uploadedFileCount = 0;
-  let createdEmptyDirectoryCount = 0;
-  const concurrency = resolveDirectorySyncConcurrency();
-  const nativePlan = await collectNativeLocalToRemotePlanIfAvailable(localDir, remotePrefix, remoteEntries, options);
+  return observeNativeWorkspaceSyncOperation({
+    operation: "sync_local_to_remote",
+    implementation: "ts",
+    target: localDir,
+    logSuccess: false,
+    logFailure: false,
+    metadata: {
+      remotePrefix
+    },
+    action: async () => {
+      const remoteEntries = await store.listEntries(remotePrefix);
+      const remoteByRelativePath = buildNormalizedRemoteEntryMap(remotePrefix, remoteEntries, options);
+      let uploadedFileCount = 0;
+      let createdEmptyDirectoryCount = 0;
+      const concurrency = resolveDirectorySyncConcurrency();
+      const nativePlan = await collectNativeLocalToRemotePlanIfAvailable(localDir, remotePrefix, remoteEntries, options);
 
-  if (nativePlan) {
-    await runWithConcurrency(nativePlan.uploadCandidates, concurrency, async (candidate) => {
-      const body = await readFile(candidate.absolutePath).catch((error) => {
-        if (isNotFoundError(error)) {
-          return null;
+      if (nativePlan) {
+        await runWithConcurrency(nativePlan.uploadCandidates, concurrency, async (candidate) => {
+          const body = await readFile(candidate.absolutePath).catch((error) => {
+            if (isNotFoundError(error)) {
+              return null;
+            }
+            throw error;
+          });
+          if (!body) {
+            return;
+          }
+
+          await store.putObject(buildRemoteKey(remotePrefix, candidate.relativePath), body, { mtimeMs: candidate.mtimeMs });
+          uploadedFileCount += 1;
+        });
+
+        await runWithConcurrency(nativePlan.infoCheckCandidates, concurrency, async (candidate) => {
+          const remoteEntry = remoteByRelativePath.get(candidate.relativePath);
+          if (!remoteEntry || remoteEntry.key.endsWith("/")) {
+            const body = await readFile(candidate.absolutePath).catch((error) => {
+              if (isNotFoundError(error)) {
+                return null;
+              }
+              throw error;
+            });
+            if (!body) {
+              return;
+            }
+
+            await store.putObject(buildRemoteKey(remotePrefix, candidate.relativePath), body, { mtimeMs: candidate.mtimeMs });
+            uploadedFileCount += 1;
+            return;
+          }
+
+          const remoteInfo = await store.getObjectInfo?.(remoteEntry.key);
+          const remoteMtimeMs = resolveTargetMtimeMs({
+            metadata: remoteInfo?.metadata,
+            lastModified: remoteInfo?.lastModified ?? remoteEntry.lastModified
+          });
+          if (typeof remoteMtimeMs === "number" && remoteMtimeMs === Math.trunc(candidate.mtimeMs)) {
+            return;
+          }
+          if (!remoteInfo && remoteEntry.lastModified && remoteEntry.lastModified.getTime() >= Math.trunc(candidate.mtimeMs)) {
+            return;
+          }
+
+          const body = await readFile(candidate.absolutePath).catch((error) => {
+            if (isNotFoundError(error)) {
+              return null;
+            }
+            throw error;
+          });
+          if (!body) {
+            return;
+          }
+
+          await store.putObject(buildRemoteKey(remotePrefix, candidate.relativePath), body, { mtimeMs: candidate.mtimeMs });
+          uploadedFileCount += 1;
+        });
+
+        await runWithConcurrency(nativePlan.emptyDirectoriesToCreate, concurrency, async (relativePath) => {
+          await store.putObject(`${buildRemoteKey(remotePrefix, relativePath)}/`, Buffer.alloc(0));
+          createdEmptyDirectoryCount += 1;
+        });
+
+        if (nativePlan.keysToDelete.length > 0) {
+          await store.deleteObjects(nativePlan.keysToDelete);
         }
-        throw error;
-      });
-      if (!body) {
-        return;
+
+        await pruneEmptyDirectories(localDir);
+        return {
+          localFingerprint: nativePlan.fingerprint,
+          uploadedFileCount,
+          deletedRemoteCount: nativePlan.keysToDelete.length,
+          createdEmptyDirectoryCount
+        };
       }
 
-      await store.putObject(buildRemoteKey(remotePrefix, candidate.relativePath), body, { mtimeMs: candidate.mtimeMs });
-      uploadedFileCount += 1;
-    });
+      const nativeSnapshot = await collectNativeSnapshotIfAvailable(localDir, options);
+      const snapshot = nativeSnapshot?.snapshot ?? (await collectLocalDirectorySnapshot(localDir, options));
+      const localFingerprint = nativeSnapshot?.fingerprint ?? createDirectoryFingerprint(snapshot);
 
-    await runWithConcurrency(nativePlan.infoCheckCandidates, concurrency, async (candidate) => {
-      const remoteEntry = remoteByRelativePath.get(candidate.relativePath);
-      if (!remoteEntry || remoteEntry.key.endsWith("/")) {
-        const body = await readFile(candidate.absolutePath).catch((error) => {
+      const seenRemoteRelativePaths = new Set<string>();
+
+      await runWithConcurrency([...snapshot.files.entries()], concurrency, async ([relativePath, file]) => {
+        const remoteEntry = remoteByRelativePath.get(relativePath);
+        seenRemoteRelativePaths.add(relativePath);
+        if (remoteEntry && !remoteEntry.key.endsWith("/") && remoteEntry.size === file.size) {
+          const remoteInfo = await store.getObjectInfo?.(remoteEntry.key);
+          const remoteMtimeMs = resolveTargetMtimeMs({
+            metadata: remoteInfo?.metadata,
+            lastModified: remoteInfo?.lastModified ?? remoteEntry.lastModified
+          });
+          if (typeof remoteMtimeMs === "number" && remoteMtimeMs === Math.trunc(file.mtimeMs)) {
+            return;
+          }
+          if (!remoteInfo && remoteEntry.lastModified && remoteEntry.lastModified.getTime() >= Math.trunc(file.mtimeMs)) {
+            return;
+          }
+        }
+
+        const body = await readFile(file.absolutePath).catch((error) => {
           if (isNotFoundError(error)) {
             return null;
           }
@@ -1451,121 +1636,41 @@ export async function syncLocalDirectoryToRemote(
           return;
         }
 
-        await store.putObject(buildRemoteKey(remotePrefix, candidate.relativePath), body, { mtimeMs: candidate.mtimeMs });
+        await store.putObject(buildRemoteKey(remotePrefix, relativePath), body, { mtimeMs: file.mtimeMs });
         uploadedFileCount += 1;
-        return;
-      }
-
-      const remoteInfo = await store.getObjectInfo?.(remoteEntry.key);
-      const remoteMtimeMs = resolveTargetMtimeMs({
-        metadata: remoteInfo?.metadata,
-        lastModified: remoteInfo?.lastModified ?? remoteEntry.lastModified
       });
-      if (typeof remoteMtimeMs === "number" && remoteMtimeMs === Math.trunc(candidate.mtimeMs)) {
-        return;
-      }
-      if (!remoteInfo && remoteEntry.lastModified && remoteEntry.lastModified.getTime() >= Math.trunc(candidate.mtimeMs)) {
-        return;
-      }
 
-      const body = await readFile(candidate.absolutePath).catch((error) => {
-        if (isNotFoundError(error)) {
-          return null;
+      await runWithConcurrency([...snapshot.emptyDirectories], concurrency, async (relativePath) => {
+        seenRemoteRelativePaths.add(relativePath);
+        const remoteEntry = remoteByRelativePath.get(relativePath);
+        if (remoteEntry?.key.endsWith("/")) {
+          return;
         }
-        throw error;
+        await store.putObject(`${buildRemoteKey(remotePrefix, relativePath)}/`, Buffer.alloc(0));
+        createdEmptyDirectoryCount += 1;
       });
-      if (!body) {
-        return;
+
+      const keysToDelete: string[] = [];
+      for (const [relativePath, remoteEntry] of remoteByRelativePath.entries()) {
+        if (relativePath === "/") {
+          continue;
+        }
+        if (!seenRemoteRelativePaths.has(relativePath)) {
+          keysToDelete.push(remoteEntry.key);
+        }
       }
 
-      await store.putObject(buildRemoteKey(remotePrefix, candidate.relativePath), body, { mtimeMs: candidate.mtimeMs });
-      uploadedFileCount += 1;
-    });
+      if (keysToDelete.length > 0) {
+        await store.deleteObjects(keysToDelete);
+      }
 
-    await runWithConcurrency(nativePlan.emptyDirectoriesToCreate, concurrency, async (relativePath) => {
-      await store.putObject(`${buildRemoteKey(remotePrefix, relativePath)}/`, Buffer.alloc(0));
-      createdEmptyDirectoryCount += 1;
-    });
-
-    if (nativePlan.keysToDelete.length > 0) {
-      await store.deleteObjects(nativePlan.keysToDelete);
+      await pruneEmptyDirectories(localDir);
+      return {
+        localFingerprint,
+        uploadedFileCount,
+        deletedRemoteCount: keysToDelete.length,
+        createdEmptyDirectoryCount
+      };
     }
-
-    await pruneEmptyDirectories(localDir);
-    return {
-      localFingerprint: nativePlan.fingerprint,
-      uploadedFileCount,
-      deletedRemoteCount: nativePlan.keysToDelete.length,
-      createdEmptyDirectoryCount
-    };
-  }
-
-  const nativeSnapshot = await collectNativeSnapshotIfAvailable(localDir, options);
-  const snapshot = nativeSnapshot?.snapshot ?? (await collectLocalDirectorySnapshot(localDir, options));
-  const localFingerprint = nativeSnapshot?.fingerprint ?? createDirectoryFingerprint(snapshot);
-
-  const seenRemoteRelativePaths = new Set<string>();
-
-  await runWithConcurrency([...snapshot.files.entries()], concurrency, async ([relativePath, file]) => {
-    const remoteEntry = remoteByRelativePath.get(relativePath);
-    seenRemoteRelativePaths.add(relativePath);
-    if (remoteEntry && !remoteEntry.key.endsWith("/") && remoteEntry.size === file.size) {
-      const remoteInfo = await store.getObjectInfo?.(remoteEntry.key);
-      const remoteMtimeMs = resolveTargetMtimeMs({
-        metadata: remoteInfo?.metadata,
-        lastModified: remoteInfo?.lastModified ?? remoteEntry.lastModified
-      });
-      if (typeof remoteMtimeMs === "number" && remoteMtimeMs === Math.trunc(file.mtimeMs)) {
-        return;
-      }
-      if (!remoteInfo && remoteEntry.lastModified && remoteEntry.lastModified.getTime() >= Math.trunc(file.mtimeMs)) {
-        return;
-      }
-    }
-
-    const body = await readFile(file.absolutePath).catch((error) => {
-      if (isNotFoundError(error)) {
-        return null;
-      }
-      throw error;
-    });
-    if (!body) {
-      return;
-    }
-
-    await store.putObject(buildRemoteKey(remotePrefix, relativePath), body, { mtimeMs: file.mtimeMs });
-    uploadedFileCount += 1;
   });
-
-  await runWithConcurrency([...snapshot.emptyDirectories], concurrency, async (relativePath) => {
-    seenRemoteRelativePaths.add(relativePath);
-    const remoteEntry = remoteByRelativePath.get(relativePath);
-    if (remoteEntry?.key.endsWith("/")) {
-      return;
-    }
-    await store.putObject(`${buildRemoteKey(remotePrefix, relativePath)}/`, Buffer.alloc(0));
-    createdEmptyDirectoryCount += 1;
-  });
-
-  const keysToDelete: string[] = [];
-  for (const [relativePath, remoteEntry] of remoteByRelativePath.entries()) {
-    if (relativePath === "/") {
-      continue;
-    }
-    if (!seenRemoteRelativePaths.has(relativePath)) {
-      keysToDelete.push(remoteEntry.key);
-    }
-  }
-
-  if (keysToDelete.length > 0) {
-    await store.deleteObjects(keysToDelete);
-  }
-
-  await pruneEmptyDirectories(localDir);
-  return {
-    localFingerprint,
-    uploadedFileCount,
-    deletedRemoteCount: keysToDelete.length,
-    createdEmptyDirectoryCount
-  };
 }

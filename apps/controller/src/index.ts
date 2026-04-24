@@ -1,11 +1,11 @@
 import path from "node:path";
 
-import { loadServerConfig } from "@oah/config";
+import { loadServerConfig } from "@oah/config/server-config";
 import {
   createRedisSessionRunQueue,
   createRedisWorkerRegistry,
   createRedisWorkspacePlacementRegistry
-} from "@oah/storage-redis";
+} from "@oah/storage-redis-control";
 
 import {
   type ControllerPlacementOwnershipRegistry,

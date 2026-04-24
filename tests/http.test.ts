@@ -12,6 +12,11 @@ import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
 import { createApp } from "../apps/server/src/app.ts";
 import { createInternalWorkerApp } from "../apps/server/src/internal-worker-app.ts";
+import {
+  observeNativeWorkspaceSyncOperation,
+  recordNativeWorkspaceSyncFallback,
+  resetNativeWorkspaceSyncObservabilityForTests
+} from "../apps/server/src/observability/native-workspace-sync.ts";
 import type { StorageAdmin } from "../apps/server/src/storage-admin.ts";
 import { FakeModelGateway } from "./helpers/fake-model-gateway";
 
@@ -387,6 +392,7 @@ const activeClosers: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  resetNativeWorkspaceSyncObservabilityForTests();
   if (activeApp) {
     await activeApp.app.close();
     activeApp = undefined;
@@ -520,6 +526,34 @@ describe("http api", () => {
         redisRunQueue: "not_configured"
       }
     });
+  });
+
+  it("exposes native workspace sync metrics", async () => {
+    await observeNativeWorkspaceSyncOperation({
+      operation: "sync_local_to_remote",
+      implementation: "rust",
+      target: "/tmp/native-sync",
+      action: async () => undefined
+    });
+    recordNativeWorkspaceSyncFallback({
+      operation: "sync_local_to_remote",
+      target: "/tmp/native-sync",
+      error: new Error("native failed")
+    });
+    activeApp = await createStartedApp();
+
+    const response = await fetch(`${activeApp.baseUrl}/metrics`);
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/plain");
+    expect(body).toContain("oah_native_workspace_sync_attempts_total");
+    expect(body).toContain('operation="sync_local_to_remote"');
+    expect(body).toContain('implementation="rust"');
+    expect(body).toContain('outcome="success"');
+    expect(body).toContain('oah_native_workspace_sync_fallbacks_total');
+    expect(body).toContain('attempted_implementation="rust"');
+    expect(body).toContain('fallback_implementation="ts"');
   });
 
   it("worker internal app exposes only readiness and internal surfaces", async () => {

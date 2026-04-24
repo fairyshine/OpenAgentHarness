@@ -44,6 +44,7 @@ import {
   loadOpenApiSpec
 } from "../developer-docs.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
+import { renderNativeWorkspaceSyncMetrics } from "../../observability/native-workspace-sync.js";
 
 export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDependencies, options: AppRouteOptions): void {
   const listRuntimes = async (_request: FastifyRequest, reply: FastifyReply) => {
@@ -188,6 +189,11 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
     }
 
     return reply.send(payload);
+  });
+
+  app.get("/metrics", async (_request, reply) => {
+    reply.header("content-type", "text/plain; version=0.0.4; charset=utf-8");
+    return reply.send(renderNativeWorkspaceSyncMetrics());
   });
 
   app.get("/api/v1", async (request, reply) => reply.send(buildApiIndex(request)));

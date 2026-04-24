@@ -7,6 +7,7 @@ import { registerInternalWorkspaceRoutes } from "./http/routes/internal-workspac
 import { registerInternalSandboxRoutes } from "./http/routes/internal-sandboxes.js";
 import { registerInternalModelRoutes } from "./http/routes/internal-models.js";
 import type { AppDependencies } from "./http/types.js";
+import { renderNativeWorkspaceSyncMetrics } from "./observability/native-workspace-sync.js";
 import { describeSandboxTopology } from "./sandbox-topology.js";
 
 function readRequestParam(request: FastifyRequest, key: string): string | undefined {
@@ -76,7 +77,7 @@ export function createBaseApp(dependencies: AppDependencies) {
   });
 
   app.addHook("onRequest", async (request, reply) => {
-    if (request.url === "/healthz" || request.url === "/readyz") {
+    if (request.url === "/healthz" || request.url === "/readyz" || request.url === "/metrics") {
       return;
     }
 
@@ -178,5 +179,10 @@ export function registerInternalOnlySurface(app: ReturnType<typeof Fastify>, dep
     }
 
     return reply.send(payload);
+  });
+
+  app.get("/metrics", async (_request: FastifyRequest, reply: FastifyReply) => {
+    reply.header("content-type", "text/plain; version=0.0.4; charset=utf-8");
+    return reply.send(renderNativeWorkspaceSyncMetrics());
   });
 }

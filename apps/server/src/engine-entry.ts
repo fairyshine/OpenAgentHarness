@@ -1,5 +1,3 @@
-import { createApiApp } from "./api-app.js";
-import { createInternalWorkerApp } from "./internal-worker-app.js";
 import type { AppDependencies } from "./http/types.js";
 import { bootstrapRuntime, installSignalHandlers, shouldStartEmbeddedWorker, type BootstrappedRuntime } from "./bootstrap.js";
 
@@ -81,6 +79,7 @@ export async function startApiServer(argv = process.argv.slice(2)): Promise<void
     processKind: "api"
   });
 
+  const { createApiApp } = await import("./api-app.js");
   const app = createApiApp(buildApiAppDependencies(runtime));
 
   app.addHook("onClose", async () => {
@@ -115,6 +114,7 @@ export async function startWorkerServer(argv = process.argv.slice(2)): Promise<v
     processKind: "worker"
   });
 
+  const { createInternalWorkerApp } = await import("./internal-worker-app.js");
   const app = createInternalWorkerApp(buildWorkerAppDependencies(runtime));
 
   app.addHook("onClose", async () => {

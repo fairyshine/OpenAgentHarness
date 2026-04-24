@@ -9,7 +9,7 @@ import {
   type SessionRunQueuePressure,
   type WorkerRegistry,
   type WorkspacePlacementRegistry
-} from "@oah/storage-redis";
+} from "@oah/storage-redis-control";
 
 import type { WorkerReplicaTarget, WorkerReplicaTargetResult } from "./scale-target.js";
 

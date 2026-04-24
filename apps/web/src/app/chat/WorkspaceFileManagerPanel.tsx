@@ -481,7 +481,7 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
             onDrop={handleDrop}
           >
             {dragActive ? (
-              <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-[24px] border border-dashed border-primary/50 bg-background/80 backdrop-blur-sm">
+              <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-[24px] border border-dashed border-primary/50 bg-background/35">
                 <div className="text-center">
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                     <Upload className="h-5 w-5" />

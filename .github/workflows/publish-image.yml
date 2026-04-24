@@ -10,12 +10,15 @@ on:
       - "Dockerfile"
       - ".dockerignore"
       - ".github/workflows/publish-image.yml"
+      - ".github/workflows/ci.yml"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - "tsconfig.json"
       - "apps/**"
+      - "native/**"
       - "packages/**"
+      - "scripts/**"
   workflow_dispatch:
 
 permissions:

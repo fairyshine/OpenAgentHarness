@@ -14,6 +14,10 @@
       "types": "./src/platform-models.ts",
       "default": "./dist/platform-models.js"
     },
+    "./object-storage": {
+      "types": "./src/object-storage.ts",
+      "default": "./dist/object-storage.js"
+    },
     "./runtimes": {
       "types": "./src/runtimes.ts",
       "default": "./dist/runtimes.js"

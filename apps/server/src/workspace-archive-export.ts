@@ -18,6 +18,13 @@ import type {
 } from "@oah/engine-core";
 import { nowIso } from "@oah/engine-core";
 
+import {
+  inspectNativeArchiveExportDirectory,
+  isNativeArchiveExportEnabled,
+  writeNativeArchiveBundle,
+  writeNativeArchiveChecksum
+} from "./native-archive-export.js";
+
 export interface WorkspaceArchiveExporterLogger {
   info?(message: string): void;
   warn?(message: string, error?: unknown): void;
@@ -310,6 +317,111 @@ async function inspectArchiveDirectory(exportRoot: string): Promise<ArchiveDirec
     missingChecksums,
     orphanChecksums
   };
+}
+
+async function inspectArchiveDirectoryWithFallback(exportRoot: string): Promise<ArchiveDirectoryInspection> {
+  if (!isNativeArchiveExportEnabled()) {
+    return inspectArchiveDirectory(exportRoot);
+  }
+
+  try {
+    const result = await inspectNativeArchiveExportDirectory({ exportRoot });
+    return {
+      unexpectedDirectories: result.unexpectedDirectories,
+      leftoverTempFiles: result.leftoverTempFiles,
+      unexpectedFiles: result.unexpectedFiles,
+      missingChecksums: result.missingChecksums,
+      orphanChecksums: result.orphanChecksums
+    };
+  } catch (error) {
+    console.warn(
+      `[oah-native] Falling back to TypeScript archive directory inspection for ${exportRoot}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return inspectArchiveDirectory(exportRoot);
+  }
+}
+
+async function writeArchiveChecksumWithFallback(exportPath: string, checksumPath: string): Promise<void> {
+  if (!isNativeArchiveExportEnabled()) {
+    const checksum = await sha256File(exportPath);
+    await writeFile(checksumPath, `${checksum}  ${path.basename(exportPath)}\n`, "utf8");
+    return;
+  }
+
+  try {
+    await writeNativeArchiveChecksum({
+      filePath: exportPath,
+      outputPath: checksumPath
+    });
+  } catch (error) {
+    console.warn(
+      `[oah-native] Falling back to TypeScript archive checksum write for ${exportPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    const checksum = await sha256File(exportPath);
+    await writeFile(checksumPath, `${checksum}  ${path.basename(exportPath)}\n`, "utf8");
+  }
+}
+
+async function writeArchiveBundleWithFallback(input: {
+  outputPath: string;
+  archiveDate: string;
+  exportPath: string;
+  exportedAt: string;
+  archives: WorkspaceArchiveRecord[];
+}): Promise<void> {
+  if (!isNativeArchiveExportEnabled()) {
+    const db = new DatabaseSync(input.outputPath);
+    try {
+      applyArchiveSchema(db);
+      const statements = createArchiveInsertStatements(db);
+      db.exec("begin immediate");
+      try {
+        insertArchiveRows(statements, input.archiveDate, input.exportPath, input.exportedAt, input.archives);
+        db.exec("commit");
+      } catch (error) {
+        db.exec("rollback");
+        throw error;
+      }
+    } finally {
+      db.close();
+    }
+    return;
+  }
+
+  try {
+    await writeNativeArchiveBundle({
+      outputPath: input.outputPath,
+      archiveDate: input.archiveDate,
+      exportPath: input.exportPath,
+      exportedAt: input.exportedAt,
+      archives: input.archives
+    });
+  } catch (error) {
+    console.warn(
+      `[oah-native] Falling back to TypeScript archive bundle write for ${input.archiveDate}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    const db = new DatabaseSync(input.outputPath);
+    try {
+      applyArchiveSchema(db);
+      const statements = createArchiveInsertStatements(db);
+      db.exec("begin immediate");
+      try {
+        insertArchiveRows(statements, input.archiveDate, input.exportPath, input.exportedAt, input.archives);
+        db.exec("commit");
+      } catch (fallbackError) {
+        db.exec("rollback");
+        throw fallbackError;
+      }
+    } finally {
+      db.close();
+    }
+  }
 }
 
 interface ArchiveInsertStatements {
@@ -667,7 +779,7 @@ export class WorkspaceArchiveExporter {
     this.#hasInspectedExportRoot = true;
 
     try {
-      const inspection = await inspectArchiveDirectory(this.#exportRoot);
+      const inspection = await inspectArchiveDirectoryWithFallback(this.#exportRoot);
 
       if (inspection.unexpectedDirectories.length > 0) {
         this.#logger.warn?.(
@@ -713,26 +825,17 @@ export class WorkspaceArchiveExporter {
     await mkdir(path.dirname(exportPath), { recursive: true });
     await rm(tempPath, { force: true });
 
-    const db = new DatabaseSync(tempPath);
-    try {
-      applyArchiveSchema(db);
-      const statements = createArchiveInsertStatements(db);
-      db.exec("begin immediate");
-      try {
-        insertArchiveRows(statements, archiveDate, exportPath, exportedAt, archives);
-        db.exec("commit");
-      } catch (error) {
-        db.exec("rollback");
-        throw error;
-      }
-    } finally {
-      db.close();
-    }
+    await writeArchiveBundleWithFallback({
+      outputPath: tempPath,
+      archiveDate,
+      exportPath,
+      exportedAt,
+      archives
+    });
 
     await rm(exportPath, { force: true });
     await rename(tempPath, exportPath);
-    const checksum = await sha256File(exportPath);
-    await writeFile(checksumPath, `${checksum}  ${path.basename(exportPath)}\n`, "utf8");
+    await writeArchiveChecksumWithFallback(exportPath, checksumPath);
     await this.#repository.markExported(
       archives.map((archive) => archive.id),
       {

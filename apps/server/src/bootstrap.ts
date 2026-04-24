@@ -49,10 +49,7 @@ import {
   resolveManagedWorkspaceExternalRef,
   resolveObjectStorageMirrorConfig
 } from "./bootstrap/object-storage-policy.js";
-import {
-  createEngineAdminCapabilities,
-  type EngineAdminCapabilities
-} from "./bootstrap/admin-capabilities.js";
+import type { EngineAdminCapabilities } from "./bootstrap/admin-capabilities.js";
 import {
   createPlatformModelCatalogService,
   type PlatformModelSnapshot
@@ -107,6 +104,7 @@ let sandboxBackedWorkspaceInitializerModulePromise:
   | undefined;
 let platformAgentsModulePromise: Promise<typeof import("./platform-agents.js")> | undefined;
 let serviceRoutedPostgresModulePromise: Promise<typeof import("./bootstrap/service-routed-postgres.js")> | undefined;
+let adminCapabilitiesModulePromise: Promise<typeof import("./bootstrap/admin-capabilities.js")> | undefined;
 
 function loadConfigWorkspaceModule(): Promise<typeof import("@oah/config/workspace")> {
   configWorkspaceModulePromise ??= import("@oah/config/workspace").catch(async () => {
@@ -159,6 +157,11 @@ function loadPlatformAgentsModule(): Promise<typeof import("./platform-agents.js
 function loadServiceRoutedPostgresModule(): Promise<typeof import("./bootstrap/service-routed-postgres.js")> {
   serviceRoutedPostgresModulePromise ??= import("./bootstrap/service-routed-postgres.js");
   return serviceRoutedPostgresModulePromise;
+}
+
+function loadAdminCapabilitiesModule(): Promise<typeof import("./bootstrap/admin-capabilities.js")> {
+  adminCapabilitiesModulePromise ??= import("./bootstrap/admin-capabilities.js");
+  return adminCapabilitiesModulePromise;
 }
 
 function hasRemoteErrorCode(error: unknown, code: string): boolean {
@@ -1110,7 +1113,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
   const useSandboxBackedWorkspaceInitializer =
     remoteSandboxProvider && sandboxHost && !objectStorageBacksManagedWorkspaces(config);
   const adminCapabilities = assemblyProfile.enableAdminCapabilities
-    ? createEngineAdminCapabilities({
+    ? (await loadAdminCapabilitiesModule()).createEngineAdminCapabilities({
         storageAdmin: (
           await import("./storage-admin.js")
         ).createStorageAdmin({

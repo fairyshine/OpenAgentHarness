@@ -6,11 +6,23 @@ import process from "node:process";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const manifestPath = path.join(repoRoot, "native", "Cargo.toml");
 const targetDir = path.join(repoRoot, ".native-target");
-const binaryBasename = process.platform === "win32" ? "oah-workspace-sync.exe" : "oah-workspace-sync";
-const builtBinaryPath = path.join(targetDir, "release", binaryBasename);
 const localBinaryDir = path.join(repoRoot, "native", "bin");
-const localBinaryPath = path.join(localBinaryDir, binaryBasename);
-const args = ["build", "--release", "--manifest-path", manifestPath, "--target-dir", targetDir, "-p", "oah-workspace-sync"];
+const binaryBasenames = [
+  process.platform === "win32" ? "oah-workspace-sync.exe" : "oah-workspace-sync",
+  process.platform === "win32" ? "oah-archive-export.exe" : "oah-archive-export"
+];
+const args = [
+  "build",
+  "--release",
+  "--manifest-path",
+  manifestPath,
+  "--target-dir",
+  targetDir,
+  "-p",
+  "oah-workspace-sync",
+  "-p",
+  "oah-archive-export"
+];
 
 const child = spawn("cargo", args, {
   cwd: repoRoot,
@@ -30,9 +42,13 @@ child.on("exit", async (code, signal) => {
 
   try {
     await mkdir(localBinaryDir, { recursive: true });
-    await copyFile(builtBinaryPath, localBinaryPath);
-    if (process.platform !== "win32") {
-      await chmod(localBinaryPath, 0o755);
+    for (const binaryBasename of binaryBasenames) {
+      const builtBinaryPath = path.join(targetDir, "release", binaryBasename);
+      const localBinaryPath = path.join(localBinaryDir, binaryBasename);
+      await copyFile(builtBinaryPath, localBinaryPath);
+      if (process.platform !== "win32") {
+        await chmod(localBinaryPath, 0o755);
+      }
     }
     process.exit(0);
   } catch (error) {

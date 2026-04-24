@@ -3,21 +3,21 @@ import { cp, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  discoverWorkspace,
-  initializeWorkspaceFromRuntime,
-  type DiscoveredAgent,
-  type PlatformModelRegistry
-} from "@oah/config";
 import { sandboxSchema, type CreateWorkspaceRequest } from "@oah/api-contracts";
+import { discoverWorkspace, initializeWorkspaceFromRuntime, type DiscoveredAgent, type PlatformModelRegistry } from "@oah/config";
 import { createId, type WorkspaceInitializationResult } from "@oah/engine-core";
 import {
   computeNativeDirectoryFingerprint,
   computeNativeDirectoryFingerprintBatch,
   isNativeWorkspaceSyncEnabled,
-  planNativeSeedUpload
+  planNativeSeedUpload,
+  syncNativeLocalToSandboxHttp
 } from "@oah/native-bridge";
 
+import {
+  observeNativeWorkspaceSyncOperation,
+  recordNativeWorkspaceSyncFallback
+} from "../observability/native-workspace-sync.js";
 import type { SandboxHost } from "./sandbox-host.js";
 import { enrichWorkspaceModelsWithDiscoveredMetadata } from "./model-metadata-discovery.js";
 
@@ -38,39 +38,56 @@ function resolveSeedUploadConcurrency(): number {
 async function collectDirectoryFingerprint(rootPath: string): Promise<string> {
   if (isNativeWorkspaceSyncEnabled()) {
     try {
-      const result = await computeNativeDirectoryFingerprint({ rootDir: rootPath });
+      const result = await observeNativeWorkspaceSyncOperation({
+        operation: "fingerprint",
+        implementation: "rust",
+        target: rootPath,
+        logFailure: false,
+        action: () => computeNativeDirectoryFingerprint({ rootDir: rootPath })
+      });
       return result.fingerprint;
     } catch (error) {
-      console.warn(
-        `[oah-native] Falling back to TypeScript seed fingerprint for ${rootPath}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      recordNativeWorkspaceSyncFallback({
+        operation: "fingerprint",
+        target: rootPath,
+        error
+      });
     }
   }
 
-  const hash = createHash("sha1");
-  const visit = async (currentPath: string): Promise<void> => {
-    const entries = await readdir(currentPath, { withFileTypes: true }).catch(() => []);
-    entries.sort((left, right) => left.name.localeCompare(right.name));
+  return observeNativeWorkspaceSyncOperation({
+    operation: "fingerprint",
+    implementation: "ts",
+    target: rootPath,
+    logSuccess: false,
+    logFailure: false,
+    action: async () => {
+      const hash = createHash("sha1");
+      const visit = async (currentPath: string): Promise<void> => {
+        const entries = await readdir(currentPath, { withFileTypes: true }).catch(() => []);
+        entries.sort((left, right) => left.name.localeCompare(right.name));
 
-    for (const entry of entries) {
-      const absolutePath = path.join(currentPath, entry.name);
-      const relativePath = path.relative(rootPath, absolutePath).replaceAll(path.sep, "/");
-      const entryStat = await stat(absolutePath).catch(() => null);
-      if (!entryStat) {
-        continue;
-      }
+        for (const entry of entries) {
+          const absolutePath = path.join(currentPath, entry.name);
+          const relativePath = path.relative(rootPath, absolutePath).replaceAll(path.sep, "/");
+          const entryStat = await stat(absolutePath).catch(() => null);
+          if (!entryStat) {
+            continue;
+          }
 
-      hash.update(`${entry.isDirectory() ? "dir" : "file"}:${relativePath}:${entryStat.size}:${Math.trunc(entryStat.mtimeMs)}\n`);
-      if (entry.isDirectory()) {
-        await visit(absolutePath);
-      }
+          hash.update(
+            `${entry.isDirectory() ? "dir" : "file"}:${relativePath}:${entryStat.size}:${Math.trunc(entryStat.mtimeMs)}\n`
+          );
+          if (entry.isDirectory()) {
+            await visit(absolutePath);
+          }
+        }
+      };
+
+      await visit(rootPath);
+      return hash.digest("hex");
     }
-  };
-
-  await visit(rootPath);
-  return hash.digest("hex");
+  });
 }
 
 function stableJson(value: unknown): string {
@@ -107,8 +124,18 @@ async function buildPreparedSeedCacheKey(input: {
   const directoryFingerprints = new Map<string, string>();
   if (isNativeWorkspaceSyncEnabled()) {
     try {
-      const result = await computeNativeDirectoryFingerprintBatch({
-        directories: fingerprintInputs.map((entry) => ({ rootDir: entry.rootDir }))
+      const result = await observeNativeWorkspaceSyncOperation({
+        operation: "fingerprint_batch",
+        implementation: "rust",
+        target: runtimeRoot,
+        logFailure: false,
+        metadata: {
+          directoryCount: fingerprintInputs.length
+        },
+        action: () =>
+          computeNativeDirectoryFingerprintBatch({
+            directories: fingerprintInputs.map((entry) => ({ rootDir: entry.rootDir }))
+          })
       });
       for (let index = 0; index < fingerprintInputs.length; index += 1) {
         const inputEntry = fingerprintInputs[index];
@@ -121,11 +148,14 @@ async function buildPreparedSeedCacheKey(input: {
         }
       }
     } catch (error) {
-      console.warn(
-        `[oah-native] Falling back to per-directory seed fingerprints: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      recordNativeWorkspaceSyncFallback({
+        operation: "fingerprint_batch",
+        target: runtimeRoot,
+        error,
+        metadata: {
+          directoryCount: fingerprintInputs.length
+        }
+      });
     }
   }
 
@@ -227,9 +257,19 @@ async function collectNativeDirectoryUploadPlan(input: {
   }
 
   try {
-    const result = await planNativeSeedUpload({
-      rootDir: input.currentLocalPath,
-      remoteBasePath: input.currentRemotePath
+    const result = await observeNativeWorkspaceSyncOperation({
+      operation: "plan_seed_upload",
+      implementation: "rust",
+      target: input.currentLocalPath,
+      logFailure: false,
+      metadata: {
+        remoteRootPath: input.currentRemotePath
+      },
+      action: () =>
+        planNativeSeedUpload({
+          rootDir: input.currentLocalPath,
+          remoteBasePath: input.currentRemotePath
+        })
     });
     return {
       directories: result.directories,
@@ -240,11 +280,14 @@ async function collectNativeDirectoryUploadPlan(input: {
       }))
     };
   } catch (error) {
-    console.warn(
-      `[oah-native] Falling back to TypeScript upload plan for ${input.currentLocalPath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    recordNativeWorkspaceSyncFallback({
+      operation: "plan_seed_upload",
+      target: input.currentLocalPath,
+      error,
+      metadata: {
+        remoteRootPath: input.currentRemotePath
+      }
+    });
     return undefined;
   }
 }
@@ -254,22 +297,80 @@ async function uploadDirectoryTree(input: {
   currentRemotePath: string;
   sandboxHost: SandboxHost;
 }): Promise<void> {
-  const plan = (await collectNativeDirectoryUploadPlan(input)) ?? (await collectDirectoryUploadPlan(input));
-  const concurrency = resolveSeedUploadConcurrency();
+  return observeNativeWorkspaceSyncOperation({
+    operation: "sync_local_to_sandbox_http",
+    implementation: "ts",
+    target: input.currentLocalPath,
+    logSuccess: false,
+    logFailure: false,
+    metadata: {
+      remoteRootPath: input.currentRemotePath
+    },
+    action: async () => {
+      const plan =
+        (await collectNativeDirectoryUploadPlan(input)) ??
+        (await observeNativeWorkspaceSyncOperation({
+          operation: "plan_seed_upload",
+          implementation: "ts",
+          target: input.currentLocalPath,
+          logSuccess: false,
+          logFailure: false,
+          metadata: {
+            remoteRootPath: input.currentRemotePath
+          },
+          action: () => collectDirectoryUploadPlan(input)
+        }));
+      const concurrency = resolveSeedUploadConcurrency();
 
-  await runWithConcurrency(plan.directories, concurrency, async (remotePath) => {
-    await input.sandboxHost.workspaceFileSystem.mkdir(remotePath, { recursive: true });
+      await runWithConcurrency(plan.directories, concurrency, async (remotePath) => {
+        await input.sandboxHost.workspaceFileSystem.mkdir(remotePath, { recursive: true });
+      });
+
+      await runWithConcurrency(plan.files, concurrency, async ({ localPath, remotePath, mtimeMs }) => {
+        const data = await readFile(localPath);
+        const resolvedMtimeMs =
+          typeof mtimeMs === "number" && Number.isFinite(mtimeMs) && mtimeMs > 0
+            ? mtimeMs
+            : (await stat(localPath)).mtimeMs;
+        await input.sandboxHost.workspaceFileSystem.writeFile(remotePath, data, {
+          ...(Number.isFinite(resolvedMtimeMs) && resolvedMtimeMs > 0 ? { mtimeMs: Number(resolvedMtimeMs) } : {})
+        });
+      });
+    }
   });
+}
 
-  await runWithConcurrency(plan.files, concurrency, async ({ localPath, remotePath, mtimeMs }) => {
-    const data = await readFile(localPath);
-    const resolvedMtimeMs =
-      typeof mtimeMs === "number" && Number.isFinite(mtimeMs) && mtimeMs > 0
-        ? mtimeMs
-        : (await stat(localPath)).mtimeMs;
-    await input.sandboxHost.workspaceFileSystem.writeFile(remotePath, data, {
-      ...(Number.isFinite(resolvedMtimeMs) && resolvedMtimeMs > 0 ? { mtimeMs: Number(resolvedMtimeMs) } : {})
-    });
+async function uploadDirectoryTreeToSelfHostedSandboxNative(input: {
+  currentLocalPath: string;
+  currentRemotePath: string;
+  sandbox: {
+    id: string;
+    baseUrl: string;
+    headers?: Record<string, string> | undefined;
+  };
+}): Promise<void> {
+  const maxConcurrency = resolveSeedUploadConcurrency();
+  await observeNativeWorkspaceSyncOperation({
+    operation: "sync_local_to_sandbox_http",
+    implementation: "rust",
+    target: input.currentLocalPath,
+    logFailure: false,
+    metadata: {
+      remoteRootPath: input.currentRemotePath,
+      sandboxId: input.sandbox.id,
+      maxConcurrency
+    },
+    action: () =>
+      syncNativeLocalToSandboxHttp({
+        rootDir: input.currentLocalPath,
+        remoteRootPath: input.currentRemotePath,
+        maxConcurrency,
+        sandbox: {
+          baseUrl: input.sandbox.baseUrl,
+          sandboxId: input.sandbox.id,
+          ...(input.sandbox.headers ? { headers: input.sandbox.headers } : {})
+        }
+      })
   });
 }
 
@@ -280,6 +381,13 @@ async function uploadWorkspaceSeed(input: {
   stagingWorkspaceRoot: string;
   sandboxHost: SandboxHost;
   remoteRootPath?: string | undefined;
+  selfHostedSandbox?:
+    | {
+        id: string;
+        baseUrl: string;
+        headers?: Record<string, string> | undefined;
+      }
+    | undefined;
 }): Promise<void> {
   const lease = await input.sandboxHost.workspaceFileAccessProvider.acquire({
     workspace: createSandboxSeedWorkspace({
@@ -297,6 +405,27 @@ async function uploadWorkspaceSeed(input: {
         await input.sandboxHost.workspaceFileSystem.mkdir(lease.workspace.rootPath, { recursive: true });
       }
     });
+    if (input.selfHostedSandbox && isNativeWorkspaceSyncEnabled()) {
+      try {
+        await uploadDirectoryTreeToSelfHostedSandboxNative({
+          currentLocalPath: input.stagingWorkspaceRoot,
+          currentRemotePath: input.remoteRootPath ?? SANDBOX_WORKSPACE_ROOT,
+          sandbox: input.selfHostedSandbox
+        });
+        return;
+      } catch (error) {
+        recordNativeWorkspaceSyncFallback({
+          operation: "sync_local_to_sandbox_http",
+          target: input.stagingWorkspaceRoot,
+          error,
+          metadata: {
+            remoteRootPath: input.remoteRootPath ?? SANDBOX_WORKSPACE_ROOT,
+            sandboxId: input.selfHostedSandbox.id
+          }
+        });
+      }
+    }
+
     await uploadDirectoryTree({
       currentLocalPath: input.stagingWorkspaceRoot,
       currentRemotePath: lease.workspace.rootPath,
@@ -449,6 +578,13 @@ export function createSandboxBackedWorkspaceInitializer(options: {
         }
       ).workspaceId?.trim() || createId("ws");
       let remoteRootPath = SANDBOX_WORKSPACE_ROOT;
+      let selfHostedSandbox:
+        | {
+            id: string;
+            baseUrl: string;
+            headers?: Record<string, string> | undefined;
+          }
+        | undefined;
 
       const prepared = await prepareSeed(input);
       const stagingRoot = await mkdtemp(path.join(os.tmpdir(), "oah-sandbox-workspace-"));
@@ -469,6 +605,11 @@ export function createSandboxBackedWorkspaceInitializer(options: {
             headers: options.selfHosted.headers
           });
           remoteRootPath = sandbox.rootPath;
+          selfHostedSandbox = {
+            id: sandbox.id,
+            baseUrl: options.selfHosted.baseUrl,
+            ...(options.selfHosted.headers ? { headers: options.selfHosted.headers } : {})
+          };
         }
 
         await uploadWorkspaceSeed({
@@ -477,7 +618,8 @@ export function createSandboxBackedWorkspaceInitializer(options: {
           initialized: prepared.discovered,
           stagingWorkspaceRoot,
           sandboxHost: options.sandboxHost,
-          remoteRootPath
+          remoteRootPath,
+          selfHostedSandbox
         });
 
         return {

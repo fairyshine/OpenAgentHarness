@@ -31,9 +31,9 @@ importers:
       '@oah/config':
         specifier: workspace:*
         version: link:../../packages/config
-      '@oah/storage-redis':
+      '@oah/storage-redis-control':
         specifier: workspace:*
-        version: link:../../packages/storage-redis
+        version: link:../../packages/storage-redis-control
 
   apps/server:
     dependencies:
@@ -250,6 +250,12 @@ importers:
       '@oah/engine-core':
         specifier: workspace:*
         version: link:../engine-core
+      redis:
+        specifier: 4.7.1
+        version: 4.7.1
+
+  packages/storage-redis-control:
+    dependencies:
       redis:
         specifier: 4.7.1
         version: 4.7.1

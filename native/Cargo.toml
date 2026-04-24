@@ -1,3 +1,3 @@
 [workspace]
-members = ["oah-workspace-sync"]
+members = ["oah-workspace-sync", "oah-archive-export"]
 resolver = "2"

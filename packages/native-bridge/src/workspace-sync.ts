@@ -136,6 +136,12 @@ export interface NativeWorkspaceSyncObjectStoreConfig {
   sessionToken?: string | undefined;
 }
 
+export interface NativeSandboxHttpConfig {
+  baseUrl: string;
+  sandboxId: string;
+  headers?: Record<string, string> | undefined;
+}
+
 export interface NativeSyncLocalToRemoteResult extends NativeCommandSuccessResponse {
   localFingerprint: string;
   uploadedFileCount: number;
@@ -147,6 +153,12 @@ export interface NativeSyncRemoteToLocalResult extends NativeCommandSuccessRespo
   removedPathCount: number;
   createdDirectoryCount: number;
   downloadedFileCount: number;
+}
+
+export interface NativeSyncLocalToSandboxHttpResult extends NativeCommandSuccessResponse {
+  localFingerprint: string;
+  createdDirectoryCount: number;
+  uploadedFileCount: number;
 }
 
 export class NativeWorkspaceSyncBridgeError extends Error {
@@ -333,6 +345,22 @@ export async function syncNativeRemoteToLocal(input: {
     objectStore: input.objectStore,
     ...(input.excludeRelativePaths ? { excludeRelativePaths: input.excludeRelativePaths } : {}),
     ...(input.preserveTopLevelNames ? { preserveTopLevelNames: input.preserveTopLevelNames } : {}),
+    ...(input.maxConcurrency ? { maxConcurrency: input.maxConcurrency } : {})
+  });
+}
+
+export async function syncNativeLocalToSandboxHttp(input: {
+  rootDir: string;
+  remoteRootPath: string;
+  excludeRelativePaths?: string[] | undefined;
+  maxConcurrency?: number | undefined;
+  sandbox: NativeSandboxHttpConfig;
+}): Promise<NativeSyncLocalToSandboxHttpResult> {
+  return runNativeWorkspaceSyncCommand<NativeSyncLocalToSandboxHttpResult>(["sync-local-to-sandbox-http"], {
+    rootDir: input.rootDir,
+    remoteRootPath: input.remoteRootPath,
+    sandbox: input.sandbox,
+    ...(input.excludeRelativePaths ? { excludeRelativePaths: input.excludeRelativePaths } : {}),
     ...(input.maxConcurrency ? { maxConcurrency: input.maxConcurrency } : {})
   });
 }

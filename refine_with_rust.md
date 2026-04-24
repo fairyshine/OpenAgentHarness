@@ -656,12 +656,30 @@ Measured results from local MinIO benchmark runs:
 - `512 x 64 KiB`: TS push/pull `571ms / 190ms`, native `586ms / 207ms`
 - `128 x 1 MiB`: TS push/pull `474ms / 212ms`, native `588ms / 322ms`
 
+Expanded benchmark runs on April 24, 2026, using the extended benchmark script with seed planning, first materialization, and process memory sampling:
+
+- `8 x 4 KiB`
+  - TS seed/materialize/pull `1ms / 13ms / 7ms`; native `15ms / 124ms / 117ms`
+  - TS RSS peak delta push/materialize/pull `5.08 / 1.08 / 0 MiB`; native `0.05 / 0.02 / 0.02 MiB`
+- `128 x 64 KiB`
+  - TS seed/materialize/pull `1ms / 78ms / 50ms`; native `17ms / 148ms / 150ms`
+  - TS RSS peak delta push/materialize/pull `12.30 / 9.14 / 6.20 MiB`; native `0.02 / 0.03 / 0.02 MiB`
+- `256 x 64 KiB`
+  - TS seed/materialize/pull `1ms / 110ms / 88ms`; native `6ms / 173ms / 159ms`
+  - TS RSS peak delta push/materialize/pull `16.22 / 24.56 / 6.47 MiB`; native `0.05 / 0.02 / 0.03 MiB`
+- `128 x 1 MiB`
+  - TS seed/materialize/pull `1ms / 198ms / 155ms`; native `8ms / 306ms / 292ms`
+  - TS RSS peak delta push/materialize/pull `52.06 / 186.19 / 49.78 MiB`; native `0 / 0.02 / 0.05 MiB`
+
 What this means:
 
 - native sync is operational and semantically correct on real MinIO
 - the current bottleneck is not TS logic correctness
 - the current sidecar model still pays too much process startup and request-stack overhead
 - enabling native execute by default in Docker is not evidence-based yet
+- native planning is close enough to keep iterating on, but execute and first materialization are still slower than TS
+- native paths do materially reduce Node-side RSS growth during large pushes, pulls, and first materialization
+- the memory win is real, but it is not yet enough on its own to justify a default switch while latency regresses
 
 For now, the native path should stay:
 
@@ -675,6 +693,7 @@ The next performance stage should focus on one of these directions:
 - persistent native worker process to remove per-sync CLI startup cost
 - in-process N-API bridge if the protocol stabilizes and startup overhead dominates
 - keeping Rust for local scan/fingerprint/plan while leaving remote execute on TS
+- using native planning plus TS transport selectively where memory pressure matters more than raw latency
 - larger-scale benchmark matrices to identify a real crossover point before changing defaults
 
 ## 25. Recommendation

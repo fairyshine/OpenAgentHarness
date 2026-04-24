@@ -14,6 +14,8 @@ use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use aws_sdk_s3::Client as S3Client;
 use clap::{Parser, Subcommand};
 use filetime::{set_file_mtime, FileTime};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
+use reqwest::{Client as HttpClient, Url};
 use serde::Deserialize;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
@@ -44,6 +46,7 @@ enum Command {
     PlanRemoteToLocal,
     SyncRemoteToLocal,
     PlanSeedUpload,
+    SyncLocalToSandboxHttp,
 }
 
 #[derive(Serialize)]
@@ -122,6 +125,18 @@ struct SyncRemoteToLocalRequest {
     object_store: NativeObjectStoreConfig,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncLocalToSandboxHttpRequest {
+    root_dir: String,
+    remote_root_path: String,
+    #[serde(default)]
+    exclude_relative_paths: Vec<String>,
+    #[serde(default)]
+    max_concurrency: Option<usize>,
+    sandbox: NativeSandboxHttpConfig,
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeObjectStoreConfig {
@@ -132,6 +147,15 @@ struct NativeObjectStoreConfig {
     access_key: Option<String>,
     secret_key: Option<String>,
     session_token: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeSandboxHttpConfig {
+    base_url: String,
+    sandbox_id: String,
+    #[serde(default)]
+    headers: HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -262,7 +286,7 @@ struct PlanSeedUploadResponse {
     files: Vec<PlanSeedUploadFile>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PlanSeedUploadFile {
     relative_path: String,
@@ -291,6 +315,16 @@ struct SyncRemoteToLocalResponse {
     removed_path_count: usize,
     created_directory_count: usize,
     downloaded_file_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncLocalToSandboxHttpResponse {
+    ok: bool,
+    protocol_version: u32,
+    local_fingerprint: String,
+    created_directory_count: usize,
+    uploaded_file_count: usize,
 }
 
 fn main() -> ExitCode {
@@ -447,6 +481,15 @@ fn run() -> Result<(), String> {
                 files: plan.files,
             })
         }
+        Command::SyncLocalToSandboxHttp => {
+            let request: SyncLocalToSandboxHttpRequest = read_json_stdin()?;
+            let runtime = RuntimeBuilder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| format!("Failed to initialize async runtime: {error}"))?;
+            let response = runtime.block_on(sync_local_to_sandbox_http(request))?;
+            write_json(&response)
+        }
     }
 }
 
@@ -515,6 +558,158 @@ fn file_time_from_mtime_ms(value: u128) -> FileTime {
 
 fn resolve_max_concurrency(value: Option<usize>) -> usize {
     value.filter(|value| *value > 0).unwrap_or(1)
+}
+
+#[derive(Clone)]
+struct NativeSandboxHttpClient {
+    client: HttpClient,
+    base_url: String,
+    route_prefix: String,
+    sandbox_id: String,
+}
+
+fn parse_sandbox_http_base_url(input: &str) -> (String, String) {
+    let trimmed = input.trim();
+    if let Ok(mut url) = Url::parse(trimmed) {
+        let path = url.path().trim_end_matches('/').to_string();
+        let route_prefix = if path.ends_with("/internal/v1") {
+            "/internal/v1"
+        } else if path.ends_with("/api/v1") {
+            "/api/v1"
+        } else {
+            ""
+        };
+        let normalized_path = if route_prefix.is_empty() {
+            path
+        } else {
+            path.trim_end_matches(route_prefix).trim_end_matches('/').to_string()
+        };
+        url.set_path(if normalized_path.is_empty() {
+            "/"
+        } else {
+            &normalized_path
+        });
+        url.set_query(None);
+        url.set_fragment(None);
+        return (
+            url.to_string().trim_end_matches('/').to_string(),
+            route_prefix.to_string(),
+        );
+    }
+
+    let trimmed = trimmed.trim_end_matches('/').to_string();
+    if let Some(base_url) = trimmed.strip_suffix("/internal/v1") {
+        return (base_url.trim_end_matches('/').to_string(), "/internal/v1".to_string());
+    }
+    if let Some(base_url) = trimmed.strip_suffix("/api/v1") {
+        return (base_url.trim_end_matches('/').to_string(), "/api/v1".to_string());
+    }
+    (trimmed, String::new())
+}
+
+impl NativeSandboxHttpClient {
+    fn new(config: &NativeSandboxHttpConfig) -> Result<Self, String> {
+        let mut headers = HeaderMap::new();
+        for (key, value) in &config.headers {
+            let name = HeaderName::from_bytes(key.as_bytes())
+                .map_err(|error| format!("Invalid sandbox HTTP header name {key:?}: {error}"))?;
+            let header_value = HeaderValue::from_str(value)
+                .map_err(|error| format!("Invalid sandbox HTTP header value for {key:?}: {error}"))?;
+            headers.insert(name, header_value);
+        }
+
+        let client = HttpClient::builder()
+            .default_headers(headers)
+            .build()
+            .map_err(|error| format!("Failed to initialize sandbox HTTP client: {error}"))?;
+        let (base_url, route_prefix) = parse_sandbox_http_base_url(&config.base_url);
+
+        Ok(Self {
+            client,
+            base_url,
+            route_prefix,
+            sandbox_id: config.sandbox_id.clone(),
+        })
+    }
+
+    fn build_url(&self, request_path: &str, query: &[(&str, String)]) -> Result<Url, String> {
+        let mapped_path = if self.route_prefix.is_empty() {
+            request_path.to_string()
+        } else {
+            request_path.replacen("/api/v1", &self.route_prefix, 1)
+        };
+        let mut url = Url::parse(&format!("{}{}", self.base_url, mapped_path))
+            .map_err(|error| format!("Failed to build sandbox HTTP URL: {error}"))?;
+        for (key, value) in query {
+            url.query_pairs_mut().append_pair(key, value);
+        }
+        Ok(url)
+    }
+
+    async fn create_directory(&self, path: &str) -> Result<(), String> {
+        let url = self.build_url(
+            &format!("/api/v1/sandboxes/{}/directories", self.sandbox_id),
+            &[],
+        )?;
+        let response = self
+            .client
+            .post(url)
+            .json(&serde_json::json!({
+                "path": path,
+                "createParents": true
+            }))
+            .send()
+            .await
+            .map_err(|error| format!("Failed to create sandbox directory {path}: {error}"))?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("<unavailable>"));
+        Err(format!(
+            "Failed to create sandbox directory {path}: HTTP {status} {body}"
+        ))
+    }
+
+    async fn upload_file(
+        &self,
+        path: &str,
+        data: Vec<u8>,
+        mtime_ms: u128,
+    ) -> Result<(), String> {
+        let url = self.build_url(
+            &format!("/api/v1/sandboxes/{}/files/upload", self.sandbox_id),
+            &[
+                ("path", path.to_string()),
+                ("overwrite", "true".to_string()),
+                ("mtimeMs", mtime_ms.to_string()),
+            ],
+        )?;
+        let response = self
+            .client
+            .put(url)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(data)
+            .send()
+            .await
+            .map_err(|error| format!("Failed to upload sandbox file {path}: {error}"))?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("<unavailable>"));
+        Err(format!(
+            "Failed to upload sandbox file {path}: HTTP {status} {body}"
+        ))
+    }
 }
 
 async fn process_with_concurrency<T, R, F, Fut>(
@@ -1557,6 +1752,67 @@ async fn sync_local_to_remote(
         uploaded_file_count,
         deleted_remote_count: plan.keys_to_delete.len(),
         created_empty_directory_count,
+    })
+}
+
+async fn sync_local_to_sandbox_http(
+    request: SyncLocalToSandboxHttpRequest,
+) -> Result<SyncLocalToSandboxHttpResponse, String> {
+    let excludes = normalize_exclude_paths(request.exclude_relative_paths);
+    let max_concurrency = resolve_max_concurrency(request.max_concurrency);
+    let snapshot = collect_snapshot(&PathBuf::from(&request.root_dir), &excludes)?;
+    let local_fingerprint = create_fingerprint(&snapshot);
+    let plan = create_seed_upload_plan(&snapshot, &request.remote_root_path);
+    let sandbox_client = NativeSandboxHttpClient::new(&request.sandbox)?;
+
+    let root_path = request.remote_root_path.clone();
+    sandbox_client.create_directory(&root_path).await?;
+
+    let sandbox_client_for_directories = sandbox_client.clone();
+    let created_directory_count = process_with_concurrency(
+        plan.directories.clone(),
+        max_concurrency,
+        move |remote_path| {
+            let sandbox_client = sandbox_client_for_directories.clone();
+            async move {
+                sandbox_client.create_directory(&remote_path).await?;
+                Ok(true)
+            }
+        },
+    )
+    .await?
+    .len()
+        + 1;
+
+    let sandbox_client_for_uploads = sandbox_client.clone();
+    let uploaded_file_count = process_with_concurrency(
+        plan.files.clone(),
+        max_concurrency,
+        move |file| {
+            let sandbox_client = sandbox_client_for_uploads.clone();
+            async move {
+                let data = tokio::fs::read(&file.absolute_path).await.map_err(|error| {
+                    format!(
+                        "Failed to read local file {} for sandbox upload: {error}",
+                        file.absolute_path
+                    )
+                })?;
+                sandbox_client
+                    .upload_file(&file.remote_path, data, file.mtime_ms)
+                    .await?;
+                Ok(true)
+            }
+        },
+    )
+    .await?
+    .len();
+
+    Ok(SyncLocalToSandboxHttpResponse {
+        ok: true,
+        protocol_version: PROTOCOL_VERSION,
+        local_fingerprint,
+        created_directory_count,
+        uploaded_file_count,
     })
 }
 

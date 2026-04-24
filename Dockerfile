@@ -31,13 +31,14 @@ COPY packages/native-bridge/package.json ./packages/native-bridge/package.json
 COPY packages/storage-memory/package.json ./packages/storage-memory/package.json
 COPY packages/storage-postgres/package.json ./packages/storage-postgres/package.json
 COPY packages/storage-redis/package.json ./packages/storage-redis/package.json
+COPY packages/storage-redis-control/package.json ./packages/storage-redis-control/package.json
 COPY packages/storage-sqlite/package.json ./packages/storage-sqlite/package.json
 
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
   pnpm config set store-dir /pnpm/store \
   && pnpm fetch --frozen-lockfile
 
-FROM deps AS build
+FROM deps AS source
 
 COPY apps/cli ./apps/cli
 COPY apps/controller ./apps/controller
@@ -45,20 +46,24 @@ COPY apps/server ./apps/server
 COPY apps/worker ./apps/worker
 COPY packages ./packages
 COPY scripts ./scripts
-COPY assets/logo-readme.png ./assets/logo-readme.png
-COPY docs/openapi ./docs/openapi
-COPY docs/schemas ./docs/schemas
 
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
   pnpm config set store-dir /pnpm/store \
   && pnpm install --frozen-lockfile --offline
 
-RUN pnpm build:runtime
+FROM source AS server-build
+
+RUN pnpm exec tsc -b apps/server/tsconfig.json
+
+FROM source AS controller-build
+
+RUN pnpm exec tsc -b apps/controller/tsconfig.json
+
+FROM server-build AS server-deploy
 
 RUN pnpm --filter @oah/server deploy --legacy --prod /opt/oah/server \
-  && pnpm --filter @oah/controller deploy --legacy --prod /opt/oah/controller \
-  && find /opt/oah/server/dist /opt/oah/controller/dist -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.ts.map' \) -delete \
-  && find /opt/oah/server/node_modules /opt/oah/controller/node_modules -type f \( \
+  && find /opt/oah/server/dist -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.ts.map' \) -delete \
+  && find /opt/oah/server/node_modules -type f \( \
     -name '*.map' -o \
     -name '*.d.ts' -o \
     -name '*.d.mts' -o \
@@ -70,8 +75,55 @@ RUN pnpm --filter @oah/server deploy --legacy --prod /opt/oah/server \
     -iname 'README*' -o \
     -iname 'CHANGELOG*' \
   \) -delete \
-  && find /opt/oah/server/node_modules /opt/oah/controller/node_modules -type d -empty -delete \
-  && rm -rf /opt/oah/server/src /opt/oah/controller/src
+  && find /opt/oah/server/node_modules -type d \( \
+    -name docs -o \
+    -name test -o \
+    -name tests -o \
+    -name __tests__ -o \
+    -name example -o \
+    -name examples \
+  \) -prune -exec rm -rf {} + \
+  && find /opt/oah/server/node_modules/.pnpm -path '*/node_modules/@oah/*/src' -prune -exec rm -rf {} + \
+  && find /opt/oah/server/node_modules/.pnpm \( \
+    -name 'tsconfig.json' -o \
+    -name 'tsconfig.*.json' -o \
+    -name '*.tsbuildinfo' \
+  \) -delete \
+  && find /opt/oah/server/node_modules -type d -empty -delete \
+  && rm -rf /opt/oah/server/src
+
+FROM controller-build AS controller-deploy
+
+RUN pnpm --filter @oah/controller deploy --legacy --prod /opt/oah/controller \
+  && find /opt/oah/controller/dist -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.ts.map' \) -delete \
+  && find /opt/oah/controller/node_modules -type f \( \
+    -name '*.map' -o \
+    -name '*.d.ts' -o \
+    -name '*.d.mts' -o \
+    -name '*.d.cts' -o \
+    -name '*.ts' -o \
+    -name '*.tsx' -o \
+    -name '*.mts' -o \
+    -name '*.cts' -o \
+    -iname 'README*' -o \
+    -iname 'CHANGELOG*' \
+  \) -delete \
+  && find /opt/oah/controller/node_modules -type d \( \
+    -name docs -o \
+    -name test -o \
+    -name tests -o \
+    -name __tests__ -o \
+    -name example -o \
+    -name examples \
+  \) -prune -exec rm -rf {} + \
+  && find /opt/oah/controller/node_modules/.pnpm -path '*/node_modules/@oah/*/src' -prune -exec rm -rf {} + \
+  && find /opt/oah/controller/node_modules/.pnpm \( \
+    -name 'tsconfig.json' -o \
+    -name 'tsconfig.*.json' -o \
+    -name '*.tsbuildinfo' \
+  \) -delete \
+  && find /opt/oah/controller/node_modules -type d -empty -delete \
+  && rm -rf /opt/oah/controller/src
 
 FROM ${BASE_RUST_IMAGE} AS native-build
 
@@ -81,8 +133,11 @@ COPY native ./
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
   --mount=type=cache,target=/tmp/oah-native-target \
-  cargo build --locked --release -p oah-workspace-sync --target-dir /tmp/oah-native-target \
-  && cp /tmp/oah-native-target/release/oah-workspace-sync /usr/local/bin/oah-workspace-sync
+  cargo build --locked --release -p oah-workspace-sync -p oah-archive-export --target-dir /tmp/oah-native-target \
+  && strip --strip-unneeded /tmp/oah-native-target/release/oah-workspace-sync \
+  && strip --strip-unneeded /tmp/oah-native-target/release/oah-archive-export \
+  && cp /tmp/oah-native-target/release/oah-workspace-sync /usr/local/bin/oah-workspace-sync \
+  && cp /tmp/oah-native-target/release/oah-archive-export /usr/local/bin/oah-archive-export
 
 FROM deps AS node-runtime-binary
 
@@ -96,52 +151,75 @@ RUN apt-get update \
 
 FROM docker/compose-bin:v${DOCKER_COMPOSE_VERSION} AS docker-compose-bin
 
-FROM ${BASE_RUNTIME_IMAGE} AS runtime-base
+FROM ${BASE_RUNTIME_IMAGE} AS runtime-common
 
 ENV NODE_ENV=production
-ENV OAH_DOCS_ROOT=/app
-ENV OAH_NATIVE_WORKSPACE_SYNC_BINARY=/app/native/oah-workspace-sync
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates libstdc++6 \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /etc/oah \
-  && mkdir -p /var/lib/oah/workspaces \
-  && mkdir -p /var/lib/oah/runtimes \
-  && mkdir -p /var/lib/oah/models \
-  && mkdir -p /var/lib/oah/tools \
-  && mkdir -p /var/lib/oah/skills \
-  && mkdir -p /var/lib/oah/archives \
-  && mkdir -p /usr/libexec/docker/cli-plugins \
-  && mkdir -p /app/native
+  && mkdir -p /usr/libexec/docker/cli-plugins
 
 WORKDIR /app
 
 COPY --from=node-runtime-binary /usr/local/bin/node /usr/local/bin/node
 
-FROM runtime-base AS api-runtime
+FROM runtime-common AS runtime-execution-base
 
-COPY --from=build /opt/oah/server /app
-COPY --from=build /app/docs/schemas /app/docs/schemas
-COPY --from=build /app/docs/openapi /app/docs/openapi
-COPY --from=build /app/assets/logo-readme.png /app/assets/logo-readme.png
+ENV OAH_DOCS_ROOT=/app
+ENV OAH_NATIVE_WORKSPACE_SYNC_BINARY=/app/native/oah-workspace-sync
+ENV OAH_NATIVE_ARCHIVE_EXPORT_BINARY=/app/native/oah-archive-export
+
+RUN mkdir -p /var/lib/oah/workspaces \
+  && mkdir -p /var/lib/oah/runtimes \
+  && mkdir -p /var/lib/oah/models \
+  && mkdir -p /var/lib/oah/tools \
+  && mkdir -p /var/lib/oah/skills \
+  && mkdir -p /var/lib/oah/archives \
+  && mkdir -p /app/native
+
+FROM runtime-execution-base AS api-runtime
+
+COPY --from=server-deploy /opt/oah/server /app
+COPY docs/schemas /app/docs/schemas
+COPY docs/openapi /app/docs/openapi
+COPY assets/logo-readme.png /app/assets/logo-readme.png
 COPY --from=native-build /usr/local/bin/oah-workspace-sync /app/native/oah-workspace-sync
+COPY --from=native-build /usr/local/bin/oah-archive-export /app/native/oah-archive-export
+
+RUN rm -f /app/dist/worker.js /app/dist/internal-worker-app.js
 
 EXPOSE 8787
 
 CMD ["node", "dist/index.js", "--config", "/etc/oah/server.yaml"]
 
-FROM runtime-base AS worker-runtime
+FROM runtime-execution-base AS worker-runtime
 
-COPY --from=build /opt/oah/server /app
-COPY --from=build /app/docs/schemas /app/docs/schemas
+COPY --from=server-deploy /opt/oah/server /app
+COPY docs/schemas /app/docs/schemas
 COPY --from=native-build /usr/local/bin/oah-workspace-sync /app/native/oah-workspace-sync
+COPY --from=native-build /usr/local/bin/oah-archive-export /app/native/oah-archive-export
+
+RUN rm -f \
+  /app/dist/index.js \
+  /app/dist/api-app.js \
+  /app/dist/app.js \
+  /app/dist/bootstrap/admin-capabilities.js \
+  /app/dist/http/developer-docs.js \
+  /app/dist/http/routes/public.js \
+  /app/dist/http/routes/workspaces.js \
+  /app/dist/http/routes/sandboxes.js \
+  /app/dist/http/routes/sessions.js \
+  /app/dist/storage-admin.js
 
 EXPOSE 8787
 
 CMD ["node", "dist/worker.js", "--config", "/etc/oah/server.yaml"]
 
-FROM runtime-base AS controller-runtime
+FROM runtime-common AS controller-runtime
+
+ENV OAH_DOCS_ROOT=/app
 
 COPY --from=docker-cli-build /usr/bin/docker /usr/bin/docker
 COPY --from=docker-compose-bin /docker-compose /usr/libexec/docker/cli-plugins/docker-compose
@@ -149,9 +227,8 @@ COPY --from=docker-compose-bin /docker-compose /usr/libexec/docker/cli-plugins/d
 RUN chmod +x /usr/bin/docker /usr/libexec/docker/cli-plugins/docker-compose \
   && docker compose version
 
-COPY --from=build /opt/oah/controller /app
-COPY --from=build /app/docs/schemas /app/docs/schemas
-COPY --from=native-build /usr/local/bin/oah-workspace-sync /app/native/oah-workspace-sync
+COPY --from=controller-deploy /opt/oah/controller /app
+COPY docs/schemas/server-config.schema.json /app/docs/schemas/server-config.schema.json
 
 EXPOSE 8788
 

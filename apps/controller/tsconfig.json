@@ -8,6 +8,6 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../../packages/config" },
-    { "path": "../../packages/storage-redis" }
+    { "path": "../../packages/storage-redis-control" }
   ]
 }

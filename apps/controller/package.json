@@ -11,6 +11,6 @@
   },
   "dependencies": {
     "@oah/config": "workspace:*",
-    "@oah/storage-redis": "workspace:*"
+    "@oah/storage-redis-control": "workspace:*"
   }
 }

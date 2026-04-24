@@ -11,6 +11,11 @@ export default defineConfig({
     alias: {
       "@oah/api-contracts": workspacePath("./packages/api-contracts/src/index.ts"),
       "@oah/config": workspacePath("./packages/config/src/index.ts"),
+      "@oah/config/object-storage": workspacePath("./packages/config/src/object-storage.ts"),
+      "@oah/config/platform-models": workspacePath("./packages/config/src/platform-models.ts"),
+      "@oah/config/runtimes": workspacePath("./packages/config/src/runtimes.ts"),
+      "@oah/config/server-config": workspacePath("./packages/config/src/server-config.ts"),
+      "@oah/config/workspace": workspacePath("./packages/config/src/workspace.ts"),
       "@oah/model-gateway": workspacePath("./packages/model-gateway/src/index.ts"),
       "@oah/native-bridge": workspacePath("./packages/native-bridge/src/index.ts"),
       "@oah/engine-core": workspacePath("./packages/engine-core/src/index.ts"),
