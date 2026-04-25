@@ -82,17 +82,23 @@ let workspaceMaterializationModulePromise: Promise<typeof import("./bootstrap/wo
 let nativeBridgeModulePromise: Promise<typeof import("@oah/native-bridge")> | undefined;
 
 function loadConfigWorkspaceModule(): Promise<typeof import("@oah/config/workspace")> {
-  configWorkspaceModulePromise ??= import("@oah/config/workspace");
+  configWorkspaceModulePromise ??= import("@oah/config/workspace").catch(() =>
+    import("../../../packages/config/src/workspace.js")
+  );
   return configWorkspaceModulePromise;
 }
 
 function loadConfigRuntimesModule(): Promise<typeof import("@oah/config/runtimes")> {
-  configRuntimesModulePromise ??= import("@oah/config/runtimes");
+  configRuntimesModulePromise ??= import("@oah/config/runtimes").catch(() =>
+    import("../../../packages/config/src/runtimes.js")
+  );
   return configRuntimesModulePromise;
 }
 
 function loadConfigServerConfigModule(): Promise<{ loadServerConfig: (configPath: string) => Promise<ServerConfig> }> {
-  configServerConfigModulePromise ??= import("@oah/config/server-config");
+  configServerConfigModulePromise ??= import("@oah/config/server-config").catch(() =>
+    import("../../../packages/config/src/server-config.js")
+  );
   return configServerConfigModulePromise;
 }
 

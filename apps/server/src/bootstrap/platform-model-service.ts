@@ -20,7 +20,9 @@ function loadPlatformModelsModule(): Promise<{
     options?: { onError?: ((input: { filePath: string; error: unknown }) => void) | undefined }
   ) => Promise<PlatformModelRegistry>;
 }> {
-  platformModelsModulePromise ??= import("@oah/config/platform-models");
+  platformModelsModulePromise ??= import("@oah/config/platform-models").catch(() =>
+    import("../../../../packages/config/src/platform-models.js")
+  );
   return platformModelsModulePromise;
 }
 
