@@ -12,9 +12,7 @@ type DiscoveredWorkspace = import("@oah/config").DiscoveredWorkspace;
 let workspaceConfigModulePromise: Promise<typeof import("@oah/config/workspace")> | undefined;
 
 function loadWorkspaceConfigModule(): Promise<typeof import("@oah/config/workspace")> {
-  workspaceConfigModulePromise ??= import("@oah/config/workspace").catch(async () => {
-    return import("../../../../packages/config/dist/workspace.js");
-  });
+  workspaceConfigModulePromise ??= import("@oah/config/workspace");
   return workspaceConfigModulePromise;
 }
 
