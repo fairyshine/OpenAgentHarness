@@ -104,7 +104,10 @@ interface NativeSyncLocalToRemotePhaseTimingsLike {
   clientCreateMs: number;
   manifestReadMs: number;
   bundleBuildMs: number;
+  bundleBodyPrepareMs: number;
   bundleUploadMs: number;
+  bundleTransport: "none" | "memory" | "tempfile";
+  bundleBytes: number;
   manifestWriteMs: number;
   deleteMs: number;
   totalPrimaryPathMs: number;
@@ -414,7 +417,10 @@ function formatPhaseTimings(timings: NativeSyncLocalToRemotePhaseTimingsLike | u
     `client-create=${timings.clientCreateMs}ms`,
     `manifest=${timings.manifestReadMs}ms`,
     `bundle-build=${timings.bundleBuildMs}ms`,
+    `bundle-body-prepare=${timings.bundleBodyPrepareMs}ms`,
     `bundle-upload=${timings.bundleUploadMs}ms`,
+    `bundle-transport=${timings.bundleTransport}`,
+    `bundle-bytes=${timings.bundleBytes}`,
     `manifest-write=${timings.manifestWriteMs}ms`,
     `delete=${timings.deleteMs}ms`,
     `primary-total=${timings.totalPrimaryPathMs}ms`,

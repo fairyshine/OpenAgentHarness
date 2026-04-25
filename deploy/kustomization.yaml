@@ -4,3 +4,4 @@ namespace: open-agent-harness
 resources:
   - kubernetes
   - controller-servicemonitor.yaml
+  - controller-prometheusrule.yaml

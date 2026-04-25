@@ -1,0 +1,47 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: oah-controller
+  labels:
+    app.kubernetes.io/name: oah-controller
+    app.kubernetes.io/part-of: open-agent-harness
+spec:
+  groups:
+    - name: oah-controller.rules
+      rules:
+        - alert: OAHControllerNoLeader
+          expr: max by (namespace) (oah_controller_leader{namespace="open-agent-harness"}) < 1
+          for: 2m
+          labels:
+            severity: critical
+            component: controller
+          annotations:
+            summary: OAH controller has no active leader
+            description: No controller instance in namespace open-agent-harness currently reports leadership.
+        - alert: OAHControllerScaleTargetError
+          expr: max by (namespace) (oah_controller_scale_target_phase_error{namespace="open-agent-harness"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+            component: controller
+          annotations:
+            summary: OAH controller scale target is erroring
+            description: The latest scale-target reconcile in namespace open-agent-harness is reporting error phase.
+        - alert: OAHControllerWorkerRolloutStuck
+          expr: max by (namespace) (oah_controller_scale_target_phase_progressing{namespace="open-agent-harness"}) > 0 and ((max by (namespace) (oah_controller_desired_replicas{namespace="open-agent-harness"}) - max by (namespace) (oah_controller_scale_target_ready_replicas{namespace="open-agent-harness"})) > 0)
+          for: 10m
+          labels:
+            severity: warning
+            component: controller
+          annotations:
+            summary: OAH worker rollout is stuck
+            description: Desired replicas exceed ready replicas while the controller still reports rollout progression in namespace open-agent-harness.
+        - alert: OAHControllerScaleDownBlocked
+          expr: max by (namespace) (oah_controller_scale_down_allowed{namespace="open-agent-harness"}) < 1 and max by (namespace) (oah_controller_scale_down_blocked_replicas{namespace="open-agent-harness"}) > 0
+          for: 15m
+          labels:
+            severity: info
+            component: controller
+          annotations:
+            summary: OAH controller scale-down is blocked
+            description: The controller in namespace open-agent-harness is holding scale-down because one or more worker replicas are still blocked.

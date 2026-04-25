@@ -37,6 +37,8 @@ const INTERNAL_SYNC_BUNDLE_RELATIVE_PATH: &str = ".oah-sync-bundle.tar";
 const INLINE_UPLOAD_THRESHOLD_BYTES: u64 = 128 * 1024;
 const DEFAULT_SYNC_BUNDLE_MIN_FILE_COUNT: usize = 16;
 const DEFAULT_SYNC_BUNDLE_MIN_TOTAL_BYTES: u64 = 128 * 1024;
+const DEFAULT_IN_MEMORY_SYNC_BUNDLE_MIN_SOURCE_BYTES: u64 = 512 * 1024;
+const DEFAULT_IN_MEMORY_SYNC_BUNDLE_MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Parser)]
 #[command(name = BINARY_NAME, version = BINARY_VERSION, about = "Open Agent Harness native workspace sync utilities.")]
@@ -454,7 +456,10 @@ struct SyncLocalToRemotePhaseTimings {
     client_create_ms: u64,
     manifest_read_ms: u64,
     bundle_build_ms: u64,
+    bundle_body_prepare_ms: u64,
     bundle_upload_ms: u64,
+    bundle_transport: String,
+    bundle_bytes: u64,
     manifest_write_ms: u64,
     delete_ms: u64,
     total_primary_path_ms: u64,
@@ -2519,56 +2524,116 @@ fn try_build_local_sync_bundle_root_with_tar_blocking(
     Ok(Some(bundle_file.into_temp_path()))
 }
 
+fn try_build_local_sync_bundle_root_with_tar_to_memory_blocking(
+    root_dir: &Path,
+) -> Result<Option<Vec<u8>>, String> {
+    let output = match ProcessCommand::new("tar")
+        .env("COPYFILE_DISABLE", "1")
+        .env("COPY_EXTENDED_ATTRIBUTES_DISABLE", "1")
+        .arg("-cf")
+        .arg("-")
+        .arg("--exclude")
+        .arg(INTERNAL_SYNC_MANIFEST_RELATIVE_PATH)
+        .arg("--exclude")
+        .arg(INTERNAL_SYNC_BUNDLE_RELATIVE_PATH)
+        .arg("-C")
+        .arg(root_dir)
+        .arg(".")
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Ok(None),
+    };
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    Ok(Some(output.stdout))
+}
+
+enum BuiltSyncBundle {
+    TempPath(tempfile::TempPath),
+    Bytes(Vec<u8>),
+}
+
 async fn build_local_sync_bundle(
     root_dir: &Path,
     snapshot: &Snapshot,
     excludes: &[String],
-) -> Result<tempfile::TempPath, String> {
-    let mut file_entries = snapshot
+) -> Result<BuiltSyncBundle, String> {
+    let root_dir_buf = root_dir.to_path_buf();
+    if excludes.is_empty() {
+        let snapshot_total_bytes = snapshot.files.iter().map(|file| file.size).sum::<u64>();
+        if (DEFAULT_IN_MEMORY_SYNC_BUNDLE_MIN_SOURCE_BYTES
+            ..=DEFAULT_IN_MEMORY_SYNC_BUNDLE_MAX_SOURCE_BYTES)
+            .contains(&snapshot_total_bytes)
+        {
+            let root_dir_for_in_memory_fast_path = root_dir_buf.clone();
+            if let Some(bundle_bytes) = tokio::task::spawn_blocking(move || {
+                try_build_local_sync_bundle_root_with_tar_to_memory_blocking(
+                    &root_dir_for_in_memory_fast_path,
+                )
+            })
+            .await
+            .map_err(|error| format!("Sync bundle worker task failed: {error}"))??
+            {
+                return Ok(BuiltSyncBundle::Bytes(bundle_bytes));
+            }
+        }
+
+        let root_dir_for_fast_path = root_dir_buf.clone();
+        if let Some(bundle_path) = tokio::task::spawn_blocking(move || {
+            try_build_local_sync_bundle_root_with_tar_blocking(&root_dir_for_fast_path)
+        })
+        .await
+        .map_err(|error| format!("Sync bundle worker task failed: {error}"))??
+        {
+            return Ok(BuiltSyncBundle::TempPath(bundle_path));
+        }
+    }
+
+    let relative_paths = snapshot
+        .files
+        .iter()
+        .map(|file| file.relative_path.clone())
+        .chain(snapshot.empty_directories.iter().cloned())
+        .collect::<Vec<_>>();
+    let file_entries_input = snapshot
         .files
         .iter()
         .map(|file| (file.relative_path.clone(), file.absolute_path.clone()))
         .collect::<Vec<_>>();
-    file_entries.sort_by(|left, right| left.0.cmp(&right.0));
-
-    let mut empty_directories = snapshot
+    let empty_directory_relative_paths = snapshot
         .empty_directories
         .iter()
-        .map(|relative_path| {
-            (
-                relative_path.clone(),
-                normalize_path(&root_dir.join(relative_path)),
-            )
-        })
+        .cloned()
         .collect::<Vec<_>>();
-    empty_directories.sort_by(|left, right| left.0.cmp(&right.0));
-    let root_dir_buf = root_dir.to_path_buf();
-    let no_excludes = excludes.is_empty();
 
     tokio::task::spawn_blocking(move || {
-        if no_excludes {
-            if let Some(bundle_path) =
-                try_build_local_sync_bundle_root_with_tar_blocking(&root_dir_buf)?
-            {
-                return Ok(bundle_path);
-            }
-        }
-
-        let relative_paths = file_entries
-            .iter()
-            .map(|(relative_path, _)| relative_path.clone())
-            .chain(
-                empty_directories
-                    .iter()
-                    .map(|(relative_path, _)| relative_path.clone()),
-            )
-            .collect::<Vec<_>>();
         if let Some(bundle_path) =
             try_build_local_sync_bundle_with_tar_blocking(&root_dir_buf, &relative_paths)?
         {
-            return Ok(bundle_path);
+            return Ok(BuiltSyncBundle::TempPath(bundle_path));
         }
+
+        let mut file_entries = file_entries_input;
+        file_entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut empty_directories = empty_directory_relative_paths
+            .iter()
+            .map(|relative_path| {
+                (
+                    relative_path.clone(),
+                    normalize_path(&root_dir_buf.join(relative_path)),
+                )
+            })
+            .collect::<Vec<_>>();
+        empty_directories.sort_by(|left, right| left.0.cmp(&right.0));
+
         build_local_sync_bundle_blocking(file_entries, empty_directories)
+            .map(BuiltSyncBundle::TempPath)
     })
     .await
     .map_err(|error| format!("Sync bundle worker task failed: {error}"))?
@@ -2576,7 +2641,10 @@ async fn build_local_sync_bundle(
 
 struct UploadSyncBundleResult {
     bundle_build_ms: u64,
+    bundle_body_prepare_ms: u64,
     bundle_upload_ms: u64,
+    bundle_transport: &'static str,
+    bundle_bytes: u64,
 }
 
 async fn upload_sync_bundle(
@@ -2590,27 +2658,65 @@ async fn upload_sync_bundle(
 ) -> Result<UploadSyncBundleResult, String> {
     let key = build_remote_path(remote_prefix, INTERNAL_SYNC_BUNDLE_RELATIVE_PATH);
     let bundle_build_started_at = Instant::now();
-    let bundle_path = build_local_sync_bundle(root_dir, snapshot, excludes).await?;
+    let bundle = build_local_sync_bundle(root_dir, snapshot, excludes).await?;
     let bundle_build_ms = elapsed_millis_u64(bundle_build_started_at);
-    let bundle_upload_started_at = Instant::now();
-    let body = ByteStream::read_from()
-        .path(bundle_path.as_ref() as &Path)
-        .build()
-        .await
-        .map_err(|error| format!("Failed to stream sync bundle file for upload: {error}"))?;
     request_counter.increment_put();
-    client
-        .put_object()
-        .bucket(&config.bucket)
-        .key(key)
-        .body(ByteStream::from(body))
-        .send()
-        .await
-        .map_err(|error| format!("Failed to write sync bundle object: {error}"))?;
-    Ok(UploadSyncBundleResult {
-        bundle_build_ms,
-        bundle_upload_ms: elapsed_millis_u64(bundle_upload_started_at),
-    })
+    match bundle {
+        BuiltSyncBundle::Bytes(bundle_bytes) => {
+            let bundle_len = bundle_bytes.len() as u64;
+            let bundle_body_prepare_ms = 0;
+            let bundle_upload_started_at = Instant::now();
+            client
+                .put_object()
+                .bucket(&config.bucket)
+                .key(&key)
+                .content_length(bundle_bytes.len() as i64)
+                .body(ByteStream::from(bundle_bytes))
+                .send()
+                .await
+                .map_err(|error| format!("Failed to write sync bundle object: {error}"))?;
+            Ok(UploadSyncBundleResult {
+                bundle_build_ms,
+                bundle_body_prepare_ms,
+                bundle_upload_ms: elapsed_millis_u64(bundle_upload_started_at),
+                bundle_transport: "memory",
+                bundle_bytes: bundle_len,
+            })
+        }
+        BuiltSyncBundle::TempPath(bundle_path) => {
+            let bundle_path_ref = bundle_path.as_ref() as &Path;
+            let bundle_len = tokio::fs::metadata(bundle_path_ref)
+                .await
+                .map_err(|error| format!("Failed to stat sync bundle file for upload: {error}"))?
+                .len();
+            let bundle_body_prepare_started_at = Instant::now();
+            let body = ByteStream::read_from()
+                .path(bundle_path_ref)
+                .build()
+                .await
+                .map_err(|error| {
+                    format!("Failed to stream sync bundle file for upload: {error}")
+                })?;
+            let bundle_body_prepare_ms = elapsed_millis_u64(bundle_body_prepare_started_at);
+            let bundle_upload_started_at = Instant::now();
+            client
+                .put_object()
+                .bucket(&config.bucket)
+                .key(&key)
+                .content_length(bundle_len as i64)
+                .body(body)
+                .send()
+                .await
+                .map_err(|error| format!("Failed to write sync bundle object: {error}"))?;
+            Ok(UploadSyncBundleResult {
+                bundle_build_ms,
+                bundle_body_prepare_ms,
+                bundle_upload_ms: elapsed_millis_u64(bundle_upload_started_at),
+                bundle_transport: "tempfile",
+                bundle_bytes: bundle_len,
+            })
+        }
+    }
 }
 
 async fn delete_remote_object_if_present(
@@ -3412,7 +3518,10 @@ async fn sync_local_to_remote(
         client_create_ms: 0,
         manifest_read_ms: 0,
         bundle_build_ms: 0,
+        bundle_body_prepare_ms: 0,
         bundle_upload_ms: 0,
+        bundle_transport: "none".to_string(),
+        bundle_bytes: 0,
         manifest_write_ms: 0,
         delete_ms: 0,
         total_primary_path_ms: 0,
@@ -3480,7 +3589,10 @@ async fn sync_local_to_remote(
             )
             .await?;
             phase_timings.bundle_build_ms = upload_result.bundle_build_ms;
+            phase_timings.bundle_body_prepare_ms = upload_result.bundle_body_prepare_ms;
             phase_timings.bundle_upload_ms = upload_result.bundle_upload_ms;
+            phase_timings.bundle_transport = upload_result.bundle_transport.to_string();
+            phase_timings.bundle_bytes = upload_result.bundle_bytes;
 
             let snapshot_file_paths = snapshot
                 .files

@@ -87,7 +87,10 @@ export interface DirectorySyncPhaseTimings {
   clientCreateMs: number;
   manifestReadMs: number;
   bundleBuildMs: number;
+  bundleBodyPrepareMs: number;
   bundleUploadMs: number;
+  bundleTransport: "none" | "memory" | "tempfile";
+  bundleBytes: number;
   manifestWriteMs: number;
   deleteMs: number;
   totalPrimaryPathMs: number;
@@ -565,7 +568,7 @@ async function buildObjectStorageBundle(input: {
     await writeFile(listPath, Buffer.from(fileList.join("\0"), "utf8"));
     await runLocalProcess({
       executable: "tar",
-      args: ["-cf", bundlePath, "--null", "-T", listPath, "-C", input.localDir],
+      args: ["-C", input.localDir, "-cf", bundlePath, "--null", "-T", listPath],
       timeoutMs
     });
     return readFile(bundlePath);

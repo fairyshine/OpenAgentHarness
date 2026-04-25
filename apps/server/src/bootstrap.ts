@@ -992,6 +992,11 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     });
   }
 
+  async function enrichBootWorkspaceModels(workspaces: WorkspaceRecord[]): Promise<WorkspaceRecord[]> {
+    const { enrichWorkspaceModelsWithDiscoveredMetadata } = await loadModelMetadataDiscoveryModule();
+    return Promise.all(workspaces.map((workspace) => enrichWorkspaceModelsWithDiscoveredMetadata(workspace)));
+  }
+
   async function withWorkspaceDefinitionTimestamp(workspace: WorkspaceRecord): Promise<WorkspaceRecord> {
     const { readLatestWorkspaceDefinitionMtimeMs } = await loadWorkspaceDefinitionHelpersModule();
     const latestDefinitionMtimeMs = await readLatestWorkspaceDefinitionMtimeMs(workspace.rootPath);
@@ -1033,12 +1038,13 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               }
             } as Parameters<typeof discoverWorkspaces>[0]);
           })().then(async (workspaces) => {
-            if (workspaceModelMetadataDiscoveryMode !== "eager") {
-              return workspaces;
+            if (workspaceModelMetadataDiscoveryMode === "eager") {
+              return enrichBootWorkspaceModels(workspaces as WorkspaceRecord[]);
             }
 
-            const { enrichWorkspaceModelsWithDiscoveredMetadata } = await loadModelMetadataDiscoveryModule();
-            return Promise.all(workspaces.map((workspace) => enrichWorkspaceModelsWithDiscoveredMetadata(workspace)));
+            // Keep multi-workspace control planes on manual refresh after boot, but
+            // still capture workspace-local model metadata for the initial catalog.
+            return enrichBootWorkspaceModels(workspaces as WorkspaceRecord[]);
           })
         ).map((workspace) =>
           withManagedWorkspaceExternalRef(workspace as WorkspaceRecord, config, objectStorageMirror)

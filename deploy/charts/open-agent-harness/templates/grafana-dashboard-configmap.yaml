@@ -1,0 +1,15 @@
+{{- if and .Values.controller.enabled .Values.grafanaDashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "open-agent-harness.controllerName" . }}-dashboard
+  labels:
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "controller") | nindent 4 }}
+    {{ .Values.grafanaDashboard.sidecarLabel }}: {{ .Values.grafanaDashboard.sidecarLabelValue | quote }}
+    {{- with .Values.grafanaDashboard.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  oah-controller-overview.json: |
+    {{- .Files.Get "dashboards/controller-overview.json" | nindent 4 }}
+{{- end }}

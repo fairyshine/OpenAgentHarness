@@ -81,12 +81,18 @@ pnpm dev:web
 - [`deploy/charts/open-agent-harness/examples/dev.values.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/charts/open-agent-harness/examples/dev.values.yaml)
 - [`deploy/charts/open-agent-harness/examples/staging.values.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/charts/open-agent-harness/examples/staging.values.yaml)
 - [`deploy/charts/open-agent-harness/examples/prod.values.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/charts/open-agent-harness/examples/prod.values.yaml)
+- [`deploy/charts/open-agent-harness/examples/strict-egress.values.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/charts/open-agent-harness/examples/strict-egress.values.yaml)
+- [`deploy/charts/open-agent-harness/examples/prod-hardening.values.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/charts/open-agent-harness/examples/prod-hardening.values.yaml)
+- [`docs/k8s-rollout-checklist.md`](/Users/wumengsong/Code/OpenAgentHarness/docs/k8s-rollout-checklist.md)
 - [`deploy/kubernetes/api-server.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/api-server.yaml)
 - [`deploy/kubernetes/worker.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/worker.yaml)
 - [`deploy/kubernetes/controller.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller.yaml)
 - [`deploy/kubernetes/controller-servicemonitor.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller-servicemonitor.example.yaml)
+- [`deploy/kubernetes/networkpolicy.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/networkpolicy.example.yaml)
+- [`deploy/kubernetes/networkpolicy.strict-egress.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/networkpolicy.strict-egress.example.yaml)
 - [`deploy/kustomization.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kustomization.yaml)
 - [`deploy/controller-servicemonitor.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/controller-servicemonitor.yaml)
+- [`deploy/controller-prometheusrule.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/controller-prometheusrule.yaml)
 - [`deploy/kubernetes/controller-rbac.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller-rbac.yaml)
 - [`deploy/kubernetes/configmap.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/configmap.example.yaml)
 
@@ -120,6 +126,16 @@ helm upgrade --install oah ./deploy/charts/open-agent-harness \
   -f ./deploy/charts/open-agent-harness/examples/staging.values.yaml
 ```
 
+如果已经进入 production-like 演练阶段，建议直接叠这层 hardening overlay：
+
+```bash
+helm upgrade --install oah ./deploy/charts/open-agent-harness \
+  --namespace open-agent-harness \
+  --create-namespace \
+  -f ./deploy/charts/open-agent-harness/examples/prod.values.yaml \
+  -f ./deploy/charts/open-agent-harness/examples/prod-hardening.values.yaml
+```
+
 如果要发布正式镜像，仓库现在也提供了一条最小 GHCR 发布链路：
 
 ```bash
@@ -148,10 +164,14 @@ git push origin master
 - 仓库额外提供 [`controller-servicemonitor.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller-servicemonitor.example.yaml) 作为 Prometheus Operator 接入示例，默认不纳入 `kustomization.yaml`
 - 现在也提供一个可直接使用的 Prometheus Operator kustomization：
   [`deploy/kustomization.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kustomization.yaml)
-  它会在基础 `deploy/kubernetes` 骨架之上额外包含 [`deploy/controller-servicemonitor.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/controller-servicemonitor.yaml)，可直接通过 `kubectl apply -k ./deploy` 启用 `controller` 的 `ServiceMonitor`
+  它会在基础 `deploy/kubernetes` 骨架之上额外包含 [`deploy/controller-servicemonitor.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/controller-servicemonitor.yaml) 和 [`deploy/controller-prometheusrule.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/controller-prometheusrule.yaml)，可直接通过 `kubectl apply -k ./deploy` 启用 `controller` 的 `ServiceMonitor` 与基础告警规则
 - 现在也提供了最小 Helm chart，可把 split deployment、RBAC、ConfigMap 和可选 `ServiceMonitor` 一起交给 Helm 管理
+- chart 现在还可选生成：
+  - `PrometheusRule`
+  - Grafana dashboard ConfigMap
+  - controller / worker / api ingress `NetworkPolicy`
 - Helm chart 当前还已支持复用已有 ConfigMap、为 `oah-sandbox` 切换到现有 PVC、以及给三个组件分别配置 resources / securityContext / envFrom / scheduling
-- Helm chart 现在还支持 `PodDisruptionBudget`、`topologySpreadConstraints`、`priorityClassName`，并可直接为 `oah-api` 生成 Ingress
+- Helm chart 现在还支持 `PodDisruptionBudget`、`topologySpreadConstraints`、`priorityClassName`、`NetworkPolicy`，并可直接为 `oah-api` 生成 Ingress
 - chart 目录下现在还已附带 `dev / staging / prod` 三套 values 样例，便于按环境起步而不是手写所有参数
 - 现在也提供了生产 `Dockerfile` 与最小 GHCR 发布 workflow，K8S manifests/chart 不再只是假定“外部已有镜像”
 - GHCR workflow 现在还会产出 `sbom/provenance`，并通过 Cosign 做 keyless signing
@@ -173,6 +193,16 @@ git push origin master
 - `worker.drain.timeoutMs < terminationGracePeriodSeconds * 1000`
 - `preStop` 只负责“尽快进入 draining”，不要在 hook 里做长时间阻塞逻辑
 - 若 worker 需要在超时后恢复未完成 run，优先使用 `requeue_running` 之类的显式策略，而不是等 K8S 强杀
+- 若要收紧 Pod ingress 面，建议从 [`deploy/kubernetes/networkpolicy.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/networkpolicy.example.yaml) 或 chart 的 `networkPolicy.enabled=true` 起步；当前基线默认只收紧 ingress，不默认限制 egress
+- 若要进一步收紧出口白名单，建议从 [`deploy/charts/open-agent-harness/examples/strict-egress.values.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/charts/open-agent-harness/examples/strict-egress.values.yaml) 或 [`deploy/kubernetes/networkpolicy.strict-egress.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/networkpolicy.strict-egress.example.yaml) 起步，再替换：
+  - Kubernetes API CIDR
+  - Redis / Postgres Pod labels
+  - 对象存储 / 模型网关的真实 CIDR 或 egress gateway 网段
+- 如果要按上线节奏收口，建议顺序是：
+  - `staging.values.yaml`
+  - `prod.values.yaml`
+  - `prod.values.yaml + prod-hardening.values.yaml`
+  - 最后按 [`docs/k8s-rollout-checklist.md`](/Users/wumengsong/Code/OpenAgentHarness/docs/k8s-rollout-checklist.md) 做 staging / production gate
 
 ---
 

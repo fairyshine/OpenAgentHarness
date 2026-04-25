@@ -1,0 +1,273 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- if and .Values.worker.enabled .Values.networkPolicy.worker.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "open-agent-harness.workerName" . }}
+  labels:
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "sandbox") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "sandbox") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.allowSameNamespace }}
+        - podSelector: {}
+        {{- end }}
+        {{- with .Values.networkPolicy.worker.extraIngress }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.worker.service.port }}
+---
+{{- end }}
+{{- if and .Values.worker.enabled .Values.networkPolicy.worker.egress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "open-agent-harness.workerName" . }}-egress
+  labels:
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "sandbox") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "sandbox") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.networkPolicy.worker.egress.allowSameNamespace }}
+    - to:
+        - podSelector: {}
+    {{- end }}
+    {{- if and .Values.networkPolicy.worker.egress.allowDns (gt (len .Values.networkPolicy.egress.dependencies.dns.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.dns.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.dns.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.worker.egress.allowKubernetesApi (gt (len .Values.networkPolicy.egress.dependencies.kubernetesApi.cidrs) 0) }}
+    - to:
+        {{- range .Values.networkPolicy.egress.dependencies.kubernetesApi.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- toYaml $.Values.networkPolicy.egress.dependencies.kubernetesApi.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.worker.egress.allowRedis (gt (len .Values.networkPolicy.egress.dependencies.redis.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.redis.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.redis.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.worker.egress.allowPostgres (gt (len .Values.networkPolicy.egress.dependencies.postgres.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.postgres.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.postgres.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.worker.egress.allowObjectStorage (gt (len .Values.networkPolicy.egress.dependencies.objectStorage.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.objectStorage.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.objectStorage.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.worker.egress.allowModelGateway (gt (len .Values.networkPolicy.egress.dependencies.modelGateway.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.modelGateway.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.modelGateway.ports | nindent 8 }}
+    {{- end }}
+    {{- with .Values.networkPolicy.worker.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+{{- end }}
+{{- if and .Values.controller.enabled .Values.networkPolicy.controller.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "open-agent-harness.controllerName" . }}
+  labels:
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "controller") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "controller") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.allowSameNamespace }}
+        - podSelector: {}
+        {{- end }}
+        {{- if .Values.networkPolicy.monitoring.enabled }}
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.monitoring.namespaceSelector | nindent 12 }}
+          {{- with .Values.networkPolicy.monitoring.podSelector }}
+          podSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.networkPolicy.controller.extraIngress }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.controller.service.port }}
+---
+{{- end }}
+{{- if and .Values.controller.enabled .Values.networkPolicy.controller.egress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "open-agent-harness.controllerName" . }}-egress
+  labels:
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "controller") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "controller") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.networkPolicy.controller.egress.allowSameNamespace }}
+    - to:
+        - podSelector: {}
+    {{- end }}
+    {{- if and .Values.networkPolicy.controller.egress.allowDns (gt (len .Values.networkPolicy.egress.dependencies.dns.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.dns.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.dns.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.controller.egress.allowKubernetesApi (gt (len .Values.networkPolicy.egress.dependencies.kubernetesApi.cidrs) 0) }}
+    - to:
+        {{- range .Values.networkPolicy.egress.dependencies.kubernetesApi.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- toYaml $.Values.networkPolicy.egress.dependencies.kubernetesApi.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.controller.egress.allowRedis (gt (len .Values.networkPolicy.egress.dependencies.redis.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.redis.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.redis.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.controller.egress.allowPostgres (gt (len .Values.networkPolicy.egress.dependencies.postgres.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.postgres.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.postgres.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.controller.egress.allowObjectStorage (gt (len .Values.networkPolicy.egress.dependencies.objectStorage.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.objectStorage.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.objectStorage.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.controller.egress.allowModelGateway (gt (len .Values.networkPolicy.egress.dependencies.modelGateway.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.modelGateway.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.modelGateway.ports | nindent 8 }}
+    {{- end }}
+    {{- with .Values.networkPolicy.controller.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+{{- end }}
+{{- if and .Values.apiServer.enabled .Values.networkPolicy.apiServer.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "open-agent-harness.apiServerName" . }}
+  labels:
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.allowSameNamespace }}
+        - podSelector: {}
+        {{- end }}
+        {{- with .Values.networkPolicy.apiServer.extraIngress }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.apiServer.service.port }}
+{{- end }}
+{{- if and .Values.apiServer.enabled .Values.networkPolicy.apiServer.egress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "open-agent-harness.apiServerName" . }}-egress
+  labels:
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "open-agent-harness.componentSelectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.networkPolicy.apiServer.egress.allowSameNamespace }}
+    - to:
+        - podSelector: {}
+    {{- end }}
+    {{- if and .Values.networkPolicy.apiServer.egress.allowDns (gt (len .Values.networkPolicy.egress.dependencies.dns.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.dns.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.dns.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.apiServer.egress.allowKubernetesApi (gt (len .Values.networkPolicy.egress.dependencies.kubernetesApi.cidrs) 0) }}
+    - to:
+        {{- range .Values.networkPolicy.egress.dependencies.kubernetesApi.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- toYaml $.Values.networkPolicy.egress.dependencies.kubernetesApi.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.apiServer.egress.allowRedis (gt (len .Values.networkPolicy.egress.dependencies.redis.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.redis.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.redis.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.apiServer.egress.allowPostgres (gt (len .Values.networkPolicy.egress.dependencies.postgres.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.postgres.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.postgres.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.apiServer.egress.allowObjectStorage (gt (len .Values.networkPolicy.egress.dependencies.objectStorage.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.objectStorage.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.objectStorage.ports | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.networkPolicy.apiServer.egress.allowModelGateway (gt (len .Values.networkPolicy.egress.dependencies.modelGateway.peers) 0) }}
+    - to:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.modelGateway.peers | nindent 8 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dependencies.modelGateway.ports | nindent 8 }}
+    {{- end }}
+    {{- with .Values.networkPolicy.apiServer.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}

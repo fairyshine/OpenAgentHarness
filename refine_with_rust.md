@@ -2,364 +2,216 @@
 
 ## Goal
 
-Keep TypeScript as the control plane, and use Rust only for the paths that matter most to real runtime cost:
+Use Rust to improve the hot paths that dominate real runtime cost, especially in Docker and self-hosted execution:
 
 - workspace sync
 - workspace materialization
 - sandbox seed upload
 - directory scan / fingerprint / diff planning
 
-The objective is not to rewrite the server in Rust.
-The objective is to reduce Docker CPU, memory, and I/O pressure on the hottest local-system paths while keeping TypeScript in charge of orchestration and fallback behavior.
+TypeScript remains the control plane.
+Rust is used only where it gives measurable gains in latency, CPU, memory, I/O, or object-store request count.
 
-## Current Direction
+## Core Strategy
 
-- Rust code lives under `native/`
-- integration stays sidecar-binary first
-- every native path keeps a TypeScript fallback
-- only keep pushing Rust where benchmarks justify it
+- keep Rust code under `native/`
+- keep a TypeScript fallback for every native path
+- optimize the most common runtime path first, not the broadest rewrite
+- measure every step with benchmarks before expanding scope
 
-## Priority Order
+## Mainline Focus
 
-### Priority 1. Workspace Sync And Materialization
+The main optimization line is now:
 
-This is now the main line of optimization work.
+1. workspace sync
+2. workspace materialization
+3. sandbox seed upload and prepared-seed reuse
 
-Why:
-
-- it is much more common than archive export
-- it directly affects workspace startup, restore, pull, push, and sandbox preparation
-- it is one of the most Docker-sensitive parts of the system
-- it spends real time in filesystem walk, hashing, diffing, and object-store transfer planning
-
-Main files today:
-
-- `apps/server/src/object-storage.ts`
-- `apps/server/src/bootstrap/sandbox-backed-workspace-initializer.ts`
-
-### Priority 2. Seed Upload And Prepared Workspace Reuse
-
-This is part of the same main path, not a side quest.
-
-Why:
-
-- repeated sandbox startup can amplify scan and upload costs
-- prepared seed cache quality has direct impact on cold-start and rebuild cost
-- reducing unnecessary upload and copy work can save both time and Docker resources
-
-### Priority 3. Archive Export
-
-Archive export remains useful, and Rust already works there, but it is no longer the primary focus.
-
-Why:
-
-- it is a background export path
-- it is not the main user-facing or container-hot path
-- it should be improved only after the higher-frequency workspace path is stronger
+Archive export is still supported, but it is no longer the primary driver of the Rust strategy.
 
 ## Current Rust Status
 
-### 1. Workspace Sync
+### 1. Native workspace sync is established
 
-`native/oah-workspace-sync` already exists and is integrated.
+`native/oah-workspace-sync` already covers:
 
-Current coverage:
-
-- directory scan
+- local scan
 - fingerprint computation
-- local-to-remote sync planning and execution
-- remote-to-local sync planning and execution
-- seed-related planning/integration
-- TypeScript bridge and fallback path
+- local-to-remote sync
+- remote-to-local sync
+- seed-related planning
+- persistent worker mode
+- TypeScript bridge integration
 
-Current judgment:
+### 2. TypeScript fallback has been tightened
 
-- functionally correct
-- valuable for reducing Node-side RSS in larger filesystem-heavy cases
-- native persistent is now the preferred Docker/runtime path for steady-state object-store materialization and pull
-- TS fallback has also been pushed much closer to the native shape on `bundle-primary`, so non-native execution is no longer stuck on the old high-request path
-- persistent-worker groundwork now exists in the native bridge and Rust binary; it is now enabled by default in the Docker runtime images and `docker-compose.local.yml`, while non-Docker usage still remains opt-in
-- the default TS materialization path now reuses the sync-produced local fingerprint when available, which removes one extra full local directory scan after remote-to-local materialization
-- sandbox-backed workspace initialization now uploads directly from the cached prepared seed root instead of copying each seed into a per-request staging directory first
-- the default TS sandbox seed upload path now skips file writes when the remote workspace file already matches local size and mtime
-- the default TS sandbox seed upload path now also prunes stale or type-mismatched remote entries before upload, so repeated seed operations behave more like a real mirror
-- the native self-hosted sandbox upload path now also skips uploads for unchanged remote files by checking sandbox file stat before sending bytes
-- the native self-hosted sandbox upload path now also prunes stale or type-mismatched remote entries, bringing its mirror semantics much closer to the TS path
-- native seed-upload path building now preserves absolute sandbox roots like `/workspace/...`, fixing a correctness issue that could otherwise misplace uploads
-- the experimental persistent native workspace-sync worker now covers more hot commands beyond the two original sync calls, including fingerprint / plan / seed-upload-related commands
-- the mainline benchmark script `scripts/bench-workspace-mainline.ts` now covers both native-direct sync primitives and end-to-end sandbox-backed initializer seed preparation
-- prepared seed cache key generation now uses native `fingerprint-batch` for the runtime/tool/skill directory set instead of issuing four separate native fingerprint calls
-- native sandbox HTTP sync now reuses `files/entries` metadata (`sizeBytes` / `updatedAt`) to avoid some follow-up per-file `stat` calls and to skip redundant directory-create requests when the remote tree is already present
-- native sandbox HTTP sync now only issues explicit sandbox `mkdir` for the root path and true empty directories; non-empty parent directories are left to file-upload parent creation
-- a container-oriented benchmark entrypoint now exists at `scripts/bench-workspace-mainline-docker.sh` so the same benchmark can be run under explicit Docker CPU and memory limits
-- Docker runtime images and local compose now default to `OAH_NATIVE_WORKSPACE_SYNC=1` and `OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT=1`, so the main container path actually exercises the native implementation without extra manual configuration
-- the mainline benchmark now also reports average sandbox HTTP request counts per scenario, broken out by `createSandbox`, `stat`, `entries`, `mkdir`, `upload`, and `delete`
-- the TS fallback seed-upload path now also reuses remote listing metadata (`sizeBytes` / `updatedAt`) to avoid per-file `stat` probes when sandbox listings already prove file state
-- the TS fallback seed-upload path now only issues explicit non-root `mkdir` for leaf empty directories on `self_hosted` sandboxes, relying on HTTP upload parent creation for non-empty directory trees
-- self-hosted sandbox seed initialization now has an archive fast path in the TS control plane: it can package the prepared seed into a single local tar, upload once, and extract once inside the sandbox
-- the prepared-seed cache now also reuses that local seed tar on repeated initialization, so warm self-hosted seed prep no longer rebuilds the same archive every time
-- object-store workspace flush now also reuses the `localFingerprint` returned by sync instead of rescanning the whole local tree after a successful push, extending the earlier "reuse sync fingerprint" pattern from materialization into the flush path
-- native object-store remote-to-local sync now also returns `localFingerprint`, so native-backed materialization can reuse the sync result instead of immediately rescanning the materialized tree
-- object-store sync now maintains a remote sync manifest for file `mtime` and size, letting both TS and native push/pull paths replace many per-file `HeadObject` probes with a single manifest read on repeated syncs
-- object-store sync now also supports an aggressive tar-bundle sidecar cache: push can write `.oah-sync-bundle.tar`, and cold pull/materialization can hydrate from that bundle before normal sync reconciliation
-- object-store sync now also supports a `bundle-primary` layout in the native path: for bundle-eligible prefixes, push can persist the workspace mainly as `manifest + bundle` instead of `manifest + per-file objects + optional bundle sidecar`
-- the TS fallback object-store push path now also supports `bundle-primary`, so non-native execution can keep bundle-backed prefixes in `manifest + bundle` form instead of regressing to per-file object uploads
-- native object-store sync now tracks request counts all the way back into the TS benchmark/materialization harness, so request tables reflect real native `GET`/`PUT`/`LIST` behavior instead of only JS fallback traffic
-- native bundle upload/download now uses temp-file-backed streaming instead of full in-memory bundle buffers, lowering bundle-path peak memory pressure in Docker
-- native bundle creation now prefers system `tar` with macOS metadata sidecars disabled, then falls back to the Rust tar builder if shell tar is unavailable
-- Docker runtime images and `docker-compose.local.yml` now default `OAH_OBJECT_STORAGE_SYNC_BUNDLE_LAYOUT=primary` on the API/sandbox execution path, so the object-store hot path uses the lower-request Rust layout by default in the main container workflow
-- Docker runtime images, local compose, and the benchmark path now also enable `OAH_OBJECT_STORAGE_SYNC_TRUST_MANAGED_PREFIXES=1`, so the mainline `bundle-primary` path can skip the last cold-push safety listing on trusted object-store prefixes
-- trusted managed prefixes now also skip the initial sync-manifest read on the first primary-bundle write in TS and native persistent mode, using in-process prefix state to preserve warm no-op behavior
-- self-hosted initializer now computes archive eligibility once per prepared-seed cache entry and starts archive construction during prepare-seed itself when eligible, so archive build can overlap later sandbox creation/discovery work instead of waiting until upload time
-- current benchmark proof for the main object-store hot path is now materially stronger:
-  - `96 files x 4 KiB`:
-    TS sidecar push `99` requests / `296ms`, warm push `2` requests / `16ms`, materialize `2` requests / `45ms`, pull `2` requests / `48ms`, push RSS peak `35.09 MiB`
-  - `96 files x 4 KiB`:
-    TS `bundle-primary` push `2` requests / `64ms`, warm push `1` request / `5ms`, materialize `2 GET` / `39ms`, pull `2 GET` / `41ms`, push RSS peak `0.11 MiB`
-  - `96 files x 4 KiB`:
-    native persistent push `2` requests / `140ms`, warm push `1` request / `4ms`, materialize `1 GET` / `15ms`, pull `1 GET` / `14ms`
-- native push now also reports phase timings:
-    on the same sample, native persistent cold push spends about `28ms` in the primary-bundle path itself (`bundle build ~10ms`, `bundle upload ~13ms`, `manifest write ~3ms`)
-- persistent worker startup now also prewarms the S3 client stack:
-    on the latest sample, native persistent `sync-local-to-remote` reports `clientCreate=0ms` and `commandTotal ~30ms`, while that first-time client-init cost is shifted into worker startup / first persistent command instead
-- bridge and worker timing now also show where the remaining cold-push latency lives:
-    on the latest sample, native persistent cold push still measures about `151ms` in the TS bridge, but only about `27ms` in worker `handle` time and about `123ms` in `receiveDelay`, meaning the dominant cold-path gap is now "request reaches worker late" rather than object-store work or Rust sync execution
-  - current interpretation:
-    on trusted mainline prefixes, TS `bundle-primary` and native persistent now both avoid any cold-push read request; after persistent prewarm, the remaining native cold-push gap is no longer mainly inside Rust sync execution and is now traced primarily to worker request receive delay / bridge orchestration before the worker begins handling the command
+The TS path has been pushed closer to the native shape so that fallback mode is still efficient:
 
-### 2. Archive Export
+- manifest-based sync state
+- `bundle-primary` layout
+- trusted managed-prefix fast path
+- fingerprint reuse after sync
+- fewer redundant `HEAD` / `GET` / local rescans
 
-`native/oah-archive-export` is implemented and currently the most polished Rust path.
+### 3. Native is now actually used on the hot path
 
-Current coverage:
+Docker and local runtime defaults now enable the main native path:
 
-- sqlite bundle writing
-- checksum writing
-- export-root inspection
-- line-delimited streaming bridge
-- persistent native worker
-- worker-pool mode
-- TypeScript fallback
+- `OAH_NATIVE_WORKSPACE_SYNC=1`
+- `OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT=1`
+- `OAH_OBJECT_STORAGE_SYNC_BUNDLE_LAYOUT=primary`
+- `OAH_OBJECT_STORAGE_SYNC_TRUST_MANAGED_PREFIXES=1`
 
-Current judgment:
+## What Has Already Improved
 
-- works well
-- has a real measured win in backlog export scenarios
-- should stay available
-- should not drive the overall Rust strategy anymore
+### Object-store sync
 
-## Current Decisions
+Rust and TS now both support:
 
-### Keep In TypeScript
+- sync manifest reuse
+- bundle-backed push / pull / materialize
+- lower object-store request count
+- lower Node memory pressure
 
-These remain TS-first:
+Rust additionally now has:
 
-- HTTP and Fastify routing
-- session and run orchestration
-- model gateway integration
-- Redis/Postgres business logic
-- feature flags and rollout policy
+- persistent worker reuse
+- temp-file-backed bundle streaming
+- in-memory root-tar fast path for small and medium bundles
+- `tar`-first bundle creation
+- root-tar fast path now skips building and sorting full file/directory lists when excludes are empty
+- request-count reporting
+- phase timing reporting
+- bridge timing reporting
+- worker timing reporting
 
-### Push Deeper Into Rust
+### Seed upload and workspace initialization
 
-These are the important native candidates:
+The mainline initializer path now avoids a lot of redundant work:
 
-- recursive directory walk
-- fingerprint and hashing
-- local/remote diff planning
-- sync execution on filesystem-heavy paths
-- sandbox seed upload planning
-- materialization-related file operations
+- prepared seed reuse
+- archive fast path for self-hosted sandbox initialization
+- archive warming during prepare-seed
+- reuse of archive eligibility metrics
+- skip unchanged uploads
+- clean stale remote entries
+- fewer redundant `mkdir` and `stat` calls
 
-## What Matters Most To Optimize
+## Latest Measured Result
 
-The highest-value optimization target is:
+On the current `96 files x 4 KiB` object-storage benchmark:
 
-- end-to-end workspace lifecycle cost inside Docker
+- TypeScript sidecar:
+  cold push `99` requests / about `359ms`
+- TypeScript `bundle-primary`:
+  cold push `2` requests / about `69ms`
+- native persistent:
+  cold push `2` requests / about `37ms`
+  warm push `1` request / about `3ms`
+  materialize `1 GET` / about `15ms`
+  pull `1 GET` / about `15ms`
 
-That means the most important metrics are:
+On a larger `1024 files x 4 KiB` object-storage benchmark:
 
-- workspace materialization latency
-- push/pull latency
-- seed upload latency
-- directory scan and fingerprint cost
-- Node RSS and heap growth during sync/materialization
-- total file I/O and redundant copy/upload work
+- TypeScript `bundle-primary`:
+  cold push about `419ms`
+- native persistent:
+  cold push about `99ms`
+  warm push about `8ms`
+  materialize about `119ms`
+  pull about `112ms`
 
-Archive export is still worth tracking, but it is now secondary to these runtime paths.
+This is an important milestone:
 
-## Current Findings
+- native persistent is no longer only better on warm paths
+- native persistent cold push now beats TS `bundle-primary` on the same benchmark path
+- native persistent also keeps a strong advantage as file count grows
+- after the latest in-memory bundle path, larger-workspace cold push improved again and bundle build/upload both moved down
 
-## Workspace Sync And Materialization
+## Why The Cold Push Improved
 
-What we know today:
+The main cold-path bottleneck was not object-store work itself.
+It was persistent worker readiness and bridge overhead.
 
-- native sync is operational and semantically correct
-- native sync can reduce Node RSS materially on large sync/materialization workloads
-- sidecar startup and bridge overhead still make native latency worse than TS in many cases
-- this means the current native sync path is promising, but not yet rollout-ready as the default
+That has now been addressed with:
 
-Practical conclusion:
+- explicit worker `ready` handshake
+- process-wide worker-pool sharing through `globalThis`
+- bootstrap-time worker prewarm
 
-- keep optimizing this path aggressively
-- do not default it yet
-- judge success by end-to-end workspace lifecycle wins, not by isolated microbenchmarks
-- keep harvesting wins on the default TS path too, especially anywhere we can remove redundant scan or diff work without waiting for native-default readiness
-- reducing duplicated local copy work in the TS seed path is already paying off and should continue alongside native-path work
-- repeated seed upload now has a safe incremental fast path on the TS side for unchanged files, which reduces remote write amplification even before native-default rollout
-- repeated seed upload on the TS path now also cleans stale remote entries, reducing workspace drift across repeated sandbox preparation
-- the same unchanged-file skip now exists in the native self-hosted upload path, so both default TS and native seed flows benefit from lower remote write churn
-- native self-hosted seed upload now also cleans stale/type-mismatched remote entries, reducing drift between TS fallback behavior and native behavior
-- persistent worker reuse is now valuable on a wider set of native workspace-sync commands, and the Docker/container path now enables it by default so those savings can show up in real deployments instead of only in opt-in tests
-- the benchmark script now compares `ts`, `native oneshot`, and `native persistent` on repeated sandbox seed preparation through the real `createSandboxBackedWorkspaceInitializer(...)` path, not just isolated native calls
-- bridge-side binary resolution now prefers fresh local build outputs under `.native-target/` and `native/target/` before `native/bin/`, because `native/bin/` is a distribution artifact and can drift from the currently tested build
-- prepared seed cache key generation now batches native fingerprinting for the four main input directories, removing repeated per-directory native bridge calls from the warm initializer path
-- `fingerprint-batch` now also routes through the persistent native worker path, so repeated cache-key generation no longer pays one-shot process startup in persistent mode
-- native sandbox HTTP sync now consumes listing metadata from `files/entries` so it can avoid extra remote `stat` probes for many unchanged files and avoid redundant `mkdir` calls for directories that already exist
-- native sandbox HTTP sync now limits explicit `mkdir` calls to the root path plus true empty directories, which reduces directory-create chatter on the hot upload path
-- the self-hosted initializer now short-circuits that per-file upload shape with the archive fast path: on the same local sample (`--files 96 --size-bytes 4096 --iterations 2 --seed-sync-repeats 2`), initializer seed preparation now averages just `5` sandbox HTTP requests per run for `ts`, `native oneshot`, and `native persistent`
-- the current request shape for that initializer path is now effectively fixed at `1 createSandbox + 1 stat + 1 mkdir + 1 upload + 1 foregroundCommand`
-- after switching the archive path to plain `tar`, caching the built archive alongside the prepared seed, reusing archive eligibility metrics, and warming archive creation during prepare-seed, warm initializer latency on the current sample (`--files 96 --size-bytes 4096 --iterations 3 --seed-sync-repeats 2`) now lands around `55.17ms` for `ts`, `51.68ms` for `native oneshot`, and `47.32ms` for `native persistent`
-- on that same sample, cold initializer latency is still meaningfully higher because it includes prepared workspace construction and the first archive build, but it now lands around `170.86ms` for `ts`, `125.97ms` for `native oneshot`, and `122.26ms` for `native persistent`
-- this means the biggest initializer win is now proven: request count is no longer dominated by per-file upload churn, and warm repeated sandbox preparation benefits directly from prepared-seed archive reuse
-- on that same sample, the native-direct micro path still shows clear wins for persistent mode on fingerprint and planning, and a smaller but still positive gain on sandbox HTTP sync
-- because Docker runtime images now default to native persistent mode, these gains are positioned on the actual main deployment path rather than only behind a manual env toggle
-- the object-store-backed materialization path now also avoids one redundant full local fingerprint scan after flush, which directly reduces local filesystem walk / hash work on dirty workspace eviction and close paths
-- the native object-store materialization path now also avoids the extra post-sync local fingerprint scan, bringing the same "sync computes the fingerprint once" behavior to both TS and native-backed restore flows
-- repeated object-store sync now has a new aggressive fast path: when the remote sync manifest is present, unchanged files can often skip per-file metadata probes entirely on both push and pull, which should reduce request count and object-store round trips on warm sync workloads
-- cold object-store materialization and pull now also have a bundle-first fast path available, which trades one larger object download plus local tar extraction for many small object fetches on larger workspace restores
+The latest timing breakdown shows:
 
-## Archive Export
+- `poolInit=0ms`
+- `receiveDelay=0ms`
+- cold persistent push now spends almost all remaining time inside the real Rust sync command
 
-What we know today:
+## Current Position
 
-- native archive export now has a real measured win for multi-date backlog exports
-- `OAH_NATIVE_ARCHIVE_EXPORT=auto` is the best current mode
-- this is useful evidence that Rust can win in the repo when the boundary is right
+Rust is now clearly justified on the main workspace path because it already improves:
 
-Practical conclusion:
+- cold push
+- warm push
+- materialize
+- pull
+- Node RSS on heavy filesystem/object-store workloads
 
-- keep it
-- maintain it
-- do not let it distract from the main optimization path
+The repo should continue using TS for:
 
-## Main Problems Still Unsolved
+- HTTP / Fastify routing
+- orchestration
+- model and storage business logic
+- rollout and compatibility behavior
 
-The biggest remaining problems are now on the workspace side:
+The repo should continue using Rust for:
 
-- sidecar overhead is still too visible in sync/materialization
-- non-trusted TS `bundle-primary` cold push still keeps the unmanaged-prefix safety probe, by design
-- native persistent wins clearly on warm push and restore/materialize, but native cold push is still slower than TS `bundle-primary` even after request-count parity
-- native cold push now has phase-level proof that only about `28-30ms` of the `136-140ms` persistent path is inside the Rust sync command, so the remaining latency is likely in bridge / IPC / first-call orchestration rather than object-store requests or bundle build/upload
-- native cold push now has an even tighter proof point:
-  on the current sample, about `123ms` of the `151ms` persistent bridge time appears before the worker starts parsing the request at all, so the next optimization target should move from Rust sync internals to worker readiness / stdin receive latency / first-async-command orchestration
-- seed upload cold-start still pays for the first archive build, even though eager archive warming now overlaps part of that work and warm repeated initialization reuses the archive
-- prepared workspace reuse can be pushed harder
-- Docker-heavy cases still need broader benchmark proof before we call the rollout universally proven, even though the main Docker runtime path now defaults to native persistent mode
-- we now have a Docker benchmark entrypoint, but it still needs a successful end-to-end run in an environment that can pull base images reliably before it becomes part of the normal proof path
+- recursive scan
+- fingerprinting
+- diff planning
+- bundle build/upload/download
+- filesystem-heavy sync/materialization execution
 
-Secondary problem:
+## What Still Needs Work
 
-- archive export still leaves some TS-side materialization overhead on the table, but this is no longer the first thing to chase
+The main remaining work is no longer bridge readiness.
+It is command-body optimization and broader proof:
 
-## Next Plan
+- improve bundle build/upload on larger workspaces
+- reduce remaining scan / manifest overhead
+- keep improving seed upload and prepared-seed reuse
+- validate the same gains under Docker CPU and memory limits
+- keep semantics aligned with TS fallback
 
-### Priority 1. Deepen Workspace Sync
+## Next Steps
 
-Focus on the most frequently exercised hot path.
+### Priority 1. Deepen workspace sync
 
-Next work:
+- optimize larger-workspace bundle build and upload time
+- reduce remaining command-body overhead in native sync
+- keep pushing request count, CPU, and I/O down on object-store-backed workspaces
 
-- reduce native invocation and runtime setup overhead for sync operations
-- add bridge-level timing around persistent worker request write / queue / response-read so the remaining `~100ms` outside Rust `commandTotal` is no longer opaque
-- add a targeted warmup or readiness strategy for the first async persistent command, because the dominant remaining cold-path cost now shows up as worker-side `receiveDelay` rather than `handle` time
-- decide whether the persistent bridge should keep hot workers even earlier in the server lifecycle, so first real sync work does not pay worker-start / prewarm cost on the request path
-- keep the trusted-prefix fast path scoped to truly managed prefixes, and avoid widening it into unsafe default behavior
-- keep more scan / diff / execute work inside Rust once invoked
-- reduce repeated JSON bridge overhead on large directory trees
-- improve batching and concurrency for Docker workloads
-- keep validating semantics against current TS behavior
-- finish stabilizing and benchmarking the persistent worker path before any default rollout
-- run the new Docker-oriented benchmark profile regularly so we can measure whether the local initializer wins still hold once filesystem virtualization and container resource limits are in play
+### Priority 2. Deepen materialization and seed upload
 
-Success bar:
+- reuse more fingerprints and prepared artifacts
+- reduce repeated upload/copy work
+- keep shrinking sandbox initialization latency and request volume
 
-- native sync must match or beat TS on meaningful end-to-end Docker workloads
-- the steady-state native path should stay best on request count, materialize/pull latency, and Node RSS
-- cold-push latency should improve enough that turning on native by default no longer feels like a trade on first sync
+### Priority 3. Expand Docker proof
 
-### Priority 2. Deepen Materialization And Seed Upload
-
-Treat this as the second half of the same runtime path.
-
-Next work:
-
-- reduce repeated fingerprint work during workspace preparation
-- extend the new "sync returns local fingerprint" pattern to more mainline restore / seed / initializer flows where we still rescan immediately after sync
-- strengthen prepared seed cache usage
-- keep removing duplicated local staging/copy work from seed upload paths
-- avoid unnecessary upload/copy of unchanged files that still remain outside the current seed fast path
-- push more seed planning into Rust
-- decide whether the current TS/native cleanup semantics should grow from seed-root mirroring into broader remote diffing rules only if that remains safe for workspace initialization semantics
-- keep stabilizing the broader persistent-worker command set before considering any larger rollout
-- optimize sandbox HTTP upload path where Rust already has enough context to help
-- use the new local benchmark as a guardrail while we add a Docker-scale benchmark and decide whether persistent native workspace sync is strong enough to become the preferred path for self-hosted sandbox seed preparation
-- consider pushing more remote tree information into a single sandbox listing pass if the current `files/entries` metadata still leaves too many fallback `stat` requests on large unchanged trees
-- now that request-count instrumentation exists, use it to focus on the remaining real bottlenecks: upload volume, prepared-seed reuse quality, and any still-unnecessary directory-create traffic
-
-Success bar:
-
-- faster repeated workspace preparation
-- fewer redundant file operations
-- lower container CPU and disk churn
-
-### Priority 3. Keep Archive Export Stable, Not Primary
-
-Next work:
-
-- keep current archive export tests and benchmark path healthy
-- only continue deeper archive-export optimization if it is low-cost or directly helps Docker memory behavior
-- avoid spending primary engineering time there while sync/materialization still underperform
-
-Success bar:
-
-- no regression in current native archive-export behavior
-- no expansion of scope unless it supports the main runtime goals
+- rerun the mainline benchmark under Docker resource limits
+- confirm that native persistent remains better on real runtime startup paths
 
 ## Rollout Guidance
 
 Current recommendation:
 
-- workspace sync:
-  - prefer `OAH_NATIVE_WORKSPACE_SYNC=1` with `OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT=1` on Docker/self-hosted runtime paths
-  - keep TS `bundle-primary` fallback enabled as the safety net and compatibility path
-- archive export:
-  - `OAH_NATIVE_ARCHIVE_EXPORT=auto` is a reasonable selective mode
-- all native paths:
-  - keep immediate TS fallback
-
-This is still a conservative rollout strategy.
-That is intentional.
-
-## Verification Commands
-
-Current checks that still matter:
-
-- `cargo test --manifest-path ./native/Cargo.toml --target-dir ./.native-target -p oah-archive-export`
-- `pnpm exec tsc -p apps/server/tsconfig.json --noEmit`
-- `pnpm exec vitest run tests/workspace-archive-export.test.ts tests/workspace-archive-export-native.test.ts tests/service-routed-postgres.test.ts`
-- workspace sync and materialization benchmarks should become the primary recurring benchmark set from this point forward
+- prefer native persistent workspace sync on Docker and self-hosted runtime paths
+- keep TS fallback enabled as the compatibility path
+- continue expanding Rust only where benchmarks continue to confirm real wins
 
 ## Bottom Line
 
-Rust is already useful in this repository, but the optimization strategy is now explicitly refocused.
+Rust is no longer just an experiment in this repository.
+It is now delivering measurable wins on the main workspace lifecycle path.
 
-Current truth:
-
-- `native/` is established
-- the mainline Rust win is now workspace sync / materialization on the object-store path, especially with native persistent mode
-- archive export is still useful, but it is no longer the strategy-defining path
-- that is where the next round of deep optimization work should go
-
-From here, the right move is not to widen Rust usage blindly.
-The right move is to push harder on the most common Docker-heavy workspace path until it produces the same kind of clear win that archive export now shows.
+The right next move is not to widen Rust usage everywhere.
+The right next move is to keep concentrating Rust on the hottest workspace path until larger Docker workloads show the same consistent advantage.

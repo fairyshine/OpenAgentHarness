@@ -1,0 +1,45 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: oah-sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: oah-sandbox
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8787
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: oah-controller
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: oah-controller
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8788
+---
+# Example only:
+# - The worker and controller policies above close their ingress surface to same-namespace traffic
+#   plus Prometheus scraping for controller metrics.
+# - API server ingress is intentionally not locked down here because most clusters need an
+#   environment-specific ingress-controller or gateway namespace selector.

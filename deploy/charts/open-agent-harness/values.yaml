@@ -220,3 +220,118 @@ serviceMonitor:
   additionalLabels: {}
   interval: 15s
   scrapeTimeout: 5s
+
+prometheusRule:
+  enabled: false
+  additionalLabels: {}
+  severities:
+    noLeader: critical
+    scaleTargetError: warning
+    rolloutStuck: warning
+    scaleDownBlocked: info
+  durations:
+    noLeader: 2m
+    scaleTargetError: 10m
+    rolloutStuck: 10m
+    scaleDownBlocked: 15m
+
+grafanaDashboard:
+  enabled: false
+  additionalLabels: {}
+  sidecarLabel: grafana_dashboard
+  sidecarLabelValue: "1"
+
+networkPolicy:
+  enabled: false
+  allowSameNamespace: true
+  monitoring:
+    enabled: false
+    namespaceSelector: {}
+    podSelector: {}
+  apiServer:
+    enabled: false
+    extraIngress: []
+    egress:
+      enabled: false
+      allowSameNamespace: true
+      allowDns: true
+      allowKubernetesApi: false
+      allowRedis: false
+      allowPostgres: false
+      allowObjectStorage: false
+      allowModelGateway: false
+      extraRules: []
+  worker:
+    enabled: true
+    extraIngress: []
+    egress:
+      enabled: false
+      allowSameNamespace: true
+      allowDns: true
+      allowKubernetesApi: false
+      allowRedis: false
+      allowPostgres: false
+      allowObjectStorage: false
+      allowModelGateway: false
+      extraRules: []
+  controller:
+    enabled: true
+    extraIngress: []
+    egress:
+      enabled: false
+      allowSameNamespace: true
+      allowDns: true
+      allowKubernetesApi: true
+      allowRedis: true
+      allowPostgres: false
+      allowObjectStorage: false
+      allowModelGateway: false
+      extraRules: []
+  egress:
+    dependencies:
+      dns:
+        peers:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: kube-system
+            podSelector:
+              matchExpressions:
+                - key: k8s-app
+                  operator: In
+                  values:
+                    - kube-dns
+                    - coredns
+        ports:
+          - protocol: UDP
+            port: 53
+          - protocol: TCP
+            port: 53
+      kubernetesApi:
+        cidrs: []
+        ports:
+          - protocol: TCP
+            port: 443
+      redis:
+        peers: []
+        ports:
+          - protocol: TCP
+            port: 6379
+      postgres:
+        peers: []
+        ports:
+          - protocol: TCP
+            port: 5432
+      objectStorage:
+        peers: []
+        ports:
+          - protocol: TCP
+            port: 443
+          - protocol: TCP
+            port: 80
+      modelGateway:
+        peers: []
+        ports:
+          - protocol: TCP
+            port: 443
+          - protocol: TCP
+            port: 80

@@ -1,0 +1,95 @@
+# Overlay this file on top of prod.values.yaml:
+#
+# helm upgrade --install oah ./deploy/charts/open-agent-harness \
+#   --namespace open-agent-harness \
+#   --create-namespace \
+#   -f ./deploy/charts/open-agent-harness/examples/prod.values.yaml \
+#   -f ./deploy/charts/open-agent-harness/examples/prod-hardening.values.yaml
+
+serviceMonitor:
+  enabled: true
+  additionalLabels:
+    release: kube-prometheus-stack
+
+prometheusRule:
+  enabled: true
+  additionalLabels:
+    release: kube-prometheus-stack
+
+grafanaDashboard:
+  enabled: true
+  additionalLabels:
+    grafana_folder: open-agent-harness
+
+networkPolicy:
+  enabled: true
+  monitoring:
+    enabled: true
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: monitoring
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: prometheus
+  apiServer:
+    enabled: true
+    egress:
+      enabled: true
+      allowSameNamespace: true
+      allowDns: true
+      allowRedis: true
+      allowPostgres: true
+      allowObjectStorage: true
+      allowModelGateway: true
+  worker:
+    enabled: true
+    egress:
+      enabled: true
+      allowSameNamespace: true
+      allowDns: true
+      allowRedis: true
+      allowPostgres: true
+      allowObjectStorage: true
+      allowModelGateway: true
+  controller:
+    enabled: true
+    egress:
+      enabled: true
+      allowSameNamespace: true
+      allowDns: true
+      allowKubernetesApi: true
+      allowRedis: true
+  egress:
+    dependencies:
+      kubernetesApi:
+        cidrs:
+          # Replace with the real cluster API VIP / egress gateway CIDR.
+          - 10.96.0.1/32
+      redis:
+        peers:
+          # Replace labels if Redis runs under a different chart / namespace.
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: open-agent-harness
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: redis
+      postgres:
+        peers:
+          # Replace labels if PostgreSQL runs under a different chart / namespace.
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: open-agent-harness
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: postgres
+      objectStorage:
+        peers:
+          # Replace with MinIO / S3 gateway CIDR or explicit egress gateway range.
+          - ipBlock:
+              cidr: 10.20.0.0/24
+      modelGateway:
+        peers:
+          # Replace with the outbound model gateway / proxy CIDR.
+          - ipBlock:
+              cidr: 10.30.0.0/24

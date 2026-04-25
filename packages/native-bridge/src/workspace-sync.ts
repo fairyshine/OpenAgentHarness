@@ -186,7 +186,10 @@ export interface NativeSyncLocalToRemotePhaseTimings {
   clientCreateMs: number;
   manifestReadMs: number;
   bundleBuildMs: number;
+  bundleBodyPrepareMs: number;
   bundleUploadMs: number;
+  bundleTransport: "none" | "memory" | "tempfile";
+  bundleBytes: number;
   manifestWriteMs: number;
   deleteMs: number;
   totalPrimaryPathMs: number;

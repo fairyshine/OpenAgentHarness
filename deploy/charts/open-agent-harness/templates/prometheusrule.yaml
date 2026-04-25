@@ -1,0 +1,51 @@
+{{- if and .Values.controller.enabled .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "open-agent-harness.controllerName" . }}
+  labels:
+    {{- include "open-agent-harness.componentLabels" (dict "root" . "component" "controller") | nindent 4 }}
+    {{- with .Values.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: {{ include "open-agent-harness.controllerName" . }}.rules
+      rules:
+        - alert: OAHControllerNoLeader
+          expr: max by (namespace) (oah_controller_leader{namespace="{{ .Release.Namespace }}"}) < 1
+          for: {{ .Values.prometheusRule.durations.noLeader }}
+          labels:
+            severity: {{ .Values.prometheusRule.severities.noLeader | quote }}
+            component: controller
+          annotations:
+            summary: OAH controller has no active leader
+            description: No controller instance in namespace {{ .Release.Namespace }} currently reports leadership.
+        - alert: OAHControllerScaleTargetError
+          expr: max by (namespace) (oah_controller_scale_target_phase_error{namespace="{{ .Release.Namespace }}"}) > 0
+          for: {{ .Values.prometheusRule.durations.scaleTargetError }}
+          labels:
+            severity: {{ .Values.prometheusRule.severities.scaleTargetError | quote }}
+            component: controller
+          annotations:
+            summary: OAH controller scale target is erroring
+            description: The latest scale-target reconcile in namespace {{ .Release.Namespace }} is reporting error phase.
+        - alert: OAHControllerWorkerRolloutStuck
+          expr: max by (namespace) (oah_controller_scale_target_phase_progressing{namespace="{{ .Release.Namespace }}"}) > 0 and ((max by (namespace) (oah_controller_desired_replicas{namespace="{{ .Release.Namespace }}"}) - max by (namespace) (oah_controller_scale_target_ready_replicas{namespace="{{ .Release.Namespace }}"})) > 0)
+          for: {{ .Values.prometheusRule.durations.rolloutStuck }}
+          labels:
+            severity: {{ .Values.prometheusRule.severities.rolloutStuck | quote }}
+            component: controller
+          annotations:
+            summary: OAH worker rollout is stuck
+            description: Desired replicas exceed ready replicas while the controller still reports rollout progression in namespace {{ .Release.Namespace }}.
+        - alert: OAHControllerScaleDownBlocked
+          expr: max by (namespace) (oah_controller_scale_down_allowed{namespace="{{ .Release.Namespace }}"}) < 1 and max by (namespace) (oah_controller_scale_down_blocked_replicas{namespace="{{ .Release.Namespace }}"}) > 0
+          for: {{ .Values.prometheusRule.durations.scaleDownBlocked }}
+          labels:
+            severity: {{ .Values.prometheusRule.severities.scaleDownBlocked | quote }}
+            component: controller
+          annotations:
+            summary: OAH controller scale-down is blocked
+            description: The controller in namespace {{ .Release.Namespace }} is holding scale-down because one or more worker replicas are still blocked.
+{{- end }}

@@ -280,6 +280,8 @@ export async function createPlatformModelCatalogService(options: {
   let revision = 0;
   let reloadPromise: Promise<void> | undefined;
   let backgroundHydrationStarted = false;
+  let backgroundHydrationPromise: Promise<void> | undefined;
+  let closed = false;
 
   async function getSnapshot(): Promise<PlatformModelSnapshot> {
     startBackgroundHydration();
@@ -316,15 +318,26 @@ export async function createPlatformModelCatalogService(options: {
   }
 
   function startBackgroundHydration(): void {
-    if (metadataDiscoveryMode !== "background" || backgroundHydrationStarted) {
+    if (metadataDiscoveryMode !== "background" || backgroundHydrationStarted || closed) {
       return;
     }
 
     backgroundHydrationStarted = true;
-    queueMicrotask(() => {
-      void reloadDefinitions({
-        discoverMetadata: true
-      }).catch(() => undefined);
+    const hydrationTask =
+      reloadPromise ??
+      (async () => {
+        await reloadDefinitions({
+          discoverMetadata: true
+        }).catch(() => undefined);
+      })().finally(() => {
+        if (reloadPromise === hydrationTask) {
+          reloadPromise = undefined;
+        }
+      });
+
+    reloadPromise = hydrationTask;
+    backgroundHydrationPromise = hydrationTask.finally(() => {
+      backgroundHydrationPromise = undefined;
     });
   }
 
@@ -362,7 +375,9 @@ export async function createPlatformModelCatalogService(options: {
       };
     },
     async close() {
-      return undefined;
+      closed = true;
+      await reloadPromise;
+      await backgroundHydrationPromise;
     }
   };
 }

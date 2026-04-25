@@ -1,0 +1,467 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "max(oah_controller_leader{namespace=\"$namespace\"})",
+          "legendFormat": "leader",
+          "refId": "A"
+        }
+      ],
+      "title": "Leader Present",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "max(oah_controller_scale_target_phase_error{namespace=\"$namespace\"})",
+          "legendFormat": "error phase",
+          "refId": "A"
+        }
+      ],
+      "title": "Scale Target Error",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "max(oah_controller_ready_session_count{namespace=\"$namespace\"})",
+          "legendFormat": "ready sessions",
+          "refId": "A"
+        }
+      ],
+      "title": "Ready Sessions",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "max(oah_controller_scale_down_blocked_replicas{namespace=\"$namespace\"})",
+          "legendFormat": "blocked replicas",
+          "refId": "A"
+        }
+      ],
+      "title": "Scale-Down Blockers",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(oah_controller_desired_replicas{namespace=\"$namespace\"})",
+          "legendFormat": "desired",
+          "refId": "A"
+        },
+        {
+          "expr": "max(oah_controller_active_replicas{namespace=\"$namespace\"})",
+          "legendFormat": "active",
+          "refId": "B"
+        },
+        {
+          "expr": "max(oah_controller_scale_target_ready_replicas{namespace=\"$namespace\"})",
+          "legendFormat": "ready",
+          "refId": "C"
+        }
+      ],
+      "title": "Replica State",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(oah_controller_scale_target_phase_accepted{namespace=\"$namespace\"})",
+          "legendFormat": "accepted",
+          "refId": "A"
+        },
+        {
+          "expr": "max(oah_controller_scale_target_phase_progressing{namespace=\"$namespace\"})",
+          "legendFormat": "progressing",
+          "refId": "B"
+        },
+        {
+          "expr": "max(oah_controller_scale_target_phase_ready{namespace=\"$namespace\"})",
+          "legendFormat": "ready",
+          "refId": "C"
+        },
+        {
+          "expr": "max(oah_controller_scale_target_phase_blocked{namespace=\"$namespace\"})",
+          "legendFormat": "blocked",
+          "refId": "D"
+        },
+        {
+          "expr": "max(oah_controller_scale_target_phase_error{namespace=\"$namespace\"})",
+          "legendFormat": "error",
+          "refId": "E"
+        }
+      ],
+      "title": "Scale Target Phase",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(oah_controller_active_slots{namespace=\"$namespace\"})",
+          "legendFormat": "active slots",
+          "refId": "A"
+        },
+        {
+          "expr": "max(oah_controller_busy_slots{namespace=\"$namespace\"})",
+          "legendFormat": "busy slots",
+          "refId": "B"
+        },
+        {
+          "expr": "max(oah_controller_effective_capacity_per_replica{namespace=\"$namespace\"})",
+          "legendFormat": "capacity / replica",
+          "refId": "C"
+        }
+      ],
+      "title": "Worker Capacity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(oah_controller_leader_election_changes{namespace=\"$namespace\"})",
+          "legendFormat": "leadership changes",
+          "refId": "A"
+        },
+        {
+          "expr": "max(oah_controller_leader_election_retry_interval_ms{namespace=\"$namespace\"})",
+          "legendFormat": "retry interval ms",
+          "refId": "B"
+        },
+        {
+          "expr": "max(oah_controller_leader_election_lease_duration_ms{namespace=\"$namespace\"})",
+          "legendFormat": "lease duration ms",
+          "refId": "C"
+        }
+      ],
+      "title": "Leader Election",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "oah",
+    "controller",
+    "kubernetes"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "open-agent-harness",
+          "value": "open-agent-harness"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Namespace",
+        "multi": false,
+        "name": "namespace",
+        "options": [],
+        "query": "label_values(oah_controller_leader, namespace)",
+        "refresh": 2,
+        "skipUrlSync": false,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "OAH Controller Overview",
+  "uid": "oah-controller-overview",
+  "version": 1,
+  "weekStart": ""
+}

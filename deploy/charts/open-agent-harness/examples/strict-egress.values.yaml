@@ -1,0 +1,67 @@
+networkPolicy:
+  enabled: true
+  monitoring:
+    enabled: true
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: monitoring
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: prometheus
+  apiServer:
+    enabled: true
+    egress:
+      enabled: true
+      allowSameNamespace: true
+      allowDns: true
+      allowRedis: true
+      allowPostgres: true
+      allowObjectStorage: true
+      allowModelGateway: true
+  worker:
+    enabled: true
+    egress:
+      enabled: true
+      allowSameNamespace: true
+      allowDns: true
+      allowRedis: true
+      allowPostgres: true
+      allowObjectStorage: true
+      allowModelGateway: true
+  controller:
+    enabled: true
+    egress:
+      enabled: true
+      allowSameNamespace: true
+      allowDns: true
+      allowKubernetesApi: true
+      allowRedis: true
+  egress:
+    dependencies:
+      kubernetesApi:
+        cidrs:
+          - 10.96.0.1/32
+      redis:
+        peers:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: open-agent-harness
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: redis
+      postgres:
+        peers:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: open-agent-harness
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: postgres
+      objectStorage:
+        peers:
+          - ipBlock:
+              cidr: 10.20.0.0/24
+      modelGateway:
+        peers:
+          - ipBlock:
+              cidr: 10.30.0.0/24

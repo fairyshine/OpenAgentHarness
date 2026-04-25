@@ -70,11 +70,17 @@ async function discoverContextWindowMetadata(definition: PlatformModelDefinition
   }
 
   const maxModelLen = parsePositiveNumber(modelCard.max_model_len);
-  return maxModelLen ? { contextWindowTokens: maxModelLen } : undefined;
+  return maxModelLen
+    ? {
+        max_model_len: maxModelLen,
+        contextWindowTokens: maxModelLen
+      }
+    : undefined;
 }
 
 export async function enrichModelRegistryWithDiscoveredMetadata(
-  models: PlatformModelRegistry
+  models: PlatformModelRegistry,
+  options?: { preserveExistingContextWindowTokens?: boolean | undefined }
 ): Promise<PlatformModelRegistry> {
   const normalizedModels = normalizePlatformModelRegistry(models);
   const entries = await Promise.all(
@@ -91,7 +97,10 @@ export async function enrichModelRegistryWithDiscoveredMetadata(
             ...definition,
             metadata: normalizeModelMetadata({
               ...(definition.metadata ?? {}),
-              ...discoveredMetadata
+              ...discoveredMetadata,
+              ...(options?.preserveExistingContextWindowTokens && definition.metadata?.contextWindowTokens
+                ? { contextWindowTokens: definition.metadata.contextWindowTokens }
+                : {})
             })
           }
         ] as const;
@@ -109,7 +118,9 @@ export async function enrichWorkspaceModelsWithDiscoveredMetadata<
     workspaceModels: PlatformModelRegistry;
   }
 >(workspace: TWorkspace): Promise<TWorkspace> {
-  const workspaceModels = await enrichModelRegistryWithDiscoveredMetadata(workspace.workspaceModels);
+  const workspaceModels = await enrichModelRegistryWithDiscoveredMetadata(workspace.workspaceModels, {
+    preserveExistingContextWindowTokens: true
+  });
   return {
     ...workspace,
     workspaceModels
