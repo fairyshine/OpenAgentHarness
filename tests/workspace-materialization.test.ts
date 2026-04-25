@@ -129,6 +129,33 @@ describe("workspace materialization", () => {
     await manager.close();
   });
 
+  it("keeps default object-store workspace copies under a standalone cache root", async () => {
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "oah-materialization-cache-"));
+    tempDirs.push(cacheRoot);
+    const store = new FakeDirectoryObjectStore();
+    await store.putObject("workspace/demo/README.md", Buffer.from("# demo\n"));
+
+    const manager = new WorkspaceMaterializationManager({
+      cacheRoot,
+      workerId: "worker_1",
+      store
+    });
+
+    const lease = await manager.acquireWorkspace({
+      workspace: {
+        id: "ws_1",
+        rootPath: "/unused",
+        externalRef: "s3://test-bucket/workspace/demo"
+      } as never
+    });
+
+    expect(lease.localPath).toBe(path.join(cacheRoot, "ws_1"));
+    await expect(readFile(path.join(lease.localPath, "README.md"), "utf8")).resolves.toBe("# demo\n");
+
+    await lease.release();
+    await manager.close();
+  });
+
   it("flushes dirty idle copies back to object storage before eviction", async () => {
     const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "oah-materialization-cache-"));
     tempDirs.push(cacheRoot);

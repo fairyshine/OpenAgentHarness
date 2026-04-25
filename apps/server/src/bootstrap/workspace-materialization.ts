@@ -199,6 +199,16 @@ function buildCacheSuffix(input: { workspaceId: string; version: string; source:
   return createHash("sha1").update(`${input.workspaceId}:${input.version}:${sourceKey}`).digest("hex").slice(0, 12);
 }
 
+function inferWorkspaceRootFromCacheRoot(cacheRoot: string): string {
+  const normalizedCacheRoot = path.resolve(cacheRoot);
+  const cacheParent = path.dirname(normalizedCacheRoot);
+  if (path.basename(normalizedCacheRoot) === "__materialized__" && path.basename(cacheParent) === ".openharness") {
+    return path.dirname(cacheParent);
+  }
+
+  return normalizedCacheRoot;
+}
+
 function parseExternalWorkspaceRef(externalRef: string): { bucket?: string | undefined; remotePrefix: string } {
   const parsed = new URL(externalRef);
   if (parsed.protocol !== "s3:") {
@@ -246,7 +256,7 @@ export class WorkspaceMaterializationManager {
 
   constructor(options: WorkspaceMaterializationManagerOptions) {
     this.#cacheRoot = options.cacheRoot;
-    this.#workspaceRoot = path.resolve(options.workspaceRoot ?? path.dirname(path.dirname(options.cacheRoot)));
+    this.#workspaceRoot = path.resolve(options.workspaceRoot ?? inferWorkspaceRootFromCacheRoot(options.cacheRoot));
     this.#workerId = options.workerId;
     this.#ownerBaseUrl = options.ownerBaseUrl;
     this.#store = options.store;
