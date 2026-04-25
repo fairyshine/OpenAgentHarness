@@ -130,7 +130,7 @@ RUN pnpm --filter @oah/compose-scaler deploy --legacy --prod /opt/oah/compose-sc
   && find /opt/oah/compose-scaler/node_modules -type d -empty -delete \
   && rm -rf /opt/oah/compose-scaler/src
 
-FROM ${BASE_RUST_IMAGE} AS native-build
+FROM ${BASE_RUST_IMAGE} AS native-build-base
 
 WORKDIR /app/native
 
@@ -140,25 +140,49 @@ RUN --mount=type=cache,target=/var/cache/apk \
 COPY native/Cargo.toml native/Cargo.lock ./
 COPY native/oah-workspace-sync/Cargo.toml ./oah-workspace-sync/Cargo.toml
 COPY native/oah-archive-export/Cargo.toml ./oah-archive-export/Cargo.toml
+COPY native/oah-compose-scaler/Cargo.toml ./oah-compose-scaler/Cargo.toml
 
 RUN mkdir -p /app/native/oah-workspace-sync/src /app/native/oah-archive-export/src \
+  && mkdir -p /app/native/oah-compose-scaler/src \
   && printf 'fn main() {}\n' > /app/native/oah-workspace-sync/src/main.rs \
-  && printf 'fn main() {}\n' > /app/native/oah-archive-export/src/main.rs
+  && printf 'fn main() {}\n' > /app/native/oah-archive-export/src/main.rs \
+  && printf 'fn main() {}\n' > /app/native/oah-compose-scaler/src/main.rs
 
-RUN --mount=type=cache,id=oah-native-lite-cargo-registry,target=/usr/local/cargo/registry \
-  --mount=type=cache,id=oah-native-lite-cargo-git,target=/usr/local/cargo/git \
-  --mount=type=cache,id=oah-native-lite-target,target=/tmp/oah-native-target \
-  cargo build --locked --release -p oah-workspace-sync --target-dir /tmp/oah-native-target
+FROM native-build-base AS native-workspace-sync-build
+
+RUN --mount=type=cache,id=oah-native-workspace-sync-cargo-registry,target=/usr/local/cargo/registry \
+  --mount=type=cache,id=oah-native-workspace-sync-cargo-git,target=/usr/local/cargo/git \
+  --mount=type=cache,id=oah-native-workspace-sync-target,target=/tmp/oah-native-workspace-sync-target \
+  cargo build --locked --release -p oah-workspace-sync --target-dir /tmp/oah-native-workspace-sync-target
 
 COPY native/oah-workspace-sync/src ./oah-workspace-sync/src
-COPY native/oah-archive-export/src ./oah-archive-export/src
 
-RUN --mount=type=cache,id=oah-native-lite-cargo-registry,target=/usr/local/cargo/registry \
-  --mount=type=cache,id=oah-native-lite-cargo-git,target=/usr/local/cargo/git \
-  --mount=type=cache,id=oah-native-lite-target,target=/tmp/oah-native-target \
-  cargo build --locked --release -p oah-workspace-sync --target-dir /tmp/oah-native-target \
-  && strip /tmp/oah-native-target/release/oah-workspace-sync \
-  && cp /tmp/oah-native-target/release/oah-workspace-sync /usr/local/bin/oah-workspace-sync
+RUN --mount=type=cache,id=oah-native-workspace-sync-cargo-registry,target=/usr/local/cargo/registry \
+  --mount=type=cache,id=oah-native-workspace-sync-cargo-git,target=/usr/local/cargo/git \
+  --mount=type=cache,id=oah-native-workspace-sync-target,target=/tmp/oah-native-workspace-sync-target \
+  find /app/native/oah-workspace-sync/src -type f -exec touch {} + \
+  && cargo clean --target-dir /tmp/oah-native-workspace-sync-target -p oah-workspace-sync \
+  && cargo build --locked --release -p oah-workspace-sync --target-dir /tmp/oah-native-workspace-sync-target \
+  && strip /tmp/oah-native-workspace-sync-target/release/oah-workspace-sync \
+  && cp /tmp/oah-native-workspace-sync-target/release/oah-workspace-sync /usr/local/bin/oah-workspace-sync
+
+FROM native-build-base AS native-compose-scaler-build
+
+RUN --mount=type=cache,id=oah-native-compose-scaler-cargo-registry,target=/usr/local/cargo/registry \
+  --mount=type=cache,id=oah-native-compose-scaler-cargo-git,target=/usr/local/cargo/git \
+  --mount=type=cache,id=oah-native-compose-scaler-target,target=/tmp/oah-native-compose-scaler-target \
+  cargo build --locked --release -p oah-compose-scaler --target-dir /tmp/oah-native-compose-scaler-target
+
+COPY native/oah-compose-scaler/src ./oah-compose-scaler/src
+
+RUN --mount=type=cache,id=oah-native-compose-scaler-cargo-registry,target=/usr/local/cargo/registry \
+  --mount=type=cache,id=oah-native-compose-scaler-cargo-git,target=/usr/local/cargo/git \
+  --mount=type=cache,id=oah-native-compose-scaler-target,target=/tmp/oah-native-compose-scaler-target \
+  find /app/native/oah-compose-scaler/src -type f -exec touch {} + \
+  && cargo clean --target-dir /tmp/oah-native-compose-scaler-target -p oah-compose-scaler \
+  && cargo build --locked --release -p oah-compose-scaler --target-dir /tmp/oah-native-compose-scaler-target \
+  && strip /tmp/oah-native-compose-scaler-target/release/oah-compose-scaler \
+  && cp /tmp/oah-native-compose-scaler-target/release/oah-compose-scaler /usr/local/bin/oah-compose-scaler
 
 FROM ${BASE_BUILD_IMAGE} AS node-runtime-binary
 
@@ -211,7 +235,7 @@ COPY --from=server-runtime-bundles /opt/oah/runtime-bundles/api /app/dist
 COPY docs/schemas /app/docs/schemas
 COPY docs/openapi /app/docs/openapi
 COPY assets/logo-readme.png /app/assets/logo-readme.png
-COPY --from=native-build /usr/local/bin/oah-workspace-sync /app/native/oah-workspace-sync
+COPY --from=native-workspace-sync-build /usr/local/bin/oah-workspace-sync /app/native/oah-workspace-sync
 
 EXPOSE 8787
 
@@ -221,7 +245,7 @@ FROM runtime-execution-base AS worker-runtime
 
 COPY --from=server-runtime-bundles /opt/oah/runtime-bundles/worker /app/dist
 COPY docs/schemas /app/docs/schemas
-COPY --from=native-build /usr/local/bin/oah-workspace-sync /app/native/oah-workspace-sync
+COPY --from=native-workspace-sync-build /usr/local/bin/oah-workspace-sync /app/native/oah-workspace-sync
 
 EXPOSE 8787
 
@@ -238,18 +262,21 @@ EXPOSE 8788
 
 CMD ["node", "dist/index.js", "--config", "/etc/oah/server.yaml"]
 
-FROM runtime-common AS compose-scaler-runtime
+FROM ${BASE_RUNTIME_IMAGE} AS compose-scaler-runtime
+
+RUN apk add --no-cache ca-certificates \
+  && mkdir -p /usr/libexec/docker/cli-plugins /app
 
 COPY --from=docker-cli-build /usr/local/bin/docker /usr/bin/docker
 COPY --from=docker-cli-build /usr/local/libexec/docker/cli-plugins/docker-compose /usr/libexec/docker/cli-plugins/docker-compose
+COPY --from=native-compose-scaler-build /usr/local/bin/oah-compose-scaler /app/oah-compose-scaler
 
 RUN chmod +x /usr/bin/docker /usr/libexec/docker/cli-plugins/docker-compose \
+  && chmod +x /app/oah-compose-scaler \
   && docker compose version
-
-COPY --from=compose-scaler-deploy /opt/oah/compose-scaler /app
 
 EXPOSE 8790
 
-CMD ["node", "dist/index.js"]
+CMD ["/app/oah-compose-scaler"]
 
 FROM api-runtime AS runtime

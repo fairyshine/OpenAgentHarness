@@ -12,13 +12,22 @@ docker build \
   -f - \
   -t "${IMAGE_TAG}" \
   "${ROOT_DIR}" <<'EOF'
+FROM rust:1.95-alpine AS native-build
+
+RUN apk add --no-cache build-base cmake perl pkgconf
+
+WORKDIR /app
+
+COPY native ./native
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+  --mount=type=cache,target=/usr/local/cargo/git \
+  --mount=type=cache,target=/app/.native-target \
+  cargo build --manifest-path ./native/Cargo.toml --target-dir /app/.native-target --release -p oah-workspace-sync
+
 FROM node:24-alpine
 
-ENV CARGO_HOME=/root/.cargo
-ENV PATH=/root/.cargo/bin:${PATH}
-
-RUN apk add --no-cache curl ca-certificates build-base cmake perl pkgconf \
-  && curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+RUN apk add --no-cache ca-certificates
 
 RUN corepack enable
 
@@ -49,16 +58,13 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 
 COPY apps ./apps
 COPY packages ./packages
-COPY native ./native
 COPY scripts ./scripts
 
-RUN --mount=type=cache,target=/root/.cargo/registry \
-  --mount=type=cache,target=/root/.cargo/git \
-  --mount=type=cache,target=/root/.local/share/pnpm/store \
-  --mount=type=cache,target=/app/.native-target \
+COPY --from=native-build /app/.native-target/release/oah-workspace-sync /app/.native-target/release/oah-workspace-sync
+
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
   pnpm config set store-dir /root/.local/share/pnpm/store \
-  && pnpm install --frozen-lockfile --offline \
-  && cargo build --manifest-path ./native/Cargo.toml --target-dir /app/.native-target --release -p oah-workspace-sync
+  && pnpm install --frozen-lockfile --offline
 
 ENV OAH_NATIVE_WORKSPACE_SYNC_BINARY=/app/.native-target/release/oah-workspace-sync
 

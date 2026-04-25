@@ -101,3 +101,6 @@ Optional flags: `--tool-dir`, `--skill-dir`, `--host`, `--port`
 - `OAH_LOCAL_SYNC_ON_CHANGE_ONLY=1` skips `pnpm storage:sync` when readonly source file names, sizes, and mtimes are unchanged. Runtime reads still go through object storage.
 - `OAH_LOCAL_SKIP_READONLY_VOLUME_RECREATE=1` keeps the existing rclone readonly volumes. Use it only when Docker Desktop and the rclone plugin have not restarted and you do not need to recover from plugin path drift.
 - `OAH_LOCAL_SKIP_REDIS_FLUSH=1` preserves Redis coordination state. The default reset is safer for repeatable local tests.
+- `OAH_MINIO_GOMEMLIMIT` / `OAH_MINIO_GOMAXPROCS` tune the local MinIO Go runtime defaults. They default to `128MiB` and `1` while preserving the MinIO + rclone object-storage simulation path.
+- `OAH_API_NODE_OPTIONS` / `OAH_CONTROLLER_NODE_OPTIONS` / `OAH_SANDBOX_NODE_OPTIONS` override the local OAH Node process V8 heap defaults. The defaults encourage idle heaps to settle earlier; raise them for production-like load tests or large jobs.
+- `OAH_POSTGRES_SHARED_BUFFERS` / `OAH_POSTGRES_MAX_CONNECTIONS` / `OAH_REDIS_HEALTHCHECK_INTERVAL` and related Compose variables can override the local database and healthcheck defaults.

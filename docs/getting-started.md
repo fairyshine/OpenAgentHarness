@@ -114,6 +114,9 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 - `OAH_LOCAL_SYNC_ON_CHANGE_ONLY=1`：只读源目录的文件清单、大小或 mtime 没变时跳过 `pnpm storage:sync`，对象存储仍然是运行时读取来源。
 - `OAH_LOCAL_SKIP_READONLY_VOLUME_RECREATE=1`：不重建 rclone 只读卷。仅在 Docker Desktop 和 rclone 插件没有重启、且你不需要修复插件 path drift 时使用。
 - `OAH_LOCAL_SKIP_REDIS_FLUSH=1`：保留 Redis 协调状态。通常调试队列/调度残留时才用；默认会清空以避免旧本地状态影响测试。
+- `OAH_MINIO_GOMEMLIMIT` / `OAH_MINIO_GOMAXPROCS`：调整本地 MinIO 的 Go 运行时资源默认值。默认分别是 `128MiB` 和 `1`，仍然保留 MinIO + rclone 的对象存储模拟路径。
+- `OAH_API_NODE_OPTIONS` / `OAH_CONTROLLER_NODE_OPTIONS` / `OAH_SANDBOX_NODE_OPTIONS`：覆盖本地 OAH Node 进程的默认 V8 heap 参数。默认值会让空闲堆更早收敛，生产压测或大任务可以按需调高。
+- `OAH_POSTGRES_SHARED_BUFFERS` / `OAH_POSTGRES_MAX_CONNECTIONS` / `OAH_REDIS_HEALTHCHECK_INTERVAL` 等 Compose 环境变量可继续覆盖本地数据库和健康检查默认值。
 
 ### `VolumeDriver.Get ... context deadline exceeded`
 

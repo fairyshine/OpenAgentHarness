@@ -1,5 +1,5 @@
 [workspace]
-members = ["oah-workspace-sync", "oah-archive-export"]
+members = ["oah-workspace-sync", "oah-archive-export", "oah-compose-scaler"]
 resolver = "2"
 
 [profile.release]

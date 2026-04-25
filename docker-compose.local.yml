@@ -2,6 +2,18 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${OAH_POSTGRES_SHARED_BUFFERS:-32MB}
+      - -c
+      - effective_cache_size=${OAH_POSTGRES_EFFECTIVE_CACHE_SIZE:-128MB}
+      - -c
+      - maintenance_work_mem=${OAH_POSTGRES_MAINTENANCE_WORK_MEM:-16MB}
+      - -c
+      - max_connections=${OAH_POSTGRES_MAX_CONNECTIONS:-40}
+      - -c
+      - wal_buffers=${OAH_POSTGRES_WAL_BUFFERS:-2MB}
     environment:
       POSTGRES_DB: open_agent_harness
       POSTGRES_USER: oah
@@ -12,7 +24,7 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U oah -d open_agent_harness"]
-      interval: 5s
+      interval: ${OAH_POSTGRES_HEALTHCHECK_INTERVAL:-15s}
       timeout: 5s
       retries: 10
 
@@ -21,12 +33,21 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --hz
+      - "5"
+      - --dynamic-hz
+      - "yes"
     volumes:
       - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: ${OAH_REDIS_HEALTHCHECK_INTERVAL:-15s}
       timeout: 5s
       retries: 10
 
@@ -37,6 +58,8 @@ services:
       MINIO_ROOT_USER: oahadmin
       MINIO_ROOT_PASSWORD: oahadmin123
       MINIO_REGION_NAME: us-east-1
+      GOMEMLIMIT: ${OAH_MINIO_GOMEMLIMIT:-128MiB}
+      GOMAXPROCS: ${OAH_MINIO_GOMAXPROCS:-1}
     command:
       - server
       - /data
@@ -51,7 +74,7 @@ services:
       - minio-data:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
-      interval: 5s
+      interval: ${OAH_MINIO_HEALTHCHECK_INTERVAL:-15s}
       timeout: 5s
       retries: 20
 
@@ -72,14 +95,14 @@ services:
       - /config/server.docker.yaml
       - --api-only
     environment:
-      NODE_OPTIONS: "--max-old-space-size=320"
+      NODE_OPTIONS: ${OAH_API_NODE_OPTIONS:---max-old-space-size=192 --max-semi-space-size=4}
       OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES: "true"
       OAH_INTERNAL_BASE_URL: "http://oah-api:8787"
       OAH_NATIVE_WORKSPACE_SYNC: ${OAH_NATIVE_WORKSPACE_SYNC:-1}
       OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT: ${OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT:-1}
       OAH_OBJECT_STORAGE_SYNC_BUNDLE_LAYOUT: ${OAH_OBJECT_STORAGE_SYNC_BUNDLE_LAYOUT:-primary}
       OAH_OBJECT_STORAGE_SYNC_TRUST_MANAGED_PREFIXES: ${OAH_OBJECT_STORAGE_SYNC_TRUST_MANAGED_PREFIXES:-1}
-      OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS: "15000"
+      OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS: ${OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS:-30000}
       OAH_WORKSPACE_PREWARM_ENABLED: "false"
     depends_on:
       postgres:
@@ -127,7 +150,7 @@ services:
       oah-compose-scaler:
         condition: service_healthy
     environment:
-      NODE_OPTIONS: "--max-old-space-size=80"
+      NODE_OPTIONS: ${OAH_CONTROLLER_NODE_OPTIONS:---max-old-space-size=64 --max-semi-space-size=2}
       OAH_CONTROLLER_SCALE_INTERVAL_MS: ${OAH_CONTROLLER_SCALE_INTERVAL_MS:-30000}
     ports:
       - "8789:8788"
@@ -147,7 +170,6 @@ services:
         BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-alpine:3.22}
     restart: unless-stopped
     environment:
-      NODE_OPTIONS: "--max-old-space-size=64"
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
       OAH_COMPOSE_SCALER_AUTH_TOKEN: ${OAH_LOCAL_COMPOSE_SCALER_AUTH_TOKEN}
       OAH_COMPOSE_SCALER_COMPOSE_FILE: ${OAH_LOCAL_REPO_ROOT:?set OAH_LOCAL_REPO_ROOT}/docker-compose.local.yml
@@ -193,13 +215,13 @@ services:
       - --config
       - /config/server.docker.yaml
     environment:
-      NODE_OPTIONS: "--max-old-space-size=224"
+      NODE_OPTIONS: ${OAH_SANDBOX_NODE_OPTIONS:---max-old-space-size=160 --max-semi-space-size=4}
       OAH_ALLOW_PRIVATE_INTERNAL_ROUTES: "true"
       OAH_NATIVE_WORKSPACE_SYNC: ${OAH_NATIVE_WORKSPACE_SYNC:-1}
       OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT: ${OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT:-1}
       OAH_OBJECT_STORAGE_SYNC_BUNDLE_LAYOUT: ${OAH_OBJECT_STORAGE_SYNC_BUNDLE_LAYOUT:-primary}
       OAH_OBJECT_STORAGE_SYNC_TRUST_MANAGED_PREFIXES: ${OAH_OBJECT_STORAGE_SYNC_TRUST_MANAGED_PREFIXES:-1}
-      OAH_WORKSPACE_MATERIALIZATION_MAINTENANCE_INTERVAL_MS: ${OAH_WORKSPACE_MATERIALIZATION_MAINTENANCE_INTERVAL_MS:-30000}
+      OAH_WORKSPACE_MATERIALIZATION_MAINTENANCE_INTERVAL_MS: ${OAH_WORKSPACE_MATERIALIZATION_MAINTENANCE_INTERVAL_MS:-60000}
     depends_on:
       postgres:
         condition: service_healthy
