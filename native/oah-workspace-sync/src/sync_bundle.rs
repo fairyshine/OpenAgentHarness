@@ -12,7 +12,7 @@ use crate::path_rules::{
     normalize_relative_path, INTERNAL_SYNC_BUNDLE_RELATIVE_PATH,
     INTERNAL_SYNC_MANIFEST_RELATIVE_PATH,
 };
-use crate::{FileEntry, Snapshot};
+use crate::snapshot::{FileEntry, Snapshot};
 
 const DEFAULT_IN_MEMORY_SYNC_BUNDLE_MIN_SOURCE_BYTES: u64 = 256 * 1024;
 const DEFAULT_IN_MEMORY_SYNC_BUNDLE_MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024;

@@ -289,7 +289,21 @@ Structural cleanup now has a safe order:
 3. split `native/oah-workspace-sync` tar/ustar bundle writer, extractor, and in-memory bundle environment controls into a `sync_bundle` module - done in `native/oah-workspace-sync/src/sync_bundle.rs`
 4. split `native/oah-workspace-sync` sandbox HTTP config/client/listing/prune rules into `sandbox_http.rs` - done in `native/oah-workspace-sync/src/sandbox_http.rs`
 5. split `native/oah-workspace-sync` local filesystem stat/remove/ensure/cleanup helpers into `local_fs.rs` - done in `native/oah-workspace-sync/src/local_fs.rs`
-6. next split snapshot/manifest planning or archive-export row insertion before S3/object-store orchestration, because object-store orchestration crosses many request/response structs
+6. split `native/oah-archive-export` export-root inspection and checksum helpers into `inspection.rs` - done in `native/oah-archive-export/src/inspection.rs`
+7. split `native/oah-archive-export` SQLite write pragmas, row insertion, and JSON field helpers into `rows.rs` - done in `native/oah-archive-export/src/rows.rs`
+8. split `native/oah-workspace-sync` local snapshot scanning and fingerprinting into `snapshot.rs` - done in `native/oah-workspace-sync/src/snapshot.rs`
+9. split `native/oah-workspace-sync` sync manifest document conversion helpers into `manifest.rs` - done in `native/oah-workspace-sync/src/manifest.rs`
+10. split `native/oah-workspace-sync` upload/download/seed planning helpers into `plan.rs` - done in `native/oah-workspace-sync/src/plan.rs`
+11. split `native/oah-workspace-sync` sync bundle policy/config/cache helpers into `bundle_policy.rs` - done in `native/oah-workspace-sync/src/bundle_policy.rs`
+12. split `native/oah-workspace-sync` object-store config, counters, manifest I/O, and plain file upload/download helpers into `object_store.rs` - done in `native/oah-workspace-sync/src/object_store.rs`
+13. split `native/oah-workspace-sync` seed archive construction into `seed_archive.rs` - done in `native/oah-workspace-sync/src/seed_archive.rs`
+14. split `native/oah-workspace-sync` CLI/worker protocol, JSON I/O, and request/response DTOs into `protocol.rs` - done in `native/oah-workspace-sync/src/protocol.rs`
+15. split `native/oah-workspace-sync` sync bundle upload/delete/hydrate orchestration into `bundle_transfer.rs` - done in `native/oah-workspace-sync/src/bundle_transfer.rs`
+16. split `native/oah-workspace-sync` repeated upload/download/info-check/concurrency operations into `sync_operations.rs` - done in `native/oah-workspace-sync/src/sync_operations.rs`
+17. split `native/oah-workspace-sync` sandbox HTTP sync orchestration into `sandbox_sync.rs` - done in `native/oah-workspace-sync/src/sandbox_sync.rs`
+18. split `native/oah-workspace-sync` object-store sync state machines into `object_sync.rs` - done in `native/oah-workspace-sync/src/object_sync.rs`
+19. split `native/oah-workspace-sync` unit tests out of `main.rs` into `tests.rs` - done in `native/oah-workspace-sync/src/tests.rs`
+20. next split helper modules internally if any newly extracted file grows past a clear responsibility boundary
 
 ## Repository Scan: Rust Candidate Map
 
@@ -310,6 +324,8 @@ These are the highest-confidence candidates because they are already on the Dock
    - Current pass: native snapshots now remember when `collect_snapshot` has already produced relative-path order, so fingerprinting and the Rust ustar writer can skip duplicate sorts on the main collected-snapshot path.
    - Current cleanup: sync bundle tar/ustar writing, tar subprocess fallback, in-memory bundle thresholds, and ustar byte extraction now live in `native/oah-workspace-sync/src/sync_bundle.rs`, leaving `main.rs` focused on command handling and sync orchestration.
    - Current cleanup: sandbox HTTP client/listing/prune helpers now live in `native/oah-workspace-sync/src/sandbox_http.rs`, and local filesystem cleanup/materialization helpers live in `native/oah-workspace-sync/src/local_fs.rs`.
+   - Current cleanup: local snapshot scanning/fingerprinting now lives in `native/oah-workspace-sync/src/snapshot.rs`, sync manifest conversion in `native/oah-workspace-sync/src/manifest.rs`, and upload/download/seed planning in `native/oah-workspace-sync/src/plan.rs`.
+   - Current cleanup: sync bundle policy/config lives in `native/oah-workspace-sync/src/bundle_policy.rs`, object-store helpers in `native/oah-workspace-sync/src/object_store.rs`, seed archive construction in `native/oah-workspace-sync/src/seed_archive.rs`, CLI/worker protocol handling in `native/oah-workspace-sync/src/protocol.rs`, bundle upload/delete/hydrate orchestration in `native/oah-workspace-sync/src/bundle_transfer.rs`, repeated sync operations in `native/oah-workspace-sync/src/sync_operations.rs`, sandbox HTTP sync orchestration in `native/oah-workspace-sync/src/sandbox_sync.rs`, object-store sync state machines in `native/oah-workspace-sync/src/object_sync.rs`, and unit tests in `native/oah-workspace-sync/src/tests.rs`.
    - Measured win: larger-sample `bundle-build` dropped from about `55ms` to about `11ms`; native persistent cold push dropped from about `97ms` to about `45ms` in the writer-on/off control.
    - Next win: upload/materialize cost and very-large tempfile/streaming behavior.
 
@@ -357,6 +373,8 @@ These are useful, but should wait until the main workspace path is proven under 
    - Code surface: `native/oah-archive-export`, `apps/server/src/native-archive-export.ts`, and `apps/server/src/workspace-archive-export.ts`.
    - Current state: Rust already writes SQLite bundles/checksums and supports persistent streaming.
    - Current cleanup: SQLite schema and insert statement definitions now live in `native/oah-archive-export/src/schema.rs`, trimming `main.rs` and keeping storage layout changes localized.
+   - Current cleanup: export-root inspection and checksum helpers now live in `native/oah-archive-export/src/inspection.rs`, separate from SQLite row writing.
+   - Current cleanup: SQLite write pragmas, row insertion, and JSON field extraction now live in `native/oah-archive-export/src/rows.rs`, so streaming protocol code stays separate from row serialization.
    - Rust opportunity: improve batching/transaction shape, add timing counters, and keep row serialization streaming all the way from TS to Rust.
    - Expected win: lower archive export CPU and memory, but this is background work rather than the main latency path.
 
