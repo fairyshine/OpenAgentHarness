@@ -61,7 +61,7 @@ RUN pnpm exec tsc -b apps/controller/tsconfig.json
 
 FROM source AS server-runtime-bundles
 
-RUN node ./scripts/build-runtime-bundles.mjs /opt/oah/runtime-bundles
+RUN OAH_RUNTIME_BUNDLE_DIAGNOSTICS=1 node ./scripts/build-runtime-bundles.mjs /opt/oah/runtime-bundles
 
 FROM controller-build AS controller-deploy
 
