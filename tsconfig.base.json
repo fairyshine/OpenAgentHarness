@@ -29,7 +29,8 @@
       "@oah/config-server-control": ["./packages/config-server-control/src/index.ts"],
       "@oah/scale-target-control": ["./packages/scale-target-control/src/index.ts"],
       "@oah/storage-redis-control": ["./packages/storage-redis-control/src/index.ts"],
-      "@oah/model-gateway": ["./packages/model-gateway/src/index.ts"],
+      "@oah/model-runtime": ["./packages/model-runtime/src/index.ts"],
+      "@oah/model-runtime/providers": ["./packages/model-runtime/src/providers.ts"],
       "@oah/native-bridge": ["./packages/native-bridge/src/index.ts"]
     }
   }

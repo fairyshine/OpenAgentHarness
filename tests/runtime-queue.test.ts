@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EngineService } from "@oah/engine-core";
 import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
-import { FakeModelGateway } from "./helpers/fake-model-gateway";
+import { FakeModelGateway } from "./helpers/fake-model-runtime";
 
 async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
   const start = Date.now();

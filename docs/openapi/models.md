@@ -1,4 +1,4 @@
-# Model Gateway Module
+# Model Runtime Module
 
 面向 workspace action、脚本和 `oah model` CLI 的内部模型调用接口。
 
@@ -37,7 +37,7 @@ data: {"model":"openai-default","finishReason":"stop"}
 
 ## 设计说明
 
-- 模型网关，不是 session 对话接口，不维护对话历史
+- 模型运行时，不是 session 对话接口，不维护对话历史
 - 仅面向服务端预设模型，使用服务端模型名（如 `openai-default`）
 - 内部 loopback 接口，无需 token 认证，后续可收敛为 Unix Socket
 - `messages` 按 AI SDK `ModelMessage[]` 校验后转 provider 请求

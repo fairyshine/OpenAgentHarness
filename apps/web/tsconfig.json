@@ -18,7 +18,8 @@
       "@oah/storage-sqlite": ["../../packages/storage-sqlite/src/index.ts"],
       "@oah/storage-postgres": ["../../packages/storage-postgres/src/index.ts"],
       "@oah/storage-redis": ["../../packages/storage-redis/src/index.ts"],
-      "@oah/model-gateway": ["../../packages/model-gateway/src/index.ts"]
+      "@oah/model-runtime": ["../../packages/model-runtime/src/index.ts"],
+      "@oah/model-runtime/providers": ["../../packages/model-runtime/src/providers.ts"]
     },
     "noEmit": true,
     "declaration": false,

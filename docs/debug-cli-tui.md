@@ -28,7 +28,7 @@ OpenAgentHarness 本身仍然是 headless runtime，不提供正式产品 UI。
 - 贴合 headless runtime 定位
 - 更容易接入本地目录、shell、Unix Socket 和日志流
 - 不需要先处理前端鉴权、静态资源和部署问题
-- 对开发者来说，终端内调试 action、model gateway、hook、run 更顺手
+- 对开发者来说，终端内调试 action、model runtime、hook、run 更顺手
 
 ## 工具形态
 
@@ -75,7 +75,7 @@ oah
 - `oah action run --workspace <id> --action <name>`
   - 手动触发 action
 - `oah model generate --model <name>`
-  - 调用内部模型网关
+  - 调用内部模型运行时
 - `oah run inspect --run <id>`
   - 查看 run、step、tool call、hook 和错误信息
 
@@ -168,7 +168,7 @@ oah
 - 查看配置解析错误
 - 查看当前 run 选中了哪个模型
 - 查看最终 prompt 拼装顺序和段来源
-- 直接测试内部模型网关
+- 直接测试内部模型运行时
 - 查看 action 注入的环境变量摘要
 
 ## 与现有系统的关系
@@ -179,22 +179,22 @@ CLI/TUI 只消费已有能力，不新增一套并行运行时。
 
 - 对外 OpenAPI
 - SSE
-- 内部模型网关
+- 内部模型运行时
 - 服务端 catalog 发现结果
 
 建议原则：
 
 - 能复用已有 HTTP / SSE 接口，就不要额外造私有协议
-- CLI/TUI 仅在“本机调试能力”场景下使用内部模型网关
+- CLI/TUI 仅在“本机调试能力”场景下使用内部模型运行时
 
-## 与模型网关的关系
+## 与模型运行时的关系
 
 `oah model generate` 与 `oah model stream` 直接调用：
 
 - `/internal/v1/models/generate`
 - `/internal/v1/models/stream`
 
-因此 CLI/TUI 也是内部模型网关的第一个官方客户端。
+因此 CLI/TUI 也是内部模型运行时的第一个官方客户端。
 
 ## 边界
 
@@ -219,7 +219,7 @@ CLI/TUI 不负责：
 - CLI 参数层：`commander` 或 `cac`
 - TUI：`ink` 或 `blessed`
 - SSE：直接复用现有事件流协议
-- 本地模型调用：复用内部模型网关
+- 本地模型调用：复用内部模型运行时
 
 ## 实施优先级
 

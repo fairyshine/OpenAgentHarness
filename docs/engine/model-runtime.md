@@ -1,4 +1,4 @@
-# Model Gateway
+# Model Runtime
 
 ## 目标
 
@@ -8,7 +8,7 @@
 
 ## 核心思路
 
-脚本不直接调用第三方模型 provider。服务端统一加载模型目录 → 通过 AI SDK 解析模型 → 脚本通过内部网关请求 → 服务端返回结果。
+脚本不直接调用第三方模型 provider。服务端统一加载模型目录 → 通过 AI SDK 解析模型 → 脚本通过内部模型运行时请求 → 服务端返回结果。
 
 收益：脚本无需关心 provider 差异、密钥不暴露、审计统一、可限流。
 
@@ -38,7 +38,7 @@ oah model generate --model "$OPENHARNESS_DEFAULT_MODEL" --prompt "Summarize the 
 oah model stream --model "openai-default" --message user:"Explain this changelog"
 ```
 
-CLI 读取运行时环境变量，调用内部网关，输出到 stdout。
+CLI 读取运行时环境变量，调用内部模型运行时，输出到 stdout。
 
 ## curl 示例
 
@@ -86,14 +86,14 @@ curl -N -X POST "http://127.0.0.1:8787/internal/v1/models/stream" \
 | `OPENHARNESS_RUN_ID` | 当前 action 所属 run ID |
 | `OPENHARNESS_ACTION_NAME` | 当前 action 名称 |
 
-网关地址变量尚未自动注入，脚本需约定 loopback 地址。
+模型运行时地址变量尚未自动注入，脚本需约定 loopback 地址。
 
 ## 服务端内部流程
 
 ```ts
-export interface ModelGateway {
-  generate(req: ModelGenerateRequest, ctx: ModelGatewayContext): Promise<ModelGenerateResult>
-  stream(req: ModelStreamRequest, ctx: ModelGatewayContext): Promise<ReadableStream>
+export interface ModelRuntime {
+  generate(req: ModelGenerateRequest, ctx: ModelRuntimeContext): Promise<ModelGenerateResult>
+  stream(req: ModelStreamRequest, ctx: ModelRuntimeContext): Promise<ReadableStream>
 }
 ```
 

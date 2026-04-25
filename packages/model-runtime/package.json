@@ -1,5 +1,5 @@
 {
-  "name": "@oah/model-gateway",
+  "name": "@oah/model-runtime",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./providers": {
+      "types": "./dist/providers.d.ts",
+      "default": "./dist/providers.js"
     }
   },
   "dependencies": {

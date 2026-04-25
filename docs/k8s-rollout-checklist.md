@@ -89,13 +89,13 @@
     - Redis Pod labels
     - Postgres Pod labels
     - 对象存储 CIDR / egress gateway
-    - 模型网关 CIDR / egress gateway
+    - 模型运行时 CIDR / egress gateway
 - 启用 strict egress 后逐项验证：
   - DNS 解析正常
   - controller 仍能访问 Kubernetes API
   - API / worker 仍能访问 Redis / Postgres
   - worker 仍能访问对象存储
-  - API / worker 仍能访问模型网关
+  - API / worker 仍能访问模型运行时
 
 ## 5. Production Readiness
 
@@ -106,7 +106,7 @@
   - PVC 名称
   - Prometheus release label
   - Kube API CIDR
-  - 对象存储 / 模型网关网段
+  - 对象存储 / 模型运行时网段
 - 滚动发布策略确认：
   - `apiServer.strategy.maxUnavailable=0`
   - `worker.strategy.maxUnavailable=0`

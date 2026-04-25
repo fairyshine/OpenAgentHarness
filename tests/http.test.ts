@@ -18,7 +18,7 @@ import {
   resetNativeWorkspaceSyncObservabilityForTests
 } from "../apps/server/src/observability/native-workspace-sync.ts";
 import type { StorageAdmin } from "../apps/server/src/storage-admin.ts";
-import { FakeModelGateway } from "./helpers/fake-model-gateway";
+import { FakeModelGateway } from "./helpers/fake-model-runtime";
 
 interface PlatformModelSnapshot {
   revision: number;

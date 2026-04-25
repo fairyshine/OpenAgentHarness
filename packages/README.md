@@ -8,7 +8,7 @@
 | --- | --- |
 | `@oah/api-contracts` | API schema、共享 DTO、catalog/engine event 合约 |
 | `@oah/config` | 服务配置加载、workspace 发现、runtime 导入、平台模型与能力目录扫描 |
-| `@oah/model-gateway` | 模型提供方适配、AI SDK 集成、MCP/tool server 装配 |
+| `@oah/model-runtime` | 模型提供方适配、AI SDK 集成、MCP/tool server 装配 |
 | `@oah/engine-core` | Agent Engine 核心编排、workspace 访问抽象、能力装配、运行执行主流程 |
 | `@oah/storage-memory` | 轻量内存仓储实现，用于测试和简单场景 |
 | `@oah/storage-postgres` | PostgreSQL 持久化实现 |
@@ -23,7 +23,7 @@
 - `config` 负责发现和配置解释
 - `engine-core` 负责 Agent Engine 内核
 - `storage-*` 负责存储与协调后端适配
-- `model-gateway` 负责模型和外部 tool server 接入
+- `model-runtime` 负责模型和外部 tool server 接入
 
 也就是说，**跨包分层基本合理**。现在更值得持续优化的是 **包内结构**。
 
@@ -103,7 +103,7 @@
 1. 如果是在解释配置或发现 workspace 资源，放 `config`
 2. 如果是在编排 agent runtime 生命周期，放 `engine-core`
 3. 如果是在适配数据库或 Redis 协调原语，放对应 `storage-*`
-4. 如果是在适配模型提供方或 MCP/tool server，放 `model-gateway`
+4. 如果是在适配模型提供方或 MCP/tool server，放 `model-runtime`
 5. 如果一个文件同时承担 schema、mapper、repository、factory 四种职责，就应该继续拆
 
 ## 一个简单阈值

@@ -23,7 +23,9 @@ COPY native ./native
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
   --mount=type=cache,target=/usr/local/cargo/git \
   --mount=type=cache,target=/app/.native-target \
-  cargo build --manifest-path ./native/Cargo.toml --target-dir /app/.native-target --release -p oah-workspace-sync
+  cargo build --manifest-path ./native/Cargo.toml --target-dir /app/.native-target --release -p oah-workspace-sync \
+  && mkdir -p /app/native-bin \
+  && cp /app/.native-target/release/oah-workspace-sync /app/native-bin/oah-workspace-sync
 
 FROM node:24-alpine
 
@@ -43,7 +45,7 @@ COPY packages/api-contracts/package.json ./packages/api-contracts/package.json
 COPY packages/config/package.json ./packages/config/package.json
 COPY packages/config-server-control/package.json ./packages/config-server-control/package.json
 COPY packages/engine-core/package.json ./packages/engine-core/package.json
-COPY packages/model-gateway/package.json ./packages/model-gateway/package.json
+COPY packages/model-runtime/package.json ./packages/model-runtime/package.json
 COPY packages/native-bridge/package.json ./packages/native-bridge/package.json
 COPY packages/scale-target-control/package.json ./packages/scale-target-control/package.json
 COPY packages/storage-memory/package.json ./packages/storage-memory/package.json
@@ -58,9 +60,10 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 
 COPY apps ./apps
 COPY packages ./packages
+COPY docs ./docs
 COPY scripts ./scripts
 
-COPY --from=native-build /app/.native-target/release/oah-workspace-sync /app/.native-target/release/oah-workspace-sync
+COPY --from=native-build /app/native-bin/oah-workspace-sync /app/.native-target/release/oah-workspace-sync
 
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
   pnpm config set store-dir /root/.local/share/pnpm/store \
@@ -71,8 +74,23 @@ ENV OAH_NATIVE_WORKSPACE_SYNC_BINARY=/app/.native-target/release/oah-workspace-s
 ENTRYPOINT ["pnpm", "exec", "tsx", "scripts/bench-workspace-mainline.ts"]
 EOF
 
+DOCKER_ENV_ARGS=()
+for ENV_NAME in \
+  OAH_BENCH_MAINLINE_FILES \
+  OAH_BENCH_MAINLINE_SIZE_BYTES \
+  OAH_BENCH_MAINLINE_ITERATIONS \
+  OAH_BENCH_MAINLINE_SEED_SYNC_REPEATS \
+  OAH_NATIVE_WORKSPACE_SYNC_RUST_BUNDLE_WRITER \
+  OAH_NATIVE_WORKSPACE_SYNC_RUST_BUNDLE_EXTRACTOR
+do
+  if [[ -n "${!ENV_NAME:-}" ]]; then
+    DOCKER_ENV_ARGS+=("-e" "${ENV_NAME}=${!ENV_NAME}")
+  fi
+done
+
 docker run --rm \
   --cpus="${CONTAINER_CPUS}" \
   --memory="${CONTAINER_MEMORY}" \
+  "${DOCKER_ENV_ARGS[@]}" \
   "${IMAGE_TAG}" \
   "$@"

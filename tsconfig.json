@@ -11,7 +11,7 @@
     { "path": "./packages/storage-postgres" },
     { "path": "./packages/storage-redis" },
     { "path": "./packages/storage-redis-control" },
-    { "path": "./packages/model-gateway" },
+    { "path": "./packages/model-runtime" },
     { "path": "./packages/native-bridge" },
     { "path": "./apps/cli" },
     { "path": "./apps/server" },

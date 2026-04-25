@@ -90,6 +90,6 @@ networkPolicy:
               cidr: 10.20.0.0/24
       modelGateway:
         peers:
-          # Replace with the outbound model gateway / proxy CIDR.
+          # Replace with the outbound model runtime / proxy CIDR.
           - ipBlock:
               cidr: 10.30.0.0/24

@@ -22,7 +22,7 @@
 ## 约束
 
 - 对外 HTTP API 位于 `/api/v1`
-- 内部脚本模型网关位于 `/internal/v1/models/*`
+- 内部脚本模型运行时位于 `/internal/v1/models/*`
 - 当前 `createApp()` 已支持宿主注入 caller context resolver
 - 若宿主显式提供 resolver，则由宿主负责提供 caller context
 - 若未提供 resolver，独立 server 会为本地调试流量注入最小 caller context
@@ -57,7 +57,7 @@
 - [openapi/files.md](./openapi/files.md)
   - workspace 内文件管理草案
 - [openapi/models.md](./openapi/models.md)
-  - 模型网关
+  - 模型运行时
 - [openapi/sessions.md](./openapi/sessions.md)
   - session 与 message
 - [openapi/runs.md](./openapi/runs.md)

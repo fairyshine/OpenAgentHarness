@@ -12,11 +12,11 @@ import {
   workspaceRuntimeListSchema
 } from "@oah/api-contracts";
 import { AppError } from "@oah/engine-core";
+import { SUPPORTED_MODEL_PROVIDERS } from "@oah/model-runtime/providers";
 
 import { createParamsSchema, writeSseEvent } from "../context.js";
 import { describeSandboxTopology } from "../../sandbox-topology.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
-import { SUPPORTED_MODEL_PROVIDERS } from "../model-providers.js";
 import { renderNativeWorkspaceSyncMetrics } from "../../observability/native-workspace-sync.js";
 import { registerPublicStorageRoutes } from "./public-storage-lazy.js";
 

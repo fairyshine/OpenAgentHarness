@@ -121,7 +121,7 @@ helm upgrade --install oah ./deploy/charts/open-agent-harness \
   - 已开启 `PrometheusRule`、Grafana dashboard ConfigMap、controller/worker ingress `NetworkPolicy`
 - `strict-egress.values.yaml`
   - 严格出口白名单的起步 overlay
-  - 演示 DNS、Kubernetes API、Redis、Postgres、对象存储、模型网关的显式放行
+  - 演示 DNS、Kubernetes API、Redis、Postgres、对象存储、模型运行时的显式放行
   - 其中 CIDR / pod label 只是示例，使用前需要替换成真实环境值
 - `prod-hardening.values.yaml`
   - 面向生产环境的 hardening overlay
@@ -169,7 +169,7 @@ helm upgrade --install oah ./deploy/charts/open-agent-harness \
   - `grafanaDashboard.enabled=true` 生成带 sidecar label 的 Grafana dashboard ConfigMap
   - `networkPolicy.enabled=true` 为 controller / worker 收紧 ingress 面
 - 当前 chart 的 `networkPolicy` 默认只收紧 ingress，不默认限制 egress：
-  - 这是为了避免把 Redis、PostgreSQL、对象存储、外部模型网关等依赖错误拦住
+  - 这是为了避免把 Redis、PostgreSQL、对象存储、外部模型运行时等依赖错误拦住
   - 如果后续要做更严格的 egress 白名单，建议从 [strict-egress.values.yaml](/Users/wumengsong/Code/OpenAgentHarness/deploy/charts/open-agent-harness/examples/strict-egress.values.yaml) 起步，再按集群环境改写
 - strict egress 的推荐理解方式：
   - 先开启 `networkPolicy.<component>.egress.enabled=true`

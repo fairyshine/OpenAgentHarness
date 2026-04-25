@@ -601,7 +601,7 @@ paths:
       tags: [Models]
       summary: Generate text with an internal platform model
       description: >
-        Internal local-only model gateway for actions, scripts, and the `oah model`
+        Internal local-only model runtime for actions, scripts, and the `oah model`
         CLI. This endpoint is only available from loopback addresses and is not
         intended for external clients or public network exposure.
       operationId: internalGenerateModel
@@ -625,7 +625,7 @@ paths:
       tags: [Models]
       summary: Stream text with an internal platform model
       description: >
-        Internal local-only model gateway for actions, scripts, and the `oah model`
+        Internal local-only model runtime for actions, scripts, and the `oah model`
         CLI. This endpoint is only available from loopback addresses and is not
         intended for external clients or public network exposure.
       operationId: internalStreamModel

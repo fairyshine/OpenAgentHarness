@@ -154,7 +154,7 @@ apps/
 packages/
   engine-core/      # 运行时编排与内建工具层
   api-contracts/    # zod schema 和共享 API 类型
-  model-gateway/    # 模型提供方抽象
+  model-runtime/    # 模型提供方抽象
   storage-*         # postgres / redis / sqlite / memory 存储实现
   config/           # workspace 与 server 配置加载
 template/

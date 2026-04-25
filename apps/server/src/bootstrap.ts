@@ -22,7 +22,7 @@ import { createId } from "../../../packages/engine-core/src/utils.js";
 import type { ControlPlaneRuntimeOperations } from "../../../packages/engine-core/src/control-plane-engine-service.js";
 import type { WorkspaceMaterializationManager } from "./bootstrap/workspace-materialization.js";
 import type { SandboxHost } from "./bootstrap/sandbox-host.js";
-import { LazyModelGateway } from "./bootstrap/lazy-model-gateway.js";
+import { LazyModelRuntime } from "./bootstrap/lazy-model-runtime.js";
 import { createLazyStorageAdmin } from "./bootstrap/lazy-storage-admin.js";
 import { describeSandboxTopology } from "./sandbox-topology.js";
 import type { WorkerRuntimeStatus } from "./bootstrap/worker-runtime.js";
@@ -1275,7 +1275,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     sessionEventStore: primarySessionEventStore,
     now: () => new Date().toISOString()
   });
-  const resolvedModelGateway = new LazyModelGateway({
+  const resolvedModelGateway = new LazyModelRuntime({
     defaultModelName: config.llm.default_model,
     models,
     logger: runtimeDebugLogger

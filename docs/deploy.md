@@ -209,7 +209,7 @@ git push origin master
 - 若要进一步收紧出口白名单，建议从 [`deploy/charts/open-agent-harness/examples/strict-egress.values.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/charts/open-agent-harness/examples/strict-egress.values.yaml) 或 [`deploy/kubernetes/networkpolicy.strict-egress.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/networkpolicy.strict-egress.example.yaml) 起步，再替换：
   - Kubernetes API CIDR
   - Redis / Postgres Pod labels
-  - 对象存储 / 模型网关的真实 CIDR 或 egress gateway 网段
+  - 对象存储 / 模型运行时的真实 CIDR 或 egress gateway 网段
 - 如果要按上线节奏收口，建议顺序是：
   - `staging.values.yaml`
   - `prod.values.yaml`

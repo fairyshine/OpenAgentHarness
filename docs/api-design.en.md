@@ -21,7 +21,7 @@ This page explains the API boundary. The concrete interface definition is descri
 ## Core Constraints
 
 - external HTTP APIs live under `/api/v1`
-- internal model gateway APIs live under `/internal/v1/models/*`
+- internal model runtime APIs live under `/internal/v1/models/*`
 - production authentication and authorization are expected to happen upstream
 - the runtime consumes caller context rather than owning identity itself
 - message sending and action triggering use asynchronous semantics

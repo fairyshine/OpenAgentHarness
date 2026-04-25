@@ -69,7 +69,7 @@ flowchart LR
 3. 应用 projection，得到 transcript / model / compact / debug 等视图
 4. 将 model view 序列化为 `ChatMessage`
 5. 适配为 AI SDK / provider message
-6. 传给模型网关 / AI SDK
+6. 传给模型运行时 / AI SDK
 
 关键代码位置：
 
@@ -79,7 +79,7 @@ flowchart LR
 - Projection：`packages/engine-core/src/engine/message-projections.ts`
 - ChatMessage 序列化：`packages/engine-core/src/engine/ai-sdk-message-serializer.ts`
 - 上下文构建：`packages/engine-core/src/engine-service.ts`
-- Provider 适配：`packages/model-gateway/src/gateway-helpers.ts`
+- Provider 适配：`packages/model-runtime/src/runtime-helpers.ts`
 
 ---
 
@@ -255,7 +255,7 @@ Projection layer 不直接操作存储模型，而是尽量操作 `EngineMessage
 | Runtime semantic message | `EngineMessage` | `packages/engine-core/src/engine/engine-messages.ts` |
 | Projection result | `TranscriptMessage` / `ModelMessage` / `CompactMessage` / `DebugMessage` | `packages/engine-core/src/engine/message-projections.ts` |
 | Provider-neutral model input | `ChatMessage` | `packages/engine-core/src/engine/ai-sdk-message-serializer.ts` |
-| Provider/SDK input | AI SDK `ModelMessage` 等 | `packages/model-gateway/src/gateway-helpers.ts` |
+| Provider/SDK input | AI SDK `ModelMessage` 等 | `packages/model-runtime/src/runtime-helpers.ts` |
 
 ---
 

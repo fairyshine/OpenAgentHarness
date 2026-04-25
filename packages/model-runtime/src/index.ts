@@ -29,7 +29,7 @@ import {
   toToolCall,
   toToolResult,
   toUsage
-} from "./gateway-helpers.js";
+} from "./runtime-helpers.js";
 import { prepareToolServers } from "./mcp-tools.js";
 import { formatSupportedModelProviders } from "./providers.js";
 
@@ -43,19 +43,19 @@ export {
   type SupportedModelProviderId
 } from "./providers.js";
 
-export interface AiSdkModelGatewayOptions {
+export interface AiSdkModelRuntimeOptions {
   defaultModelName: string;
   models: PlatformModelRegistry;
   logger?: EngineLogger | undefined;
 }
 
-export class AiSdkModelGateway implements ModelGateway {
+export class AiSdkModelRuntime implements ModelGateway {
   readonly #defaultModelName: string;
   readonly #models: PlatformModelRegistry;
   readonly #logger: EngineLogger | undefined;
   readonly #clients = new Map<string, LanguageModel>();
 
-  constructor(options: AiSdkModelGatewayOptions) {
+  constructor(options: AiSdkModelRuntimeOptions) {
     this.#defaultModelName = options.defaultModelName;
     this.#models = options.models;
     this.#logger = options.logger;
@@ -114,7 +114,7 @@ export class AiSdkModelGateway implements ModelGateway {
       await preparedToolServers.close();
     };
     let observedStreamError: Error | undefined;
-    this.#logger?.debug?.("Model gateway starting AI SDK stream.", {
+    this.#logger?.debug?.("Model runtime starting AI SDK stream.", {
       model: modelName,
       provider: input.modelDefinition?.provider,
       messageCount: input.messages?.length ?? 0,
@@ -134,7 +134,7 @@ export class AiSdkModelGateway implements ModelGateway {
       ...(options?.signal ? { abortSignal: options.signal } : {}),
       onError: ({ error }) => {
         observedStreamError ??= toError(error);
-        this.#logger?.error?.("Model gateway stream error observed.", {
+        this.#logger?.error?.("Model runtime stream error observed.", {
           model: modelName,
           provider: input.modelDefinition?.provider,
           errorMessage: observedStreamError.message
@@ -162,7 +162,7 @@ export class AiSdkModelGateway implements ModelGateway {
             onStepFinish: async (step) => {
               const stepResult = toStepResult(step);
               const toolErrors = extractToolErrors(stepResult);
-              this.#logger?.debug?.("Model gateway step finished.", {
+              this.#logger?.debug?.("Model runtime step finished.", {
                 model: modelName,
                 provider: input.modelDefinition?.provider,
                 finishReason: stepResult.finishReason ?? "unknown",
@@ -178,7 +178,7 @@ export class AiSdkModelGateway implements ModelGateway {
       ...(options?.onToolCallStart
         ? {
             experimental_onToolCallStart: async (event) => {
-              this.#logger?.debug?.("Model gateway tool call started.", {
+              this.#logger?.debug?.("Model runtime tool call started.", {
                 model: modelName,
                 provider: input.modelDefinition?.provider,
                 toolCallId: event.toolCall.toolCallId,
@@ -192,7 +192,7 @@ export class AiSdkModelGateway implements ModelGateway {
         ? {
             experimental_onToolCallFinish: async (event) => {
               if (!event.success) {
-                this.#logger?.debug?.("Model gateway tool call finished with non-success status.", {
+                this.#logger?.debug?.("Model runtime tool call finished with non-success status.", {
                   model: modelName,
                   provider: input.modelDefinition?.provider,
                   toolCallId: event.toolCall.toolCallId,
@@ -201,7 +201,7 @@ export class AiSdkModelGateway implements ModelGateway {
                 return;
               }
 
-              this.#logger?.debug?.("Model gateway tool call finished.", {
+              this.#logger?.debug?.("Model runtime tool call finished.", {
                 model: modelName,
                 provider: input.modelDefinition?.provider,
                 toolCallId: event.toolCall.toolCallId,

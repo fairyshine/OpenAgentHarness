@@ -15,7 +15,7 @@ import type {
 import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 import type { Message, Run } from "@oah/api-contracts";
 
-import { FakeModelGateway } from "./helpers/fake-model-gateway";
+import { FakeModelGateway } from "./helpers/fake-model-runtime";
 
 async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
   const start = Date.now();
@@ -1404,7 +1404,7 @@ describe("runtime service", () => {
     });
   });
 
-  it("forwards multimodal user content to the model gateway unchanged", async () => {
+  it("forwards multimodal user content to the model runtime unchanged", async () => {
     const { gateway, runtimeService, workspace } = await createRuntime();
     const caller = {
       subjectRef: "dev:test",
@@ -6563,7 +6563,7 @@ describe("runtime service", () => {
     expect(gateway.maxConcurrentStreams).toBeGreaterThanOrEqual(3);
   });
 
-  it("forwards agent sampling settings including topP to the model gateway", async () => {
+  it("forwards agent sampling settings including topP to the model runtime", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();
     const runtimeService = new EngineService({

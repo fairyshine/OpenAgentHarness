@@ -10,7 +10,7 @@
 
 - Keep runtime truth boundaries consistent across implementation, design docs, and OpenAPI spec
 - Evaluate more aggressive recovery strategies (auto-requeue / resume) as needed; currently fail-closed only
-- Deferred capabilities remain candidates, not commitments: Unix socket model gateway, first-class `action_run` / `artifact`
+- Deferred capabilities remain candidates, not commitments: Unix socket model runtime, first-class `action_run` / `artifact`
 
 ## Repository Roadmap
 

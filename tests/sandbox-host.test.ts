@@ -19,7 +19,7 @@ import {
 import { createApp } from "../apps/server/src/app.ts";
 import { createLazySandboxHost, createMaterializationSandboxHost } from "../apps/server/src/bootstrap/sandbox-host.ts";
 import { WorkspaceMaterializationDrainingError } from "../apps/server/src/bootstrap/workspace-materialization.ts";
-import { FakeModelGateway } from "./helpers/fake-model-gateway";
+import { FakeModelGateway } from "./helpers/fake-model-runtime";
 
 const tempRoots: string[] = [];
 

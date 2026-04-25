@@ -14,8 +14,8 @@
 !packages/config/**
 !packages/engine-core/
 !packages/engine-core/**
-!packages/model-gateway/
-!packages/model-gateway/**
+!packages/model-runtime/
+!packages/model-runtime/**
 !packages/native-bridge/
 !packages/native-bridge/**
 !packages/storage-memory/

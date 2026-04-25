@@ -71,6 +71,7 @@ export interface RemoteToLocalDirectorySyncResult {
   createdDirectoryCount: number;
   downloadedFileCount: number;
   requestCounts?: ObjectStoreRequestCounts | undefined;
+  phaseTimings?: RemoteToLocalDirectorySyncPhaseTimings | undefined;
 }
 
 export interface ObjectStoreRequestCounts {
@@ -94,6 +95,26 @@ export interface DirectorySyncPhaseTimings {
   manifestWriteMs: number;
   deleteMs: number;
   totalPrimaryPathMs: number;
+  totalCommandMs: number;
+}
+
+export interface RemoteToLocalDirectorySyncPhaseTimings {
+  scanMs: number;
+  clientCreateMs: number;
+  listingMs: number;
+  manifestReadMs: number;
+  planMs: number;
+  removeMs: number;
+  mkdirMs: number;
+  bundleGetMs: number;
+  bundleBodyReadMs: number;
+  bundleExtractMs: number;
+  bundleTransport: "none" | "memory" | "tempfile";
+  bundleExtractor: "none" | "rust-ustar" | "tar";
+  bundleBytes: number;
+  downloadMs: number;
+  infoCheckMs: number;
+  fingerprintMs: number;
   totalCommandMs: number;
 }
 
@@ -1470,7 +1491,8 @@ async function syncNativeRemotePrefixToLocalIfAvailable(
       removedPathCount: result.removedPathCount,
       createdDirectoryCount: result.createdDirectoryCount,
       downloadedFileCount: result.downloadedFileCount,
-      ...(result.requestCounts ? { requestCounts: result.requestCounts } : {})
+      ...(result.requestCounts ? { requestCounts: result.requestCounts } : {}),
+      ...(result.phaseTimings ? { phaseTimings: result.phaseTimings } : {})
     };
   } catch (error) {
     recordNativeWorkspaceSyncFallback({

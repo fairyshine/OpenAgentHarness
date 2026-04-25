@@ -79,6 +79,8 @@ interface BenchmarkCaseResult {
   pushWarmWorkerTimings?: NativeWorkspaceSyncWorkerTimingsLike | undefined;
   pushWrapperTimings?: DirectorySyncWrapperTimingsLike | undefined;
   pushWarmWrapperTimings?: DirectorySyncWrapperTimingsLike | undefined;
+  materializePhaseTimings?: NativeSyncRemoteToLocalPhaseTimingsLike | undefined;
+  pullPhaseTimings?: NativeSyncRemoteToLocalPhaseTimingsLike | undefined;
   pushRequests: StoreOperationCounts;
   pushWarmRequests: StoreOperationCounts;
   materializeRequests: StoreOperationCounts;
@@ -111,6 +113,26 @@ interface NativeSyncLocalToRemotePhaseTimingsLike {
   manifestWriteMs: number;
   deleteMs: number;
   totalPrimaryPathMs: number;
+  totalCommandMs: number;
+}
+
+interface NativeSyncRemoteToLocalPhaseTimingsLike {
+  scanMs: number;
+  clientCreateMs: number;
+  listingMs: number;
+  manifestReadMs: number;
+  planMs: number;
+  removeMs: number;
+  mkdirMs: number;
+  bundleGetMs: number;
+  bundleBodyReadMs: number;
+  bundleExtractMs: number;
+  bundleTransport: "none" | "memory" | "tempfile";
+  bundleExtractor: "none" | "rust-ustar" | "tar";
+  bundleBytes: number;
+  downloadMs: number;
+  infoCheckMs: number;
+  fingerprintMs: number;
   totalCommandMs: number;
 }
 
@@ -440,6 +462,32 @@ function formatBridgeTimings(timings: NativeWorkspaceSyncBridgeTimingsLike | und
     `write=${timings.writeMs}ms`,
     `response=${timings.responseWaitMs}ms`,
     `bridge-total=${timings.totalBridgeMs}ms`
+  ].join(" ");
+}
+
+function formatRemotePhaseTimings(timings: NativeSyncRemoteToLocalPhaseTimingsLike | undefined): string {
+  if (!timings) {
+    return "n/a";
+  }
+
+  return [
+    `scan=${timings.scanMs}ms`,
+    `client-create=${timings.clientCreateMs}ms`,
+    `listing=${timings.listingMs}ms`,
+    `manifest=${timings.manifestReadMs}ms`,
+    `plan=${timings.planMs}ms`,
+    `remove=${timings.removeMs}ms`,
+    `mkdir=${timings.mkdirMs}ms`,
+    `bundle-get=${timings.bundleGetMs}ms`,
+    `bundle-body-read=${timings.bundleBodyReadMs}ms`,
+    `bundle-extract=${timings.bundleExtractMs}ms`,
+    `bundle-transport=${timings.bundleTransport}`,
+    `bundle-extractor=${timings.bundleExtractor}`,
+    `bundle-bytes=${timings.bundleBytes}`,
+    `download=${timings.downloadMs}ms`,
+    `info-check=${timings.infoCheckMs}ms`,
+    `fingerprint=${timings.fingerprintMs}ms`,
+    `command-total=${timings.totalCommandMs}ms`
   ].join(" ");
 }
 

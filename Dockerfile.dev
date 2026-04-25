@@ -28,7 +28,7 @@ COPY apps/server/package.json ./apps/server/package.json
 COPY packages/api-contracts/package.json ./packages/api-contracts/package.json
 COPY packages/config/package.json ./packages/config/package.json
 COPY packages/engine-core/package.json ./packages/engine-core/package.json
-COPY packages/model-gateway/package.json ./packages/model-gateway/package.json
+COPY packages/model-runtime/package.json ./packages/model-runtime/package.json
 COPY packages/native-bridge/package.json ./packages/native-bridge/package.json
 COPY packages/storage-memory/package.json ./packages/storage-memory/package.json
 COPY packages/storage-postgres/package.json ./packages/storage-postgres/package.json
@@ -39,7 +39,7 @@ COPY apps/server ./apps/server
 COPY packages/api-contracts ./packages/api-contracts
 COPY packages/config ./packages/config
 COPY packages/engine-core ./packages/engine-core
-COPY packages/model-gateway ./packages/model-gateway
+COPY packages/model-runtime ./packages/model-runtime
 COPY packages/native-bridge ./packages/native-bridge
 COPY packages/storage-memory ./packages/storage-memory
 COPY packages/storage-postgres ./packages/storage-postgres

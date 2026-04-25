@@ -118,7 +118,7 @@ kubectl -n <namespace> get events --sort-by=.lastTimestamp | tail -n 50
 常见原因：
 
 - readiness 探针失败
-- strict egress 打开后，Redis / Postgres / 对象存储 / 模型网关未放行
+- strict egress 打开后，Redis / Postgres / 对象存储 / 模型运行时未放行
 - PVC 或 `emptyDir` 容量问题
 - 新镜像启动失败
 
@@ -204,7 +204,7 @@ kubectl -n <namespace> logs <worker-pod> --tail=200
 现象：
 
 - rollout 后多个组件同时 not ready
-- 日志出现 Redis / Postgres / S3 / model gateway 连接失败
+- 日志出现 Redis / Postgres / S3 / model runtime 连接失败
 - DNS 解析失败
 
 优先检查：
@@ -225,7 +225,7 @@ kubectl -n <namespace> logs <pod> --tail=200
 1. 先确认 DNS 是否放行
 2. 再确认 Redis / Postgres
 3. 再确认 Kubernetes API
-4. 最后确认对象存储 / 模型网关
+4. 最后确认对象存储 / 模型运行时
 
 恢复动作：
 

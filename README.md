@@ -154,7 +154,7 @@ apps/
 packages/
   engine-core/      # runtime orchestration and native tool layer
   api-contracts/    # zod schemas and shared API types
-  model-gateway/    # model provider abstraction
+  model-runtime/    # model provider abstraction
   storage-*         # postgres / redis / sqlite / memory backends
   config/           # workspace and server config loading
 template/

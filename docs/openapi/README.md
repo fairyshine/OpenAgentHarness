@@ -5,7 +5,7 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 ## 统一约束
 
 - 对外 API：`/api/v1`
-- 内部模型网关：`/internal/v1/models/*`（仅 loopback，无需 `Authorization`）
+- 内部模型运行时：`/internal/v1/models/*`（仅 loopback，无需 `Authorization`）
 - 宿主应用可注入 caller context resolver 接管认证；未注入时使用最小 caller context
 - 异步入口（发消息、触发 action）返回 `202`
 - 流式输出走 SSE
@@ -102,7 +102,7 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | [runs.md](./runs.md) | run 查询与取消 |
 | [actions.md](./actions.md) | action 手动触发 |
 | [files.md](./files.md) | sandbox 文件与命令接口 |
-| [models.md](./models.md) | 模型网关 |
+| [models.md](./models.md) | 模型运行时 |
 | [streaming.md](./streaming.md) | SSE 事件流 |
 | [components.md](./components.md) | 通用 schema 与错误模型 |
 

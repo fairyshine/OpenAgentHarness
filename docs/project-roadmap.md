@@ -11,7 +11,7 @@
 
 - 维持运行时真值边界，保持实现、设计和 OpenAPI 描述一致
 - 按需评估更积极的恢复策略（自动重新入队 / 续跑），当前仅 fail-closed recovery
-- 已明确延期的能力保持为候选项：Unix socket 模型网关、`action_run` / `artifact` 一等化
+- 已明确延期的能力保持为候选项：Unix socket 模型运行时、`action_run` / `artifact` 一等化
 
 ## 仓库路线图
 

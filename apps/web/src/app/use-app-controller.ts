@@ -1506,7 +1506,7 @@ export function useAppController() {
         { auth: false }
       );
       setGenerateOutput(response);
-      setActivity(`内部模型网关 generate 成功，model=${response.model}`);
+      setActivity(`内部模型运行时 generate 成功，model=${response.model}`);
       clearActiveError();
     } catch (error) {
       reportError(error);

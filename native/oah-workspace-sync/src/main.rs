@@ -49,6 +49,7 @@ const IN_MEMORY_SYNC_BUNDLE_MAX_SOURCE_BYTES_ENV: &str =
 const IN_MEMORY_SYNC_BUNDLE_EXTRACT_MAX_BYTES_ENV: &str =
     "OAH_NATIVE_WORKSPACE_SYNC_IN_MEMORY_BUNDLE_EXTRACT_MAX_BYTES";
 const RUST_SYNC_BUNDLE_WRITER_ENV: &str = "OAH_NATIVE_WORKSPACE_SYNC_RUST_BUNDLE_WRITER";
+const RUST_SYNC_BUNDLE_EXTRACTOR_ENV: &str = "OAH_NATIVE_WORKSPACE_SYNC_RUST_BUNDLE_EXTRACTOR";
 
 #[derive(Parser)]
 #[command(name = BINARY_NAME, version = BINARY_VERSION, about = "Open Agent Harness native workspace sync utilities.")]
@@ -499,6 +500,28 @@ struct SyncLocalToRemotePhaseTimings {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SyncRemoteToLocalPhaseTimings {
+    scan_ms: u64,
+    client_create_ms: u64,
+    listing_ms: u64,
+    manifest_read_ms: u64,
+    plan_ms: u64,
+    remove_ms: u64,
+    mkdir_ms: u64,
+    bundle_get_ms: u64,
+    bundle_body_read_ms: u64,
+    bundle_extract_ms: u64,
+    bundle_transport: String,
+    bundle_extractor: String,
+    bundle_bytes: u64,
+    download_ms: u64,
+    info_check_ms: u64,
+    fingerprint_ms: u64,
+    total_command_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WorkerRequestTimings {
     receive_delay_ms: u64,
     parse_ms: u64,
@@ -532,6 +555,8 @@ struct SyncRemoteToLocalResponse {
     created_directory_count: usize,
     downloaded_file_count: usize,
     request_counts: ObjectStoreRequestCounts,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase_timings: Option<SyncRemoteToLocalPhaseTimings>,
 }
 
 #[derive(Serialize)]
@@ -2931,6 +2956,10 @@ fn should_use_rust_sync_bundle_writer() -> bool {
     read_bool_env(RUST_SYNC_BUNDLE_WRITER_ENV).unwrap_or(true)
 }
 
+fn should_use_rust_sync_bundle_extractor() -> bool {
+    read_bool_env(RUST_SYNC_BUNDLE_EXTRACTOR_ENV).unwrap_or(true)
+}
+
 fn resolve_in_memory_sync_bundle_source_byte_range() -> InMemorySyncBundleSourceByteRange {
     let min = read_u64_env(IN_MEMORY_SYNC_BUNDLE_MIN_SOURCE_BYTES_ENV)
         .unwrap_or(DEFAULT_IN_MEMORY_SYNC_BUNDLE_MIN_SOURCE_BYTES);
@@ -3290,13 +3319,253 @@ fn unpack_sync_bundle_blocking(root_dir: PathBuf, bundle_path: PathBuf) -> Resul
 fn unpack_sync_bundle_bytes_blocking(
     root_dir: PathBuf,
     bundle_bytes: Vec<u8>,
-) -> Result<(), String> {
-    unpack_sync_bundle_reader_blocking(root_dir, Cursor::new(bundle_bytes))
+) -> Result<&'static str, String> {
+    if should_use_rust_sync_bundle_extractor()
+        && try_unpack_ustar_bundle_bytes_blocking(&root_dir, &bundle_bytes)?
+    {
+        return Ok("rust-ustar");
+    }
+
+    unpack_sync_bundle_reader_blocking(root_dir, Cursor::new(bundle_bytes))?;
+    Ok("tar")
+}
+
+fn parse_tar_octal_field(field: &[u8]) -> Option<u64> {
+    let text = field
+        .iter()
+        .copied()
+        .take_while(|byte| *byte != 0)
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect::<Vec<_>>();
+    if text.is_empty() {
+        return Some(0);
+    }
+
+    std::str::from_utf8(&text)
+        .ok()
+        .and_then(|value| u64::from_str_radix(value, 8).ok())
+}
+
+fn tar_header_name(header: &[u8; TAR_BLOCK_SIZE]) -> Option<String> {
+    let name_end = header[0..100]
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(100);
+    let name = std::str::from_utf8(&header[0..name_end]).ok()?;
+    let prefix_end = header[345..500]
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(155);
+    let prefix = std::str::from_utf8(&header[345..345 + prefix_end]).ok()?;
+    if prefix.is_empty() {
+        Some(name.to_string())
+    } else {
+        Some(format!("{prefix}/{name}"))
+    }
+}
+
+fn safe_bundle_relative_path(raw_path: &str) -> Option<PathBuf> {
+    let normalized = normalize_relative_path(raw_path.trim_start_matches("./"));
+    if normalized.is_empty() || normalized == "." {
+        return None;
+    }
+
+    let mut relative_path = PathBuf::new();
+    for segment in normalized.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return None;
+        }
+        relative_path.push(segment);
+    }
+    Some(relative_path)
+}
+
+fn try_unpack_ustar_bundle_bytes_blocking(
+    root_dir: &Path,
+    bundle_bytes: &[u8],
+) -> Result<bool, String> {
+    if bundle_bytes.len() < TAR_BLOCK_SIZE * 2 || bundle_bytes.len() % TAR_BLOCK_SIZE != 0 {
+        return Ok(false);
+    }
+
+    fs::create_dir_all(root_dir).map_err(|error| {
+        format!(
+            "Failed to create local bundle root {}: {error}",
+            root_dir.display()
+        )
+    })?;
+
+    let mut offset = 0;
+    let mut saw_entry = false;
+    while offset + TAR_BLOCK_SIZE <= bundle_bytes.len() {
+        let header_slice = &bundle_bytes[offset..offset + TAR_BLOCK_SIZE];
+        if header_slice.iter().all(|byte| *byte == 0) {
+            return Ok(saw_entry);
+        }
+
+        let header: &[u8; TAR_BLOCK_SIZE] = header_slice
+            .try_into()
+            .map_err(|_| "Failed to read ustar header block.".to_string())?;
+        if &header[257..263] != b"ustar\0" {
+            return Ok(false);
+        }
+
+        let raw_path = tar_header_name(header).ok_or_else(|| {
+            "Failed to decode ustar header path while extracting sync bundle.".to_string()
+        })?;
+        let Some(relative_path) = safe_bundle_relative_path(&raw_path) else {
+            return Ok(false);
+        };
+        let size = parse_tar_octal_field(&header[124..136]).ok_or_else(|| {
+            format!("Failed to parse ustar entry size for {raw_path} while extracting sync bundle.")
+        })?;
+        let mode = parse_tar_octal_field(&header[100..108]).unwrap_or(0o644) as u32;
+        let mtime_seconds = parse_tar_octal_field(&header[136..148]).unwrap_or(0);
+        let data_offset = offset + TAR_BLOCK_SIZE;
+        let size_usize = usize::try_from(size).map_err(|_| {
+            format!("Ustar entry {raw_path} is too large to extract on this platform.")
+        })?;
+        let data_end = data_offset.checked_add(size_usize).ok_or_else(|| {
+            format!("Ustar entry {raw_path} overflowed while extracting sync bundle.")
+        })?;
+        if data_end > bundle_bytes.len() {
+            return Ok(false);
+        }
+
+        let target_path = root_dir.join(&relative_path);
+        match header[156] {
+            b'0' | 0 => {
+                if let Some(parent) = target_path.parent() {
+                    fs::create_dir_all(parent).map_err(|error| {
+                        format!(
+                            "Failed to create local bundle parent {}: {error}",
+                            parent.display()
+                        )
+                    })?;
+                }
+                if matches!(fs::metadata(&target_path), Ok(metadata) if metadata.is_dir()) {
+                    fs::remove_dir_all(&target_path).map_err(|error| {
+                        format!(
+                            "Failed to replace local bundle directory {}: {error}",
+                            target_path.display()
+                        )
+                    })?;
+                }
+                let mut file = fs::File::create(&target_path).map_err(|error| {
+                    format!(
+                        "Failed to create local bundle file {}: {error}",
+                        target_path.display()
+                    )
+                })?;
+                file.write_all(&bundle_bytes[data_offset..data_end])
+                    .map_err(|error| {
+                        format!(
+                            "Failed to write local bundle file {}: {error}",
+                            target_path.display()
+                        )
+                    })?;
+                #[cfg(unix)]
+                {
+                    if mode & 0o7777 != 0o644 {
+                        use std::os::unix::fs::PermissionsExt;
+                        let permissions = fs::Permissions::from_mode(mode & 0o7777);
+                        fs::set_permissions(&target_path, permissions).map_err(|error| {
+                            format!(
+                                "Failed to set permissions on local bundle file {}: {error}",
+                                target_path.display()
+                            )
+                        })?;
+                    }
+                }
+                if mtime_seconds > 0 {
+                    set_file_mtime(
+                        &target_path,
+                        FileTime::from_unix_time(mtime_seconds.min(i64::MAX as u64) as i64, 0),
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "Failed to set mtime on local bundle file {}: {error}",
+                            target_path.display()
+                        )
+                    })?;
+                }
+            }
+            b'5' => {
+                fs::create_dir_all(&target_path).map_err(|error| {
+                    format!(
+                        "Failed to create local bundle directory {}: {error}",
+                        target_path.display()
+                    )
+                })?;
+                #[cfg(unix)]
+                {
+                    if mode & 0o7777 != 0o755 {
+                        use std::os::unix::fs::PermissionsExt;
+                        let permissions = fs::Permissions::from_mode(mode & 0o7777);
+                        fs::set_permissions(&target_path, permissions).map_err(|error| {
+                            format!(
+                                "Failed to set permissions on local bundle directory {}: {error}",
+                                target_path.display()
+                            )
+                        })?;
+                    }
+                }
+            }
+            _ => return Ok(false),
+        }
+
+        saw_entry = true;
+        let padded_size = size_usize.div_ceil(TAR_BLOCK_SIZE) * TAR_BLOCK_SIZE;
+        offset = data_offset
+            .checked_add(padded_size)
+            .ok_or_else(|| format!("Ustar entry {raw_path} overflowed archive bounds."))?;
+    }
+
+    Ok(false)
 }
 
 fn resolve_in_memory_sync_bundle_extract_max_bytes() -> u64 {
     read_u64_env(IN_MEMORY_SYNC_BUNDLE_EXTRACT_MAX_BYTES_ENV)
         .unwrap_or(DEFAULT_IN_MEMORY_SYNC_BUNDLE_EXTRACT_MAX_BYTES)
+}
+
+#[derive(Clone)]
+struct HydrateSyncBundleResult {
+    hydrated: bool,
+    bundle_get_ms: u64,
+    bundle_body_read_ms: u64,
+    bundle_extract_ms: u64,
+    bundle_transport: &'static str,
+    bundle_extractor: &'static str,
+    bundle_bytes: u64,
+}
+
+impl HydrateSyncBundleResult {
+    fn not_found() -> Self {
+        Self {
+            hydrated: false,
+            bundle_get_ms: 0,
+            bundle_body_read_ms: 0,
+            bundle_extract_ms: 0,
+            bundle_transport: "none",
+            bundle_extractor: "none",
+            bundle_bytes: 0,
+        }
+    }
+}
+
+fn record_hydrate_timings(
+    phase_timings: &mut SyncRemoteToLocalPhaseTimings,
+    hydrate_result: &HydrateSyncBundleResult,
+) {
+    phase_timings.bundle_get_ms += hydrate_result.bundle_get_ms;
+    phase_timings.bundle_body_read_ms += hydrate_result.bundle_body_read_ms;
+    phase_timings.bundle_extract_ms += hydrate_result.bundle_extract_ms;
+    if hydrate_result.hydrated {
+        phase_timings.bundle_transport = hydrate_result.bundle_transport.to_string();
+        phase_timings.bundle_extractor = hydrate_result.bundle_extractor.to_string();
+        phase_timings.bundle_bytes = hydrate_result.bundle_bytes;
+    }
 }
 
 async fn maybe_hydrate_from_remote_sync_bundle(
@@ -3306,9 +3575,9 @@ async fn maybe_hydrate_from_remote_sync_bundle(
     bundle_key: &str,
     require_empty_root: bool,
     request_counter: &NativeObjectStoreRequestCounter,
-) -> Result<bool, String> {
+) -> Result<HydrateSyncBundleResult, String> {
     if require_empty_root && !is_local_directory_empty(root_dir).await? {
-        return Ok(false);
+        return Ok(HydrateSyncBundleResult::not_found());
     }
 
     let hydrated = async {
@@ -3316,6 +3585,7 @@ async fn maybe_hydrate_from_remote_sync_bundle(
             .map_err(|error| format!("Failed to create temporary sync bundle file: {error}"))?
             .into_temp_path();
         request_counter.increment_get();
+        let bundle_get_started_at = Instant::now();
         let response = match client
             .get_object()
             .bucket(&config.bucket)
@@ -3326,17 +3596,19 @@ async fn maybe_hydrate_from_remote_sync_bundle(
             Ok(response) => response,
             Err(error) => {
                 if error.code() == Some("NoSuchKey") {
-                    return Ok(false);
+                    return Ok(HydrateSyncBundleResult::not_found());
                 }
                 return Err(format!(
                     "Failed to download sync bundle {bundle_key}: {error}"
                 ));
             }
         };
+        let bundle_get_ms = elapsed_millis_u64(bundle_get_started_at);
 
         let content_length = response.content_length().unwrap_or_default().max(0) as u64;
         let extract_max_bytes = resolve_in_memory_sync_bundle_extract_max_bytes();
         if content_length > 0 && content_length <= extract_max_bytes {
+            let body_read_started_at = Instant::now();
             let bundle_bytes = response
                 .body
                 .collect()
@@ -3344,15 +3616,27 @@ async fn maybe_hydrate_from_remote_sync_bundle(
                 .map_err(|error| format!("Failed to read sync bundle {bundle_key}: {error}"))?
                 .into_bytes()
                 .to_vec();
+            let bundle_body_read_ms = elapsed_millis_u64(body_read_started_at);
+            let bundle_bytes_len = bundle_bytes.len() as u64;
             let root_dir = root_dir.to_path_buf();
-            tokio::task::spawn_blocking(move || {
+            let extract_started_at = Instant::now();
+            let bundle_extractor = tokio::task::spawn_blocking(move || {
                 unpack_sync_bundle_bytes_blocking(root_dir, bundle_bytes)
             })
             .await
             .map_err(|error| format!("Sync bundle extraction worker task failed: {error}"))??;
-            return Ok(true);
+            return Ok(HydrateSyncBundleResult {
+                hydrated: true,
+                bundle_get_ms,
+                bundle_body_read_ms,
+                bundle_extract_ms: elapsed_millis_u64(extract_started_at),
+                bundle_transport: "memory",
+                bundle_extractor,
+                bundle_bytes: bundle_bytes_len,
+            });
         }
 
+        let body_read_started_at = Instant::now();
         let mut body = response.body.into_async_read();
         let mut bundle_file = tokio::fs::OpenOptions::new()
             .write(true)
@@ -3375,13 +3659,27 @@ async fn maybe_hydrate_from_remote_sync_bundle(
             )
         })?;
         drop(bundle_file);
+        let bundle_body_read_ms = elapsed_millis_u64(body_read_started_at);
+        let bundle_bytes = tokio::fs::metadata(bundle_path.as_ref() as &Path)
+            .await
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
 
         let root_dir = root_dir.to_path_buf();
         let bundle_path_buf = bundle_path.to_path_buf();
+        let extract_started_at = Instant::now();
         tokio::task::spawn_blocking(move || unpack_sync_bundle_blocking(root_dir, bundle_path_buf))
             .await
             .map_err(|error| format!("Sync bundle extraction worker task failed: {error}"))??;
-        Ok(true)
+        Ok(HydrateSyncBundleResult {
+            hydrated: true,
+            bundle_get_ms,
+            bundle_body_read_ms,
+            bundle_extract_ms: elapsed_millis_u64(extract_started_at),
+            bundle_transport: "tempfile",
+            bundle_extractor: "tar",
+            bundle_bytes,
+        })
     }
     .await;
 
@@ -3390,7 +3688,7 @@ async fn maybe_hydrate_from_remote_sync_bundle(
         Err(_) => {
             let _ = tokio::fs::remove_dir_all(root_dir).await;
             let _ = tokio::fs::create_dir_all(root_dir).await;
-            Ok(false)
+            Ok(HydrateSyncBundleResult::not_found())
         }
     }
 }
@@ -3609,19 +3907,42 @@ async fn download_remote_file(
 async fn sync_remote_to_local(
     request: SyncRemoteToLocalRequest,
 ) -> Result<SyncRemoteToLocalResponse, String> {
+    let command_started_at = Instant::now();
     let excludes = normalize_exclude_paths(request.exclude_relative_paths);
     let preserve_top_level_names = normalize_exclude_paths(request.preserve_top_level_names);
     let max_concurrency = resolve_max_concurrency(request.max_concurrency);
     let sync_bundle_config = resolve_sync_bundle_config(request.sync_bundle.as_ref());
     let root_dir = PathBuf::from(&request.root_dir);
+    let scan_started_at = Instant::now();
     let snapshot = collect_snapshot(&root_dir, &excludes)?;
+    let mut phase_timings = SyncRemoteToLocalPhaseTimings {
+        scan_ms: elapsed_millis_u64(scan_started_at),
+        client_create_ms: 0,
+        listing_ms: 0,
+        manifest_read_ms: 0,
+        plan_ms: 0,
+        remove_ms: 0,
+        mkdir_ms: 0,
+        bundle_get_ms: 0,
+        bundle_body_read_ms: 0,
+        bundle_extract_ms: 0,
+        bundle_transport: "none".to_string(),
+        bundle_extractor: "none".to_string(),
+        bundle_bytes: 0,
+        download_ms: 0,
+        info_check_ms: 0,
+        fingerprint_ms: 0,
+        total_command_ms: 0,
+    };
 
+    let client_create_started_at = Instant::now();
     let client = create_s3_client(&request.object_store);
+    phase_timings.client_create_ms = elapsed_millis_u64(client_create_started_at);
     let request_counts = Arc::new(NativeObjectStoreRequestCounter::default());
     if request.remote_entries.is_none() && sync_bundle_config.mode != SyncBundleMode::Off {
         let bundle_key =
             build_remote_path(&request.remote_prefix, INTERNAL_SYNC_BUNDLE_RELATIVE_PATH);
-        if maybe_hydrate_from_remote_sync_bundle(
+        let hydrate_result = maybe_hydrate_from_remote_sync_bundle(
             &client,
             &request.object_store,
             &root_dir,
@@ -3629,43 +3950,54 @@ async fn sync_remote_to_local(
             true,
             request_counts.as_ref(),
         )
-        .await?
-        {
+        .await?;
+        record_hydrate_timings(&mut phase_timings, &hydrate_result);
+        if hydrate_result.hydrated {
+            let fingerprint_started_at = Instant::now();
             let hydrated_snapshot = collect_snapshot(&root_dir, &excludes)?;
+            let local_fingerprint = create_fingerprint(&hydrated_snapshot);
+            phase_timings.fingerprint_ms = elapsed_millis_u64(fingerprint_started_at);
+            phase_timings.total_command_ms = elapsed_millis_u64(command_started_at);
             return Ok(SyncRemoteToLocalResponse {
                 ok: true,
                 protocol_version: PROTOCOL_VERSION,
-                local_fingerprint: create_fingerprint(&hydrated_snapshot),
+                local_fingerprint,
                 removed_path_count: 0,
                 created_directory_count: 0,
                 downloaded_file_count: hydrated_snapshot.files.len(),
                 request_counts: request_counts.snapshot(),
+                phase_timings: Some(phase_timings),
             });
         }
     }
 
     if request.remote_entries.is_none() && sync_bundle_config.layout == SyncBundleLayout::Primary {
-        if let Some(manifest_document) = load_remote_sync_manifest_document(
+        let manifest_read_started_at = Instant::now();
+        let manifest_document = load_remote_sync_manifest_document(
             &client,
             &request.object_store,
             &request.remote_prefix,
             request_counts.as_ref(),
         )
-        .await?
-        {
+        .await?;
+        phase_timings.manifest_read_ms += elapsed_millis_u64(manifest_read_started_at);
+        if let Some(manifest_document) = manifest_document {
             if is_primary_bundle_manifest(&manifest_document) {
                 let remote_entries = create_remote_entries_from_manifest_document(
                     &manifest_document,
                     &request.remote_prefix,
                     &excludes,
                 );
+                let plan_started_at = Instant::now();
                 let plan = create_remote_to_local_plan(
                     &root_dir,
                     &snapshot,
                     remote_entries.clone(),
                     preserve_top_level_names.clone(),
                 );
+                phase_timings.plan_ms += elapsed_millis_u64(plan_started_at);
 
+                let remove_started_at = Instant::now();
                 let removed_path_count = process_with_concurrency(
                     plan.remove_paths.clone(),
                     max_concurrency,
@@ -3675,7 +4007,9 @@ async fn sync_remote_to_local(
                 .into_iter()
                 .filter(|removed| *removed)
                 .count();
+                phase_timings.remove_ms += elapsed_millis_u64(remove_started_at);
 
+                let mkdir_started_at = Instant::now();
                 tokio::fs::create_dir_all(&root_dir)
                     .await
                     .map_err(|error| {
@@ -3701,10 +4035,11 @@ async fn sync_remote_to_local(
                 .into_iter()
                 .filter(|created| *created)
                 .count();
+                phase_timings.mkdir_ms += elapsed_millis_u64(mkdir_started_at);
 
                 let bundle_key =
                     build_remote_path(&request.remote_prefix, INTERNAL_SYNC_BUNDLE_RELATIVE_PATH);
-                if maybe_hydrate_from_remote_sync_bundle(
+                let hydrate_result = maybe_hydrate_from_remote_sync_bundle(
                     &client,
                     &request.object_store,
                     &root_dir,
@@ -3712,8 +4047,9 @@ async fn sync_remote_to_local(
                     false,
                     request_counts.as_ref(),
                 )
-                .await?
-                {
+                .await?;
+                record_hydrate_timings(&mut phase_timings, &hydrate_result);
+                if hydrate_result.hydrated {
                     let manifest_files = manifest_document
                         .files
                         .iter()
@@ -3743,20 +4079,25 @@ async fn sync_remote_to_local(
                         .map(|(relative_path, _, _)| relative_path.clone())
                         .collect::<BTreeSet<_>>();
 
+                    let fingerprint_started_at = Instant::now();
+                    let local_fingerprint = create_fingerprint_from_entries(
+                        &manifest_files,
+                        &resolve_empty_remote_directories(
+                            &explicit_remote_directories,
+                            &remote_file_paths,
+                        ),
+                    );
+                    phase_timings.fingerprint_ms = elapsed_millis_u64(fingerprint_started_at);
+                    phase_timings.total_command_ms = elapsed_millis_u64(command_started_at);
                     return Ok(SyncRemoteToLocalResponse {
                         ok: true,
                         protocol_version: PROTOCOL_VERSION,
-                        local_fingerprint: create_fingerprint_from_entries(
-                            &manifest_files,
-                            &resolve_empty_remote_directories(
-                                &explicit_remote_directories,
-                                &remote_file_paths,
-                            ),
-                        ),
+                        local_fingerprint,
                         removed_path_count,
                         created_directory_count,
                         downloaded_file_count: manifest_files.len(),
                         request_counts: request_counts.snapshot(),
+                        phase_timings: Some(phase_timings),
                     });
                 }
             }
@@ -3770,6 +4111,7 @@ async fn sync_remote_to_local(
             request.bundle_entry,
         ),
         None => {
+            let listing_started_at = Instant::now();
             let remote_listing = list_remote_entries(
                 &client,
                 &request.object_store,
@@ -3777,6 +4119,7 @@ async fn sync_remote_to_local(
                 request_counts.as_ref(),
             )
             .await?;
+            phase_timings.listing_ms += elapsed_millis_u64(listing_started_at);
             (
                 remote_listing.entries,
                 remote_listing.has_sync_manifest,
@@ -3786,8 +4129,8 @@ async fn sync_remote_to_local(
     };
 
     if let Some(bundle_entry) = bundle_entry.as_ref() {
-        if should_attempt_sync_bundle_for_remote_entries(&remote_entries, sync_bundle_config)
-            && maybe_hydrate_from_remote_sync_bundle(
+        if should_attempt_sync_bundle_for_remote_entries(&remote_entries, sync_bundle_config) {
+            let hydrate_result = maybe_hydrate_from_remote_sync_bundle(
                 &client,
                 &request.object_store,
                 &root_dir,
@@ -3795,21 +4138,29 @@ async fn sync_remote_to_local(
                 true,
                 request_counts.as_ref(),
             )
-            .await?
-        {
-            let hydrated_snapshot = collect_snapshot(&root_dir, &excludes)?;
-            return Ok(SyncRemoteToLocalResponse {
-                ok: true,
-                protocol_version: PROTOCOL_VERSION,
-                local_fingerprint: create_fingerprint(&hydrated_snapshot),
-                removed_path_count: 0,
-                created_directory_count: 0,
-                downloaded_file_count: count_remote_file_entries(&remote_entries),
-                request_counts: request_counts.snapshot(),
-            });
+            .await?;
+            record_hydrate_timings(&mut phase_timings, &hydrate_result);
+            if hydrate_result.hydrated {
+                let fingerprint_started_at = Instant::now();
+                let hydrated_snapshot = collect_snapshot(&root_dir, &excludes)?;
+                let local_fingerprint = create_fingerprint(&hydrated_snapshot);
+                phase_timings.fingerprint_ms = elapsed_millis_u64(fingerprint_started_at);
+                phase_timings.total_command_ms = elapsed_millis_u64(command_started_at);
+                return Ok(SyncRemoteToLocalResponse {
+                    ok: true,
+                    protocol_version: PROTOCOL_VERSION,
+                    local_fingerprint,
+                    removed_path_count: 0,
+                    created_directory_count: 0,
+                    downloaded_file_count: count_remote_file_entries(&remote_entries),
+                    request_counts: request_counts.snapshot(),
+                    phase_timings: Some(phase_timings),
+                });
+            }
         }
     }
 
+    let manifest_read_started_at = Instant::now();
     let sync_manifest = Arc::new(
         load_remote_sync_manifest(
             &client,
@@ -3820,6 +4171,7 @@ async fn sync_remote_to_local(
         )
         .await?,
     );
+    phase_timings.manifest_read_ms += elapsed_millis_u64(manifest_read_started_at);
     let explicit_remote_directories = remote_entries
         .iter()
         .filter(|entry| entry.is_directory)
@@ -3832,13 +4184,16 @@ async fn sync_remote_to_local(
         .map(|entry| normalize_relative_path(&entry.relative_path))
         .filter(|relative_path| !relative_path.is_empty())
         .collect::<BTreeSet<_>>();
+    let plan_started_at = Instant::now();
     let plan = create_remote_to_local_plan(
         &root_dir,
         &snapshot,
         remote_entries,
         preserve_top_level_names,
     );
+    phase_timings.plan_ms += elapsed_millis_u64(plan_started_at);
 
+    let remove_started_at = Instant::now();
     let removed_path_count = process_with_concurrency(
         plan.remove_paths.clone(),
         max_concurrency,
@@ -3848,7 +4203,9 @@ async fn sync_remote_to_local(
     .into_iter()
     .filter(|removed| *removed)
     .count();
+    phase_timings.remove_ms += elapsed_millis_u64(remove_started_at);
 
+    let mkdir_started_at = Instant::now();
     tokio::fs::create_dir_all(&root_dir)
         .await
         .map_err(|error| {
@@ -3874,10 +4231,12 @@ async fn sync_remote_to_local(
     .into_iter()
     .filter(|created| *created)
     .count();
+    phase_timings.mkdir_ms += elapsed_millis_u64(mkdir_started_at);
 
     let client_for_downloads = client.clone();
     let object_store_for_downloads = request.object_store.clone();
     let request_counts_for_downloads = Arc::clone(&request_counts);
+    let download_started_at = Instant::now();
     let downloaded_candidates = process_with_concurrency(
         plan.download_candidates.clone(),
         max_concurrency,
@@ -3901,11 +4260,13 @@ async fn sync_remote_to_local(
         },
     )
     .await?;
+    phase_timings.download_ms += elapsed_millis_u64(download_started_at);
 
     let client_for_info_checks = client.clone();
     let object_store_for_info_checks = request.object_store.clone();
     let sync_manifest_for_info_checks = Arc::clone(&sync_manifest);
     let request_counts_for_info_checks = Arc::clone(&request_counts);
+    let info_check_started_at = Instant::now();
     let info_checked_candidates = process_with_concurrency(
         plan.info_check_candidates.clone(),
         max_concurrency,
@@ -3993,11 +4354,13 @@ async fn sync_remote_to_local(
         },
     )
     .await?;
+    phase_timings.info_check_ms += elapsed_millis_u64(info_check_started_at);
     let downloaded_file_count = downloaded_candidates.len()
         + info_checked_candidates
             .iter()
             .filter(|(_, _, _, downloaded)| *downloaded)
             .count();
+    let fingerprint_started_at = Instant::now();
     let local_fingerprint = create_fingerprint_from_entries(
         &downloaded_candidates
             .into_iter()
@@ -4006,6 +4369,8 @@ async fn sync_remote_to_local(
             .collect::<Vec<_>>(),
         &resolve_empty_remote_directories(&explicit_remote_directories, &remote_file_paths),
     );
+    phase_timings.fingerprint_ms = elapsed_millis_u64(fingerprint_started_at);
+    phase_timings.total_command_ms = elapsed_millis_u64(command_started_at);
 
     Ok(SyncRemoteToLocalResponse {
         ok: true,
@@ -4015,6 +4380,7 @@ async fn sync_remote_to_local(
         created_directory_count,
         downloaded_file_count,
         request_counts: request_counts.snapshot(),
+        phase_timings: Some(phase_timings),
     })
 }
 

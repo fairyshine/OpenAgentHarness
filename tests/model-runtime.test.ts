@@ -5,9 +5,9 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { AiSdkModelGateway, prepareToolServers } from "@oah/model-gateway";
-import { normalizeMessages } from "../packages/model-gateway/src/gateway-helpers.ts";
-import { normalizeRemoteMcpUrl } from "../packages/model-gateway/src/mcp-endpoint-utils.ts";
+import { AiSdkModelRuntime, prepareToolServers } from "@oah/model-runtime";
+import { normalizeMessages } from "../packages/model-runtime/src/runtime-helpers.ts";
+import { normalizeRemoteMcpUrl } from "../packages/model-runtime/src/mcp-endpoint-utils.ts";
 
 const globalWithAiSdkWarnings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
 globalWithAiSdkWarnings.AI_SDK_LOG_WARNINGS = false;
@@ -120,7 +120,7 @@ afterEach(async () => {
   );
 });
 
-describe("model gateway mcp tools", () => {
+describe("model runtime mcp tools", () => {
   it("normalizes raw base64 and data URL attachments without forcing a single client format", () => {
     const normalized = normalizeMessages([
       {
@@ -536,7 +536,7 @@ describe("model gateway mcp tools", () => {
   });
 });
 
-describe("AiSdkModelGateway openai-compatible provider", () => {
+describe("AiSdkModelRuntime openai-compatible provider", () => {
   it("streams multi-turn chat through chat completions for openai-compatible models", async () => {
     const originalFetch = globalThis.fetch;
     const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -563,7 +563,7 @@ describe("AiSdkModelGateway openai-compatible provider", () => {
     }) as typeof fetch;
 
     try {
-      const gateway = new AiSdkModelGateway({
+      const runtime = new AiSdkModelRuntime({
         defaultModelName: "mock-entry",
         models: {
           "mock-entry": {
@@ -575,7 +575,7 @@ describe("AiSdkModelGateway openai-compatible provider", () => {
         }
       });
 
-      const response = await gateway.stream({
+      const response = await runtime.stream({
         model: "mock-entry",
         messages: [
           { role: "system", content: "You are helpful." },
@@ -622,7 +622,7 @@ describe("AiSdkModelGateway openai-compatible provider", () => {
       })) as typeof fetch;
 
     try {
-      const gateway = new AiSdkModelGateway({
+      const runtime = new AiSdkModelRuntime({
         defaultModelName: "mock-entry",
         models: {
           "mock-entry": {
@@ -634,7 +634,7 @@ describe("AiSdkModelGateway openai-compatible provider", () => {
         }
       });
 
-      const response = await gateway.stream({
+      const response = await runtime.stream({
         model: "mock-entry",
         messages: [
           { role: "user", content: "hi" },
@@ -679,7 +679,7 @@ describe("AiSdkModelGateway openai-compatible provider", () => {
     }) as typeof fetch;
 
     try {
-      const gateway = new AiSdkModelGateway({
+      const runtime = new AiSdkModelRuntime({
         defaultModelName: "mock-entry",
         models: {
           "mock-entry": {
@@ -691,7 +691,7 @@ describe("AiSdkModelGateway openai-compatible provider", () => {
         }
       });
 
-      const response = await gateway.stream({
+      const response = await runtime.stream({
         model: "mock-entry",
         messages: [
           { role: "user", content: "run the tool" },

@@ -203,6 +203,26 @@ export interface NativeSyncLocalToRemotePhaseTimings {
   totalCommandMs: number;
 }
 
+export interface NativeSyncRemoteToLocalPhaseTimings {
+  scanMs: number;
+  clientCreateMs: number;
+  listingMs: number;
+  manifestReadMs: number;
+  planMs: number;
+  removeMs: number;
+  mkdirMs: number;
+  bundleGetMs: number;
+  bundleBodyReadMs: number;
+  bundleExtractMs: number;
+  bundleTransport: "none" | "memory" | "tempfile";
+  bundleExtractor: "none" | "rust-ustar" | "tar";
+  bundleBytes: number;
+  downloadMs: number;
+  infoCheckMs: number;
+  fingerprintMs: number;
+  totalCommandMs: number;
+}
+
 export interface NativeSyncLocalToRemoteResult extends NativeCommandSuccessResponse {
   localFingerprint: string;
   uploadedFileCount: number;
@@ -218,6 +238,7 @@ export interface NativeSyncRemoteToLocalResult extends NativeCommandSuccessRespo
   createdDirectoryCount: number;
   downloadedFileCount: number;
   requestCounts?: NativeObjectStoreRequestCounts | undefined;
+  phaseTimings?: NativeSyncRemoteToLocalPhaseTimings | undefined;
 }
 
 export interface NativeSyncLocalToSandboxHttpResult extends NativeCommandSuccessResponse {

@@ -27,7 +27,7 @@
     "@aws-sdk/client-s3": "3.916.0",
     "@oah/api-contracts": "workspace:*",
     "@oah/config": "workspace:*",
-    "@oah/model-gateway": "workspace:*",
+    "@oah/model-runtime": "workspace:*",
     "@oah/native-bridge": "workspace:*",
     "@oah/engine-core": "workspace:*",
     "@oah/storage-memory": "workspace:*",

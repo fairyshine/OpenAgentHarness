@@ -87,6 +87,8 @@ Rust additionally now has:
 - process-wide worker-pool sharing
 - bootstrap-time worker prewarm
 - `tar`-first bundle creation
+- in-process ustar bundle writer for filtered/in-memory sync bundles
+- in-process ustar bundle extractor for in-memory sync bundle hydration
 - root-tar fast path
 - temp-file-backed bundle path
 - in-memory bundle path for smaller bundles
@@ -129,27 +131,56 @@ Current native bundle split on this sample:
 
 Current shape:
 
-- TS `bundle-primary` cold push: about `444-509ms`
-- native persistent cold push: about `95-115ms`
+- TS `bundle-primary` cold push: about `417-509ms`
+- native persistent cold push: about `45ms` with the Rust ustar writer, or about `97ms` with it disabled
 - native persistent warm push: about `6-8ms`
-- native persistent materialize: about `106-149ms`
-- native persistent pull: about `105-125ms`
+- native persistent materialize: about `84ms` with the Rust ustar extractor, or about `127ms` with it disabled
+- native persistent pull: about `86ms` with the Rust ustar extractor, or about `113ms` with it disabled
 
 Current native bundle split on this sample:
 
-- `bundle-build ~54-62ms`
-- `bundle-upload ~30-43ms`
-- transport mode now varies based on threshold policy, but the dominant remaining cost is build rather than body preparation
+- Rust ustar writer enabled: `bundle-build ~11ms`, `bundle-upload ~24ms`, `command-total ~44ms`
+- Rust ustar writer disabled / external tar path: `bundle-build ~55ms`, `bundle-upload ~34ms`, `command-total ~96ms`
+- Rust ustar extractor enabled: native persistent materialize `84ms`, pull `86ms`
+- Rust ustar extractor disabled / `tar::Archive` path: native persistent materialize `127ms`, pull `113ms`
+- transport mode: `memory`
 
 Latest local proof after this stage:
 
-- TS sidecar cold push: `1292ms`, `1027` requests
-- TS `bundle-primary` cold push: `444ms`, `2` requests
-- native persistent cold push: `95ms`, `2` requests
+- TS sidecar cold push: `1334ms`, `1027` requests
+- TS `bundle-primary` cold push: `433ms`, `2` requests
+- native persistent cold push: `45ms`, `2` requests
 - native persistent warm push: `6ms`, `1` request
-- native persistent materialize: `106ms`, `1` request
-- native persistent pull: `110ms`, `1` request
-- native persistent push phase split: `scan=2ms`, `bundle-build=54ms`, `bundle-upload=33ms`, `command-total=94ms`
+- native persistent materialize: `84ms`, `1` request
+- native persistent pull: `86ms`, `1` request
+- native persistent push phase split: `scan=3ms`, `bundle-build=11ms`, `bundle-upload=24ms`, `command-total=44ms`
+- explicit writer-off control: native persistent cold push `97ms`, with `bundle-build=55ms` and `command-total=96ms`
+- explicit extractor-off control: native persistent materialize `127ms`, pull `113ms`
+
+### Mainline prepared-seed and Docker-limited proof
+
+Synthetic `1024 files x 4 KiB`, local host:
+
+- initializer seed prepare cold: TS `970ms`, native oneshot `418ms`, native persistent `526ms`
+- initializer seed prepare warm: TS `360ms`, native oneshot `137ms`, native persistent `126ms`
+- native direct sandbox-http cold sync: oneshot `365ms`, persistent `281ms`
+- native direct sandbox-http warm sync: oneshot `168ms`, persistent `141ms`
+
+Synthetic `1024 files x 4 KiB`, Docker-limited container with `--cpus=2 --memory=1g`:
+
+- initializer seed prepare cold: TS `451ms`, native oneshot `299ms`, native persistent `315ms`
+- initializer seed prepare warm: TS `86ms`, native oneshot `38ms`, native persistent `35ms`
+- native direct sandbox-http cold sync: oneshot `344ms`, persistent `346ms`
+- native direct sandbox-http warm sync: oneshot `202ms`, persistent `173ms`
+
+Real runtime from `OAH_DEPLOY_ROOT=/Users/wumengsong/Code/test_oah_server`, runtime `compact-hook-e2e-runtime`:
+
+- initializer seed prepare cold: TS `144ms`, native oneshot `31.5ms`, native persistent `140ms`
+- initializer seed prepare warm: TS `22.5ms`, native oneshot `11.7ms`, native persistent `6.5ms`
+- native direct sandbox-http cold sync: oneshot `22.2ms`, persistent `7.1ms`
+- native direct sandbox-http warm sync: oneshot `11.3ms`, persistent `2.8ms`
+
+The persistent cold number on small real runtimes can be distorted by first worker startup. The steady-state and larger synthetic cases still favor persistent mode; oneshot remains useful as a fallback and as a debugging/control mode, not as the preferred hot path.
 
 ## What We Learned In This Phase
 
@@ -169,20 +200,36 @@ Net result:
 - `receiveDelay` is no longer the main bottleneck
 - cold persistent push now spends most of its time inside the actual Rust sync command
 
-### 2. Bundle body preparation is no longer the main issue
+### 2. Bundle build cost moved from an external-tar floor to a small Rust loop
 
-The additional fields introduced in this phase showed:
+The direct ustar writer changed the larger sample substantially:
 
 - `bundleBodyPrepareMs` is effectively near zero in the current native path
-- the remaining larger cost is usually `bundle-build`
-- `bundle-upload` still matters, but it is no longer the first thing to chase on larger samples
+- `bundle-build` dropped from about `55ms` to about `11ms` on `1024 files x 4 KiB`
+- the remaining cold push cost is now mostly upload and object-store/request overhead
+- the external tar path should remain as a compatibility fallback for edge cases such as paths outside the simple ustar envelope
 
-### 3. Small and large bundle cases should not be treated the same
+### 3. Bundle extraction now has the same measured native fast path
+
+The in-memory hydration path now tries a constrained ustar extractor before falling back to `tar::Archive`:
+
+- it handles safe ustar regular files and directories
+- it rejects complex/unsafe paths and unsupported entry types back to the existing tar path
+- it preserves mtime and non-default executable/permission modes where they matter
+- it can be disabled with `OAH_NATIVE_WORKSPACE_SYNC_RUST_BUNDLE_EXTRACTOR=0` for controls and rollback
+
+Measured result on `1024 files x 4 KiB`:
+
+- native persistent materialize improved from `127ms` to `84ms`
+- native persistent pull improved from `113ms` to `86ms`
+
+### 4. Small and large bundle cases should not be treated the same
 
 The benchmarks show a useful split:
 
 - small bundles clearly benefit from the in-memory path
-- larger bundles need more careful treatment and should be judged by measured build/upload breakdown, not by one transport rule applied everywhere
+- larger bundles now benefit from the Rust writer when they are still within the in-memory source-byte threshold
+- very large bundles still need separate tempfile/streaming measurements before changing thresholds again
 
 ## Current Conclusion
 
@@ -202,27 +249,27 @@ That conclusion is justified because native persistent now improves:
 
 The remaining mainline work is now narrower and more concrete:
 
-- keep reducing bundle build cost on larger workspaces, now from a `~54ms` baseline on the `1024 files x 4 KiB` sample
-- reduce remaining command-body overhead in native sync where it still shows up under oneshot mode
+- keep reducing upload and remaining materialize cost now that build and in-memory extract both have native fast paths
+- keep oneshot documented and tested as fallback-only unless future measurements show a reason to optimize it
 - continue improving prepared-seed reuse and seed upload efficiency
-- add more Docker CPU/memory constrained proof beyond local compose startup and object-storage microbenchmarks
+- add broader Docker CPU/memory constrained proof against real runtime mixes, not only the synthetic `1024 x 4 KiB` fixture
 - keep TS fallback semantically aligned with native behavior
 
 ## Next Phase Entry Point
 
-This phase completed the first pass through this order:
+This phase completed the next pass through this order:
 
-1. optimize larger-workspace `bundle-build`
-2. revisit larger-workspace `bundle-upload` after remeasurement
-3. extend the same discipline to seed archive / prepared-seed reuse
-4. rerun local Docker proof before broadening rollout claims
+1. Docker-limited runtime/workspace create measurement
+2. native `bundle-build` reduction below the previous `~54ms` larger-sample floor
+3. oneshot overhead decision
+4. prepared-seed cold/warm measurement using both synthetic and real `OAH_DEPLOY_ROOT` runtime inputs
 
 The next phase should continue from:
 
-1. add Docker-limited runtime/workspace create measurements, not only local object-storage sync measurements
-2. profile native `bundle-build` below the current `~54ms` larger-sample floor
-3. reduce native oneshot client-create/command overhead, or keep oneshot clearly documented as fallback-only
-4. expand prepared-seed cold/warm measurements with real runtimes from `OAH_DEPLOY_ROOT`
+1. reduce native bundle upload cost after the Rust writer/extractor shift
+2. measure real runtime mixes from `OAH_DEPLOY_ROOT`, especially runtimes larger than the current small local samples
+3. move runtime/tool/skill copy and merge into a native command only if those real-runtime measurements show copy/setup cost dominating
+4. keep improving Docker benchmark ergonomics so constrained measurements stay cheap enough to run regularly
 
 ## Repository Scan: Rust Candidate Map
 
@@ -234,12 +281,14 @@ The next candidates should keep that boundary and extend the existing worker/sid
 These are the highest-confidence candidates because they are already on the Docker/self-hosted hot path and already have native integration points.
 
 1. `native/oah-workspace-sync`: larger-workspace bundle construction
-   - Current hotspot: `bundle-build` is now the dominant native cost on the larger sample.
+   - Current hotspot: `bundle-build` was the dominant native cost on the larger sample; after the Rust ustar writer it is no longer the floor for the `1024 files x 4 KiB` case.
    - Code surface: `native/oah-workspace-sync/src/main.rs`, `apps/server/src/object-storage.ts`, `packages/native-bridge/src/workspace-sync.ts`.
    - Rust opportunity: reduce tar assembly cost, avoid unnecessary sorted full-list construction where possible, preserve metadata in one pass, and keep using the persistent worker.
    - Current pass: in-memory root bundle thresholds are now native-configurable and default high enough to cover the `1024 files x 4 KiB` benchmark class without forcing tempfile I/O.
    - Current pass: bundle creation now uses a hybrid tar strategy. Clean snapshots keep the faster root-tar path; snapshots with ignored runtime junk switch to a snapshot-list tar path so `.DS_Store`, `__pycache__`, `.pyc`, SQLite sidecars, and internal sync files do not leak into bundles.
-   - Expected win: lower cold push and materialize latency under Docker CPU limits.
+   - Current pass: filtered/in-memory sync bundles now use a native ustar writer by default, with `OAH_NATIVE_WORKSPACE_SYNC_RUST_BUNDLE_WRITER=0` available as an external-tar control/fallback.
+   - Measured win: larger-sample `bundle-build` dropped from about `55ms` to about `11ms`; native persistent cold push dropped from about `97ms` to about `45ms` in the writer-on/off control.
+   - Next win: upload/materialize cost and very-large tempfile/streaming behavior.
 
 2. `native/oah-workspace-sync`: object-store bundle extraction and local cleanup
    - Current TS fallback still shells out to `tar` and then prunes empty directories.
@@ -247,14 +296,18 @@ These are the highest-confidence candidates because they are already on the Dock
    - Rust opportunity: make extract, mtime restore, empty-directory handling, and post-sync cleanup one native operation.
    - Current pass: native local-to-remote sync now prunes empty directories itself, so the TS native wrapper no longer performs a second recursive cleanup walk.
    - Current pass: native remote-to-local hydration now extracts smaller and medium sync bundles from memory when the remote `content-length` is under `OAH_NATIVE_WORKSPACE_SYNC_IN_MEMORY_BUNDLE_EXTRACT_MAX_BYTES` instead of always writing a temporary bundle file first.
-   - Expected win: less process spawning, fewer local filesystem walks, and lower Node RSS during materialization.
+   - Current pass: in-memory hydration now uses a constrained native ustar extractor by default, with `OAH_NATIVE_WORKSPACE_SYNC_RUST_BUNDLE_EXTRACTOR=0` available as a fallback/control.
+   - Measured win: native persistent materialize dropped from `127ms` to `84ms`; pull dropped from `113ms` to `86ms` on `1024 files x 4 KiB`.
+   - Next win: expose remote-to-local phase timings and reduce any remaining download/fingerprint cost.
 
 3. `native/oah-workspace-sync`: seed archive build/upload path
    - Current path already uses native planning; seed archive construction now prefers a native `build-seed-archive` command and falls back to the previous TS `tar` spawn.
    - Code surface: `apps/server/src/bootstrap/sandbox-backed-workspace-initializer.ts`.
    - Rust opportunity: keep folding archive creation and archive-based upload/extract into the existing persistent native worker path for self-hosted sandboxes.
    - Current pass: native seed archive build now uses the same snapshot-list tar strategy as sync bundles, with an in-process Rust tar fallback.
-   - Expected win: faster cold workspace creation and lower peak memory when prepared seeds contain many small files.
+   - Current pass: `scripts/bench-workspace-mainline.ts` can now benchmark a real runtime via `OAH_DEPLOY_ROOT` plus `OAH_BENCH_MAINLINE_RUNTIME_NAME`, or an explicit `OAH_BENCH_MAINLINE_RUNTIME_SOURCE_DIR`.
+   - Measured win: synthetic Docker-limited prepared-seed warm prepare improved from TS `86ms` to native persistent `35ms`; real `compact-hook-e2e-runtime` warm prepare improved from TS `22.5ms` to native persistent `6.5ms`.
+   - Expected next win: faster cold workspace creation and lower peak memory when prepared seeds contain many small files.
 
 4. `scripts/local-stack.mjs`: readonly deploy-source fingerprint and storage sync planning
    - Local deployment uses `OAH_DEPLOY_ROOT` and scans `source/runtimes`, `source/models`, `source/tools`, `source/skills`, and `source/archives` before `pnpm storage:sync`.
@@ -310,12 +363,12 @@ These areas are plausible but not yet obvious Rust wins.
    - Why not now: the database owns most runtime cost; TypeScript mostly maps rows and assembles API responses.
    - Better next move: query/index improvements, pagination, and fewer `row_to_json(... )::text ilike` scans.
 
-5. Model gateway, MCP tools, SSE streaming, and Fastify routes
-   - Code surface: `packages/model-gateway`, `apps/server/src/http`, `apps/web`.
+5. Model runtime, MCP tools, SSE streaming, and Fastify routes
+   - Code surface: `packages/model-runtime`, `apps/server/src/http`, `apps/web`.
    - Why not now: these are protocol orchestration paths with external model/network latency.
    - Rust would add integration complexity without a clear CPU/FS bottleneck.
 
-## Local Docker Proof Points To Add
+## Local Docker Proof Points
 
 The local compose path now matters because it defaults to native workspace sync on API and sandbox workers while keeping small Node heaps:
 
@@ -324,17 +377,16 @@ The local compose path now matters because it defaults to native workspace sync 
 - native sync enabled by default through `OAH_NATIVE_WORKSPACE_SYNC=1`
 - persistent native worker enabled by default through `OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT=1`
 
-The next proof should use the same shape as:
+The compose proof uses the same shape as:
 
 ```bash
 OAH_DEPLOY_ROOT=/Users/wumengsong/Code/test_oah_server pnpm local:up
 ```
 
-Then measure at least:
+The remaining compose-oriented measurements to add are:
 
 - first `local:up` after readonly volume recreation
 - second `local:up` with `OAH_LOCAL_SYNC_ON_CHANGE_ONLY=1`
-- workspace create from runtime with prepared seed cache cold/warm
 - object-store-backed workspace materialize, mutate, idle flush, and rematerialize
 - API and sandbox RSS during large runtime/workspace sync
 
@@ -345,8 +397,11 @@ Current Docker proof status:
 - The packaged API image now returns a valid `/app/native/oah-workspace-sync version` response, and worker `serve` responds to a `version` request.
 - A second run with `OAH_LOCAL_SYNC_ON_CHANGE_ONLY=1` detected unchanged readonly sources and skipped `pnpm storage:sync`.
 - The local stack reached healthy/running state for Postgres, Redis, MinIO, API, sandbox worker, controller, and compose scaler.
+- `scripts/bench-workspace-mainline-docker.sh` now builds its native Linux binary through a Rust Alpine builder stage instead of installing Rust with `curl rustup` inside the Node image, copies `docs/` for initializer schema reads, and forwards benchmark env vars into the constrained container.
+- Docker-limited prepared-seed measurement for `1024 files x 4 KiB` now exists: native persistent warm prepare `35ms` versus TS `86ms`; native oneshot remains a useful control but is not the preferred hot path.
+- Real-runtime prepared-seed measurement from `OAH_DEPLOY_ROOT` now exists for `compact-hook-e2e-runtime`: native persistent warm prepare `6.5ms` versus TS `22.5ms`.
 
-Do not broaden Rust scope until these Docker-constrained measurements show the same pattern as the local microbenchmarks.
+Do not broaden Rust scope until these Docker-constrained measurements keep showing the same pattern on larger real runtime mixes.
 
 ## Guardrails
 
@@ -370,4 +425,4 @@ Current recommendation:
 This phase is complete enough to treat Rust-on-workspace-path as an established direction rather than an experiment.
 
 The correct next move is not wider Rust adoption.
-The correct next move is to keep drilling into the same hot path until larger Docker-bound workloads show the same stable advantage end to end.
+The correct next move is to keep drilling into upload, materialize, and runtime-copy costs now that the larger-sample bundle-build floor has moved from external tar to the in-process Rust writer.

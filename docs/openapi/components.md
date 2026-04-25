@@ -46,7 +46,7 @@
 
 `id`、`packageName`、`description`、`requiresUrl`、`useCases`
 
-## 模型网关对象
+## 模型运行时对象
 
 ### ChatMessage
 

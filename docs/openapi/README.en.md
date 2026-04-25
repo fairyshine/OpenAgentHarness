@@ -5,7 +5,7 @@ The HTTP API is built on REST resource endpoints + SSE event streams. The [opena
 ## Conventions
 
 - Public API: `/api/v1`
-- Internal model gateway: `/internal/v1/models/*` (loopback only, no `Authorization`)
+- Internal model runtime: `/internal/v1/models/*` (loopback only, no `Authorization`)
 - Host can inject a caller context resolver; without one, standalone server uses minimal caller context
 - Async entry points (send message, trigger action) return `202`
 - Streaming uses SSE
@@ -34,7 +34,7 @@ File and command endpoints intentionally keep [E2B](https://github.com/e2b-dev/E
 | [runs.md](./runs.md) | Run lookup, cancellation, and queued-run guide |
 | [actions.md](./actions.md) | Manual action triggering |
 | [files.md](./files.md) | Sandbox file management and commands |
-| [models.md](./models.md) | Model gateway |
+| [models.md](./models.md) | Model runtime |
 | [streaming.md](./streaming.md) | SSE event streaming |
 | [components.md](./components.md) | Shared schemas and error models |
 

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdtemp, mkdir, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -23,6 +23,8 @@ interface BenchmarkOptions {
   sizeBytes: number;
   iterations: number;
   seedSyncRepeats: number;
+  runtimeSourceDir?: string;
+  runtimeSourceLabel?: string;
 }
 
 interface BenchmarkMeasurement {
@@ -81,7 +83,8 @@ const DEFAULT_OPTIONS: BenchmarkOptions = {
   files: Number.parseInt(process.env.OAH_BENCH_MAINLINE_FILES || "64", 10) || 64,
   sizeBytes: Number.parseInt(process.env.OAH_BENCH_MAINLINE_SIZE_BYTES || "16384", 10) || 16384,
   iterations: Number.parseInt(process.env.OAH_BENCH_MAINLINE_ITERATIONS || "8", 10) || 8,
-  seedSyncRepeats: Number.parseInt(process.env.OAH_BENCH_MAINLINE_SEED_SYNC_REPEATS || "3", 10) || 3
+  seedSyncRepeats: Number.parseInt(process.env.OAH_BENCH_MAINLINE_SEED_SYNC_REPEATS || "3", 10) || 3,
+  ...resolveRuntimeSourceOptions()
 };
 
 const WORKSPACE_SYNC_BINARY_BASENAME = process.platform === "win32" ? "oah-workspace-sync.exe" : "oah-workspace-sync";
@@ -113,12 +116,46 @@ function parseArgs(argv: string[]): BenchmarkOptions {
         options.seedSyncRepeats = Math.max(1, Number.parseInt(value, 10) || options.seedSyncRepeats);
         index += 1;
         break;
+      case "--runtime-source-dir":
+        options.runtimeSourceDir = path.resolve(value);
+        options.runtimeSourceLabel = path.basename(options.runtimeSourceDir);
+        index += 1;
+        break;
+      case "--runtime-name":
+        if (process.env.OAH_DEPLOY_ROOT) {
+          options.runtimeSourceDir = path.resolve(process.env.OAH_DEPLOY_ROOT, "source", "runtimes", value);
+          options.runtimeSourceLabel = value;
+        }
+        index += 1;
+        break;
       default:
         break;
     }
   }
 
   return options;
+}
+
+function resolveRuntimeSourceOptions(): Pick<BenchmarkOptions, "runtimeSourceDir" | "runtimeSourceLabel"> {
+  const explicitSourceDir = process.env.OAH_BENCH_MAINLINE_RUNTIME_SOURCE_DIR?.trim();
+  if (explicitSourceDir) {
+    const runtimeSourceDir = path.resolve(explicitSourceDir);
+    return {
+      runtimeSourceDir,
+      runtimeSourceLabel: path.basename(runtimeSourceDir)
+    };
+  }
+
+  const deployRoot = process.env.OAH_DEPLOY_ROOT?.trim();
+  const runtimeName = process.env.OAH_BENCH_MAINLINE_RUNTIME_NAME?.trim();
+  if (deployRoot && runtimeName) {
+    return {
+      runtimeSourceDir: path.resolve(deployRoot, "source", "runtimes", runtimeName),
+      runtimeSourceLabel: runtimeName
+    };
+  }
+
+  return {};
 }
 
 function round(value: number): number {
@@ -205,6 +242,29 @@ async function createFixture(rootDir: string, files: number, sizeBytes: number):
 
   await mkdir(path.join(rootDir, ".openharness"), { recursive: true });
   await writeFile(path.join(rootDir, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+}
+
+async function copyDirectoryContents(sourceDir: string, targetDir: string): Promise<void> {
+  await mkdir(targetDir, { recursive: true });
+  const entries = await readdir(sourceDir, { withFileTypes: true });
+  await Promise.all(
+    entries.map((entry) =>
+      cp(path.join(sourceDir, entry.name), path.join(targetDir, entry.name), {
+        dereference: false,
+        force: true,
+        recursive: true
+      })
+    )
+  );
+}
+
+async function prepareBenchmarkWorkspace(rootDir: string, options: BenchmarkOptions): Promise<void> {
+  if (options.runtimeSourceDir) {
+    await copyDirectoryContents(options.runtimeSourceDir, rootDir);
+    return;
+  }
+
+  await createFixture(rootDir, options.files, options.sizeBytes);
 }
 
 async function measureIterations(
@@ -887,7 +947,7 @@ async function runNativeModeBenchmarks(options: BenchmarkOptions, mode: NativeBe
   const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), `oah-bench-mainline-fixture-${mode}-`));
   const sandboxRoot = await mkdtemp(path.join(os.tmpdir(), `oah-bench-mainline-sandbox-${mode}-`));
   try {
-    await createFixture(fixtureRoot, options.files, options.sizeBytes);
+    await prepareBenchmarkWorkspace(fixtureRoot, options);
     const sandboxServer = await createSandboxServer(sandboxRoot);
     try {
       const rows: BenchmarkRow[] = [];
@@ -1003,7 +1063,7 @@ async function runInitializerBenchmarks(options: BenchmarkOptions, mode: Benchma
     const skillsDir = path.join(tempRoot, "skills");
 
     await Promise.all([
-      createFixture(runtimeRoot, options.files, options.sizeBytes),
+      prepareBenchmarkWorkspace(runtimeRoot, options),
       mkdir(toolsDir, { recursive: true }),
       mkdir(skillsDir, { recursive: true })
     ]);
@@ -1100,6 +1160,11 @@ async function main(): Promise<void> {
   console.log(
     `Benchmarking workspace mainline paths files=${options.files} sizeBytes=${options.sizeBytes} iterations=${options.iterations} warmRepeats=${options.seedSyncRepeats}`
   );
+  if (options.runtimeSourceDir) {
+    console.log(
+      `Benchmark runtime source=${options.runtimeSourceLabel ?? "custom"} path=${options.runtimeSourceDir}`
+    );
+  }
   console.log("Modes: ts fallback, oneshot native bridge, persistent native worker.");
 
   const rows = [

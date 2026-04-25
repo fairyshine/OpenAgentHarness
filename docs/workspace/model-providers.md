@@ -1,6 +1,6 @@
 # Model Providers
 
-当前 Open Agent Harness 支持的 `provider` 取值。新增 provider 时需同步更新 `packages/model-gateway/src/providers.ts` 和本文档。
+当前 Open Agent Harness 支持的 `provider` 取值。新增 provider 时需同步更新 `packages/model-runtime/src/providers.ts` 和本文档。
 
 ## 支持列表
 

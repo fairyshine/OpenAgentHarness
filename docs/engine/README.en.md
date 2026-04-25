@@ -22,4 +22,4 @@ Core flow: request → queue → context build → LLM loop → tool dispatch �
 ### Execution environment
 
 1. [Execution Backend](./execution-backend.md) — Execution backend abstraction
-2. [Model Gateway](./model-gateway.md) — Internal model gateway
+2. [Model Runtime](./model-runtime.md) — Internal model runtime

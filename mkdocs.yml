@@ -82,7 +82,7 @@ plugins:
             生命周期: Lifecycle
             上下文引擎: Context Engine
             消息投影: Message Projections
-            模型网关: Model Gateway
+            模型运行时: Model Runtime
             执行后端: Execution Backend
             Projection 与 Executors: Projection and Executors
             Queue 与可靠性: Queue and Reliability
@@ -150,7 +150,7 @@ nav:
       - 生命周期: engine/lifecycle.md
       - 上下文引擎: engine/context-engine.md
       - 消息投影: engine/message-projections.md
-      - 模型网关: engine/model-gateway.md
+      - 模型运行时: engine/model-runtime.md
       - Projection 与 Executors: engine/projection-and-executors.md
       - 执行后端: engine/execution-backend.md
       - Hook Runtime: engine/hook-runtime.md

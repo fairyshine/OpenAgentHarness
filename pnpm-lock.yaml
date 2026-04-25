@@ -61,9 +61,9 @@ importers:
       '@oah/engine-core':
         specifier: workspace:*
         version: link:../../packages/engine-core
-      '@oah/model-gateway':
+      '@oah/model-runtime':
         specifier: workspace:*
-        version: link:../../packages/model-gateway
+        version: link:../../packages/model-runtime
       '@oah/native-bridge':
         specifier: workspace:*
         version: link:../../packages/native-bridge
@@ -228,7 +228,7 @@ importers:
         specifier: 4.3.6
         version: 4.3.6
 
-  packages/model-gateway:
+  packages/model-runtime:
     dependencies:
       '@ai-sdk/mcp':
         specifier: 1.0.30
