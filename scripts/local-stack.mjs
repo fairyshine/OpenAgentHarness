@@ -305,8 +305,8 @@ function prepareDockerServerConfigs() {
     sourceConfig.workers?.embedded && typeof sourceConfig.workers.embedded === "object"
       ? sourceConfig.workers.embedded
       : {
-          min_count: 1,
-          max_count: 2,
+          min_count: 2,
+          max_count: 4,
           scale_interval_ms: 3000,
           scale_up_window: 2,
           scale_down_window: 3,

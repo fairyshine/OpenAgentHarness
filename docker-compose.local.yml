@@ -95,7 +95,7 @@ services:
       - /config/server.docker.yaml
       - --api-only
     environment:
-      NODE_OPTIONS: ${OAH_API_NODE_OPTIONS:---max-old-space-size=192 --max-semi-space-size=4}
+      NODE_OPTIONS: ${OAH_API_NODE_OPTIONS:---max-old-space-size=512 --max-semi-space-size=8}
       OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES: "true"
       OAH_INTERNAL_BASE_URL: "http://oah-api:8787"
       OAH_NATIVE_WORKSPACE_SYNC: ${OAH_NATIVE_WORKSPACE_SYNC:-1}
@@ -150,8 +150,8 @@ services:
       oah-compose-scaler:
         condition: service_healthy
     environment:
-      NODE_OPTIONS: ${OAH_CONTROLLER_NODE_OPTIONS:---max-old-space-size=64 --max-semi-space-size=2}
-      OAH_CONTROLLER_SCALE_INTERVAL_MS: ${OAH_CONTROLLER_SCALE_INTERVAL_MS:-30000}
+      NODE_OPTIONS: ${OAH_CONTROLLER_NODE_OPTIONS:---max-old-space-size=128 --max-semi-space-size=4}
+      OAH_CONTROLLER_SCALE_INTERVAL_MS: ${OAH_CONTROLLER_SCALE_INTERVAL_MS:-5000}
     ports:
       - "8789:8788"
     extra_hosts:
@@ -215,7 +215,10 @@ services:
       - --config
       - /config/server.docker.yaml
     environment:
-      NODE_OPTIONS: ${OAH_SANDBOX_NODE_OPTIONS:---max-old-space-size=160 --max-semi-space-size=4}
+      NODE_OPTIONS: ${OAH_SANDBOX_NODE_OPTIONS:---max-old-space-size=1024 --max-semi-space-size=16}
+      OAH_EMBEDDED_WORKER_MIN: ${OAH_EMBEDDED_WORKER_MIN:-2}
+      OAH_EMBEDDED_WORKER_MAX: ${OAH_EMBEDDED_WORKER_MAX:-4}
+      OAH_EMBEDDED_WORKER_SCALE_INTERVAL_MS: ${OAH_EMBEDDED_WORKER_SCALE_INTERVAL_MS:-3000}
       OAH_ALLOW_PRIVATE_INTERNAL_ROUTES: "true"
       OAH_NATIVE_WORKSPACE_SYNC: ${OAH_NATIVE_WORKSPACE_SYNC:-1}
       OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT: ${OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT:-1}

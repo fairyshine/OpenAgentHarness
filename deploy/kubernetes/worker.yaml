@@ -34,7 +34,7 @@ spec:
             - name: OAH_CONFIG
               value: /etc/oah/server.yaml
             - name: NODE_OPTIONS
-              value: "--max-old-space-size=224"
+              value: "--max-old-space-size=1024 --max-semi-space-size=16"
             - name: OAH_INTERNAL_BASE_URL
               value: http://$(HOSTNAME).oah-sandbox-internal.open-agent-harness.svc.cluster.local:8787
             - name: OAH_ALLOW_PRIVATE_INTERNAL_ROUTES
@@ -74,6 +74,13 @@ spec:
               readOnly: true
             - name: oah-workspaces
               mountPath: /var/lib/oah/workspaces
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
       volumes:
         - name: oah-config
           configMap:

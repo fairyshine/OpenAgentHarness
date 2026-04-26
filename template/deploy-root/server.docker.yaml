@@ -37,6 +37,30 @@ workspace:
     # Check idle materialization cleanup every 15 seconds to reduce idle I/O.
     maintenance_interval_ms: 15000
 
+workers:
+  embedded:
+    # Standalone sandbox workers use this pool internally. Keep local defaults
+    # roomy enough for multi-run development, while still allowing env override.
+    min_count: 2
+    max_count: 4
+    scale_interval_ms: 3000
+    scale_up_window: 2
+    scale_down_window: 3
+    cooldown_ms: 4000
+    reserved_capacity_for_subagent: 1
+  standalone:
+    min_replicas: 1
+    max_replicas: 8
+    ready_sessions_per_capacity_unit: 1
+    reserved_capacity_for_subagent: 1
+  controller:
+    scale_interval_ms: 5000
+    scale_up_window: 2
+    scale_down_window: 4
+    cooldown_ms: 10000
+    scale_up_busy_ratio_threshold: 0.75
+    scale_up_max_ready_age_ms: 5000
+
 llm:
   # Define this model under source/models/ before deploying.
   default_model: openai-default

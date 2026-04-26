@@ -38,10 +38,18 @@ config:
         maintenance_interval_ms: 15000
 
     workers:
+      embedded:
+        min_count: 2
+        max_count: 4
+        scale_interval_ms: 3000
+        scale_up_window: 2
+        scale_down_window: 3
+        cooldown_ms: 4000
+        reserved_capacity_for_subagent: 1
       standalone:
         min_replicas: {{ .Values.worker.replicaCount }}
-        max_replicas: 12
-        slots_per_pod: 2
+        max_replicas: 16
+        slots_per_pod: 4
         ready_sessions_per_capacity_unit: 1
         reserved_capacity_for_subagent: 1
       controller:
@@ -71,7 +79,7 @@ apiServer:
   replicaCount: 1
   minReadySeconds: 5
   terminationGracePeriodSeconds: 30
-  nodeOptions: "--max-old-space-size=320"
+  nodeOptions: "--max-old-space-size=512 --max-semi-space-size=8"
   runtimeOptimizations:
     allowPrivateInternalModelRoutes: true
     workspacePrewarmEnabled: false
@@ -92,7 +100,13 @@ apiServer:
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  resources: {}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
   extraEnv: []
   envFrom: []
   extraVolumes: []
@@ -125,7 +139,7 @@ worker:
   replicaCount: 1
   minReadySeconds: 5
   terminationGracePeriodSeconds: 120
-  nodeOptions: "--max-old-space-size=224"
+  nodeOptions: "--max-old-space-size=1024 --max-semi-space-size=16"
   runtimeOptimizations:
     allowPrivateInternalRoutes: true
     objectStorageTrustManagedPrefixes: true
@@ -152,7 +166,13 @@ worker:
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  resources: {}
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
   extraEnv: []
   envFrom: []
   extraVolumes: []
@@ -182,7 +202,7 @@ controller:
   replicaCount: 1
   minReadySeconds: 5
   terminationGracePeriodSeconds: 30
-  nodeOptions: "--max-old-space-size=80"
+  nodeOptions: "--max-old-space-size=128 --max-semi-space-size=4"
   priorityClassName: ""
   podSecurityContext: {}
   securityContext: {}
@@ -199,7 +219,13 @@ controller:
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  resources: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
   extraEnv: []
   envFrom: []
   extraVolumes: []
