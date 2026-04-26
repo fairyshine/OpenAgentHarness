@@ -95,7 +95,7 @@ services:
       - /config/server.docker.yaml
       - --api-only
     environment:
-      NODE_OPTIONS: ${OAH_API_NODE_OPTIONS:---max-old-space-size=512 --max-semi-space-size=8}
+      NODE_OPTIONS: ${OAH_API_NODE_OPTIONS:---max-old-space-size=2048 --max-semi-space-size=32}
       OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES: "true"
       OAH_INTERNAL_BASE_URL: "http://oah-api:8787"
       OAH_NATIVE_WORKSPACE_SYNC: ${OAH_NATIVE_WORKSPACE_SYNC:-1}

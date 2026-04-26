@@ -79,7 +79,7 @@ apiServer:
   replicaCount: 1
   minReadySeconds: 5
   terminationGracePeriodSeconds: 30
-  nodeOptions: "--max-old-space-size=512 --max-semi-space-size=8"
+  nodeOptions: "--max-old-space-size=2048 --max-semi-space-size=32"
   runtimeOptimizations:
     allowPrivateInternalModelRoutes: true
     workspacePrewarmEnabled: false
@@ -106,7 +106,7 @@ apiServer:
       memory: 1Gi
     limits:
       cpu: "2"
-      memory: 2Gi
+      memory: 4Gi
   extraEnv: []
   envFrom: []
   extraVolumes: []
