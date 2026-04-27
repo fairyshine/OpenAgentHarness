@@ -25,6 +25,7 @@ import {
 } from "./observability/native-workspace-sync.js";
 
 type AwsS3Module = typeof import("@aws-sdk/client-s3");
+type AwsS3ModuleImport = AwsS3Module | { default?: AwsS3Module | undefined };
 type AwsS3ClientLike = {
   send(command: unknown): Promise<unknown>;
   destroy(): void;
@@ -200,8 +201,21 @@ const DEFAULT_NATIVE_INLINE_UPLOAD_THRESHOLD_BYTES = 128 * 1024;
 const DEFAULT_MANAGED_PATHS = Object.keys(DEFAULT_KEY_PREFIXES) as ManagedPathKey[];
 let awsS3ModulePromise: Promise<AwsS3Module> | undefined;
 
+export function normalizeAwsS3Module(module: AwsS3ModuleImport): AwsS3Module {
+  if (typeof (module as AwsS3Module).S3Client === "function") {
+    return module as AwsS3Module;
+  }
+
+  const defaultExport = (module as { default?: AwsS3Module | undefined }).default;
+  if (defaultExport && typeof defaultExport.S3Client === "function") {
+    return defaultExport;
+  }
+
+  throw new TypeError("Failed to load @aws-sdk/client-s3: S3Client export is unavailable.");
+}
+
 function loadAwsS3Module(): Promise<AwsS3Module> {
-  awsS3ModulePromise ??= import("@aws-sdk/client-s3");
+  awsS3ModulePromise ??= import("@aws-sdk/client-s3").then(normalizeAwsS3Module);
   return awsS3ModulePromise;
 }
 

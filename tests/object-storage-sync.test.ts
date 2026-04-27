@@ -8,6 +8,7 @@ import type { DirectoryObjectStore } from "../apps/server/src/object-storage.ts"
 import {
   computeLocalDirectoryFingerprint,
   deleteRemotePrefixFromObjectStore,
+  normalizeAwsS3Module,
   ObjectStorageMirrorController,
   syncLocalDirectoryToRemote,
   syncRemotePrefixToLocal,
@@ -994,6 +995,23 @@ describe("object storage sync", () => {
     await deleteRemotePrefixFromObjectStore(store, "workspace/demo");
 
     expect([...store.objects.keys()].sort()).toEqual(["workspace/other/README.md"]);
+  });
+
+  it("normalizes bundled AWS SDK default exports", () => {
+    class S3Client {}
+    class ListObjectsV2Command {}
+    class DeleteObjectsCommand {}
+    const module = normalizeAwsS3Module({
+      default: {
+        S3Client,
+        ListObjectsV2Command,
+        DeleteObjectsCommand
+      }
+    } as unknown as Parameters<typeof normalizeAwsS3Module>[0]);
+
+    expect(module.S3Client).toBe(S3Client);
+    expect(module.ListObjectsV2Command).toBe(ListObjectsV2Command);
+    expect(module.DeleteObjectsCommand).toBe(DeleteObjectsCommand);
   });
 
   it("only computes managed workspace external refs for configured managed paths", () => {
