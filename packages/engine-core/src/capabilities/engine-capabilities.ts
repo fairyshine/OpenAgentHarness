@@ -6,8 +6,7 @@ import { AppError } from "../errors.js";
 import {
   createNativeToolSet,
   getNativeToolRetryPolicy,
-  isNativeToolName,
-  NATIVE_TOOL_NAMES
+  isNativeToolName
 } from "../native-tools.js";
 import { createDynamicActivateSkillTool } from "./skill-activation.js";
 import type {
@@ -23,14 +22,14 @@ import type {
 
 export type EngineToolSourceType = "action" | "skill" | "agent" | "tool" | "native";
 
-function configuredAgentActions(workspace: WorkspaceRecord, activeAgentName: string): string[] {
+function configuredAgentActions(workspace: WorkspaceRecord, activeAgentName: string): string[] | undefined {
   const activeAgent = workspace.agents[activeAgentName];
-  return activeAgent?.actions ?? activeAgent?.tools?.actions ?? [];
+  return activeAgent?.actions ?? activeAgent?.tools?.actions;
 }
 
-function configuredAgentSkills(workspace: WorkspaceRecord, activeAgentName: string): string[] {
+function configuredAgentSkills(workspace: WorkspaceRecord, activeAgentName: string): string[] | undefined {
   const activeAgent = workspace.agents[activeAgentName];
-  return activeAgent?.skills ?? activeAgent?.tools?.skills ?? [];
+  return activeAgent?.skills ?? activeAgent?.tools?.skills;
 }
 
 function excludedActionNames(workspace: WorkspaceRecord, activeAgentName: string): Set<string> {
@@ -55,7 +54,7 @@ export function visibleSkills(
 ): WorkspaceRecord["skills"][string][] {
   const configuredSkills = configuredAgentSkills(workspace, activeAgentName);
   const excludedSkills = excludedSkillNames(workspace, activeAgentName);
-  if (configuredSkills.length === 0) {
+  if (configuredSkills === undefined) {
     return Object.values(workspace.skills).filter((skill) => !excludedSkills.has(skill.name));
   }
 
@@ -85,7 +84,7 @@ export function visibleActions(
 ): WorkspaceRecord["actions"][string][] {
   const configuredActions = configuredAgentActions(workspace, activeAgentName);
   const excludedActions = excludedActionNames(workspace, activeAgentName);
-  if (configuredActions.length === 0) {
+  if (configuredActions === undefined) {
     return Object.values(workspace.actions).filter((action) => !excludedActions.has(action.name));
   }
 
@@ -113,9 +112,9 @@ export function visibleToolServers(
   workspace: WorkspaceRecord,
   activeAgentName: string
 ): WorkspaceRecord["toolServers"][string][] {
-  const configuredToolServers = workspace.agents[activeAgentName]?.tools?.external ?? [];
+  const configuredToolServers = workspace.agents[activeAgentName]?.tools?.external;
   const excludedToolServers = excludedExternalToolServerNames(workspace, activeAgentName);
-  if (configuredToolServers.length === 0) {
+  if (configuredToolServers === undefined) {
     return Object.values(workspace.toolServers).filter((server) => !excludedToolServers.has(server.name));
   }
 
@@ -151,12 +150,11 @@ export function enabledToolServers(
 
 export function visibleNativeToolNames(workspace: WorkspaceRecord, activeAgentName: string): string[] {
   const activeAgent = workspace.agents[activeAgentName];
-  const configuredNativeTools = activeAgent?.tools?.native ?? [];
-  const availableNativeTools = [...NATIVE_TOOL_NAMES];
+  const configuredNativeTools = activeAgent?.tools?.native;
   const excludedNativeTools = excludedNativeToolNames(workspace, activeAgentName);
 
-  if (configuredNativeTools.length === 0) {
-    return availableNativeTools.filter((toolName) => !excludedNativeTools.has(toolName));
+  if (configuredNativeTools === undefined) {
+    return [];
   }
 
   return configuredNativeTools.map((toolName) => {
@@ -208,7 +206,7 @@ export function activeToolNamesForAgent(
 export function engineToolNamesForCatalog(workspace: WorkspaceRecord): string[] {
   const agentNames = Object.keys(workspace.agents);
   if (agentNames.length === 0) {
-    return [...NATIVE_TOOL_NAMES];
+    return [];
   }
 
   const names = new Set<string>();
@@ -328,18 +326,36 @@ export interface BuildEngineToolsInput {
   commandExecutor?: import("../types.js").WorkspaceCommandExecutor | undefined;
 }
 
+function configuredNativeToolNameSet(workspace: WorkspaceRecord): Set<string> {
+  return new Set(
+    Object.values(workspace.agents)
+      .flatMap((agent) => agent.tools?.native ?? [])
+      .filter((toolName) => isNativeToolName(toolName))
+  );
+}
+
+function filterNativeToolSetByConfiguredAgents(workspace: WorkspaceRecord, nativeTools: EngineToolSet): EngineToolSet {
+  const configuredNativeTools = configuredNativeToolNameSet(workspace);
+  return Object.fromEntries(
+    Object.entries(nativeTools).filter(([toolName]) => configuredNativeTools.has(toolName))
+  ) as EngineToolSet;
+}
+
 export function buildEngineTools(input: BuildEngineToolsInput): EngineToolSet {
   const { workspace, run, session, getCurrentAgentName, modelGateway, defaultModel } = input;
   return {
-    ...createNativeToolSet(
-      workspace.rootPath,
-      () => visibleNativeToolNames(workspace, getCurrentAgentName()),
-      {
-        sessionId: session.id,
-        modelGateway,
-        webFetchModel: defaultModel,
-        ...(input.commandExecutor ? { commandExecutor: input.commandExecutor } : {})
-      }
+    ...filterNativeToolSetByConfiguredAgents(
+      workspace,
+      createNativeToolSet(
+        workspace.rootPath,
+        () => visibleNativeToolNames(workspace, getCurrentAgentName()),
+        {
+          sessionId: session.id,
+          modelGateway,
+          webFetchModel: defaultModel,
+          ...(input.commandExecutor ? { commandExecutor: input.commandExecutor } : {})
+        }
+      )
     ),
     ...createRunActionTool(
       () => visibleLlmActions(workspace, getCurrentAgentName()),

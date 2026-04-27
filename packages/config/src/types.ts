@@ -299,8 +299,8 @@ export interface DiscoveredAgent {
   hidden?: boolean | undefined;
   color?: string | undefined;
   tools: {
-    native: string[];
-    external: string[];
+    native?: string[] | undefined;
+    external?: string[] | undefined;
     actions?: string[] | undefined;
     skills?: string[] | undefined;
   };

@@ -157,7 +157,9 @@ tools:
 | `skills` | Workspace skills |
 | `external` | MCP tool servers |
 
-- 整体可选，未声明的子字段按空列表处理
+- `native` 必须显式声明才启用；未声明时不暴露任何内建工具
+- `external`、`actions`、`skills` 未声明时继承当前 workspace 已发现的默认能力集
+- 显式空数组表示关闭该类能力，例如 `external: []` 不会回退到默认 MCP servers
 - 仅表达 allowlist，不承载执行逻辑
 - 所有 workspace 统一按声明内容解析
 

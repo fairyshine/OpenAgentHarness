@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EngineService, createLocalWorkspaceFileSystem } from "@oah/engine-core";
 import type {
+  AgentDefinition,
   HookRunAuditRecord,
   ToolCallAuditRecord,
   WorkspaceActivityTracker,
@@ -130,6 +131,7 @@ async function createRuntime(
           } | undefined;
         }
       | undefined;
+    agents?: Record<string, AgentDefinition> | undefined;
   }
 ) {
   const gateway = new FakeModelGateway(delayMs);
@@ -142,6 +144,7 @@ async function createRuntime(
     ...persistence,
     workspaceInitializer: {
       async initialize(input) {
+        const agents = options?.agents ?? {};
         return {
           rootPath: input.rootPath,
           settings: {
@@ -151,14 +154,19 @@ async function createRuntime(
           },
           defaultAgent: "default",
           workspaceModels: {},
-          agents: {},
+          agents,
           actions: {},
           skills: {},
           toolServers: {},
           hooks: {},
           catalog: {
             workspaceId: "runtime",
-            agents: [],
+            agents: Object.values(agents).map((agent) => ({
+              name: agent.name,
+              mode: agent.mode,
+              source: "workspace" as const,
+              ...(agent.description ? { description: agent.description } : {})
+            })),
             models: [],
             actions: [],
             skills: [],
@@ -3152,6 +3160,18 @@ describe("runtime service", () => {
             enabled: true
           }
         }
+      },
+      agents: {
+        default: {
+          name: "default",
+          mode: "primary",
+          prompt: "You are a workspace memory assistant.",
+          tools: {
+            native: ["Glob"]
+          },
+          switch: [],
+          subagents: []
+        }
       }
     });
     gateway.generateResponseFactory = (input) => {
@@ -3215,6 +3235,9 @@ describe("runtime service", () => {
     });
     await waitFor(async () => {
       const run = await runtimeService.getRun(firstAccepted.runId);
+      if (run.status === "failed") {
+        throw new Error(run.errorMessage ?? "First workspace memory recall setup run failed.");
+      }
       return run.status === "completed";
     });
 
@@ -9648,9 +9671,9 @@ describe("runtime service", () => {
           prompt: "You are the builder.",
           tools: {
             native: [],
-            actions: [],
+            actions: ["debug.echo"],
             skills: ["repo-explorer"],
-            external: []
+            external: ["docs-server"]
           },
           switch: ["reviewer"],
           subagents: ["researcher"]
@@ -11505,6 +11528,7 @@ describe("runtime service", () => {
     expect(systemMessages.some((message) => message.content.includes("<available_actions>"))).toBe(true);
     expect(systemMessages.some((message) => message.content.includes("<available_skills>"))).toBe(true);
     expect(capturedToolNames).toEqual(expect.arrayContaining(["run_action", "Skill"]));
+    expect(capturedToolNames).not.toEqual(expect.arrayContaining(["Bash", "Glob", "Read"]));
     expect(capturedMcpNames).toEqual(["docs"]);
 
     const runSteps = await runtimeService.listRunSteps(accepted.runId);

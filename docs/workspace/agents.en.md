@@ -151,7 +151,9 @@ tools:
 | `skills` | Workspace skills |
 | `external` | MCP tool servers |
 
-- Optional; undeclared sub-fields default to empty lists
+- `native` must be explicitly declared; omitted `native` exposes no built-in tools
+- Omitted `external`, `actions`, and `skills` inherit the default capabilities discovered in the current workspace
+- An explicit empty array disables that capability class, for example `external: []` does not fall back to default MCP servers
 - Expresses an allowlist only, not execution logic
 - Parsed uniformly from the workspace declaration
 

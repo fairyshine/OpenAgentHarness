@@ -480,19 +480,22 @@ export async function loadWorkspaceAgents(
         : undefined;
     const policy = data.policy && typeof data.policy === "object" ? (data.policy as Record<string, unknown>) : undefined;
 
+    const nativeTools = Array.isArray(tools?.native)
+      ? tools.native.filter((item): item is string => typeof item === "string")
+      : undefined;
     const externalTools = Array.isArray(tools?.external)
       ? tools.external.filter((item): item is string => typeof item === "string")
-      : [];
+      : undefined;
     const configuredActions = Array.isArray(data.actions)
       ? data.actions.filter((item): item is string => typeof item === "string")
       : Array.isArray(tools?.actions)
         ? tools.actions.filter((item): item is string => typeof item === "string")
-        : [];
+        : undefined;
     const configuredSkills = Array.isArray(data.skills)
       ? data.skills.filter((item): item is string => typeof item === "string")
       : Array.isArray(tools?.skills)
         ? tools.skills.filter((item): item is string => typeof item === "string")
-        : [];
+        : undefined;
     const disallowedNativeTools = Array.isArray(disallowedTools?.native)
       ? disallowedTools.native.filter((item): item is string => typeof item === "string")
       : [];
@@ -556,17 +559,13 @@ export async function loadWorkspaceAgents(
       ...(typeof data.hidden === "boolean" ? { hidden: data.hidden } : {}),
       ...(typeof data.color === "string" ? { color: data.color } : {}),
       tools: {
-        native: Array.isArray(tools?.native) ? tools.native.filter((item): item is string => typeof item === "string") : [],
-        external: externalTools,
-        ...(Array.isArray(tools?.actions)
-          ? { actions: tools.actions.filter((item): item is string => typeof item === "string") }
-          : {}),
-        ...(Array.isArray(tools?.skills)
-          ? { skills: tools.skills.filter((item): item is string => typeof item === "string") }
-          : {})
+        ...(nativeTools !== undefined ? { native: nativeTools } : {}),
+        ...(externalTools !== undefined ? { external: externalTools } : {}),
+        ...(Array.isArray(tools?.actions) ? { actions: configuredActions ?? [] } : {}),
+        ...(Array.isArray(tools?.skills) ? { skills: configuredSkills ?? [] } : {})
       },
-      ...(configuredActions.length > 0 ? { actions: configuredActions } : {}),
-      ...(configuredSkills.length > 0 ? { skills: configuredSkills } : {}),
+      ...(Array.isArray(data.actions) ? { actions: configuredActions ?? [] } : {}),
+      ...(Array.isArray(data.skills) ? { skills: configuredSkills ?? [] } : {}),
       ...(disallowedNativeTools.length > 0 ||
       disallowedExternalTools.length > 0 ||
       disallowedActions.length > 0 ||

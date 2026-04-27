@@ -15,6 +15,7 @@ import {
   loadWorkspaceSettings,
   loadServerConfig
 } from "@oah/config";
+import { visibleLlmSkills, visibleNativeToolNames, visibleToolServers } from "@oah/engine-core";
 
 const tempDirs: string[] = [];
 
@@ -1466,8 +1467,7 @@ capabilities:
       topP: 0.8,
       maxTokens: 1024,
       tools: {
-        native: ["Bash"],
-        external: []
+        native: ["Bash"]
       },
       policy: {
         runTimeoutSeconds: 120,
@@ -1716,6 +1716,86 @@ Stay hidden from the catalog.
     expect(workspace.catalog.agents).toEqual([
       { name: "builder", mode: "primary", source: "workspace", description: "Workspace builder" }
     ]);
+  });
+
+  it("preserves omitted versus explicit agent capability allowlists", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-discovery-agent-capabilities-"));
+    tempDirs.push(tempDir);
+
+    await mkdir(path.join(tempDir, ".openharness", "agents"), { recursive: true });
+    await mkdir(path.join(tempDir, ".openharness", "skills", "repo-explorer"), { recursive: true });
+    await mkdir(path.join(tempDir, ".openharness", "tools"), { recursive: true });
+
+    await writeFile(
+      path.join(tempDir, ".openharness", "agents", "defaulted.md"),
+      `---
+description: Uses workspace defaults
+---
+
+# Defaulted
+
+Use workspace defaults.
+`,
+      "utf8"
+    );
+
+    await writeFile(
+      path.join(tempDir, ".openharness", "agents", "locked.md"),
+      `---
+description: Explicitly disables capabilities
+tools:
+  native: []
+  external: []
+  skills: []
+skills: []
+---
+
+# Locked
+
+Use only explicitly enabled capabilities.
+`,
+      "utf8"
+    );
+
+    await writeFile(
+      path.join(tempDir, ".openharness", "skills", "repo-explorer", "SKILL.md"),
+      `
+# Repo Explorer
+
+Explore repository structure.
+`,
+      "utf8"
+    );
+
+    await writeFile(
+      path.join(tempDir, ".openharness", "tools", "settings.yaml"),
+      `
+docs:
+  url: https://example.com/mcp
+  enabled: true
+`,
+      "utf8"
+    );
+
+    const workspace = await discoverWorkspace(tempDir, "project", {
+      platformModels: {}
+    });
+
+    expect(workspace.agents.defaulted.tools).toEqual({});
+    expect(workspace.agents.locked.tools).toEqual({
+      native: [],
+      external: [],
+      skills: []
+    });
+    expect(workspace.agents.locked.skills).toEqual([]);
+
+    expect(visibleNativeToolNames(workspace, "defaulted")).toEqual([]);
+    expect(visibleToolServers(workspace, "defaulted").map((server) => server.name)).toEqual(["docs"]);
+    expect(visibleLlmSkills(workspace, "defaulted").map((skill) => skill.name)).toEqual(["repo-explorer"]);
+
+    expect(visibleNativeToolNames(workspace, "locked")).toEqual([]);
+    expect(visibleToolServers(workspace, "locked")).toEqual([]);
+    expect(visibleLlmSkills(workspace, "locked")).toEqual([]);
   });
 
   it("still accepts legacy model parameters in agent frontmatter for compatibility", async () => {
