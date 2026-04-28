@@ -3,6 +3,18 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("local docker compose stack", () => {
+  it("does not persist workspaces on the API service", async () => {
+    const compose = await readFile(new URL("../docker-compose.local.yml", import.meta.url), "utf8");
+    const apiStart = compose.indexOf("  oah-api:");
+    const nextServiceStart = compose.indexOf("\n  oah-controller:", apiStart);
+    expect(apiStart).toBeGreaterThanOrEqual(0);
+    expect(nextServiceStart).toBeGreaterThan(apiStart);
+
+    const apiService = compose.slice(apiStart, nextServiceStart);
+    expect(apiService).not.toContain("/data/workspaces");
+    expect(compose).not.toContain("oah-api-workspaces");
+  });
+
   it("passes compose interpolation inputs into the remote scaler", async () => {
     const compose = await readFile(new URL("../docker-compose.local.yml", import.meta.url), "utf8");
     const scalerStart = compose.indexOf("  oah-compose-scaler:");
