@@ -32,9 +32,22 @@ config:
       tool_dir: /var/lib/oah/tools
       skill_dir: /var/lib/oah/skills
 
+    sandbox:
+      provider: self_hosted
+      self_hosted:
+        base_url: http://{{ include "open-agent-harness.workerInternalServiceName" . }}.{{ .Release.Namespace }}.svc.{{ .Values.global.clusterDomain }}:{{ .Values.worker.service.port }}/internal/v1
+      fleet:
+        min_count: {{ .Values.worker.replicaCount }}
+        max_count: 16
+        warm_empty_count: 1
+        resource_cpu_pressure_threshold: 0.8
+        resource_memory_pressure_threshold: 0.8
+        max_workspaces_per_sandbox: 32
+        ownerless_pool: shared
+
     workspace:
       materialization:
-        idle_ttl_ms: 1800000
+        idle_ttl_ms: 900000
         maintenance_interval_ms: 15000
 
     workers:

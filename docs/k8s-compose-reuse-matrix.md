@@ -23,7 +23,7 @@
 | native workspace sync 二进制裁剪 | 镜像内生效 | 镜像内生效 | 已直接复用 |
 | 按角色拆包 | `api-runtime` / `worker-runtime` / `controller-runtime` | 同上 | 已直接复用 |
 | docs/schema 最小化拷贝 | 镜像内生效 | 镜像内生效 | 已直接复用 |
-| `oah-api` / `oah-controller` / `oah-sandbox` 职责拆分 | Compose 三容器 | K8S 三 Deployment | 已直接复用 |
+| `oah-api` / `oah-controller` / `oah-sandbox` 职责拆分 | Compose 三个核心容器，另有本地 `oah-compose-scaler` 执行 Docker Compose 扩缩容 | K8S 三 Deployment，扩缩容直接走 `Deployment /scale` | 已直接复用核心职责 |
 | worker drain 基础逻辑 | 容器内实现 | K8S `preStop` 调用同一逻辑 | 已直接复用 |
 
 ## 2. 已补齐到 K8S

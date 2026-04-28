@@ -23,7 +23,7 @@
 
 请求字段：`name`、`runtime`、`executionPolicy`。可选：`rootPath`、`ownerId`、`serviceName`、`agentsMd`、`toolServers`、`skills`。
 
-- `ownerId`：用于 sandbox pod 亲和调度，让同 owner 的 workspace 尽量落到同一 sandbox pod
+- `ownerId`：用于 sandbox 亲和调度，让同 owner 的 workspace 尽量落到同一 sandbox；未提供时进入 ownerless 共享池，并按 sandbox CPU / memory 负载决定复用已有 sandbox 还是使用预留空 sandbox
 - `serviceName`：用于服务级 PostgreSQL 路由；未传时全部数据都落在 `postgres_url` 指向的默认库，传入后 workspace/session/run 的索引会保留在默认库，业务真值会路由到同前缀的派生库（例如基础库为 `OAH` 时，`serviceName=acme` 会落到 `OAH-acme`）
 
 未传 `rootPath` 时默认在 `paths.workspace_dir/<normalized-name>` 下创建。创建顺序：先复制 runtime，再叠加用户配置。

@@ -26,7 +26,9 @@ export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
 pnpm local:up
 ```
 
-这条命令会一次性启动本地整套 stack：`PostgreSQL`、`Redis`、`MinIO`、`oah-api`、`oah-controller`、`oah-sandbox`。其中 `oah-api` 对外监听 `http://127.0.0.1:8787`，`oah-sandbox` 在本地栈中承载 standalone worker，并会在启动阶段自动执行一次 storage sync。
+这条命令会一次性启动本地整套 stack：`PostgreSQL`、`Redis`、`MinIO`、`oah-api`、`oah-controller`、`oah-compose-scaler`、`oah-sandbox`。其中 `oah-api` 对外监听 `http://127.0.0.1:8787`，`oah-sandbox` 在本地栈中承载 standalone worker，`oah-compose-scaler` 负责按 controller 目标副本数动态扩缩 `oah-sandbox`，并会在启动阶段自动执行一次 storage sync。
+
+本地默认使用 `oah-sandbox + OSS/MinIO workspace_backing_store` 承载 active workspace copy。`oah-api` 不挂载持久 workspace volume，避免 API 容器累积已回收 workspace 的本地目录壳。
 
 ### 第 3 步：启动调试控制台
 
@@ -40,7 +42,7 @@ pnpm dev:web
 
 启动成功后检查以下几点：
 
-1. `oah-api`、`oah-controller`、`oah-sandbox` 三个服务都启动成功
+1. `oah-api`、`oah-controller`、`oah-compose-scaler`、`oah-sandbox` 都启动成功
 2. 浏览器能打开 `http://localhost:5174`
 3. 在控制台发送消息，Run 从 `queued` 进入执行状态
 4. 如果当前 Run 还在执行，再发一条消息会先通过服务端 `/api/v1/sessions/{sessionId}/queue` 出现在输入框上方的队列里；如果希望立即打断当前 Run，可以点击 `引导`，底层会调用 `/api/v1/runs/{runId}/guide`
@@ -74,7 +76,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 | `pnpm install` | 安装依赖 |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm storage:sync` | 把部署根目录里的只读数据同步到 MinIO（默认不含 `source/workspaces`） |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm storage:sync -- --include-workspaces` | 连同 `source/workspaces` 一起同步到 MinIO |
-| `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm local:up` | 启动本地整套服务（`oah-api` / `oah-controller` / `oah-sandbox`） |
+| `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm local:up` | 启动本地整套服务（`oah-api` / `oah-controller` / `oah-compose-scaler` / `oah-sandbox`） |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root OAH_SKIP_BUILD=1 pnpm local:up` | 复用本地已有 OAH 镜像，跳过 Docker 构建 |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root OAH_LOCAL_SYNC_ON_CHANGE_ONLY=1 pnpm local:up` | 仍通过 MinIO/rclone 模拟对象存储部署，但只在只读源目录变化时重新同步 |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root OAH_LOCAL_SKIP_READONLY_VOLUME_RECREATE=1 pnpm local:up` | 保留已有 rclone 只读卷，适合 Docker/rclone 插件未重启且只想快速重启服务 |

@@ -210,9 +210,10 @@ This starts:
 - MinIO
 - `oah-api`
 - `oah-controller`
+- `oah-compose-scaler`
 - `oah-sandbox`
 
-The startup flow also runs one storage sync automatically.
+The startup flow also runs one storage sync automatically. In the local split topology, `oah-api` does not persist active workspace copies; writable workspace state lives in `oah-sandbox` and flushes through the object-storage backing store.
 
 ### 4. Start the web console
 

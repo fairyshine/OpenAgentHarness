@@ -143,7 +143,7 @@ llm:
 > `self_hosted` and `e2b` share the same execution semantics: `oah-api` routes workspaces into a real sandbox, while the standalone worker inside that sandbox owns the live workspace copy, local file state, and command execution context.
 
 > **tip**
-> The controller now treats sandbox fleet demand as a first-class signal: the same `ownerId` prefers the same real sandbox, while ownerless workspaces fall into a shared pool by default. Ownerless workspaces first reuse existing sandboxes whose CPU and memory are below threshold, then fall back to the empty sandboxes reserved by `warm_empty_count`.
+> The controller now treats sandbox fleet demand as a first-class signal: the same `ownerId` prefers the same real sandbox, while ownerless workspaces use a shared pool by default. Ownerless workspaces first reuse existing sandboxes whose CPU and memory are both below threshold; when either CPU or memory crosses the threshold, placement falls back to the empty sandboxes reserved by `warm_empty_count`.
 
 > **tip**
 > Starting with the current version, `createSession` asynchronously prewarms the target workspace after the session is created. With a remote sandbox provider, that eagerly binds the workspace to a sandbox; with workspace materialization enabled, it also prepares the active workspace copy ahead of the first user message. Combined with the remote-provider default `fleet.warm_empty_count = 1`, this removes most first-message cold-start latency, although very large first-time materializations can still dominate.

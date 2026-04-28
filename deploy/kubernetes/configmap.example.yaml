@@ -19,6 +19,24 @@ data:
       tool_dir: /var/lib/oah/tools
       skill_dir: /var/lib/oah/skills
 
+    sandbox:
+      provider: self_hosted
+      self_hosted:
+        base_url: http://oah-sandbox-internal.open-agent-harness.svc.cluster.local:8787/internal/v1
+      fleet:
+        min_count: 2
+        max_count: 16
+        warm_empty_count: 1
+        resource_cpu_pressure_threshold: 0.8
+        resource_memory_pressure_threshold: 0.8
+        max_workspaces_per_sandbox: 32
+        ownerless_pool: shared
+
+    workspace:
+      materialization:
+        idle_ttl_ms: 900000
+        maintenance_interval_ms: 15000
+
     workers:
       embedded:
         min_count: 2

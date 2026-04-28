@@ -2382,7 +2382,7 @@ components:
         ownerId:
           type: string
           minLength: 1
-          description: Optional owner affinity key used to colocate workspaces for the same owner on one sandbox pod.
+          description: Optional owner affinity key used to colocate workspaces for the same owner on one sandbox. When omitted, placement uses the ownerless shared pool and considers sandbox CPU / memory pressure before falling back to a warm empty sandbox.
         serviceName:
           type: string
           minLength: 1
@@ -2438,6 +2438,7 @@ components:
         ownerId:
           type: string
           minLength: 1
+          description: Optional owner affinity key used to colocate workspaces for the same owner on one sandbox. When omitted, placement uses the ownerless shared pool and considers sandbox CPU / memory pressure before falling back to a warm empty sandbox.
         serviceName:
           type: string
           minLength: 1

@@ -18,7 +18,7 @@
 Three terminals, simplest path:
 
 ```bash
-# Terminal 1 — Full local stack (PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox)
+# Terminal 1 — Full local stack (PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-compose-scaler + oah-sandbox)
 mkdir -p /absolute/path/to/oah-deploy-root
 cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
 export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
@@ -32,6 +32,9 @@ Frontend default address: `http://localhost:5174`
 
 > **info**
 > Run `pnpm install` before the first start.
+
+> **info**
+> The local split stack keeps active workspace copies in `oah-sandbox` and flushes them through the object-storage backing store. `oah-api` is only the API ingress and router; it does not mount a persistent workspace volume.
 
 ---
 
@@ -126,9 +129,12 @@ Notes:
 This baseline already includes:
 
 - Separate Deployments for `oah-api`, `oah-sandbox`, and `oah-controller`
+- `oah-api` does not need a workspace volume; `oah-sandbox` owns writable active workspace copies, ideally paired with object-storage backing for idle / drain flushes
 - A dedicated ClusterIP Service for `controller` exposing `/healthz`, `/readyz`, `/snapshot`, and `/metrics`
 - Kubernetes Lease based leader election for `controller`
 - Replica reconciliation through the `Deployment /scale` subresource for `oah-sandbox`, with optional target discovery via `label_selector`
+- The shipped `server.yaml` examples set `sandbox.provider=self_hosted` and route sandbox requests through the `oah-sandbox-internal` headless service
+- The default sandbox fleet keeps `warm_empty_count: 1` empty sandbox ready; ownerless workspaces reuse existing sandboxes while both CPU and memory are below `0.8`, then fall back to the warm empty sandbox when either resource crosses the threshold
 - `controller-rbac.yaml` now includes the `leases`, `deployments`, and `deployments/scale` permissions needed for leader election, label-selector discovery, and replica reconciliation
 - Automatic scale-down is now enabled when safety conditions are met; the real scale-down guardrail comes from controller health probes against standalone worker `/healthz`
 - Standalone workers now enter a drain phase on shutdown so readiness drops before the current run is allowed to finish
@@ -213,7 +219,7 @@ If OAH itself runs inside Docker while an HTTP MCP server runs on the host machi
 - the default alias is `host.docker.internal`
 - override it with `OAH_DOCKER_HOST_ALIAS` when needed
 
-The local `docker-compose.local.yml` already injects `host.docker.internal:host-gateway` for `oah-api`, `oah-controller`, and `oah-sandbox`, so the default alias also works on Linux in the local stack.
+The local `docker-compose.local.yml` already injects `host.docker.internal:host-gateway` for `oah-api`, `oah-controller`, `oah-compose-scaler`, and `oah-sandbox`, so the default alias also works on Linux in the local stack.
 
 When using containers started by `docker-compose.local.yml`, the default connection strings are:
 

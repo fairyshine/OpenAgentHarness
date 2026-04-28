@@ -131,6 +131,9 @@ helm upgrade --install oah ./deploy/charts/open-agent-harness \
 ## 配置说明
 
 - 默认会创建一个 ConfigMap，并把 `config.serverYaml` 渲染为 `/etc/oah/server.yaml`
+- 默认 `config.serverYaml` 使用 `sandbox.provider=self_hosted`，并通过 `oah-sandbox-internal` headless service 访问 sandbox 内 worker
+- 默认 sandbox fleet 保留 `warm_empty_count: 1` 个空 sandbox；无 `ownerId` 的 workspace 会先复用 CPU 和内存均低于 `0.8` 的已有 sandbox，任一资源超过阈值后再使用空 sandbox
+- 默认 active workspace copy 空闲 `900000ms` 后进入 flush / evict 维护流程
 - 如需复用外部已有 ConfigMap，可设置：
   - `config.create=false`
   - `config.nameOverride=<existing-configmap-name>`
@@ -152,6 +155,7 @@ helm upgrade --install oah ./deploy/charts/open-agent-harness \
 - worker 的 workspace 卷现在支持两种模式：
   - `worker.workspaceVolume.type=emptyDir`
   - `worker.workspaceVolume.type=persistentVolumeClaim`
+- workspace 卷只挂在 sandbox worker 上；`oah-api` 默认不挂载 workspace volume，避免 API Pod 累积 active workspace 的本地目录
 - 当 `worker.workspaceVolume.type=persistentVolumeClaim` 时，需要设置：
   - `worker.workspaceVolume.persistentVolumeClaim.claimName`
 - worker 现在默认会把 K8S `preStop` hook 对齐到本地 drain 控制入口：

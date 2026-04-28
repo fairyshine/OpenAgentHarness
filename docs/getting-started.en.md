@@ -26,7 +26,9 @@ export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
 pnpm local:up
 ```
 
-This single command starts the full local stack: `PostgreSQL`, `Redis`, `MinIO`, `oah-api`, `oah-controller`, and `oah-sandbox`. `oah-api` listens on `http://127.0.0.1:8787`, `oah-sandbox` hosts the standalone worker in the local topology, and the startup flow also runs one storage sync automatically.
+This single command starts the full local stack: `PostgreSQL`, `Redis`, `MinIO`, `oah-api`, `oah-controller`, `oah-compose-scaler`, and `oah-sandbox`. `oah-api` listens on `http://127.0.0.1:8787`, `oah-sandbox` hosts the standalone worker in the local topology, `oah-compose-scaler` applies controller-driven `oah-sandbox` replica changes, and the startup flow also runs one storage sync automatically.
+
+The local default uses `oah-sandbox + OSS/MinIO workspace_backing_store` for active workspace copies. `oah-api` does not mount a persistent workspace volume, so recycled workspaces do not accumulate as local directory shells in the API container.
 
 ### Step 3: Start the debug console
 
@@ -40,7 +42,7 @@ Open [http://localhost:5174](http://localhost:5174).
 
 After startup, check:
 
-1. `oah-api`, `oah-controller`, and `oah-sandbox` all start successfully
+1. `oah-api`, `oah-controller`, `oah-compose-scaler`, and `oah-sandbox` all start successfully
 2. Browser opens `http://localhost:5174`
 3. Send a message in the console. The run should move from `queued` to executing.
 4. While a run is still active, sending another message should place it into the server-side queue surfaced above the input box through `/api/v1/sessions/{sessionId}/queue`. Use the `Guide` button to call `/api/v1/runs/{runId}/guide` if you want to interrupt the active run immediately.
@@ -74,7 +76,7 @@ Optional flags: `--tool-dir`, `--skill-dir`, `--host`, `--port`
 | `pnpm install` | Install dependencies |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm storage:sync` | Sync readonly data from the deploy root to MinIO (does not include `source/workspaces` by default) |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm storage:sync -- --include-workspaces` | Also sync `source/workspaces` to MinIO |
-| `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm local:up` | Start the full local stack (`oah-api` / `oah-controller` / `oah-sandbox`) |
+| `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root pnpm local:up` | Start the full local stack (`oah-api` / `oah-controller` / `oah-compose-scaler` / `oah-sandbox`) |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root OAH_SKIP_BUILD=1 pnpm local:up` | Reuse an already-built local OAH image and skip Docker build |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root OAH_LOCAL_SYNC_ON_CHANGE_ONLY=1 pnpm local:up` | Keep the MinIO/rclone object-storage simulation, but resync readonly sources only when they changed |
 | `OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root OAH_LOCAL_SKIP_READONLY_VOLUME_RECREATE=1 pnpm local:up` | Reuse existing rclone readonly volumes when Docker/rclone has not restarted and you only need a fast service restart |

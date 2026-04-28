@@ -28,7 +28,7 @@
 三个终端，最简路径：
 
 ```bash
-# 终端 1 — 本地整套服务（PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox）
+# 终端 1 — 本地整套服务（PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-compose-scaler + oah-sandbox）
 mkdir -p /absolute/path/to/oah-deploy-root
 cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
 export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
@@ -42,6 +42,9 @@ pnpm dev:web
 
 > **info**
 > 首次运行前先执行 `pnpm install` 安装依赖。
+
+> **info**
+> 本地 split stack 默认让 active workspace copy 落在 `oah-sandbox`，并通过对象存储 backing store flush 回 OSS/MinIO。`oah-api` 只负责 API 入口和路由，不再挂载持久 workspace volume。
 
 ---
 
@@ -164,9 +167,12 @@ git push origin master
 当前这套骨架已经包含：
 
 - `oah-api`、`oah-sandbox`、`oah-controller` 三个独立 Deployment
+- `oah-api` 不需要挂载 workspace volume；`oah-sandbox` 才承载 writable active workspace copy，推荐配合对象存储 backing store 做 idle / drain flush
 - `controller` 额外暴露一个 ClusterIP Service，提供 `/healthz`、`/readyz`、`/snapshot`、`/metrics`
 - `controller` 使用 Kubernetes Lease 做 leader election
 - `controller` 通过 `Deployment /scale` 子资源改写 `oah-sandbox` 副本数，并已支持通过 `label_selector` 自动发现目标 Deployment
+- `server.yaml` 示例已把 `sandbox.provider` 设为 `self_hosted`，并通过 `oah-sandbox-internal` headless service 路由到 sandbox 内 worker
+- 默认 sandbox fleet 保留 `warm_empty_count: 1` 个空 sandbox；ownerless workspace 会先复用 CPU 和内存均低于 `0.8` 的已有 sandbox，任一资源超过阈值后才落到空 sandbox
 - `controller-rbac.yaml` 当前已包含 `leases`、`deployments` 和 `deployments/scale` 所需权限，能够覆盖 leader election、label selector 发现和副本数改写
 - 默认已经允许在安全前提满足时自动缩容；真正的缩容护栏由 controller 对 standalone worker `/healthz` 的动态探测决定
 - standalone worker 收到退出信号后会先进入 drain，使 readiness 先摘除，再等待当前 run 自然结束
@@ -283,7 +289,7 @@ curl http://127.0.0.1:8787/readyz
 - 默认使用 `host.docker.internal`
 - 如有需要可通过 `OAH_DOCKER_HOST_ALIAS` 覆盖
 
-本地 `docker-compose.local.yml` 已为 `oah-api`、`oah-controller`、`oah-sandbox` 注入 `host.docker.internal:host-gateway`，因此 Linux 环境下也能直接使用该别名。
+本地 `docker-compose.local.yml` 已为 `oah-api`、`oah-controller`、`oah-compose-scaler`、`oah-sandbox` 注入 `host.docker.internal:host-gateway`，因此 Linux 环境下也能直接使用该别名。
 
 本地开发使用 `docker-compose.local.yml` 启动的容器时，默认连接串为：
 

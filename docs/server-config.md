@@ -143,7 +143,7 @@ llm:
 > `self_hosted` 和 `e2b` 的共同语义是：`oah-api` 不直接执行业务 run，而是把 workspace 路由到真实 sandbox；standalone worker 在 sandbox 内部持有活跃 workspace、本地文件状态和命令执行上下文。
 
 > **tip**
-> 当前 controller 已经开始把 sandbox fleet 视为一等调度对象：同一 `ownerId` 会优先复用同一真实 sandbox；未提供 `ownerId` 的 workspace 默认进入共享池。ownerless workspace 会先复用资源未压线的已有 sandbox，CPU 或内存超过阈值后才使用 `warm_empty_count` 额外保留的空 sandbox。
+> 当前 controller 已经开始把 sandbox fleet 视为一等调度对象：同一 `ownerId` 会优先复用同一真实 sandbox；未提供 `ownerId` 的 workspace 默认进入共享池。ownerless workspace 会先复用 CPU 和内存都未压线的已有 sandbox；任一资源超过阈值后，才使用 `warm_empty_count` 额外保留的空 sandbox。
 
 > **tip**
 > 从当前版本开始，`createSession` 成功后会异步预热对应 workspace：如果配置了远端 sandbox，会提前触发 sandbox 绑定；如果启用了 workspace materialization，也会提前拿到 active workspace copy。配合远端 provider 默认的 `fleet.warm_empty_count = 1`，可以显著缩短首条消息的冷启动等待，但首次 materialization 很重时仍会受到 workspace 体积影响。

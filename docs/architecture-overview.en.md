@@ -152,7 +152,7 @@ flowchart TD
 
 - Owns workspace placement and worker lifecycle governance
 - Combines `owner affinity + workspace ownership + worker health + capacity` into placement decisions
-- For `self_hosted / e2b` providers, also derives logical sandbox fleet demand: same `ownerId` reuses a sandbox, while ownerless workspaces fall into a shared pool by default
+- For `self_hosted / e2b` providers, also derives logical sandbox fleet demand: the same `ownerId` reuses a sandbox, while ownerless workspaces use a shared pool, first reusing existing sandboxes whose CPU and memory are both below threshold and then falling back to a warm empty sandbox when either resource crosses the threshold
 - Owns drain, rebalance, recovery, and scaling
 - Does not execute business runs directly
 
@@ -257,7 +257,7 @@ sequenceDiagram
 - `Worker` is the unified execution role; `sandbox` is only the worker host environment, not the primary runtime term
 - `Sandbox Host API` is the host compatibility boundary; the first implementation should be the self-hosted sandbox pod, with E2B as a later pluggable backend rather than the primary architecture vocabulary
 - `Controller` is the unified control-plane role; it owns placement, lifecycle, and capacity rather than direct business execution
-- For remote sandbox providers, the controller now also owns logical sandbox-fleet sizing signals so we can later attach real sandbox autoscaling targets without changing API semantics
+- For remote sandbox providers, the controller owns both logical sandbox-fleet sizing and scale-target reconciliation; the local Compose stack applies that through `oah-compose-scaler`, while Kubernetes applies it through `Deployment /scale`
 - `workspace -> owner worker` is the routing truth for execution and file access; `ownerId` is used for affinity scheduling and must not be treated as a second ownership source of truth
 - While active, a workspace's read/write truth lives in the owner worker's `Active Workspace Copy`; after flush / evict, truth returns to OSS / external storage
 - Default trusted intranet environment -- no strong container isolation by default; if the platform is exposed more broadly, sandbox backend hardening should be prioritized

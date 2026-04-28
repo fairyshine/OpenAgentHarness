@@ -210,9 +210,10 @@ pnpm local:up
 - MinIO
 - `oah-api`
 - `oah-controller`
+- `oah-compose-scaler`
 - `oah-sandbox`
 
-启动过程中还会自动执行一次 storage sync。
+启动过程中还会自动执行一次 storage sync。本地 split 拓扑下，`oah-api` 不再持久化 active workspace copy；可写 workspace 状态由 `oah-sandbox` 承载，并通过对象存储 backing store flush 回 OSS/MinIO。
 
 ### 4. 启动 Web 控制台
 
