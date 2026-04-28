@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Run, Session, SessionEventContract, Workspace, WorkspaceRuntime } from "@oah/api-contracts";
+import type { Run, Session, SessionEventContract, Workspace, WorkspaceCatalog, WorkspaceRuntime } from "@oah/api-contracts";
 
 import { OahApiClient, type OahConnection } from "../../api/oah-api.js";
 import type { ChatLine, Dialog, Notice, WorkspaceCreateDialog } from "../domain/types.js";
@@ -23,6 +23,7 @@ export function useOahReplState(connection: OahConnection) {
   const [runtimes, setRuntimes] = useState<WorkspaceRuntime[]>([]);
   const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [catalog, setCatalog] = useState<WorkspaceCatalog | null>(null);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<ChatLine[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -101,11 +102,16 @@ export function useOahReplState(connection: OahConnection) {
       try {
         setCurrentWorkspace(workspace);
         setSessions([]);
+        setCatalog(null);
         setCurrentSession(null);
         resetSessionView();
         setNotice({ level: "info", message: `Loading ${workspace.name}...` });
-        const nextSessions = await client.listWorkspaceSessions(workspace.id);
+        const [nextSessions, nextCatalog] = await Promise.all([
+          client.listWorkspaceSessions(workspace.id),
+          client.getWorkspaceCatalog(workspace.id).catch(() => null)
+        ]);
         setSessions(nextSessions);
+        setCatalog(nextCatalog);
         if (nextSessions[0]) {
           setCurrentSession(nextSessions[0]);
         }
@@ -358,6 +364,7 @@ export function useOahReplState(connection: OahConnection) {
     workspaces,
     runtimes,
     currentWorkspace,
+    catalog,
     sessions,
     currentSession,
     messages,

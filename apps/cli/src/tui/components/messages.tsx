@@ -12,7 +12,14 @@ type VisibleChatLine = ChatLine & {
   clipped?: boolean;
 };
 
-export function Messages(props: { lines: ChatLine[]; workspace: Workspace | null; session: Session | null; height: number; columns: number }) {
+export function Messages(props: {
+  lines: ChatLine[];
+  workspace: Workspace | null;
+  session: Session | null;
+  serviceUrl: string;
+  height: number;
+  columns: number;
+}) {
   const hasMessages = props.session !== null && props.lines.length > 0;
   const bannerRows = startBannerRows({ height: props.height, columns: props.columns, hasMessages });
   const messageRows = hasMessages ? Math.max(1, props.height - bannerRows) : 0;
@@ -30,6 +37,7 @@ export function Messages(props: { lines: ChatLine[]; workspace: Workspace | null
           height={props.height}
           columns={props.columns}
           subtitle={bannerSubtitle}
+          serviceUrl={props.serviceUrl}
           workspaceName={props.workspace?.name}
           compact={props.height < 9}
         />
@@ -44,6 +52,7 @@ export function Messages(props: { lines: ChatLine[]; workspace: Workspace | null
           height={props.height}
           columns={props.columns}
           subtitle={bannerSubtitle}
+          serviceUrl={props.serviceUrl}
           workspaceName={props.workspace?.name}
           sessionTitle={props.session.title}
           sessionId={props.session.id}
@@ -60,6 +69,7 @@ export function Messages(props: { lines: ChatLine[]; workspace: Workspace | null
           height={bannerRows}
           columns={props.columns}
           subtitle={bannerSubtitle}
+          serviceUrl={props.serviceUrl}
           workspaceName={props.workspace?.name}
           sessionTitle={props.session.title}
           sessionId={props.session.id}

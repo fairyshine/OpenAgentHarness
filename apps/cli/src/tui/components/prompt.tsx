@@ -15,6 +15,7 @@ export function PromptInput(props: {
   run: Run | null;
   notice: Notice;
   streamState: string;
+  agentMode: string;
 }) {
   const beforeCursor = props.value.slice(0, props.cursor);
   const afterCursor = props.value.slice(props.cursor);
@@ -22,7 +23,7 @@ export function PromptInput(props: {
   const { columns, rows } = useWindowSize();
   const prompt = "❯ ";
   const cursorX = Math.min(Math.max(0, columns - 1), terminalWidth(prompt) + terminalWidth(beforeCursor));
-  const cursorY = Math.max(0, rows - 2);
+  const cursorY = Math.max(0, rows - 3);
 
   setCursorPosition(
     !props.disabled
@@ -34,7 +35,7 @@ export function PromptInput(props: {
   );
 
   return (
-    <Box flexDirection="column" height={4} overflow="hidden">
+    <Box flexDirection="column" height={5} overflow="hidden">
       <Text dimColor>{"─".repeat(Math.max(0, columns))}</Text>
       <Box flexDirection="row" width="100%" height={1}>
         <Text {...(props.disabled ? { color: "gray" } : {})} dimColor={Boolean(props.disabled)}>
@@ -57,6 +58,7 @@ export function PromptInput(props: {
         run={props.run}
         notice={props.notice}
         streamState={props.streamState}
+        agentMode={props.agentMode}
       />
     </Box>
   );
@@ -99,36 +101,57 @@ function PromptFooter(props: {
   run: Run | null;
   notice: Notice;
   streamState: string;
+  agentMode: string;
 }) {
   const sessionLabel = props.session?.title ?? shortId(props.session?.id);
   const location = props.session ? `${props.workspace?.name ?? "no workspace"} / ${sessionLabel}` : props.workspace?.name ?? "no workspace";
   const activity = footerActivity(props.run, props.session, props.streamState);
   const shortcuts = props.disabled ? "modal · esc" : "? · ^W ws · ^O sess · ^C";
+  const modelAgent = footerModelAgent(props.session, props.agentMode);
 
   return (
-    <Box paddingX={2} flexDirection="row" width="100%">
-      <Box flexShrink={1} flexGrow={1}>
-        <Text dimColor wrap="truncate-end">
-          <Text color="cyan" bold>
-            OAH
-          </Text>{" "}
-          {location}
-        </Text>
+    <Box paddingX={2} flexDirection="column" width="100%">
+      <Box flexDirection="row" width="100%">
+        <Box flexShrink={1} flexGrow={1}>
+          <Text dimColor wrap="truncate-end">
+            <Text color="cyan" bold>
+              OAH
+            </Text>{" "}
+            {location}
+          </Text>
+        </Box>
+        <Box flexShrink={0} marginLeft={1}>
+          {props.notice.level === "error" ? (
+            <Text color="red" wrap="truncate-start">
+              {props.notice.message}
+            </Text>
+          ) : (
+            <Text dimColor wrap="truncate-start">
+              {activity ? `${activity} · ` : ""}
+              {shortcuts}
+            </Text>
+          )}
+        </Box>
       </Box>
-      <Box flexShrink={0} marginLeft={1}>
-        {props.notice.level === "error" ? (
-          <Text color="red" wrap="truncate-start">
-            {props.notice.message}
-          </Text>
-        ) : (
+      <Box flexDirection="row" width="100%">
+        <Box flexShrink={1} flexGrow={1}>
           <Text dimColor wrap="truncate-start">
-            {activity ? `${activity} · ` : ""}
-            {shortcuts}
+            {modelAgent}
           </Text>
-        )}
+        </Box>
       </Box>
     </Box>
   );
+}
+
+function footerModelAgent(session: Session | null, agentMode: string) {
+  if (!session) {
+    return "model auto · agent none";
+  }
+  const model = session.modelRef ? session.modelRef.replace(/^(platform|workspace)\//u, "") : "auto";
+  const agent = session.activeAgentName || session.agentName || "agent";
+  const mode = agentMode || "unknown";
+  return `model ${model} · agent ${agent} · mode ${mode}`;
 }
 
 function footerActivity(run: Run | null, session: Session | null, streamState: string) {

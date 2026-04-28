@@ -25,9 +25,12 @@ function OahRepl({ connection }: { connection: OahConnection }) {
   const slashMatches = !state.dialog ? getSlashCommandMatches(state.composer) : [];
   const suggestionRows = slashMatches.length > 0 ? slashMatches.length + 1 : 0;
   const spinnerRows = runActive ? 2 : 0;
-  const chromeRows = 4 + suggestionRows + spinnerRows;
+  const chromeRows = 5 + suggestionRows + spinnerRows;
   const dialogRows = state.dialog ? Math.max(8, Math.min(Math.floor(height * 0.66), height - chromeRows - 3)) : 0;
   const transcriptHeight = Math.max(3, height - dialogRows - chromeRows);
+  const agentMode =
+    state.catalog?.agents.find((agent) => agent.name === state.currentSession?.activeAgentName)?.mode ??
+    (state.currentSession ? "unknown" : "");
   const activeDialog =
     state.dialog?.kind === "workspace-list" || state.dialog?.kind === "workspace-create" ? (
       <WorkspaceDialog
@@ -56,6 +59,7 @@ function OahRepl({ connection }: { connection: OahConnection }) {
           lines={state.messages}
           workspace={state.currentWorkspace}
           session={state.currentSession}
+          serviceUrl={connection.baseUrl}
           height={transcriptHeight}
           columns={columns}
         />
@@ -73,6 +77,7 @@ function OahRepl({ connection }: { connection: OahConnection }) {
         run={latestRun}
         notice={state.notice}
         streamState={state.streamState}
+        agentMode={agentMode}
       />
     </Box>
   );
