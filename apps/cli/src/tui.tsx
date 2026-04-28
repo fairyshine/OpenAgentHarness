@@ -1,547 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useInput, useWindowSize } from "ink";
-import type { Message, Run, Session, SessionEventContract, Workspace } from "@oah/api-contracts";
+import { Box, useApp, useInput, useWindowSize } from "ink";
+import type { Run, Session, SessionEventContract, Workspace, WorkspaceRuntime } from "@oah/api-contracts";
 
 import { OahApiClient, type OahConnection } from "./oah-api.js";
-
-type Notice = {
-  level: "info" | "error";
-  message: string;
-};
-
-type ChatLine = {
-  id: string;
-  role: string;
-  text: string;
-  createdAt?: string;
-  tone?: "normal" | "muted" | "error";
-};
-
-type Dialog =
-  | { kind: "workspace-list"; selectedIndex: number }
-  | { kind: "workspace-create"; draft: string }
-  | { kind: "session-list"; selectedIndex: number }
-  | { kind: "session-create"; draft: string }
-  | { kind: "help" };
-
-type VisibleWindow<T> = {
-  items: T[];
-  offset: number;
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  active: "green",
-  archived: "yellow",
-  closed: "yellow",
-  disabled: "red",
-  queued: "yellow",
-  running: "cyan",
-  waiting_tool: "magenta",
-  completed: "green",
-  failed: "red",
-  cancelled: "yellow",
-  timed_out: "red"
-};
-
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-const SLASH_COMMANDS = [
-  { command: "/workspace", description: "Switch workspace" },
-  { command: "/session", description: "Switch session in current workspace" },
-  { command: "/new-workspace", description: "Create workspace" },
-  { command: "/new-session", description: "Create session" }
-];
+import { HelpDialog, SessionDialog, WorkspaceDialog } from "./tui-dialogs.js";
+import { Messages, SpinnerLine, StatusLine } from "./tui-messages.js";
+import { PromptInput, SlashSuggestions } from "./tui-prompt.js";
+import type { ChatLine, Dialog, Notice, WorkspaceCreateDialog } from "./tui-types.js";
+import {
+  cleanControlInput,
+  clampIndex,
+  createWorkspaceDialog,
+  cycleRuntime,
+  hasRawControl,
+  insertTextAt,
+  isReturnInput,
+  messageToChatLine,
+  moveWorkspaceCreateField,
+  shortId,
+  SLASH_COMMANDS,
+  updateChatLinesFromEvent
+} from "./tui-utils.js";
 
 function useOahClient(connection: OahConnection) {
   return useMemo(() => new OahApiClient(connection), [connection.baseUrl, connection.token]);
-}
-
-function clampIndex(index: number, length: number) {
-  if (length <= 0) {
-    return 0;
-  }
-  return Math.max(0, Math.min(index, length - 1));
-}
-
-function visibleWindow<T>(items: T[], selectedIndex: number, limit: number): VisibleWindow<T> {
-  if (items.length <= limit) {
-    return { items, offset: 0 };
-  }
-  const half = Math.floor(limit / 2);
-  const offset = Math.max(0, Math.min(selectedIndex - half, items.length - limit));
-  return {
-    items: items.slice(offset, offset + limit),
-    offset
-  };
-}
-
-function shortId(id: string | undefined) {
-  if (!id) {
-    return "-";
-  }
-  return id.length <= 12 ? id : `${id.slice(0, 8)}…${id.slice(-4)}`;
-}
-
-function formatTime(value: string | undefined) {
-  if (!value) {
-    return "-";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleTimeString("zh-CN", { hour12: false });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringifyPart(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((part) => {
-        if (isRecord(part)) {
-          if (part.type === "text" && typeof part.text === "string") {
-            return part.text;
-          }
-          if (part.type === "reasoning" && typeof part.text === "string") {
-            return `[reasoning] ${part.text}`;
-          }
-          if (part.type === "tool-call" && typeof part.toolName === "string") {
-            return `[tool-call] ${part.toolName}`;
-          }
-          if (part.type === "tool-result" && typeof part.toolName === "string") {
-            return `[tool-result] ${part.toolName}`;
-          }
-        }
-        return JSON.stringify(part);
-      })
-      .join("\n");
-  }
-  return JSON.stringify(value);
-}
-
-function messageToChatLine(message: Message): ChatLine {
-  return {
-    id: message.id,
-    role: message.role,
-    text: stringifyPart(message.content),
-    createdAt: message.createdAt
-  };
-}
-
-function eventChatLine(event: SessionEventContract): ChatLine | null {
-  const toolName = typeof event.data.toolName === "string" ? event.data.toolName : undefined;
-  const errorMessage = typeof event.data.errorMessage === "string" ? event.data.errorMessage : undefined;
-  switch (event.event) {
-    case "tool.started":
-      return {
-        id: `event:${event.id}`,
-        role: "tool",
-        text: toolName ? `Using ${toolName}` : "Using tool",
-        createdAt: event.createdAt,
-        tone: "muted"
-      };
-    case "tool.completed":
-      return {
-        id: `event:${event.id}`,
-        role: "tool",
-        text: toolName ? `Done ${toolName}` : "Tool completed",
-        createdAt: event.createdAt,
-        tone: "muted"
-      };
-    case "tool.failed":
-      return {
-        id: `event:${event.id}`,
-        role: "tool",
-        text: errorMessage ?? (toolName ? `Failed ${toolName}` : "Tool failed"),
-        createdAt: event.createdAt,
-        tone: "error"
-      };
-    case "agent.switched":
-      return {
-        id: `event:${event.id}`,
-        role: "system",
-        text: typeof event.data.toAgent === "string" ? `Switched to ${event.data.toAgent}` : "Agent switched",
-        createdAt: event.createdAt,
-        tone: "muted"
-      };
-    case "run.failed":
-      return {
-        id: `event:${event.id}`,
-        role: "system",
-        text: errorMessage ?? "Run failed",
-        createdAt: event.createdAt,
-        tone: "error"
-      };
-    case "run.cancelled":
-      return {
-        id: `event:${event.id}`,
-        role: "system",
-        text: "Run cancelled",
-        createdAt: event.createdAt,
-        tone: "muted"
-      };
-    default:
-      return null;
-  }
-}
-
-function updateChatLinesFromEvent(lines: ChatLine[], event: SessionEventContract): ChatLine[] {
-  const messageId = typeof event.data.messageId === "string" ? event.data.messageId : undefined;
-  if (!messageId) {
-    const line = eventChatLine(event);
-    if (!line || lines.some((item) => item.id === line.id)) {
-      return lines;
-    }
-    return [...lines, line];
-  }
-
-  if (event.event === "message.delta" && typeof event.data.delta === "string") {
-    const existing = lines.find((line) => line.id === messageId);
-    if (!existing) {
-      return [
-        ...lines,
-        {
-          id: messageId,
-          role: "assistant",
-          text: event.data.delta,
-          createdAt: event.createdAt
-        }
-      ];
-    }
-    return lines.map((line) => (line.id === messageId ? { ...line, text: `${line.text}${event.data.delta}` } : line));
-  }
-
-  if (event.event === "message.completed" && event.data.content !== undefined) {
-    const role = typeof event.data.role === "string" ? event.data.role : "assistant";
-    const completed: ChatLine = {
-      id: messageId,
-      role,
-      text: stringifyPart(event.data.content),
-      createdAt: event.createdAt
-    };
-    return lines.some((line) => line.id === messageId)
-      ? lines.map((line) => (line.id === messageId ? completed : line))
-      : [...lines, completed];
-  }
-
-  return lines;
-}
-
-function parseWorkspaceDraft(draft: string) {
-  const [namePart, runtimePart, rootPart] = draft.split("|").map((part) => part.trim());
-  return {
-    name: namePart ?? "",
-    runtime: runtimePart || "local",
-    rootPath: rootPart || undefined
-  };
-}
-
-function StatusLine(props: { workspace: Workspace | null; session: Session | null; run: Run | null; notice: Notice; streamState: string }) {
-  const runStatus = props.run ? props.run.status : "idle";
-  return (
-    <Box flexDirection="column">
-      <Box justifyContent="space-between">
-        <Text wrap="truncate-end">
-          <Text color="cyan" bold>
-            OAH
-          </Text>{" "}
-          <Text dimColor>{props.workspace?.name ?? "no workspace"}</Text>
-        </Text>
-        <Text dimColor>
-          {props.session?.title ?? shortId(props.session?.id)} · {props.session?.activeAgentName ?? "no session"} · {runStatus} · {props.streamState}
-        </Text>
-      </Box>
-      {props.notice.level === "error" ? (
-        <Text color="red" wrap="truncate-end">
-          {props.notice.message}
-        </Text>
-      ) : null}
-    </Box>
-  );
-}
-
-function Messages(props: { lines: ChatLine[]; session: Session | null; height: number }) {
-  const visibleLines = props.lines.slice(-Math.max(4, props.height));
-  if (!props.session) {
-    return (
-      <Box flexDirection="column" height={props.height} flexShrink={1} justifyContent="flex-end" overflow="hidden">
-        <Text dimColor>Welcome. Press ctrl+w to choose a workspace, then ctrl+o to choose or create a session.</Text>
-      </Box>
-    );
-  }
-
-  if (visibleLines.length === 0) {
-    return (
-      <Box flexDirection="column" height={props.height} flexShrink={1} justifyContent="flex-end" overflow="hidden">
-        <Text dimColor>Start typing. Enter sends. /workspace and /session open switchers.</Text>
-      </Box>
-    );
-  }
-
-  return (
-    <Box flexDirection="column" height={props.height} flexShrink={1} overflow="hidden">
-      {visibleLines.map((line) => (
-        <MessageRow key={line.id} line={line} />
-      ))}
-    </Box>
-  );
-}
-
-function MessageRow(props: { line: ChatLine }) {
-  if (props.line.role === "user") {
-    return (
-      <Box flexDirection="column" marginBottom={1}>
-        <Text color="cyan" bold>
-          ❯ <Text>{props.line.text}</Text>
-        </Text>
-      </Box>
-    );
-  }
-
-  const color = props.line.tone === "error" ? "red" : props.line.role === "assistant" ? undefined : "gray";
-  return (
-    <Box flexDirection="row" marginBottom={1}>
-      <Box flexShrink={0}>
-        <Text dimColor>{"  "}⎿  </Text>
-      </Box>
-      <Box flexGrow={1} flexDirection="column">
-        <Text {...(color ? { color } : {})} dimColor={props.line.tone === "muted"} wrap="wrap">
-          {props.line.text}
-        </Text>
-      </Box>
-    </Box>
-  );
-}
-
-function PromptInput(props: { value: string; cursor: number; disabled?: boolean; running: boolean }) {
-  const beforeCursor = props.value.slice(0, props.cursor);
-  const afterCursor = props.value.slice(props.cursor);
-  return (
-    <Box flexDirection="column">
-      <Box
-        flexDirection="row"
-        alignItems="flex-start"
-        borderStyle="round"
-        borderColor={props.disabled ? "gray" : "cyan"}
-        borderLeft={false}
-        borderRight={false}
-        borderBottom
-        width="100%"
-      >
-        <Text {...(props.disabled ? { color: "gray" } : {})} dimColor={Boolean(props.running || props.disabled)}>
-          ❯{" "}
-        </Text>
-        {props.value ? (
-          <Text wrap="truncate-end">
-            {beforeCursor}
-            {!props.disabled ? <Text inverse>{afterCursor[0] ?? " "}</Text> : null}
-            {afterCursor.slice(1)}
-          </Text>
-        ) : (
-          <Text dimColor>
-            message OAH, or type /workspace{!props.disabled ? <Text inverse> </Text> : null}
-          </Text>
-        )}
-      </Box>
-      <PromptFooter {...(props.disabled === undefined ? {} : { disabled: props.disabled })} />
-    </Box>
-  );
-}
-
-function PromptFooter(props: { disabled?: boolean }) {
-  const help = props.disabled ? "modal active" : "? for shortcuts";
-  return (
-    <Box paddingX={2}>
-      <Text dimColor wrap="truncate-end">
-        {help} · ctrl+w workspace · ctrl+o session · enter send · ctrl+c quit
-      </Text>
-    </Box>
-  );
-}
-
-function SpinnerLine(props: { run: Run | null }) {
-  const [frame, setFrame] = useState(0);
-  const active = props.run?.status === "queued" || props.run?.status === "running" || props.run?.status === "waiting_tool";
-
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-    const timer = setInterval(() => setFrame((current) => (current + 1) % SPINNER_FRAMES.length), 80);
-    return () => clearInterval(timer);
-  }, [active]);
-
-  if (!active) {
-    return null;
-  }
-
-  const verb = props.run?.status === "waiting_tool" ? "Waiting for tool" : props.run?.status === "queued" ? "Queued" : "Working";
-  return (
-    <Box marginTop={1}>
-      <Text color="cyan">{SPINNER_FRAMES[frame]} </Text>
-      <Text dimColor>
-        {verb}… {shortId(props.run?.id)}
-      </Text>
-    </Box>
-  );
-}
-
-function WorkspaceDialog(props: {
-  dialog: Extract<Dialog, { kind: "workspace-list" | "workspace-create" }>;
-  workspaces: Workspace[];
-  currentWorkspace: Workspace | null;
-  rows: number;
-}) {
-  if (props.dialog.kind === "workspace-create") {
-    return (
-      <DialogBox title="New Workspace" rows={props.rows}>
-        <Text>Name | runtime | rootPath</Text>
-        <Box borderStyle="single" borderColor="cyan" paddingX={1} marginTop={1}>
-          <Text color="cyan">{"> "}</Text>
-          <Text>{props.dialog.draft}</Text>
-          <Text inverse> </Text>
-        </Box>
-        <Text dimColor>Example: demo | local | /srv/demo</Text>
-        <Text dimColor>runtime defaults to local. Esc returns, enter creates.</Text>
-      </DialogBox>
-    );
-  }
-  const selectedIndex = props.dialog.selectedIndex;
-  const limit = Math.max(6, props.rows - 5);
-  const window = visibleWindow(props.workspaces, selectedIndex, limit);
-
-  return (
-      <DialogBox title={`Workspaces ${props.workspaces.length > 0 ? `${selectedIndex + 1}/${props.workspaces.length}` : ""}`} rows={props.rows}>
-      {props.workspaces.length === 0 ? (
-        <Text dimColor>No workspaces. Press n to create one.</Text>
-      ) : (
-        window.items.map((workspace, index) => {
-          const absoluteIndex = window.offset + index;
-          const selected = absoluteIndex === selectedIndex;
-          const current = props.currentWorkspace?.id === workspace.id;
-          const color = selected ? "cyan" : current ? "green" : STATUS_COLORS[workspace.status];
-          return (
-            <Text key={workspace.id} {...(color ? { color } : {})} bold={selected || current} wrap="truncate-end">
-              {selected ? "❯" : current ? "•" : " "} {workspace.name} <Text dimColor>{shortId(workspace.id)}</Text> {workspace.kind}/
-              {workspace.executionPolicy}/{workspace.readOnly ? "ro" : "rw"} <Text dimColor>{workspace.runtime ?? "runtime -"}</Text>{" "}
-              <Text dimColor>{workspace.rootPath}</Text>
-            </Text>
-          );
-        })
-      )}
-      <Text dimColor>enter switch · n new · r refresh · esc close</Text>
-    </DialogBox>
-  );
-}
-
-function SessionDialog(props: {
-  dialog: Extract<Dialog, { kind: "session-list" | "session-create" }>;
-  sessions: Session[];
-  currentSession: Session | null;
-  workspace: Workspace | null;
-  rows: number;
-}) {
-  if (props.dialog.kind === "session-create") {
-    return (
-      <DialogBox title="New Session" rows={props.rows}>
-        <Text>Title optional</Text>
-        <Box borderStyle="single" borderColor="cyan" paddingX={1} marginTop={1}>
-          <Text color="cyan">{"> "}</Text>
-          <Text>{props.dialog.draft}</Text>
-          <Text inverse> </Text>
-        </Box>
-        <Text dimColor>Esc returns, enter creates for {props.workspace?.name ?? "current workspace"}.</Text>
-      </DialogBox>
-    );
-  }
-  const selectedIndex = props.dialog.selectedIndex;
-  const limit = Math.max(6, props.rows - 5);
-  const window = visibleWindow(props.sessions, selectedIndex, limit);
-
-  return (
-    <DialogBox title={`Sessions ${props.sessions.length > 0 ? `${selectedIndex + 1}/${props.sessions.length}` : ""}`} rows={props.rows}>
-      {props.sessions.length === 0 ? (
-        <Text dimColor>No sessions in this workspace. Press n to create one.</Text>
-      ) : (
-        window.items.map((session, index) => {
-          const absoluteIndex = window.offset + index;
-          const selected = absoluteIndex === selectedIndex;
-          const current = props.currentSession?.id === session.id;
-          const color = selected ? "cyan" : current ? "green" : STATUS_COLORS[session.status];
-          return (
-            <Text key={session.id} {...(color ? { color } : {})} bold={selected || current} wrap="truncate-end">
-              {selected ? "❯" : current ? "•" : " "} {session.title ?? shortId(session.id)} <Text dimColor>{shortId(session.id)}</Text>{" "}
-              {session.activeAgentName} {session.status} <Text dimColor>{formatTime(session.lastRunAt ?? session.updatedAt)}</Text>
-            </Text>
-          );
-        })
-      )}
-      <Text dimColor>enter switch · n new · r refresh · esc close</Text>
-    </DialogBox>
-  );
-}
-
-function HelpDialog(props: { rows: number }) {
-  return (
-    <DialogBox title="Shortcuts" rows={props.rows}>
-      <Text>Enter sends the current prompt.</Text>
-      <Text>ctrl+w opens workspace switcher.</Text>
-      <Text>ctrl+o opens session switcher.</Text>
-      <Text>? opens this help pane.</Text>
-      <Text>Esc closes panes. j/k or arrows move selection.</Text>
-      <Box marginTop={1} flexDirection="column">
-        {SLASH_COMMANDS.map((item) => (
-          <Text key={item.command}>
-            <Text color="cyan">{item.command}</Text> <Text dimColor>{item.description}</Text>
-          </Text>
-        ))}
-      </Box>
-    </DialogBox>
-  );
-}
-
-function DialogBox(props: { title: string; rows: number; children: React.ReactNode }) {
-  const { columns } = useWindowSize();
-  return (
-    <Box flexDirection="column" width="100%" height={props.rows} flexShrink={0} overflow="hidden">
-      <Text dimColor>{"─".repeat(Math.max(0, columns))}</Text>
-      <Box justifyContent="space-between">
-        <Text color="cyan" bold>
-          {"  "}
-          {props.title}
-        </Text>
-        <Text dimColor>Esc close  </Text>
-      </Box>
-      <Box flexDirection="column" paddingX={2}>
-        {props.children}
-      </Box>
-    </Box>
-  );
-}
-
-function SlashSuggestions(props: { value: string }) {
-  if (!props.value.startsWith("/") || props.value.includes(" ")) {
-    return null;
-  }
-  const matches = SLASH_COMMANDS.filter((item) => item.command.startsWith(props.value)).slice(0, 4);
-  if (matches.length === 0) {
-    return null;
-  }
-  return (
-    <Box flexDirection="column" paddingX={2}>
-      {matches.map((item, index) => (
-        <Text key={item.command} {...(index === 0 ? { color: "cyan" } : {})} dimColor={index !== 0}>
-          {index === 0 ? "❯" : " "} {item.command} <Text dimColor>{item.description}</Text>
-        </Text>
-      ))}
-    </Box>
-  );
 }
 
 function OahApp(props: { children: React.ReactNode }) {
@@ -553,12 +35,13 @@ function OahRepl({ connection }: { connection: OahConnection }) {
   const client = useOahClient(connection);
   const { rows: height } = useWindowSize();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [runtimes, setRuntimes] = useState<WorkspaceRuntime[]>([]);
   const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<ChatLine[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
-  const [events, setEvents] = useState<SessionEventContract[]>([]);
+  const [, setEvents] = useState<SessionEventContract[]>([]);
   const [composer, setComposer] = useState("");
   const [composerCursor, setComposerCursor] = useState(0);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -573,8 +56,9 @@ function OahRepl({ connection }: { connection: OahConnection }) {
 
   const refreshWorkspaces = useCallback(async () => {
     try {
-      const nextWorkspaces = await client.listAllWorkspaces();
+      const [nextWorkspaces, nextRuntimes] = await Promise.all([client.listAllWorkspaces(), client.listWorkspaceRuntimes().catch(() => [])]);
       setWorkspaces(nextWorkspaces);
+      setRuntimes(nextRuntimes);
       if (!currentWorkspace && nextWorkspaces[0]) {
         setCurrentWorkspace(nextWorkspaces[0]);
       }
@@ -623,17 +107,27 @@ function OahRepl({ connection }: { connection: OahConnection }) {
   );
 
   const createWorkspace = useCallback(
-    async (draft: string) => {
-      const parsed = parseWorkspaceDraft(draft);
-      if (!parsed.name) {
+    async (draft: WorkspaceCreateDialog) => {
+      const name = draft.name.trim();
+      const runtime = draft.runtime.trim();
+      const rootPath = draft.rootPath.trim();
+      const ownerId = draft.ownerId.trim();
+      const serviceName = draft.serviceName.trim();
+      if (!name) {
         setNotice({ level: "error", message: "Workspace name is required." });
+        return;
+      }
+      if (!runtime) {
+        setNotice({ level: "error", message: "No workspace runtime is available." });
         return;
       }
       try {
         const workspace = await client.createWorkspace({
-          name: parsed.name,
-          runtime: parsed.runtime,
-          ...(parsed.rootPath ? { rootPath: parsed.rootPath } : {})
+          name,
+          runtime,
+          ...(rootPath ? { rootPath } : {}),
+          ...(ownerId ? { ownerId } : {}),
+          ...(serviceName ? { serviceName } : {})
         });
         setWorkspaces((current) => [workspace, ...current.filter((item) => item.id !== workspace.id)]);
         await loadWorkspace(workspace);
@@ -674,13 +168,14 @@ function OahRepl({ connection }: { connection: OahConnection }) {
     setComposerCursor(value.length);
   }, []);
 
-  const insertComposerInput = useCallback((input: string) => {
-    const cursor = composerCursor;
-    setComposer((current) => {
-      return `${current.slice(0, cursor)}${input}${current.slice(cursor)}`;
-    });
-    setComposerCursor(cursor + input.length);
-  }, [composerCursor]);
+  const insertComposerInput = useCallback(
+    (input: string) => {
+      const cursor = composerCursor;
+      setComposer((current) => insertTextAt(current, cursor, input));
+      setComposerCursor(cursor + input.length);
+    },
+    [composerCursor]
+  );
 
   const deleteComposerInput = useCallback(() => {
     if (composerCursor <= 0) {
@@ -690,53 +185,60 @@ function OahRepl({ connection }: { connection: OahConnection }) {
     setComposerCursor((cursor) => Math.max(0, cursor - 1));
   }, [composerCursor]);
 
-  const sendComposer = useCallback(async () => {
-    const content = composer.trim();
-    if (!content) {
-      return;
-    }
-    if (content === "/workspace") {
-      setComposerValue("");
-      setDialog({ kind: "workspace-list", selectedIndex: 0 });
-      return;
-    }
-    if (content === "/session") {
-      setComposerValue("");
-      setDialog({ kind: "session-list", selectedIndex: 0 });
-      return;
-    }
-    if (content === "/new-session") {
-      setComposerValue("");
-      setDialog({ kind: "session-create", draft: "" });
-      return;
-    }
-    if (content === "/new-workspace") {
-      setComposerValue("");
-      setDialog({ kind: "workspace-create", draft: "" });
-      return;
-    }
-    if (!currentSession) {
-      setNotice({ level: "error", message: "Create or select a session first." });
-      return;
-    }
+  const openWorkspaceCreator = useCallback(() => {
+    setDialog(createWorkspaceDialog(currentWorkspace?.runtime ?? runtimes[0]?.name));
+  }, [currentWorkspace?.runtime, runtimes]);
 
-    setComposerValue("");
-    const optimistic: ChatLine = {
-      id: `pending:${Date.now()}`,
-      role: "user",
-      text: content,
-      createdAt: new Date().toISOString()
-    };
-    setMessages((current) => [...current, optimistic]);
-    try {
-      const accepted = await client.sendMessage(currentSession.id, content);
-      setNotice({ level: "info", message: `Queued run ${shortId(accepted.runId)}` });
-      void refreshSession(currentSession);
-    } catch (error) {
-      setMessages((current) => current.filter((line) => line.id !== optimistic.id));
-      setError(error);
-    }
-  }, [client, composer, currentSession, refreshSession, setComposerValue, setError]);
+  const sendComposer = useCallback(
+    async (override?: string) => {
+      const content = (override ?? composer).trim();
+      if (!content) {
+        return;
+      }
+      if (content === "/workspace") {
+        setComposerValue("");
+        setDialog({ kind: "workspace-list", selectedIndex: 0 });
+        return;
+      }
+      if (content === "/session") {
+        setComposerValue("");
+        setDialog({ kind: "session-list", selectedIndex: 0 });
+        return;
+      }
+      if (content === "/new-session") {
+        setComposerValue("");
+        setDialog({ kind: "session-create", draft: "" });
+        return;
+      }
+      if (content === "/new-workspace") {
+        setComposerValue("");
+        openWorkspaceCreator();
+        return;
+      }
+      if (!currentSession) {
+        setNotice({ level: "error", message: "Create or select a session first." });
+        return;
+      }
+
+      setComposerValue("");
+      const optimistic: ChatLine = {
+        id: `pending:${Date.now()}`,
+        role: "user",
+        text: content,
+        createdAt: new Date().toISOString()
+      };
+      setMessages((current) => [...current, optimistic]);
+      try {
+        const accepted = await client.sendMessage(currentSession.id, content);
+        setNotice({ level: "info", message: `Queued run ${shortId(accepted.runId)}` });
+        void refreshSession(currentSession);
+      } catch (error) {
+        setMessages((current) => current.filter((line) => line.id !== optimistic.id));
+        setError(error);
+      }
+    },
+    [client, composer, currentSession, openWorkspaceCreator, refreshSession, setComposerValue, setError]
+  );
 
   useEffect(() => {
     void refreshWorkspaces();
@@ -800,7 +302,7 @@ function OahRepl({ connection }: { connection: OahConnection }) {
   }, [client, currentSession?.id, refreshSession, setError]);
 
   useInput((input, key) => {
-    if (input === "c" && key.ctrl) {
+    if ((input === "c" && key.ctrl) || hasRawControl(input, "\u0003")) {
       app.exit();
       return;
     }
@@ -819,26 +321,16 @@ function OahRepl({ connection }: { connection: OahConnection }) {
       if (dialog.kind === "help") {
         return;
       }
-      if (dialog.kind === "workspace-create" || dialog.kind === "session-create") {
-        if (key.return) {
-          if (dialog.kind === "workspace-create") {
-            void createWorkspace(dialog.draft);
-          } else {
-            void createSession(dialog.draft);
-          }
-          return;
-        }
-        if (key.backspace || key.delete) {
-          setDialog({ ...dialog, draft: dialog.draft.slice(0, -1) });
-          return;
-        }
-        if (input && !key.ctrl && !key.meta) {
-          setDialog({ ...dialog, draft: `${dialog.draft}${input}` });
-        }
+      if (dialog.kind === "workspace-create") {
+        handleWorkspaceCreateInput({ input, key, dialog, client, runtimes, setDialog, setRuntimes, setError, createWorkspace });
+        return;
+      }
+      if (dialog.kind === "session-create") {
+        handleSessionCreateInput({ input, key, dialog, setDialog, createSession });
         return;
       }
       if (input === "n") {
-        setDialog(dialog.kind === "workspace-list" ? { kind: "workspace-create", draft: "" } : { kind: "session-create", draft: "" });
+        setDialog(dialog.kind === "workspace-list" ? createWorkspaceDialog(currentWorkspace?.runtime ?? runtimes[0]?.name) : { kind: "session-create", draft: "" });
         return;
       }
       if (input === "r") {
@@ -859,7 +351,7 @@ function OahRepl({ connection }: { connection: OahConnection }) {
         setDialog({ ...dialog, selectedIndex: clampIndex(dialog.selectedIndex - 1, length) });
         return;
       }
-      if (key.return) {
+      if (isReturnInput(input, key)) {
         if (dialog.kind === "workspace-list") {
           const workspace = workspaces[dialog.selectedIndex];
           if (workspace) {
@@ -881,11 +373,11 @@ function OahRepl({ connection }: { connection: OahConnection }) {
       return;
     }
 
-    if (input === "w" && key.ctrl) {
+    if ((input === "w" && key.ctrl) || hasRawControl(input, "\u0017")) {
       setDialog({ kind: "workspace-list", selectedIndex: Math.max(0, workspaces.findIndex((item) => item.id === currentWorkspace?.id)) });
       return;
     }
-    if (input === "o" && key.ctrl) {
+    if ((input === "o" && key.ctrl) || hasRawControl(input, "\u000f")) {
       setDialog({ kind: "session-list", selectedIndex: Math.max(0, sessions.findIndex((item) => item.id === currentSession?.id)) });
       return;
     }
@@ -893,8 +385,15 @@ function OahRepl({ connection }: { connection: OahConnection }) {
       setDialog({ kind: "help" });
       return;
     }
-    if (key.return) {
-      void sendComposer();
+    if (isReturnInput(input, key)) {
+      const cleanInput = cleanControlInput(input);
+      if (cleanInput) {
+        const nextComposer = insertTextAt(composer, composerCursor, cleanInput);
+        setComposerValue(nextComposer);
+        void sendComposer(nextComposer);
+      } else {
+        void sendComposer();
+      }
       return;
     }
     if (key.tab && composer.startsWith("/")) {
@@ -920,12 +419,19 @@ function OahRepl({ connection }: { connection: OahConnection }) {
       setComposerCursor(composer.length);
       return;
     }
+    if ((input === "u" && key.ctrl) || hasRawControl(input, "\u0015")) {
+      setComposerValue("");
+      return;
+    }
     if (key.backspace || key.delete) {
       deleteComposerInput();
       return;
     }
     if (input && !key.ctrl && !key.meta) {
-      insertComposerInput(input);
+      const cleanInput = cleanControlInput(input);
+      if (cleanInput) {
+        insertComposerInput(cleanInput);
+      }
     }
   });
 
@@ -935,7 +441,7 @@ function OahRepl({ connection }: { connection: OahConnection }) {
   const transcriptHeight = Math.max(3, height - dialogRows - chromeRows);
   const activeDialog =
     dialog?.kind === "workspace-list" || dialog?.kind === "workspace-create" ? (
-      <WorkspaceDialog dialog={dialog} workspaces={workspaces} currentWorkspace={currentWorkspace} rows={dialogRows} />
+      <WorkspaceDialog dialog={dialog} workspaces={workspaces} currentWorkspace={currentWorkspace} runtimes={runtimes} rows={dialogRows} />
     ) : dialog?.kind === "session-list" || dialog?.kind === "session-create" ? (
       <SessionDialog dialog={dialog} sessions={sessions} currentSession={currentSession} workspace={currentWorkspace} rows={dialogRows} />
     ) : dialog?.kind === "help" ? (
@@ -951,9 +457,97 @@ function OahRepl({ connection }: { connection: OahConnection }) {
       </Box>
       {activeDialog}
       {!dialog ? <SlashSuggestions value={composer} /> : null}
-      <PromptInput value={composer} cursor={composerCursor} disabled={dialog !== null} running={latestRun?.status === "queued" || latestRun?.status === "running" || latestRun?.status === "waiting_tool"} />
+      <PromptInput
+        value={composer}
+        cursor={composerCursor}
+        disabled={dialog !== null}
+        running={latestRun?.status === "queued" || latestRun?.status === "running" || latestRun?.status === "waiting_tool"}
+      />
     </Box>
   );
+}
+
+function handleWorkspaceCreateInput(input: {
+  input: string;
+  key: { ctrl?: boolean; meta?: boolean; tab?: boolean; upArrow?: boolean; downArrow?: boolean; leftArrow?: boolean; rightArrow?: boolean; backspace?: boolean; delete?: boolean; return?: boolean };
+  dialog: WorkspaceCreateDialog;
+  client: OahApiClient;
+  runtimes: WorkspaceRuntime[];
+  setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
+  setRuntimes: React.Dispatch<React.SetStateAction<WorkspaceRuntime[]>>;
+  setError: (error: unknown) => void;
+  createWorkspace: (draft: WorkspaceCreateDialog) => void;
+}) {
+  const { dialog, key } = input;
+  if ((input.input === "u" && key.ctrl) || hasRawControl(input.input, "\u0015")) {
+    input.setDialog({ ...dialog, [dialog.field]: "" });
+    return;
+  }
+  if ((input.input === "r" && key.ctrl) || hasRawControl(input.input, "\u0012")) {
+    void input.client.listWorkspaceRuntimes().then(input.setRuntimes).catch(input.setError);
+    return;
+  }
+  if (key.tab || key.downArrow) {
+    input.setDialog({ ...dialog, field: moveWorkspaceCreateField(dialog.field, 1) });
+    return;
+  }
+  if (key.upArrow) {
+    input.setDialog({ ...dialog, field: moveWorkspaceCreateField(dialog.field, -1) });
+    return;
+  }
+  if (key.leftArrow && dialog.field === "runtime") {
+    input.setDialog({ ...dialog, runtime: cycleRuntime(dialog.runtime, input.runtimes, -1) });
+    return;
+  }
+  if (key.rightArrow && dialog.field === "runtime") {
+    input.setDialog({ ...dialog, runtime: cycleRuntime(dialog.runtime, input.runtimes, 1) });
+    return;
+  }
+  if (isReturnInput(input.input, key)) {
+    const cleanInput = cleanControlInput(input.input);
+    const nextDialog = dialog.field === "runtime" ? dialog : { ...dialog, [dialog.field]: `${dialog[dialog.field]}${cleanInput}` };
+    input.createWorkspace(nextDialog);
+    return;
+  }
+  if (key.backspace || key.delete) {
+    if (dialog.field !== "runtime") {
+      input.setDialog({ ...dialog, [dialog.field]: dialog[dialog.field].slice(0, -1) });
+    }
+    return;
+  }
+  if (input.input && !key.ctrl && !key.meta) {
+    const cleanInput = cleanControlInput(input.input);
+    if (cleanInput && dialog.field !== "runtime") {
+      input.setDialog({ ...dialog, [dialog.field]: `${dialog[dialog.field]}${cleanInput}` });
+    }
+  }
+}
+
+function handleSessionCreateInput(input: {
+  input: string;
+  key: { ctrl?: boolean; meta?: boolean; backspace?: boolean; delete?: boolean; return?: boolean };
+  dialog: Extract<Dialog, { kind: "session-create" }>;
+  setDialog: React.Dispatch<React.SetStateAction<Dialog | null>>;
+  createSession: (title?: string) => void;
+}) {
+  if ((input.input === "u" && input.key.ctrl) || hasRawControl(input.input, "\u0015")) {
+    input.setDialog({ ...input.dialog, draft: "" });
+    return;
+  }
+  if (isReturnInput(input.input, input.key)) {
+    input.createSession(`${input.dialog.draft}${cleanControlInput(input.input)}`);
+    return;
+  }
+  if (input.key.backspace || input.key.delete) {
+    input.setDialog({ ...input.dialog, draft: input.dialog.draft.slice(0, -1) });
+    return;
+  }
+  if (input.input && !input.key.ctrl && !input.key.meta) {
+    const cleanInput = cleanControlInput(input.input);
+    if (cleanInput) {
+      input.setDialog({ ...input.dialog, draft: `${input.dialog.draft}${cleanInput}` });
+    }
+  }
 }
 
 export function OahTui({ connection }: { connection: OahConnection }) {

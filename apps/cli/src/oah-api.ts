@@ -12,6 +12,8 @@ import type {
   SessionPage,
   Workspace,
   WorkspaceCatalog,
+  WorkspaceRuntime,
+  WorkspaceRuntimeList,
   WorkspacePage
 } from "@oah/api-contracts";
 
@@ -100,7 +102,18 @@ export class OahApiClient {
     return items;
   }
 
-  async createWorkspace(input: { name: string; runtime?: string; rootPath?: string }): Promise<Workspace> {
+  async listWorkspaceRuntimes(): Promise<WorkspaceRuntime[]> {
+    const list = await this.request<WorkspaceRuntimeList>("/api/v1/runtimes");
+    return list.items;
+  }
+
+  async createWorkspace(input: {
+    name: string;
+    runtime: string;
+    rootPath?: string;
+    ownerId?: string;
+    serviceName?: string;
+  }): Promise<Workspace> {
     return this.request<Workspace>("/api/v1/workspaces", {
       method: "POST",
       headers: {
@@ -108,8 +121,11 @@ export class OahApiClient {
       },
       body: JSON.stringify({
         name: input.name,
-        runtime: input.runtime ?? "local",
-        ...(input.rootPath ? { rootPath: input.rootPath } : {})
+        runtime: input.runtime,
+        ...(input.rootPath ? { rootPath: input.rootPath } : {}),
+        ...(input.ownerId ? { ownerId: input.ownerId } : {}),
+        ...(input.serviceName ? { serviceName: input.serviceName } : {}),
+        executionPolicy: "local"
       })
     });
   }
