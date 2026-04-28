@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import type { Run, Session, Workspace } from "@oah/api-contracts";
 
-import type { ChatLine, Notice } from "./tui-types.js";
-import { shortId, SPINNER_FRAMES } from "./tui-utils.js";
+import type { ChatLine, Notice } from "../domain/types.js";
+import { shortId, SPINNER_FRAMES } from "../domain/utils.js";
 
 export function StatusLine(props: { workspace: Workspace | null; session: Session | null; run: Run | null; notice: Notice; streamState: string }) {
   const runStatus = props.run ? props.run.status : "idle";

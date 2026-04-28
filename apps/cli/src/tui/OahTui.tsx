@@ -2,11 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Box, useApp, useInput, useWindowSize } from "ink";
 import type { Run, Session, SessionEventContract, Workspace, WorkspaceRuntime } from "@oah/api-contracts";
 
-import { OahApiClient, type OahConnection } from "./oah-api.js";
-import { HelpDialog, SessionDialog, WorkspaceDialog } from "./tui-dialogs.js";
-import { Messages, SpinnerLine, StatusLine } from "./tui-messages.js";
-import { PromptInput, SlashSuggestions } from "./tui-prompt.js";
-import type { ChatLine, Dialog, Notice, WorkspaceCreateDialog } from "./tui-types.js";
+import { OahApiClient, type OahConnection } from "../api/oah-api.js";
+import { HelpDialog, SessionDialog, WorkspaceDialog } from "./components/dialogs.js";
+import { Messages, SpinnerLine, StatusLine } from "./components/messages.js";
+import { PromptInput, SlashSuggestions } from "./components/prompt.js";
+import type { ChatLine, Dialog, Notice, WorkspaceCreateDialog } from "./domain/types.js";
 import {
   cleanControlInput,
   clampIndex,
@@ -20,7 +20,7 @@ import {
   shortId,
   SLASH_COMMANDS,
   updateChatLinesFromEvent
-} from "./tui-utils.js";
+} from "./domain/utils.js";
 
 function useOahClient(connection: OahConnection) {
   return useMemo(() => new OahApiClient(connection), [connection.baseUrl, connection.token]);

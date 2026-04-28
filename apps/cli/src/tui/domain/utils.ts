@@ -1,6 +1,6 @@
 import type { Message, SessionEventContract, WorkspaceRuntime } from "@oah/api-contracts";
 
-import type { ChatLine, VisibleWindow, WorkspaceCreateDialog, WorkspaceCreateField } from "./tui-types.js";
+import type { ChatLine, VisibleWindow, WorkspaceCreateDialog, WorkspaceCreateField } from "./types.js";
 
 export const STATUS_COLORS: Record<string, string> = {
   active: "green",

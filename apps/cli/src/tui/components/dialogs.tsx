@@ -2,8 +2,8 @@ import React from "react";
 import { Box, Text, useWindowSize } from "ink";
 import type { Session, Workspace, WorkspaceRuntime } from "@oah/api-contracts";
 
-import type { Dialog } from "./tui-types.js";
-import { formatTime, shortId, SLASH_COMMANDS, STATUS_COLORS, visibleWindow } from "./tui-utils.js";
+import type { Dialog } from "../domain/types.js";
+import { formatTime, shortId, SLASH_COMMANDS, STATUS_COLORS, visibleWindow } from "../domain/utils.js";
 
 export function WorkspaceDialog(props: {
   dialog: Extract<Dialog, { kind: "workspace-list" | "workspace-create" }>;

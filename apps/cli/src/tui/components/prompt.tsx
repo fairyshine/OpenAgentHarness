@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 
-import { SLASH_COMMANDS } from "./tui-utils.js";
+import { SLASH_COMMANDS } from "../domain/utils.js";
 
 export function PromptInput(props: { value: string; cursor: number; disabled?: boolean; running: boolean }) {
   const beforeCursor = props.value.slice(0, props.cursor);
