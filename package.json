@@ -19,6 +19,7 @@
     "dev:worker": "pnpm --filter @oah/worker dev",
     "dev:controller": "pnpm --filter @oah/controller dev",
     "dev:compose-scaler": "pnpm --filter @oah/compose-scaler dev",
+    "dev:cli": "pnpm --filter @oah/cli dev",
     "dev:web": "pnpm --filter @oah/web dev",
     "native:build": "node ./scripts/build-native.mjs",
     "native:check": "cargo check --manifest-path ./native/Cargo.toml",
