@@ -223,6 +223,96 @@ describe("storage admin", () => {
     await storageAdmin.close();
   });
 
+  it("uses bounded SCAN for redis overview key summaries", async () => {
+    const previousLimit = process.env.OAH_STORAGE_ADMIN_REDIS_OVERVIEW_KEY_LIMIT;
+    process.env.OAH_STORAGE_ADMIN_REDIS_OVERVIEW_KEY_LIMIT = "2";
+    const commands: string[][] = [];
+
+    const redisClient = {
+      isOpen: true,
+      async dbSize() {
+        return 5;
+      },
+      async lLen(key: string) {
+        if (key === "oah:runs:ready") {
+          return 3;
+        }
+        if (key.endsWith(":queue")) {
+          return 7;
+        }
+        if (key.endsWith(":events")) {
+          return 9;
+        }
+        return 0;
+      },
+      async sendCommand(command: string[]) {
+        commands.push(command);
+        const pattern = command[3];
+        if (pattern === "oah:session:*:queue") {
+          return [
+            "1",
+            [
+              "oah:session:ses_1:queue",
+              "oah:session:ses_2:queue",
+              "oah:session:ses_3:queue"
+            ]
+          ];
+        }
+        if (pattern === "oah:session:*:lock") {
+          return ["0", ["oah:session:ses_4:lock"]];
+        }
+        if (pattern === "oah:session:*:events") {
+          return ["0", ["oah:session:ses_5:events"]];
+        }
+        throw new Error(`Unexpected SCAN pattern: ${String(pattern)}`);
+      },
+      async pTTL() {
+        return 1234;
+      },
+      async get() {
+        return "worker_1";
+      },
+      async keys() {
+        throw new Error("KEYS must not be used by redis overview.");
+      },
+      async quit() {
+        throw new Error("Injected redis clients must not be closed by storage admin.");
+      }
+    };
+
+    try {
+      const storageAdmin = createStorageAdmin({
+        redisClient: redisClient as Parameters<typeof createStorageAdmin>[0]["redisClient"],
+        redisAvailable: true,
+        redisEventBusEnabled: true,
+        redisRunQueueEnabled: true
+      });
+
+      const overview = await storageAdmin.overview();
+
+      expect(commands.map((command) => command[0])).toEqual(["SCAN", "SCAN", "SCAN"]);
+      expect(overview.redis.readyQueue).toEqual({
+        key: "oah:runs:ready",
+        length: 3
+      });
+      expect(overview.redis.sessionQueues).toEqual([
+        { key: "oah:session:ses_1:queue", sessionId: "ses_1", length: 7 },
+        { key: "oah:session:ses_2:queue", sessionId: "ses_2", length: 7 }
+      ]);
+      expect(overview.redis.sessionQueuesTruncated).toBe(true);
+      expect(overview.redis.sessionLocksTruncated).toBeUndefined();
+      expect(overview.redis.eventBuffersTruncated).toBeUndefined();
+
+      await storageAdmin.close();
+    } finally {
+      if (previousLimit === undefined) {
+        delete process.env.OAH_STORAGE_ADMIN_REDIS_OVERVIEW_KEY_LIMIT;
+      } else {
+        process.env.OAH_STORAGE_ADMIN_REDIS_OVERVIEW_KEY_LIMIT = previousLimit;
+      }
+    }
+  });
+
   it("routes postgres inspection to the matching service database", async () => {
     const defaultQueries: string[] = [];
     const serviceQueries: string[] = [];

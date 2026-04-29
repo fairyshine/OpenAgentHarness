@@ -401,6 +401,7 @@ openai-default:
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `OAH_HISTORY_EVENT_RETENTION_DAYS` | `7` | Postgres 模式下历史事件保留天数 |
+| `OAH_STORAGE_ADMIN_REDIS_OVERVIEW_KEY_LIMIT` | `200` | Storage overview 中每类 Redis session queue / lock / event key 最多扫描并返回的数量，上限 `10000`；超过后响应会带 truncated 标记 |
 | `OAH_RUNTIME_DEBUG` | 未设置 | 设置后向标准输出镜像 runtime debug 日志 |
 | `OAH_DOCKER_HOST_ALIAS` | `host.docker.internal` | 当服务运行在 Docker 内且 HTTP MCP server 配置为 loopback 地址时，用于替换 `127.0.0.1` / `localhost` 的宿主机别名 |
 

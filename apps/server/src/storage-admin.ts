@@ -182,6 +182,55 @@ async function readRedisKeySize(client: RedisInspectorClient, key: string, type:
   }
 }
 
+const DEFAULT_REDIS_OVERVIEW_KEY_LIMIT = 200;
+
+function resolveRedisOverviewKeyLimit(): number {
+  const raw = process.env.OAH_STORAGE_ADMIN_REDIS_OVERVIEW_KEY_LIMIT?.trim();
+  if (!raw) {
+    return DEFAULT_REDIS_OVERVIEW_KEY_LIMIT;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 10_000) : DEFAULT_REDIS_OVERVIEW_KEY_LIMIT;
+}
+
+async function scanRedisKeysBounded(
+  client: RedisInspectorClient,
+  pattern: string,
+  limit: number
+): Promise<{ keys: string[]; truncated: boolean }> {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  let cursor = "0";
+  const count = String(Math.max(1, Math.min(limit, 1_000)));
+
+  do {
+    const response = (await client.sendCommand(["SCAN", cursor, "MATCH", pattern, "COUNT", count])) as [string, string[]];
+    cursor = response[0];
+
+    for (let index = 0; index < response[1].length; index += 1) {
+      const key = response[1][index]!;
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      keys.push(key);
+      if (keys.length >= limit) {
+        return {
+          keys,
+          truncated: cursor !== "0" || index < response[1].length - 1
+        };
+      }
+    }
+  } while (cursor !== "0");
+
+  return {
+    keys,
+    truncated: false
+  };
+}
+
 function extractSessionId(key: string): string {
   const match = key.match(/:session:([^:]+):/u);
   return match?.[1] ?? "unknown";
@@ -342,6 +391,7 @@ export function createStorageAdmin(options: {
   archiveExportEnabled?: boolean | undefined;
   archiveExportRoot?: string | undefined;
   keyPrefix?: string | undefined;
+  redisClient?: RedisInspectorClient | undefined;
   workerRegistry?: WorkerRegistryInspector | undefined;
   workspacePlacementRegistry?: WorkspacePlacementRegistry | undefined;
 }): StorageAdmin {
@@ -395,6 +445,10 @@ export function createStorageAdmin(options: {
   const postgresServicePools = new Map<string, Promise<Pool>>();
 
   async function getRedisClient(): Promise<RedisInspectorClient | undefined> {
+    if (options.redisClient) {
+      return options.redisClient;
+    }
+
     if (!options.redisUrl) {
       return undefined;
     }
@@ -552,14 +606,15 @@ export function createStorageAdmin(options: {
         : undefined;
 
       const redisClient = await getRedisClient();
+      const redisOverviewKeyLimit = resolveRedisOverviewKeyLimit();
       const redisSummary =
         redisClient && options.redisAvailable
           ? await Promise.all([
               redisClient.dbSize(),
               redisClient.lLen(`${keyPrefix}:runs:ready`),
-              redisClient.keys(`${keyPrefix}:session:*:queue`),
-              redisClient.keys(`${keyPrefix}:session:*:lock`),
-              redisClient.keys(`${keyPrefix}:session:*:events`)
+              scanRedisKeysBounded(redisClient, `${keyPrefix}:session:*:queue`, redisOverviewKeyLimit),
+              scanRedisKeysBounded(redisClient, `${keyPrefix}:session:*:lock`, redisOverviewKeyLimit),
+              scanRedisKeysBounded(redisClient, `${keyPrefix}:session:*:events`, redisOverviewKeyLimit)
             ])
           : undefined;
 
@@ -567,7 +622,13 @@ export function createStorageAdmin(options: {
         postgresSummary && options.archiveExportRoot ? await summarizeArchiveExportDirectory(options.archiveExportRoot) : undefined;
 
       const [databaseResult, tableSummaries, historyEventStats, archiveStats, recoveryStats, recoveryReasons] = postgresSummary ?? [];
-      const [dbSize, readyQueueLength, sessionQueueKeys = [], sessionLockKeys = [], eventBufferKeys = []] = redisSummary ?? [];
+      const [
+        dbSize,
+        readyQueueLength,
+        sessionQueueScan = { keys: [], truncated: false },
+        sessionLockScan = { keys: [], truncated: false },
+        eventBufferScan = { keys: [], truncated: false }
+      ] = redisSummary ?? [];
       const readyQueue = redisSummary
         ? {
             key: `${keyPrefix}:runs:ready`,
@@ -657,9 +718,12 @@ export function createStorageAdmin(options: {
           runQueueEnabled: options.redisRunQueueEnabled,
           ...(redisSummary ? { dbSize } : {}),
           ...(readyQueue ? { readyQueue } : {}),
+          ...(sessionQueueScan.truncated ? { sessionQueuesTruncated: true } : {}),
+          ...(sessionLockScan.truncated ? { sessionLocksTruncated: true } : {}),
+          ...(eventBufferScan.truncated ? { eventBuffersTruncated: true } : {}),
           sessionQueues: redisSummary
             ? await Promise.all(
-                sessionQueueKeys.map(async (key) => ({
+                sessionQueueScan.keys.map(async (key) => ({
                   key,
                   sessionId: extractSessionId(key),
                   length: await redisClient!.lLen(key)
@@ -668,7 +732,7 @@ export function createStorageAdmin(options: {
             : [],
           sessionLocks: redisSummary
             ? await Promise.all(
-                sessionLockKeys.map(async (key) => ({
+                sessionLockScan.keys.map(async (key) => ({
                   key,
                   sessionId: extractSessionId(key),
                   ...(await redisClient!.pTTL(key)).valueOf() >= 0 ? { ttlMs: await redisClient!.pTTL(key) } : {},
@@ -678,7 +742,7 @@ export function createStorageAdmin(options: {
             : [],
           eventBuffers: redisSummary
             ? await Promise.all(
-                eventBufferKeys.map(async (key) => ({
+                eventBufferScan.keys.map(async (key) => ({
                   key,
                   sessionId: extractSessionId(key),
                   length: await redisClient!.lLen(key)
@@ -1031,7 +1095,7 @@ export function createStorageAdmin(options: {
       );
 
       const client = await getRedisClient();
-      if (client?.isOpen) {
+      if (client && client !== options.redisClient && client.isOpen) {
         await client.quit();
       }
     }

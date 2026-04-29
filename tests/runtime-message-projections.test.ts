@@ -183,6 +183,106 @@ describe("runtime message projections", () => {
     ]);
   });
 
+  it("preserves streamed assistant structured content in runtime messages", () => {
+    const messages: Message[] = [
+      {
+        id: "msg_user",
+        sessionId: "sess_1",
+        runId: "run_1",
+        role: "user",
+        content: "B",
+        createdAt: "2026-04-08T00:00:00.000Z"
+      },
+      {
+        id: "msg_streamed",
+        sessionId: "sess_1",
+        runId: "run_1",
+        role: "assistant",
+        content: [
+          {
+            type: "reasoning",
+            text: "The user answered B."
+          },
+          {
+            type: "text",
+            text: "Correct: B means Pod is the smallest K8S management unit."
+          }
+        ],
+        createdAt: "2026-04-08T00:00:01.000Z"
+      }
+    ];
+    const events: SessionEvent[] = [
+      {
+        id: "evt_1",
+        cursor: "1",
+        sessionId: "sess_1",
+        runId: "run_1",
+        event: "message.delta",
+        data: {
+          runId: "run_1",
+          messageId: "msg_streamed",
+          content: [
+            {
+              type: "reasoning",
+              text: "The user answered B."
+            }
+          ]
+        },
+        createdAt: "2026-04-08T00:00:01.100Z"
+      },
+      {
+        id: "evt_2",
+        cursor: "2",
+        sessionId: "sess_1",
+        runId: "run_1",
+        event: "message.delta",
+        data: {
+          runId: "run_1",
+          messageId: "msg_streamed",
+          content: messages[1]!.content
+        },
+        createdAt: "2026-04-08T00:00:01.200Z"
+      },
+      {
+        id: "evt_3",
+        cursor: "3",
+        sessionId: "sess_1",
+        runId: "run_1",
+        event: "message.completed",
+        data: {
+          runId: "run_1",
+          messageId: "msg_streamed",
+          content: messages[1]!.content
+        },
+        createdAt: "2026-04-08T00:00:02.000Z"
+      },
+      {
+        id: "evt_4",
+        cursor: "4",
+        sessionId: "sess_1",
+        runId: "run_1",
+        event: "run.completed",
+        data: {
+          runId: "run_1",
+          status: "completed"
+        },
+        createdAt: "2026-04-08T00:00:03.000Z"
+      }
+    ];
+
+    const engineMessages = buildSessionEngineMessages({
+      messages,
+      events
+    });
+
+    expect(engineMessages.map((message) => message.id)).toEqual(["msg_user", "msg_streamed:segment:1"]);
+    expect(engineMessages[1]).toMatchObject({
+      role: "assistant",
+      kind: "assistant_text",
+      content: "The user answered B.\n\nCorrect: B means Pod is the smallest K8S management unit."
+    });
+  });
+
   it("infers compact engine kinds from runtime metadata", () => {
     const messages: Message[] = [
       {

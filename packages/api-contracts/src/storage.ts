@@ -111,6 +111,9 @@ export const storageOverviewSchema = z.object({
         length: z.number().int().min(0)
       })
       .optional(),
+    sessionQueuesTruncated: z.boolean().optional(),
+    sessionLocksTruncated: z.boolean().optional(),
+    eventBuffersTruncated: z.boolean().optional(),
     sessionQueues: z.array(storageRedisQueueSummarySchema),
     sessionLocks: z.array(storageRedisLockSummarySchema),
     eventBuffers: z.array(storageRedisQueueSummarySchema)

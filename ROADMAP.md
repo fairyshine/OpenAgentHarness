@@ -397,7 +397,133 @@ The main remaining follow-up is:
 
 That means this roadmap is largely complete at the contract level, but not fully closed if the goal is "controller-managed sandbox fleet that can switch seamlessly between self_hosted and e2b in production".
 
-## 7. Non-Goals Right Now
+## 7. Large-Storage Readiness Roadmap
+
+This section tracks optimization work found during the large data volume deployment review.
+
+Current summary: the split topology is directionally sound, but the deployment skeleton and a few storage paths still assume development or medium-size datasets. Large workspace trees, large files, many object-store keys, high message volume, and long archive retention can currently cause disk pressure, memory spikes, slow drain, slow materialization, and debug/inspection queries that are too expensive for production.
+
+### Phase G: Production Storage Contracts
+
+Status:
+
+- pending
+
+Goals:
+
+1. Make object storage a first-class production requirement in Helm examples and production docs, not an implicit external assumption.
+2. Replace the default `worker.workspaceVolume.emptyDir.sizeLimit: 8Gi` production path with explicit PVC or sized ephemeral-storage guidance.
+3. Add per-worker and per-workspace disk watermarks so new materializations are refused or redirected before the node fills.
+4. Add workspace-level quota fields or policy hooks for maximum active copy size, maximum object count, and maximum single-file size.
+5. Document that `docker-compose.local.yml` is a development stack only; its Postgres, Redis, and MinIO defaults are intentionally undersized for large data.
+
+Implementation notes:
+
+- Helm should expose storage-class, requested capacity, access mode, and optional PVC creation for worker workspace cache.
+- Worker readiness should surface local disk pressure and materialization failure count.
+- Controller placement should eventually treat disk pressure as a first-class capacity signal.
+
+### Phase H: Object Storage Sync Scalability
+
+Status:
+
+- pending
+
+Risks to address:
+
+1. `listEntries` currently materializes and sorts all objects under a prefix.
+2. `getObject`, `putObject`, and tar bundle paths use whole-object `Buffer` flows in TypeScript fallback paths.
+3. Manifest and bundle handling can grow large for huge workspaces or many small files.
+4. Drain and idle flush can be blocked by slow full-tree diff, full-prefix listing, or large bundle upload.
+
+Goals:
+
+1. Stream S3 downloads/uploads instead of buffering whole objects.
+2. Use multipart upload for large files and large bundles.
+3. Stream bundle creation/extraction where possible; avoid `readFile(bundlePath)` for large archives.
+4. Add paged object listing and paged diff planning, so huge prefixes do not need to be resident in memory.
+5. Split sync manifests by shard or prefix for large workspaces.
+6. Add configurable per-operation timeouts, retry budgets, and byte/object-count limits.
+7. Add metrics for materialization bytes, object counts, list pages, flush duration, and drain-blocking syncs.
+
+### Phase I: Postgres Growth And Archive Lifecycle
+
+Status:
+
+- pending
+
+Risks to address:
+
+1. Archive rows currently store full deleted workspace/session trees as large JSONB payloads.
+2. Deletion archive construction can load all sessions, runs, messages, steps, tool calls, hooks, and artifacts into memory.
+3. Archive export exists as a utility class, but production bootstrap does not currently run it as an enabled background lifecycle.
+4. `history_events`, `session_events`, and recovery metadata can grow without clear production retention defaults.
+
+Goals:
+
+1. Move archive payloads to object storage or exported SQLite bundles by default, leaving only compact index rows in Postgres.
+2. Stream archive construction instead of building one large in-memory object.
+3. Wire `WorkspaceArchiveExporter` into production bootstrap behind explicit config.
+4. Add retention config for exported archive rows, `history_events`, `session_events`, and old completed runs where product policy allows it.
+5. Add partial indexes for recovery inspection paths, especially `metadata->'recovery'->>'state'`.
+6. Add production guidance for partitioning high-volume tables by time or workspace/service scope.
+
+### Phase J: Storage Admin Safety
+
+Status:
+
+- in progress
+
+Risks to address:
+
+1. Storage overview currently runs broad `count(*)` queries across all inspected Postgres tables.
+2. Recovery summaries scan JSON recovery metadata in `runs`.
+3. Table browsing can use `row_to_json(table)::text ilike`, which is intentionally expensive.
+4. Redis overview previously used broad `KEYS` calls for session queue/lock/event keys.
+
+Goals:
+
+1. Replace Redis overview `KEYS` calls with bounded `SCAN`.
+2. Add explicit caps and `truncated` signals for Redis overview arrays.
+3. Make expensive Postgres counts optional, cached, or approximate for production.
+4. Require filters or an explicit opt-in for full-row text search on large tables.
+5. Prefer keyset pagination over offset pagination for deep table browsing.
+6. Keep storage admin routes debug/operator-facing, not part of the hot user path.
+
+Progress:
+
+- bounded Redis overview scanning implemented for session queue, lock, and event keys
+- Redis overview responses now expose truncation flags when the configured scan cap is reached
+
+### Phase K: Production Observability And SLOs
+
+Status:
+
+- pending
+
+Goals:
+
+1. Add alerts for worker workspace disk pressure, object-store sync failure rate, drain flush duration, and materialization latency.
+2. Add Postgres table and index bloat monitoring guidance.
+3. Add Redis memory, AOF rewrite, key count, and queue depth alerts.
+4. Add object-storage request count, error rate, latency, and throttling metrics.
+5. Extend rollout checklist with large-workspace, high-message-volume, and drain-under-load tests.
+
+### Phase L: Deployment Hardening For Large Data
+
+Status:
+
+- pending
+
+Goals:
+
+1. Add production values examples with explicit object storage, PVC capacity, and resource sizing.
+2. Document managed Postgres / Redis / object storage as the recommended production path.
+3. Add backup and restore runbooks for Postgres, Redis queue state, object storage prefixes, and archive exports.
+4. Add lifecycle policies for workspace backing-store prefixes, archive exports, and old readonly mirrors.
+5. Add a capacity planning doc covering active workspace cache size, object count, session/message growth, archive retention, worker drain timing, and expected sync bandwidth.
+
+## 8. Non-Goals Right Now
 
 - replacing `worker` with `sandbox` as the primary runtime term
 - moving ownership truth from workspace to user

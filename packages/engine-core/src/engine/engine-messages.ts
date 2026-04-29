@@ -202,6 +202,19 @@ function contentText(content: Message["content"]): string {
     .join("\n\n");
 }
 
+function readDeltaText(event: SessionEvent): { mode: "append" | "replace"; text: string } {
+  if (typeof event.data.delta === "string") {
+    return { mode: "append", text: event.data.delta };
+  }
+
+  const content = event.data.content;
+  if (typeof content === "string" || Array.isArray(content)) {
+    return { mode: "replace", text: contentText(content as Message["content"]) };
+  }
+
+  return { mode: "append", text: "" };
+}
+
 function isStreamedAssistantTextMessage(message: Message, deltaMessageIds: Set<string>) {
   return message.role === "assistant" && deltaMessageIds.has(message.id) && contentText(message.content).trim().length > 0;
 }
@@ -308,9 +321,11 @@ function projectRunEngineMessages(messages: Message[], events: SessionEvent[]): 
     const messageId = readSessionEventMessageId(event);
 
     if (event.event === "message.delta" && messageId && messagesById.has(messageId)) {
+      const deltaText = readDeltaText(event);
       const existingSegment = activeSegments.get(messageId);
       if (existingSegment) {
-        existingSegment.content += typeof event.data.delta === "string" ? event.data.delta : "";
+        existingSegment.content =
+          deltaText.mode === "replace" ? deltaText.text : `${existingSegment.content}${deltaText.text}`;
         existingSegment.endCursor = event.cursor;
         continue;
       }
@@ -319,7 +334,7 @@ function projectRunEngineMessages(messages: Message[], events: SessionEvent[]): 
       segmentCounts.set(messageId, nextIndex);
       activeSegments.set(messageId, {
         index: nextIndex,
-        content: typeof event.data.delta === "string" ? event.data.delta : "",
+        content: deltaText.text,
         createdAt: event.createdAt,
         startCursor: event.cursor,
         endCursor: event.cursor
@@ -443,5 +458,12 @@ export function buildSessionEngineMessages(params: {
     projected.push(...(projectedRuns.get(message.runId) ?? [toEngineMessage(message)]));
   }
 
-  return projected;
+  return projected.sort((left, right) => {
+    const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+    if (createdAtComparison !== 0) {
+      return createdAtComparison;
+    }
+
+    return left.id.localeCompare(right.id);
+  });
 }

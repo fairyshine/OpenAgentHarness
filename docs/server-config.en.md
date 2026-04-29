@@ -324,6 +324,7 @@ In addition to YAML config, the server also reads a set of runtime environment v
 | Variable | Default | Description |
 | --- | --- | --- |
 | `OAH_HISTORY_EVENT_RETENTION_DAYS` | `7` | Retention window for historical events in PostgreSQL mode. |
+| `OAH_STORAGE_ADMIN_REDIS_OVERVIEW_KEY_LIMIT` | `200` | Maximum number of Redis session queue / lock / event keys scanned and returned per category in storage overview, capped at `10000`; responses include truncated flags when the cap is reached. |
 | `OAH_RUNTIME_DEBUG` | unset | Mirrors runtime debug logs to stdout when set. |
 | `OAH_DOCKER_HOST_ALIAS` | `host.docker.internal` | Host alias used when OAH runs inside Docker and an HTTP MCP server is configured with a loopback URL such as `127.0.0.1` or `localhost`. |
 
