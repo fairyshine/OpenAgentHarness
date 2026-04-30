@@ -1,6 +1,6 @@
 # OAP Daemon Roadmap
 
-OAP（Open Agent Harness Personal）是 OAH 的个人部署形态。它面向本地单用户使用，目标是用一个常驻 daemon 提供完整 OAH-compatible API，让 Web 调试端、CLI、TUI 和后续桌面端都能连接同一套本地服务。
+OAP（Open Agent Harness Personal）是 OAH 的个人部署形态。它面向本地单用户使用，目标是用一个常驻 daemon 提供完整 OAH-compatible API，让 WebUI、TUI 和 Desktop 都能连接同一套本地服务。
 
 ## 1. Product Target
 
@@ -40,10 +40,9 @@ oah models default openai-default
 OAP 不是 OAH 的 fork，也不是一套新协议。它是 OAH-compatible 的 personal deployment profile。
 
 ```text
-oah web/debug UI  ┐
-oah cli           ├── OAH API ── OAH enterprise server
-oah tui           │
-OAP desktop       ┘          └── OAP local daemon
+WebUI       ┐
+TUI         ├── OAH API ── OAH enterprise server
+Desktop    ┘          └── OAP local daemon
 ```
 
 OAH 与 OAP 的差异在部署形态，不在客户端协议：
@@ -56,11 +55,13 @@ OAH 与 OAP 的差异在部署形态，不在客户端协议：
 | 存储 | PostgreSQL + Redis + object storage | SQLite + local disk |
 | 配置 | `OAH_DEPLOY_ROOT/config/server.docker.yaml` 或 K8S profile | `OAH_HOME/config/daemon.yaml` |
 | 资产 | deploy root 同步 / 发布 | home 下直接读取 |
-| 客户端 | Web / CLI / TUI / external API consumers | 同一套 Web / CLI / TUI / desktop |
+| 客户端 | WebUI / TUI / Desktop | 同一套 WebUI / TUI / Desktop |
 
 ## 3. Deployment Identity And Capabilities
 
-Web、TUI、Desktop 都应同时兼容 OAH enterprise server 和 OAP local daemon。为了避免客户端靠端口、URL、配置猜测部署形态，OAH-compatible server 应提供一个稳定的 profile endpoint。
+WebUI、TUI、Desktop 都应同时兼容 OAH enterprise server 和 OAP local daemon。为了避免客户端靠端口、URL、配置猜测部署形态，OAH-compatible server 应提供一个稳定的 profile endpoint。
+
+Desktop 不应被定义成 OAP-only client。它是通用 OAH-compatible client；连接 OAP local daemon 时，才根据 profile / capabilities 额外显示 daemon supervisor、local logs、本地模型/工具/技能管理等能力。
 
 建议 API：
 
@@ -84,7 +85,7 @@ GET /api/v1/system/profile
     "workspaceRegistration": true,
     "storageInspection": true,
     "modelManagement": false,
-    "desktopSupervisor": false
+    "localDaemonSupervisor": false
   }
 }
 ```
@@ -105,17 +106,17 @@ OAP local daemon 则应返回：
     "workspaceRegistration": true,
     "storageInspection": true,
     "modelManagement": true,
-    "desktopSupervisor": true
+    "localDaemonSupervisor": true
   }
 }
 ```
 
 客户端使用原则：
 
-- Web / TUI / Desktop 连接后先读取 profile。
+- WebUI / TUI / Desktop 连接后先读取 profile。
 - UI 明确展示当前连接的是 `OAH enterprise server` 还是 `OAP local daemon`。
 - `--workspace /local/path`、daemon logs、local model/tool/skill 管理等只在 `edition=personal` 且 capability 允许时启用。
-- 连接远端 OAH 时，不显示 stop daemon、open local logs、register local path 等 OAP-only 操作。
+- 连接远端 OAH 时，不显示 stop daemon、open local logs、register local path 等个人本地专属操作。
 - profile 与 capabilities 是客户端行为判断依据，不能只依赖 `localhost`、端口或用户手工选择。
 
 ## 4. Single Workspace Mode
@@ -254,11 +255,11 @@ Initial capability flags:
 - `workspaceRegistration`
 - `storageInspection`
 - `modelManagement`
-- `desktopSupervisor`
+- `localDaemonSupervisor`
 
 Completion target:
 
-- Web、TUI、Desktop 都能通过同一个 endpoint 判断当前连接目标。
+- WebUI、TUI、Desktop 都能通过同一个 endpoint 判断当前连接目标。
 - 客户端不再用 URL、端口或是否 localhost 来推断 OAH/OAP。
 
 ### Phase 2: Daemon Lifecycle CLI
@@ -405,7 +406,7 @@ Completion target:
 
 - OAP 用户能在不理解 deploy root 内部细节的情况下完成基本模型和能力配置。
 
-### Phase 6: TUI And Web Client Defaults
+### Phase 6: WebUI And TUI Client Defaults
 
 Status: planned
 
@@ -421,14 +422,14 @@ TUI requirements:
 
 - `oah tui --workspace /path/to/repo` 默认连接本地 daemon。
 - 如果 daemon 未运行，提示启动或自动启动。
-- 支持 `--base-url` 覆盖到远端 OAH，并根据 profile 禁用 OAP-only 行为。
+- 支持 `--base-url` 覆盖到远端 OAH，并根据 profile 禁用个人本地专属行为。
 - 支持 `--token` 或读取 local daemon token。
 - workspace 创建 / 复用失败时给出明确修复建议。
 
 Web requirements:
 
-- `oah web` 可以打开本地 Web Debug UI。
-- Web Debug UI 默认读本地 daemon endpoint。
+- `oah web` 可以打开本地 WebUI。
+- WebUI 默认读本地 daemon endpoint。
 - 仍支持手动配置远端 OAH endpoint。
 - 连接远端 OAH 时不显示 local daemon control。
 
@@ -436,21 +437,22 @@ Completion target:
 
 - 个人用户主要记住两个命令：`oah daemon start` 与 `oah tui --workspace .`。
 
-### Phase 7: Desktop Packaging
+### Phase 7: Desktop App
 
 Status: planned
 
-Objective: Electron 桌面端作为 OAP client + daemon supervisor，而不是另一套 runtime。
+Objective: Electron 桌面端作为通用 OAH-compatible client。它既能连接远端 OAH enterprise server，也能连接 OAP local daemon；连接 OAP 时，可以额外承担 local daemon supervisor 职责。
 
 Desktop responsibilities:
 
-- 检查 / 初始化 `OAH_HOME`。
-- 启停 local daemon。
-- 管理本地 endpoint 和 token。
+- 配置和切换 OAH-compatible API endpoint。
+- 读取 server profile，并展示当前连接的是 OAH enterprise server 还是 OAP local daemon。
+- 管理 endpoint token。
 - 提供模型、tools、skills、workspace 和 session 的 GUI。
-- 内嵌或打开 Web Debug UI。
-- 也可以作为普通 OAH-compatible client 连接远端 OAH enterprise server。
-- 根据 server profile 判断是否显示 daemon supervisor 功能。
+- 内嵌或打开 WebUI。
+- 连接 OAP local daemon 时，检查 / 初始化 `OAH_HOME`。
+- 连接 OAP local daemon 时，启停 local daemon、查看日志、管理本地 endpoint 和 token。
+- 根据 server profile 判断是否显示 local daemon supervisor 功能。
 
 Non-goals:
 
@@ -461,7 +463,7 @@ Non-goals:
 
 Completion target:
 
-- 桌面端、TUI、CLI、Web Debug UI 共享同一套 local daemon。
+- Desktop、TUI、WebUI 连接同一套 OAH-compatible API；连接 OAP 时共享同一个 local daemon。
 
 ### Phase 8: Migration And Deprecation
 
@@ -494,7 +496,7 @@ Completion target:
 7. README 中将 single workspace mode 标记为 legacy
 8. `oah models` / `oah runtimes` / `oah tools` / `oah skills`
 9. `oah web`
-10. Electron desktop supervisor
+10. Electron desktop client and local daemon supervisor
 11. single workspace migration / deprecation
 
 ## 9. Acceptance Scenarios

@@ -1,25 +1,25 @@
-# Debug CLI And TUI
+# TUI Client
 
 ## Positioning
 
 OpenAgentHarness is still a headless runtime and does not ship a formal product UI.
 
-For development, local debugging, and operations work, the repository includes a lightweight terminal debug surface:
+The repository includes a lightweight `oah` terminal client. CLI commands and `tui` are two modes of the same entry point:
 
-- `oah` CLI
-- `oah tui`
+- CLI commands: scriptable, one-shot query commands.
+- TUI mode: real-time observation and interactive operation.
 
 It is meant to be:
 
-- a debug entry point
+- a TUI client
 - a local development tool
-- an operations troubleshooting tool
+- an operations and observation tool
 
 It is not:
 
 - a polished terminal product
 - an end-user chat client
-- an admin console
+- a management UI
 
 ## Current Entry Point
 
@@ -39,7 +39,7 @@ oah
   catalog:show --workspace <id>
 ```
 
-Use `workspace:list` / `workspaces` to list visible workspaces, `catalog:show` to inspect a workspace catalog as JSON, and `tui` to enter the interactive debug interface.
+Use `workspace:list` / `workspaces` to list visible workspaces, `catalog:show` to inspect a workspace catalog as JSON, and `tui` to enter the interactive terminal interface.
 
 ## Why TUI
 
@@ -48,24 +48,24 @@ Compared with a product web UI, a TUI fits the current system especially well:
 - it matches the headless-runtime positioning
 - it works naturally from a repository, server shell, or local terminal
 - it can reuse the existing HTTP and SSE APIs
-- it is convenient for debugging actions, model runtime behavior, hooks, runs, and streaming output
+- it is convenient for working with actions, model runtime behavior, hooks, runs, and streaming output
 
 ## Shape
 
-The CLI and TUI share one binary entry point:
+The terminal client has one binary entry point:
 
 - `oah`
 
-The layers are:
+The modes are:
 
-- CLI
-  - scriptable, one-shot inspection commands
-- TUI
-  - real-time observation and interactive troubleshooting
+- CLI commands
+  - scriptable, one-shot query commands
+- TUI mode
+  - real-time observation and interactive operation
 
 ## Relationship To The System
 
-CLI/TUI consumes existing capabilities and does not introduce a parallel runtime.
+The `oah` terminal client consumes existing capabilities and does not introduce a parallel runtime.
 
 It mainly depends on:
 
@@ -82,7 +82,7 @@ Principles:
 
 ## Boundaries
 
-CLI/TUI does not own:
+The `oah` terminal client does not own:
 
 - user management
 - multi-tenant administration
@@ -91,10 +91,10 @@ CLI/TUI does not own:
 
 It only owns:
 
-- debugging
+- usage
 - verification
 - observation
-- troubleshooting
+- operations
 
 ## Roadmap
 

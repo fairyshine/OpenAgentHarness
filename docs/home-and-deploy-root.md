@@ -17,21 +17,21 @@ OAH 需要同时支持三种使用方式：
 本地个人版不应成为一套独立协议。它应被定义为 `OAP`（Open Agent Harness Personal）：一个 OAH-compatible 的个人部署 profile。
 
 ```text
-oah web/debug UI  ┐
-oah cli           ├── OAH API ── OAH enterprise server
-oah tui           │
-OAP desktop       ┘          └── OAP local daemon
+WebUI     ┐
+TUI       ├── OAH API ── OAH enterprise server
+Desktop   ┘          └── OAP local daemon
 ```
 
 这意味着：
 
 - `OAH enterprise server` 和 `OAP local daemon` 都暴露同一套 API / SSE。
-- Web 调试端、CLI、TUI、Electron 桌面端都只是 client，可以连接本地 daemon，也可以连接远端企业服务。
+- WebUI、TUI、Desktop 都只是 client，可以连接本地 daemon，也可以连接远端企业服务。
+- Desktop 不是 OAP 专属；连接 OAP local daemon 时才显示本地 daemon supervisor、local logs、本地模型/工具/技能管理等增强能力。
 - `OAP` 默认使用 `OAH_HOME`、SQLite、本地磁盘、embedded worker 和 `config/daemon.yaml`。
 - `OAH` 企业部署默认使用 `OAH_DEPLOY_ROOT`、PostgreSQL、Redis、对象存储、controller、standalone worker 和 Compose / K8S profile。
 - 从 OAP 迁移到 OAH 的主要动作应是迁移 assets、workspace/session 数据和配置 profile，而不是改客户端或协议。
 
-客户端连接后应通过 `GET /api/v1/system/profile` 判断当前服务形态。OAP local daemon 应返回 `edition=personal`、`runtimeMode=daemon`，并声明 `localDaemonControl`、`localWorkspacePaths` 等本地能力；OAH enterprise server 应返回 `edition=enterprise`，并关闭这些 OAP-only capabilities。
+客户端连接后应通过 `GET /api/v1/system/profile` 判断当前服务形态。OAP local daemon 应返回 `edition=personal`、`runtimeMode=daemon`，并声明 `localDaemonControl`、`localWorkspacePaths` 等本地能力；OAH enterprise server 应返回 `edition=enterprise`，并关闭这些个人本地专属 capabilities。
 
 ## 目录语义
 

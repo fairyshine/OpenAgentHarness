@@ -2,7 +2,55 @@
 
 ## 1. What This Is
 
-Open Agent Harness is a headless agent runtime. It has no product UI -- it exposes capabilities through OpenAPI + SSE for web apps, desktop clients, CLIs, TUIs, and automation systems. The shipped web console and `oah tui` are debug surfaces for observing runtime, session, run, and storage state.
+Open Agent Harness is a headless agent runtime. It exposes capabilities through OpenAPI + SSE and keeps the official client surfaces focused on WebUI, TUI, and Desktop. WebUI and TUI in this repository both connect to the same API to operate and observe workspace, session, run, and storage state; Desktop should follow the same API / profile contract.
+
+The product hierarchy is infrastructure-style:
+
+| Abbrev | Name | Role |
+| --- | --- | --- |
+| `OAR` | Open Agent Runtime | Developer-facing runtime package layer: publishable, reusable runtime bundles for initializing workspaces. |
+| `OAS` | Open Agent Spec | User-facing spec layer: user-added configuration and imported resources layered on top of an OAR/runtime baseline, such as `AGENTS.md`, `MEMORY.md`, imported `tool` / `skill` / `model` entries. |
+| `OAH` | Open Agent Harness | Enterprise/platform deployment for Compose, Kubernetes, PostgreSQL, Redis, object storage, sandbox fleets, and multiple workers. |
+| `OAP` | Open Agent Harness Personal | Personal deployment for a local daemon, SQLite, local disk, embedded worker, and single-user workflows. |
+
+Both `OAH` and `OAP` should expose the same OAH-compatible API. WebUI, TUI, and Desktop are clients; they are not bound to one deployment shape. Desktop is not OAP-specific. It only enables local daemon supervisor behavior when connected to OAP:
+
+```text
+WebUI     ┐
+TUI       ├── OAH API ── OAH enterprise server
+Desktop   ┘          └── OAP local daemon
+```
+
+OAR and OAS have a baseline-plus-overlay relationship, not two unrelated input streams. OAR provides the publishable runtime baseline. OAS is what a user adds or overrides at the workspace level. The service layer loads the result as an effective workspace:
+
+```mermaid
+flowchart LR
+    Web["WebUI"]
+    Terminal["TUI"]
+    Desktop["Desktop"]
+    Api["OAH API\nREST + SSE"]
+    Enterprise["OAH enterprise server"]
+    Personal["OAP local daemon"]
+    Runtime["OAR\nruntime baseline\ndeveloper-published"]
+    Spec["OAS\nuser overlay\nuser-authored/imported"]
+    Workspace["Effective workspace\nOAR baseline + OAS overlay"]
+    Engine["Agent Engine\nsession / run / tool loop"]
+
+    Web --> Api
+    Terminal --> Api
+    Desktop --> Api
+    Api --> Enterprise
+    Api --> Personal
+    Enterprise --> Engine
+    Personal --> Engine
+    Runtime -->|"initializes workspace"| Workspace
+    Spec -->|"extends / overrides"| Workspace
+    Workspace -->|"loaded by"| Engine
+```
+
+The key difference between the personal and enterprise editions should live in the deployment profile, storage backend, worker / sandbox shape, and default directories, not in the protocol or client contract.
+
+After connecting to any OAH-compatible API, clients should first read a server profile such as `GET /api/v1/system/profile`. The server must report whether it is `edition=enterprise` or `edition=personal`, along with capabilities such as local daemon control, local workspace paths, and model management. WebUI, TUI, and Desktop should enable behavior from profile / capabilities, not from URL, port, or localhost guesses.
 
 Two types of users:
 
@@ -33,7 +81,7 @@ Two workspace kinds:
 
 - `Agent Engine`: the execution, scheduling, recovery, audit, and API exposure system
 - `Agent Runtime`: the primary runnable unit, formerly called `blueprint`
-- `Agent Spec`: the user-authored extension layer, mainly `AGENTS.md`, `MEMORY.md`, and extra loaded `model` / `tool` / `skill`
+- `Agent Spec`: the user-authored extension layer on top of a runtime / workspace baseline, mainly `AGENTS.md`, `MEMORY.md`, and extra loaded `model` / `tool` / `skill`
 - mnemonic: `Engine` is how it runs, `Runtime` is what runs, `Spec` is what the user adds
 
 ### API Server
@@ -103,7 +151,7 @@ In other words:
 
 ```mermaid
 flowchart TD
-    A[Clients\nWeb / Desktop / CLI / TUI / API Consumers] --> B[Identity / Access Service]
+    A[Clients\nWebUI / TUI / Desktop] --> B[Identity / Access Service]
     B --> C[API Server]
     C --> D[Controller]
     C --> E[Worker Routing / Owner Proxy]

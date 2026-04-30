@@ -14,7 +14,7 @@ Define agent runtimes in Markdown, switch by scenario, run many workspaces in pa
 
 Open Agent Harness is a deployable Agent Engine. It runs Agent Runtime units and extends them with Agent Spec. It manages workspace lifecycles, agent execution loops, tool invocations, and state persistence without shipping a product UI.
 
-The shipped web console and terminal TUI are debug surfaces rather than product UI. Use the web console for browser-based trace and storage inspection, or the TUI when you are already working in a shell and want to select a workspace, enter a session, and watch streaming output.
+Client surfaces are converging on WebUI, TUI, and Desktop. This repository currently ships WebUI and TUI: use WebUI for browser-based sessions, runtime state, trace, and storage inspection, or the TUI when you are already working in a shell and want to select a workspace, enter a session, and watch streaming output. Desktop should connect to the same OAH-compatible API.
 
 ## Core Capabilities
 
@@ -23,7 +23,7 @@ The shipped web console and terminal TUI are debug surfaces rather than product 
 - **Composable capabilities** — agent / skill / action / tool / hook / context are configured independently per workspace.
 - **One workspace model** — the same directory structure supports conversation, tools, and execution.
 - **REST + SSE API** — Everything exposed under `/api/v1`. Frontend-agnostic.
-- **Debug TUI** — Workspace and session debugging in the terminal over the same API / SSE surfaces.
+- **TUI** — Workspace and session operation in the terminal over the same API / SSE surfaces.
 - **Flexible deployment** — Use `oah-api` with an embedded worker for the smallest deployment, or split into `oah-api + oah-controller + oah-sandbox`.
 
 ## Quick Start
@@ -34,13 +34,13 @@ mkdir -p /absolute/path/to/oah-deploy-root
 cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
 export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
 pnpm local:up                                       # Start PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox, then auto-sync once
-pnpm dev:web                                        # Start debug console
+pnpm dev:web                                        # Start WebUI
 pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui # Start terminal TUI
 ```
 
 After startup:
 
-- :material-monitor-dashboard: **Debug Console** — [http://localhost:5174](http://localhost:5174)
+- :material-monitor-dashboard: **WebUI** — [http://localhost:5174](http://localhost:5174)
 - :material-console: **Terminal TUI** — `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui`
 - :material-api: **oah-api** — [http://localhost:8787](http://localhost:8787)
 
@@ -90,12 +90,12 @@ After startup:
 
     [:octicons-arrow-right-24: Deploy](./deploy.md)
 
--   :material-console:{ .lg .middle } **Debug CLI / TUI**
+-   :material-console:{ .lg .middle } **TUI**
 
     ---
 
-    Debug workspaces, sessions, catalogs, and streaming output from the terminal
+    Operate workspaces, sessions, catalogs, and streaming output from the terminal
 
-    [:octicons-arrow-right-24: View](./debug-cli-tui.md)
+    [:octicons-arrow-right-24: View](./tui.md)
 
 </div>

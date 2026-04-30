@@ -25,7 +25,7 @@
 - 内部脚本模型运行时位于 `/internal/v1/models/*`
 - 当前 `createApp()` 已支持宿主注入 caller context resolver
 - 若宿主显式提供 resolver，则由宿主负责提供 caller context
-- 若未提供 resolver，独立 server 会为本地调试流量注入最小 caller context
+- 若未提供 resolver，独立 server 会为本地开发流量注入最小 caller context
 - 生产接入应由上游网关或外部服务完成认证鉴权，再向运行时透传 caller context
 - `workspaceAccess = []` 等授权决策不在 OAH 内部实现
 - `/internal/v1/models/*` 是本地通道接口，不面向外部客户端，也不要求 `Authorization` 请求头

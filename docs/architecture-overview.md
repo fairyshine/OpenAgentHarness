@@ -2,29 +2,55 @@
 
 ## 1. 定位
 
-Open Agent Harness 是一个 headless Agent Engine。不提供正式产品 UI，通过 OpenAPI + SSE 暴露能力，供 Web、桌面、CLI、TUI 或自动化系统接入。仓库里的 Web 控制台和 `oah tui` 都是调试界面，用来观察 runtime、session、run 和存储状态。
+Open Agent Harness 是一个 headless Agent Engine。不绑定某一种产品 UI，通过 OpenAPI + SSE 暴露能力，官方客户端形态收敛为 WebUI、TUI 和 Desktop。仓库里的 WebUI 和 TUI 都连接同一套 API，用来操作和观察 workspace、session、run 和存储状态；Desktop 也应遵循同一套 API / profile 约定。
 
 OAH 的产品层级可以按基础设施体系理解：
 
 | 缩写 | 名称 | 定位 |
 | --- | --- | --- |
-| `OAS` | Open Agent Spec | 面向实际用户的 Spec 层。特指用户叠加到 runtime 上的配置与导入资源，例如 `AGENTS.md`、`MEMORY.md`、用户导入的 `tool` / `skill` / `model`。 |
 | `OAR` | Open Agent Runtime | 面向开发者的运行时包层。定义一个可发布、可复用、可初始化 workspace 的 runtime 组织方式。 |
+| `OAS` | Open Agent Spec | 面向实际用户的 Spec 层。特指用户基于 OAR / runtime 叠加的配置与导入资源，例如 `AGENTS.md`、`MEMORY.md`、用户导入的 `tool` / `skill` / `model`。 |
 | `OAH` | Open Agent Harness | 企业/平台部署。面向 Compose、Kubernetes、PostgreSQL、Redis、对象存储、sandbox fleet 和多 worker。 |
 | `OAP` | Open Agent Harness Personal | 个人部署。面向本地 daemon、SQLite、本地磁盘、embedded worker 和单用户工作流。 |
 
-`OAH` 与 `OAP` 都应暴露同一套 OAH-compatible API；Web 调试端、CLI、TUI、Electron 桌面端都只是 client，不绑定某一种部署形态：
+`OAH` 与 `OAP` 都应暴露同一套 OAH-compatible API；WebUI、TUI、Desktop 都只是 client，不绑定某一种部署形态。Desktop 不是 OAP 专属，它连接 OAP 时才启用本地 daemon supervisor 能力：
 
 ```text
-oah web/debug UI  ┐
-oah cli           ├── OAH API ── OAH enterprise server
-oah tui           │
-OAP desktop       ┘          └── OAP local daemon
+WebUI     ┐
+TUI       ├── OAH API ── OAH enterprise server
+Desktop   ┘          └── OAP local daemon
+```
+
+OAR 与 OAS 的关系是“基线 + 叠加”，不是两套互不相干的输入。OAR 提供可发布的 runtime baseline，OAS 是用户在该 baseline 之上加入或覆盖的 workspace 级配置，最终由服务层加载成 effective workspace：
+
+```mermaid
+flowchart LR
+    Web["WebUI"]
+    Terminal["TUI"]
+    Desktop["Desktop"]
+    Api["OAH API\nREST + SSE"]
+    Enterprise["OAH enterprise server"]
+    Personal["OAP local daemon"]
+    Runtime["OAR\nruntime baseline\n开发者发布"]
+    Spec["OAS\nuser overlay\n用户导入/编写"]
+    Workspace["Effective workspace\nOAR baseline + OAS overlay"]
+    Engine["Agent Engine\nsession / run / tool loop"]
+
+    Web --> Api
+    Terminal --> Api
+    Desktop --> Api
+    Api --> Enterprise
+    Api --> Personal
+    Enterprise --> Engine
+    Personal --> Engine
+    Runtime -->|"初始化 workspace"| Workspace
+    Spec -->|"叠加 / 覆盖"| Workspace
+    Workspace -->|"加载执行"| Engine
 ```
 
 因此，本地个人版和企业版的关键差异应落在部署 profile、存储后端、worker / sandbox 形态和默认目录，而不是协议或客户端能力上。
 
-客户端连接任意 OAH-compatible API 后，应先读取 server profile，例如 `GET /api/v1/system/profile`。服务端需要明确自报 `edition=enterprise` 还是 `edition=personal`，以及是否支持 local daemon control、local workspace paths、model management 等 capabilities。Web、TUI、Desktop 只能基于 profile / capabilities 开关行为，不能靠 URL、端口或是否 localhost 猜测当前是 OAH 还是 OAP。
+客户端连接任意 OAH-compatible API 后，应先读取 server profile，例如 `GET /api/v1/system/profile`。服务端需要明确自报 `edition=enterprise` 还是 `edition=personal`，以及是否支持 local daemon control、local workspace paths、model management 等 capabilities。WebUI、TUI、Desktop 只能基于 profile / capabilities 开关行为，不能靠 URL、端口或是否 localhost 猜测当前是 OAH 还是 OAP。
 
 两类使用者：
 
@@ -55,7 +81,7 @@ OAP desktop       ┘          └── OAP local daemon
 
 - `Agent Engine`：执行、调度、恢复、审计与 API 暴露系统
 - `Agent Runtime`：实际被运行的主对象，旧称 `blueprint`
-- `Agent Spec`：用户额外叠加的扩展层，主要包括 `AGENTS.md`、`MEMORY.md` 与额外加载的 `model` / `tool` / `skill`
+- `Agent Spec`：基于某个 runtime / workspace baseline 额外叠加的用户扩展层，主要包括 `AGENTS.md`、`MEMORY.md` 与额外加载的 `model` / `tool` / `skill`
 - 记忆方式：`Engine` 关注 how it runs，`Runtime` 关注 what runs，`Spec` 关注 what the user adds
 
 ### API Server
@@ -127,7 +153,7 @@ OAP desktop       ┘          └── OAP local daemon
 
 ```mermaid
 flowchart TD
-    A[Clients\nWeb / Desktop / CLI / TUI / API Consumers] --> B[Identity / Access Service]
+    A[Clients\nWebUI / TUI / Desktop] --> B[Identity / Access Service]
     B --> C[API Server]
     C --> D[Controller]
     C --> E[Worker Routing / Owner Proxy]

@@ -24,14 +24,14 @@ cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
 export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
 pnpm local:up
 
-# Terminal 3 — Frontend
+# Terminal 3 — WebUI
 pnpm dev:web
 
 # Optional — terminal TUI
 pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
 ```
 
-Frontend default address: `http://localhost:5174`
+WebUI default address: `http://localhost:5174`
 
 The TUI connects to the same local API: `http://127.0.0.1:8787`
 
@@ -60,7 +60,7 @@ pnpm exec tsx --tsconfig ./apps/controller/tsconfig.json ./apps/controller/src/i
 # Terminal 4 — Standalone worker (typically hosted inside `oah-sandbox`, can run multiple instances)
 pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml
 
-# Terminal 5 — Frontend
+# Terminal 5 — WebUI
 pnpm dev:web
 
 # Optional — terminal TUI
@@ -69,7 +69,7 @@ pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
 
 `oah-api` handles HTTP ingress and owner routing. `oah-controller` handles the control plane. Standalone workers typically run inside `oah-sandbox` or E2B sandboxes, consume the Redis queue, and execute runs.
 
-For debugging, both the web console and the TUI access system capabilities through `oah-api`; the TUI is especially convenient from a server or local shell when switching workspaces/sessions and watching streaming output.
+Both the WebUI and the TUI access system capabilities through `oah-api`; the TUI is especially convenient from a server or local shell when switching workspaces/sessions and watching streaming output.
 
 ### Kubernetes Split Deployment
 

@@ -69,7 +69,7 @@ plugins:
             快速开始: Quick Start
             部署与运行: Deploy and Run
             服务端配置: Server Config
-            调试 CLI / TUI: Debug CLI / TUI
+            TUI: TUI
             设计总览: Overview
             术语约定: Terminology
             概念关系: Concept Relationships
@@ -126,7 +126,7 @@ nav:
   - 快速开始: getting-started.md
   - 部署与运行: deploy.md
   - 服务端配置: server-config.md
-  - 调试 CLI / TUI: debug-cli-tui.md
+  - TUI: tui.md
   - 设计总览: design-overview.md
   - 术语约定: terminology.md
   - 概念关系: concept-relationships.md

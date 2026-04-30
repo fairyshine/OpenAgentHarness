@@ -8,7 +8,7 @@
 
 - 服务形态：TypeScript + Node.js 的 headless Agent Engine
 - 接口形态：REST + SSE
-- 调试入口：Web 控制台与终端 TUI 只消费现有 API / SSE，用于开发、联调和排障
+- 客户端入口：WebUI、TUI、Desktop 都只消费现有 API / SSE，并通过 server profile 适配 OAH / OAP
 - 部署假设：可信内网 / 自有环境
 - 身份边界：用户、组织、鉴权由外部服务管理，Engine 只消费 caller context
 - 执行边界：workspace 是能力发现边界，session 是上下文边界，run 是执行边界
@@ -27,7 +27,7 @@
 - [server-config.md](./server-config.md) — 服务端配置文件与运行模式
 - [deploy.md](./deploy.md) — 本地启动、联调、embedded worker 与拆分部署方式
 - [home-and-deploy-root.md](./home-and-deploy-root.md) — `OAH_HOME`、`OAH_DEPLOY_ROOT`、local daemon 与部署 profile 的目录契约
-- [debug-cli-tui.md](./debug-cli-tui.md) — 调试 CLI / TUI 的定位、入口和边界
+- [tui.md](./tui.md) — TUI 的定位、入口和边界；`oah` 命令与 TUI 是同一终端入口的两种模式
 - [k8s-compose-reuse-matrix.md](./k8s-compose-reuse-matrix.md) — Compose 优化到 K8S 的复用对照
 - [k8s-rollout-checklist.md](./k8s-rollout-checklist.md) — K8S staging / production 上线检查清单
 - [k8s-operations-runbook.md](./k8s-operations-runbook.md) — K8S 常见异常的排障与恢复手册
@@ -42,7 +42,7 @@
 - 想先把系统跑起来：看 [deploy.md](./deploy.md)
 - 想统一本地 daemon、Compose 和 K8S 的目录结构：看 [home-and-deploy-root.md](./home-and-deploy-root.md)
 - 想理解 OAH / OAP / OAR / OAS 的产品与配置层级：看 [architecture-overview.md](./architecture-overview.md) 和 [terminology.md](./terminology.md)
-- 想在终端里调试 workspace/session：看 [debug-cli-tui.md](./debug-cli-tui.md)
+- 想在终端里使用 workspace/session：看 [tui.md](./tui.md)
 - 想确认 Compose 优化是否继承到 K8S：看 [k8s-compose-reuse-matrix.md](./k8s-compose-reuse-matrix.md)
 - 想做 K8S 上线检查：看 [k8s-rollout-checklist.md](./k8s-rollout-checklist.md)
 - 想做 K8S 故障排查：看 [k8s-operations-runbook.md](./k8s-operations-runbook.md)

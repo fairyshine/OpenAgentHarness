@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `Agent Engine` | 执行系统 | 负责加载、调度、执行、恢复、审计，以及对外提供 API / SSE。 |
 | `Agent Runtime` | 主运行对象 | 负责承载一套可运行的 agent / action / hook 等定义。旧称 `blueprint`。 |
-| `Agent Spec` | 用户扩展层 | 用户额外叠加给 runtime 的说明与资源，主要包括 `AGENTS.md`、`MEMORY.md`，以及额外加载的 `model` / `tool` / `skill`。 |
+| `Agent Spec` | 用户扩展层 | 用户基于 runtime / workspace baseline 额外叠加的说明与资源，主要包括 `AGENTS.md`、`MEMORY.md`，以及额外加载的 `model` / `tool` / `skill`。 |
 
 ## 产品与发行层命名
 
@@ -24,27 +24,27 @@
 
 | 缩写 | 名称 | 边界 |
 | --- | --- | --- |
-| `OAS` | Open Agent Spec | 面向实际用户的 Spec 层。特指用户叠加到 runtime 上的配置与导入资源，例如 `AGENTS.md`、`MEMORY.md`、用户导入的 `tool` / `skill` / `model`。 |
 | `OAR` | Open Agent Runtime | 面向开发者的可发布 runtime 包层。一个 OAR 可以被放入 `runtimes/`，用于初始化 workspace。 |
+| `OAS` | Open Agent Spec | 面向实际用户的 Spec 层。特指用户基于 OAR / runtime 叠加到 workspace 上的配置与导入资源，例如 `AGENTS.md`、`MEMORY.md`、用户导入的 `tool` / `skill` / `model`。 |
 | `OAH` | Open Agent Harness | 企业/平台部署形态。默认面向 Compose / K8S、PostgreSQL、Redis、对象存储、控制面和 sandbox fleet。 |
 | `OAP` | Open Agent Harness Personal | 个人部署形态。默认面向 local daemon、SQLite、本地磁盘、embedded worker 和单用户 workspace。 |
 
 推荐记法：
 
 ```text
-OAS adds what the user brings.
 OAR packages what developers publish.
+OAS extends a runtime-backed workspace with what the user brings.
 OAH deploys it for teams and platforms.
 OAP deploys it for one local user.
 ```
 
-`OAH` 与 `OAP` 都应保持同一套 API / SSE 兼容性。Web 调试端、CLI、TUI 和桌面端连接的是 API endpoint，而不是某个固定部署形态。
+`OAH` 与 `OAP` 都应保持同一套 API / SSE 兼容性。WebUI、TUI 和 Desktop 连接的是 API endpoint，而不是某个固定部署形态。
 
 注意：`OAS` 不是 OpenAPI、REST/SSE contract 或 JSON Schema 的统称；这些属于 API / config schema。`OAS` 对齐的是 `Agent Spec`，也就是用户额外带来的 workspace 级配置与资源。
 
-作者边界上，`OAR` 更多面向开发者：开发者设计、测试和发布 runtime。`OAS` 更多面向实际用户：用户在自己的 workspace 中导入工具、技能、模型入口、项目说明和记忆。
+作者边界上，`OAR` 更多面向开发者：开发者设计、测试和发布 runtime。`OAS` 更多面向实际用户：用户在 OAR 初始化出来的 workspace 或已有 runtime baseline 上导入工具、技能、模型入口、项目说明和记忆。
 
-客户端边界上，Web、TUI、Desktop 应连接 OAH-compatible API，并通过 server profile / capabilities 判断当前是 OAH enterprise server 还是 OAP local daemon。
+客户端边界上，WebUI、TUI、Desktop 应连接 OAH-compatible API，并通过 server profile / capabilities 判断当前是 OAH enterprise server 还是 OAP local daemon。
 
 ## 边界口诀
 

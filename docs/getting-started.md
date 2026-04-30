@@ -30,7 +30,7 @@ pnpm local:up
 
 本地默认使用 `oah-sandbox + OSS/MinIO workspace_backing_store` 承载 active workspace copy。`oah-api` 不挂载持久 workspace volume，避免 API 容器累积已回收 workspace 的本地目录壳。
 
-### 第 3 步：启动调试控制台
+### 第 3 步：启动 WebUI
 
 ```bash
 pnpm dev:web
@@ -38,7 +38,7 @@ pnpm dev:web
 
 打开 [http://localhost:5174](http://localhost:5174)。
 
-如果你希望留在终端内调试，可以改用 TUI：
+如果你希望留在终端内操作，可以改用 TUI：
 
 ```bash
 pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
@@ -53,7 +53,7 @@ TUI 会连接同一个 `oah-api`，用于选择 workspace、进入 session、发
 1. `oah-api`、`oah-controller`、`oah-compose-scaler`、`oah-sandbox` 都启动成功
 2. 浏览器能打开 `http://localhost:5174`
 3. 或者 TUI 能连接 `http://127.0.0.1:8787` 并列出 workspace
-4. 在控制台或 TUI 里发送消息，Run 从 `queued` 进入执行状态
+4. 在 WebUI 或 TUI 里发送消息，Run 从 `queued` 进入执行状态
 5. 如果当前 Run 还在执行，再发一条消息会先通过服务端 `/api/v1/sessions/{sessionId}/queue` 出现在输入框上方的队列里；如果希望立即打断当前 Run，可以点击 `引导`，底层会调用 `/api/v1/runs/{runId}/guide`
 
 !!! tip
@@ -76,7 +76,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 可选参数：`--tool-dir`、`--skill-dir`、`--host`、`--port`
 
 !!! info
-    Single Workspace 模式下，调试控制台会自动进入唯一的 Workspace。
+    Single Workspace 模式下，WebUI 会自动进入唯一的 Workspace。
 
 ## 常用命令
 
@@ -93,8 +93,8 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --api-only --config ./server.example.yaml` | 仅启动 `oah-api` |
 | `pnpm exec tsx --tsconfig ./apps/controller/tsconfig.json ./apps/controller/src/index.ts -- --config ./server.example.yaml` | 单独启动 `oah-controller` |
 | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml` | 单独启动 standalone worker（通常跑在 `oah-sandbox`） |
-| `pnpm dev:web` | 启动调试控制台 |
-| `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui` | 启动终端调试 TUI |
+| `pnpm dev:web` | 启动 WebUI |
+| `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui` | 启动 TUI |
 | `pnpm build` | 全量构建 |
 | `pnpm test` | 运行测试 |
 | `mkdocs serve` | 本地预览文档站 |
@@ -104,7 +104,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 - [架构总览](./architecture-overview.md) — 理解系统整体结构
 - [Workspace 配置](./workspace/README.md) — 配置 Agent、Skill、Tool
 - [部署与运行](./deploy.md) — 本地一体 vs 生产拆分部署
-- [Debug CLI 与 TUI](./debug-cli-tui.md) — 了解终端调试入口
+- [TUI](./tui.md) — 了解终端入口
 - [设计总览](./design-overview.md) — 理解核心设计决策
 
 ## 常见故障
@@ -126,7 +126,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 
 - `OAH_LOCAL_SYNC_ON_CHANGE_ONLY=1`：只读源目录的文件清单、大小或 mtime 没变时跳过 `pnpm storage:sync`，对象存储仍然是运行时读取来源。
 - `OAH_LOCAL_SKIP_READONLY_VOLUME_RECREATE=1`：不重建 rclone 只读卷。仅在 Docker Desktop 和 rclone 插件没有重启、且你不需要修复插件 path drift 时使用。
-- `OAH_LOCAL_SKIP_REDIS_FLUSH=1`：保留 Redis 协调状态。通常调试队列/调度残留时才用；默认会清空以避免旧本地状态影响测试。
+- `OAH_LOCAL_SKIP_REDIS_FLUSH=1`：保留 Redis 协调状态。通常排查队列/调度残留时才用；默认会清空以避免旧本地状态影响测试。
 - `OAH_MINIO_GOMEMLIMIT` / `OAH_MINIO_GOMAXPROCS`：调整本地 MinIO 的 Go 运行时资源默认值。默认分别是 `128MiB` 和 `1`，仍然保留 MinIO + rclone 的对象存储模拟路径。
 - `OAH_API_NODE_OPTIONS` / `OAH_CONTROLLER_NODE_OPTIONS` / `OAH_SANDBOX_NODE_OPTIONS`：覆盖本地 OAH Node 进程的默认 V8 heap 参数。默认值会让空闲堆更早收敛，生产压测或大任务可以按需调高。
 - `OAH_POSTGRES_SHARED_BUFFERS` / `OAH_POSTGRES_MAX_CONNECTIONS` / `OAH_REDIS_HEALTHCHECK_INTERVAL` 等 Compose 环境变量可继续覆盖本地数据库和健康检查默认值。

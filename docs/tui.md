@@ -1,19 +1,19 @@
-# Debug CLI 与 TUI
+# TUI Client
 
 ## 定位
 
 OpenAgentHarness 本身仍然是 headless runtime，不提供正式产品 UI。
 
-但为了调试、开发和排障，仓库提供了一个轻量的终端调试入口：
+仓库提供了一个轻量的 `oah` 终端端。CLI 命令和 `tui` 是同一个入口下的两种模式：
 
-- `oah` CLI
-- `oah tui`
+- CLI 命令：适合脚本化和单次查询。
+- TUI 模式：适合实时观察和交互式操作。
 
 它的定位是：
 
-- 调试入口
+- TUI 客户端
 - 本地开发工具
-- 运维排障工具
+- 运维与观测工具
 
 而不是：
 
@@ -39,16 +39,16 @@ oah
   catalog:show --workspace <id>
 ```
 
-`workspace:list` / `workspaces` 用于列出可见 workspace，`catalog:show` 用于查看指定 workspace 的 catalog JSON，`tui` 则进入交互式调试界面。
+`workspace:list` / `workspaces` 用于列出可见 workspace，`catalog:show` 用于查看指定 workspace 的 catalog JSON，`tui` 则进入交互式终端界面。
 
-## 为什么优先 TUI
+## 为什么需要 TUI
 
 相比 Web UI，TUI 更适合当前系统：
 
 - 贴合 headless runtime 定位
 - 更容易接入本地目录、shell、Unix Socket 和日志流
 - 不需要先处理前端鉴权、静态资源和部署问题
-- 对开发者来说，终端内调试 action、model runtime、hook、run 更顺手
+- 对开发者来说，终端内操作 action、model runtime、hook、run 更顺手
 
 ## 工具形态
 
@@ -56,12 +56,12 @@ oah
 
 - `oah`
 
-分成两层：
+分成两种模式：
 
-- CLI
-  - 适合脚本化和单次调试
-- TUI
-  - 适合实时观察和交互式排障
+- CLI 命令
+  - 适合脚本化和单次查询
+- TUI 模式
+  - 适合实时观察和交互式操作
 
 ## CLI 命令结构
 
@@ -85,13 +85,13 @@ oah
 ### 首批命令与后续补齐
 
 - `oah tui`
-  - 启动调试 TUI
+  - 启动 TUI
 - `oah workspace:list` / `oah workspaces`
   - 列出已发现 workspace
 - `oah catalog:show --workspace <id>`
   - 查看当前 workspace 的 agents / models / actions / skills / tools / hooks
 - `oah session inspect --workspace <id>`
-  - 后续可补成脚本化或非 TUI 的 session 调试入口
+  - 后续可补成脚本化或非 TUI 的 session 操作入口
 - `oah action run --workspace <id> --action <name>`
   - 手动触发 action
 - `oah model generate --model <name>`
@@ -121,7 +121,7 @@ oah
 
 用途：
 
-- 快速切换当前调试对象
+- 快速切换当前工作对象
 
 ### 2. Catalog 面板
 
@@ -150,7 +150,7 @@ oah
 
 说明：
 
-- 对常规 workspace，这里是主要调试界面之一
+- 对常规 workspace，这里是主要交互界面之一
 - 对 `project` workspace，可同时观察普通对话和工具调用结果
 
 ### 4. Run 时间线
@@ -178,7 +178,7 @@ oah
 - 错误码
 - 最近失败原因
 
-## 特别有价值的调试能力
+## 特别有价值的观测能力
 
 后续建议优先补强：
 
@@ -193,7 +193,7 @@ oah
 
 ## 与现有系统的关系
 
-CLI/TUI 只消费已有能力，不新增一套并行运行时。
+`oah` 终端端只消费已有能力，不新增一套并行运行时。
 
 它主要依赖：
 
@@ -205,7 +205,7 @@ CLI/TUI 只消费已有能力，不新增一套并行运行时。
 建议原则：
 
 - 能复用已有 HTTP / SSE 接口，就不要额外造私有协议
-- CLI/TUI 仅在“本机调试能力”场景下使用内部模型运行时
+- `oah` 终端端仅在“本机运行时工具”场景下使用内部模型运行时
 
 ## 与模型运行时的关系
 
@@ -214,11 +214,11 @@ CLI/TUI 只消费已有能力，不新增一套并行运行时。
 - `/internal/v1/models/generate`
 - `/internal/v1/models/stream`
 
-因此 CLI/TUI 也是内部模型运行时的第一个官方客户端。
+因此 `oah` 终端端也是内部模型运行时的第一个官方客户端。
 
 ## 边界
 
-CLI/TUI 不负责：
+`oah` 终端端不负责：
 
 - 用户体系
 - 多租户后台
@@ -227,10 +227,10 @@ CLI/TUI 不负责：
 
 它只负责：
 
-- 调试
+- 使用
 - 验证
 - 观察
-- 排障
+- 运维
 
 ## 实现建议
 
@@ -248,4 +248,4 @@ CLI/TUI 不负责：
 1. 稳定现有 `workspace:list`、`catalog:show` 和 `oah tui`
 2. 补齐非交互式 `session inspect`、`run inspect`、`model generate`
 3. 在 TUI 内增强 run timeline、tool call、prompt compose 与 catalog 检视
-4. 再补 hooks、subagent、action 环境变量摘要等深层排障视图
+4. 再补 hooks、subagent、action 环境变量摘要等深层观测视图

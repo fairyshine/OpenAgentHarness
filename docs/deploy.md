@@ -34,14 +34,14 @@ cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
 export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
 pnpm local:up
 
-# 终端 3 — 前端
+# 终端 3 — WebUI
 pnpm dev:web
 
 # 可选 — 终端 TUI
 pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
 ```
 
-前端默认地址：`http://localhost:5174`
+WebUI 默认地址：`http://localhost:5174`
 
 TUI 连接同一个本地 API：`http://127.0.0.1:8787`
 
@@ -70,7 +70,7 @@ pnpm exec tsx --tsconfig ./apps/controller/tsconfig.json ./apps/controller/src/i
 # 终端 4 — Standalone worker（通常跑在 oah-sandbox，可启动多个实例）
 pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml
 
-# 终端 5 — 前端
+# 终端 5 — WebUI
 pnpm dev:web
 
 # 可选 — 终端 TUI
@@ -79,7 +79,7 @@ pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
 
 `oah-api` 只负责 HTTP 请求与 owner 路由；`oah-controller` 负责控制面；standalone worker 通常运行在 `oah-sandbox` 或 E2B sandbox 内，消费 Redis 队列并执行 Run。
 
-调试时 Web 控制台和 TUI 都只通过 `oah-api` 访问系统能力；TUI 更适合在服务器或本地 shell 内快速切换 workspace/session、查看流式输出。
+WebUI 和 TUI 都只通过 `oah-api` 访问系统能力；TUI 更适合在服务器或本地 shell 内快速切换 workspace/session、查看流式输出。
 
 ### Kubernetes Split 部署
 

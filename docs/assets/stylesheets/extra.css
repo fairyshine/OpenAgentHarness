@@ -1,6 +1,6 @@
 /* ============================================================
    Open Agent Harness — MkDocs Theme
-   Matched to web console: warm beige, glass, soft shadows
+   Matched to WebUI: warm beige, glass, soft shadows
    ============================================================ */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -76,7 +76,7 @@
    Web app topbar: rgba(239,239,234,0.97) bg, dark text, inner top highlight, soft drop shadow.
    Material uses --md-primary-fg-color as header bg and --md-primary-bg-color as header text,
    so the palette above gives us warm bg + dark text automatically.
-   We add the glass shadow from the web console below. */
+   We add the glass shadow from the WebUI below. */
 
 .md-header {
   box-shadow:

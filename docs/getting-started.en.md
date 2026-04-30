@@ -30,7 +30,7 @@ This single command starts the full local stack: `PostgreSQL`, `Redis`, `MinIO`,
 
 The local default uses `oah-sandbox + OSS/MinIO workspace_backing_store` for active workspace copies. `oah-api` does not mount a persistent workspace volume, so recycled workspaces do not accumulate as local directory shells in the API container.
 
-### Step 3: Start the debug console
+### Step 3: Start the WebUI
 
 ```bash
 pnpm dev:web
@@ -53,7 +53,7 @@ After startup, check:
 1. `oah-api`, `oah-controller`, `oah-compose-scaler`, and `oah-sandbox` all start successfully
 2. Browser opens `http://localhost:5174`
 3. Or the TUI can connect to `http://127.0.0.1:8787` and list workspaces
-4. Send a message in the console or TUI. The run should move from `queued` to executing.
+4. Send a message in the WebUI or TUI. The run should move from `queued` to executing.
 5. While a run is still active, sending another message should place it into the server-side queue surfaced above the input box through `/api/v1/sessions/{sessionId}/queue`. Use the `Guide` button to call `/api/v1/runs/{runId}/guide` if you want to interrupt the active run immediately.
 
 !!! tip
@@ -76,7 +76,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 Optional flags: `--tool-dir`, `--skill-dir`, `--host`, `--port`
 
 !!! info
-    In single workspace mode, the debug console enters the workspace automatically.
+    In single workspace mode, the WebUI enters the workspace automatically.
 
 ## Common Commands
 
@@ -93,8 +93,8 @@ Optional flags: `--tool-dir`, `--skill-dir`, `--host`, `--port`
 | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- --api-only --config ./server.example.yaml` | Start `oah-api` only |
 | `pnpm exec tsx --tsconfig ./apps/controller/tsconfig.json ./apps/controller/src/index.ts -- --config ./server.example.yaml` | Start `oah-controller` only |
 | `pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/worker.ts -- --config ./server.example.yaml` | Start a standalone worker (typically inside `oah-sandbox`) |
-| `pnpm dev:web` | Start debug console |
-| `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui` | Start the terminal debug TUI |
+| `pnpm dev:web` | Start WebUI |
+| `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui` | Start TUI |
 | `pnpm build` | Full build |
 | `pnpm test` | Run tests |
 | `mkdocs serve` | Preview docs locally |
@@ -104,7 +104,7 @@ Optional flags: `--tool-dir`, `--skill-dir`, `--host`, `--port`
 - [Architecture Overview](./architecture-overview.md) — Understand the system structure
 - [Workspace Guide](./workspace/README.md) — Configure agents, skills, and tools
 - [Deploy and Run](./deploy.md) — Unified local vs split production deployment
-- [Debug CLI and TUI](./debug-cli-tui.md) — Use the terminal debug surface
+- [TUI](./tui.md) — Use the terminal client
 - [Design Overview](./design-overview.md) — Core design decisions
 
 ## Local Object Storage Startup Tuning

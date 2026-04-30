@@ -28,7 +28,7 @@
 ### 2.1 包含
 
 - TypeScript + Node.js 服务端骨架
-- 调试用 `oah` CLI 基础骨架
+- `oah` 终端客户端基础骨架
 - OpenAPI 3.1
 - PostgreSQL + Redis 基础设施
 - workspace / session / message / run 领域模型
@@ -129,9 +129,9 @@
 - 事件协议
 - 增量输出
 
-### Phase 7: 调试 CLI / TUI
+### Phase 7: TUI 与终端客户端
 
-- 已有初版 `oah tui` 作为终端调试入口
+- 已有初版 `oah tui` 作为终端客户端入口
 - 已有初版 `oah workspace:list` / `oah workspaces`
 - 已有初版 `oah catalog:show`
 - 实现统一的 `oah session inspect`
@@ -186,7 +186,7 @@ packages/
 
 ### 6.2 Hook 失控
 
-Hook 如果能力边界过大，会让调试和安全控制都变差。建议当前阶段严格 capability 化。
+Hook 如果能力边界过大，会让排障和安全控制都变差。建议当前阶段严格 capability 化。
 
 ### 6.3 本地执行风险
 

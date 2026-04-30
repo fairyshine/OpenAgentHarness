@@ -39,8 +39,8 @@ The repository is no longer just an architecture sketch. Today it already includ
 
 - A working HTTP API for workspaces, sessions, runs, actions, sandboxes, models, storage inspection, and SSE streaming
 - A multi-process topology with `oah-api`, `oah-controller`, and sandbox-hosted standalone workers
-- A debug web console for conversation flow, trace inspection, and storage troubleshooting
-- A terminal TUI for workspace selection, session chat, streaming output, and local runtime debugging
+- A WebUI for sessions, runtime state, storage inspection, and system visibility
+- A TUI for workspace selection, session chat, streaming output, and terminal workflows
 - Workspace auto-discovery for agents, models, skills, tools, actions, hooks, prompts, and project instructions
 - A deploy-root template with starter runtimes and object-storage sync flow
 - Local Docker Compose startup and a Kubernetes/Helm split-deployment skeleton
@@ -61,42 +61,43 @@ OAH is a good fit when you need one reusable agent backend that can power differ
 
 OAH is designed as an infrastructure-style stack with four layers:
 
-| Layer | Name | Role |
-| --- | --- | --- |
-| `OAS` | Open Agent Spec | The actual-user layer: user-imported tools, skills, model entries, `AGENTS.md`, `MEMORY.md`, and other workspace-level additions. |
-| `OAR` | Open Agent Runtime | The developer-facing runtime package layer: reusable runtime bundles that platform/runtime developers build and publish to initialize workspaces. |
-| `OAH` | Open Agent Harness | The enterprise/platform deployment: Compose or Kubernetes, PostgreSQL, Redis, object storage, controller, sandbox fleet, and multiple workers. |
-| `OAP` | Open Agent Harness Personal | The personal deployment: local daemon, SQLite, local disk, embedded worker, and single-user workflows. |
+| Layer | Audience | Name | Role |
+| --- | --- | --- | --- |
+| `OAR` | Developer layer | Open Agent Runtime | Reusable runtime bundles that platform/runtime developers build and publish to initialize workspaces. |
+| `OAS` | User layer | Open Agent Spec | User-imported tools, skills, model entries, `AGENTS.md`, `MEMORY.md`, and other workspace-level additions layered on top of an OAR/runtime baseline. |
+| `OAH` | Service layer | Open Agent Harness | Enterprise/platform service deployment: Compose or Kubernetes, PostgreSQL, Redis, object storage, controller, sandbox fleet, and multiple workers. |
+| `OAP` | Service layer | Open Agent Harness Personal | Personal service deployment: local daemon, SQLite, local disk, embedded worker, and single-user workflows. |
 
-The debug web UI, CLI, TUI, and future desktop app all connect to the same OAH-compatible API. They should work against either an enterprise server or a local personal daemon.
+WebUI, TUI, and Desktop all connect to the same OAH-compatible API. They should work against either an enterprise server or a local personal daemon. Desktop is not OAP-specific; local daemon supervision is an extra capability only when it connects to OAP.
 
 ```mermaid
 flowchart LR
-    Web["oah web/debug UI"]
-    Cli["oah cli"]
-    Tui["oah tui"]
-    Desktop["OAP desktop"]
+    Web["WebUI"]
+    Terminal["TUI\noah terminal client"]
+    Desktop["Desktop app"]
     Api["OAH API\nREST + SSE"]
     Enterprise["OAH enterprise server\nCompose / Kubernetes\nPostgreSQL + Redis + object storage"]
     Personal["OAP local daemon\nSQLite + local disk\nembedded worker"]
     Runtime["OAR runtime packages\ndeveloper-facing"]
     Spec["OAS user specs\nactual-user-facing\nAGENTS.md + MEMORY.md\ntools + skills + models"]
+    Workspace["Effective workspace\nOAR baseline + OAS overlay"]
+    Engine["Agent Engine\nsessions + runs + tools"]
 
     Web --> Api
-    Cli --> Api
-    Tui --> Api
+    Terminal --> Api
     Desktop --> Api
     Api --> Enterprise
     Api --> Personal
-    Enterprise --> Runtime
-    Enterprise --> Spec
-    Personal --> Runtime
-    Personal --> Spec
+    Enterprise --> Engine
+    Personal --> Engine
+    Runtime -->|"initializes"| Workspace
+    Spec -->|"extends / overrides"| Workspace
+    Workspace -->|"loaded by"| Engine
 ```
 
 That means OAH and OAP differ by deployment profile, storage backend, worker/sandbox shape, and default directories, not by client protocol.
-It also keeps authorship clear: developers publish OAR runtimes; actual users bring OAS specs into their workspace.
-Clients should read a server profile, such as `GET /api/v1/system/profile`, before enabling OAH-only or OAP-only behavior.
+It also keeps authorship clear: developers publish OAR runtimes; actual users bring OAS specs that extend a runtime-backed workspace.
+Clients should read a server profile, such as `GET /api/v1/system/profile`, before enabling enterprise-only or personal/local-only behavior.
 
 ## Core Model
 
@@ -142,21 +143,21 @@ OAH already understands a workspace as a composable capability bundle:
 
 This makes the workspace the real customization boundary instead of global process config.
 
-### Operations and Debugging
+### Clients and Operations
 
-- Debug web console with streaming conversation view
+- WebUI with streaming conversation view
 - Server-side follow-up queue surfaced in the UI, plus explicit `Guide` interruption flow
 - Inspector panels for messages, run steps, system prompt, provider calls, catalog snapshots, and records
 - Storage workbench for PostgreSQL and Redis, including `messages.content` inspection and manual queue/recovery operations
 - Health/readiness endpoints and controller metrics/snapshot surfaces
-- Debug TUI for terminal-first workspace/session inspection and streaming conversations
+- TUI for terminal-first workspace/session inspection and streaming conversations
 
-## Web Console
+## WebUI
 
-The repository ships with a debug web console for development and inspection:
+The repository ships with a WebUI for sessions, runtime state, storage inspection, and system visibility:
 
 <p align="center">
-  <img src="assets/web-console-screenshot.png" width="820" alt="Web Console Screenshot" />
+  <img src="assets/web-console-screenshot.png" width="820" alt="WebUI Screenshot" />
 </p>
 
 It is intentionally built for runtime visibility, not just chatting:
@@ -165,21 +166,25 @@ It is intentionally built for runtime visibility, not just chatting:
 - queued follow-up messages above the composer
 - run-step and tool-call inspection
 - raw message / run / session record views
-- storage debugging for PostgreSQL and Redis
+- storage inspection for PostgreSQL and Redis
 
-## Debug TUI
+## TUI
 
-For terminal-first development, OAH also ships an Ink-based debug TUI:
+For terminal-first work, OAH also ships an Ink-based TUI:
 
 <p align="center">
-  <img src="assets/tui-screenshot.png" width="820" alt="OAH Debug TUI Screenshot" />
+  <img src="assets/tui-screenshot.png" width="820" alt="OAH TUI Screenshot" />
 </p>
 
-The TUI talks to the same API and SSE surfaces as the web console. It is useful when you are already working inside a repository or shell and want to select a workspace, create or resume a session, stream assistant output, and inspect local run state without opening the browser.
+The TUI talks to the same API and SSE surfaces as the WebUI. It is useful when you are already working inside a repository or shell and want to select a workspace, create or resume a session, and stream assistant output without opening the browser.
 
 ```bash
 pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
 ```
+
+## Desktop
+
+Desktop is the planned desktop client shape, not an OAP-only product. It should connect to the same OAH-compatible API as WebUI and TUI, show whether the current endpoint is OAH or OAP from the server profile, and only enable local daemon supervision when the connected server advertises that capability.
 
 ## Architecture At A Glance
 
@@ -206,8 +211,8 @@ apps/
   server/       # API server, worker entry, bootstrap, HTTP routes
   controller/   # control-plane process
   worker/       # worker package wrapper
-  web/          # debug console
-  cli/          # CLI entry
+  web/          # WebUI
+  cli/          # TUI and terminal command entry
 packages/
   engine-core/      # runtime orchestration and native tool layer
   api-contracts/    # zod schemas and shared API types
@@ -311,7 +316,7 @@ This starts:
 
 The startup flow also runs one storage sync automatically. In the local split topology, `oah-api` does not persist active workspace copies; writable workspace state lives in `oah-sandbox` and flushes through the object-storage backing store.
 
-#### 4. Start the web console
+#### 4. Start the WebUI
 
 ```bash
 pnpm dev:web
@@ -323,12 +328,12 @@ Or start the terminal TUI:
 pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
 ```
 
-Default local addresses and debug commands:
+Default local addresses and client commands:
 
 | Service | URL / Command |
 | --- | --- |
-| Web Console | `http://localhost:5173` |
-| Debug TUI | `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui` |
+| WebUI | `http://localhost:5173` |
+| TUI | `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui` |
 | API | `http://127.0.0.1:8787` |
 | Sandbox worker host | `http://127.0.0.1:8788` |
 | Controller metrics | `http://127.0.0.1:8789` |
