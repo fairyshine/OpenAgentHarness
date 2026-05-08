@@ -50,7 +50,6 @@ import {
   serviceScopeMatches,
   toErrorSummary,
   toErrorMessage,
-  compareSavedSessionsByRecency,
   mergeSessionMessages,
   upsertSessionMessage,
   type AppRequestErrorSummary,
@@ -79,134 +78,20 @@ import { useSettingsStore } from "./stores/settings-store";
 import { useStreamStore } from "./stores/stream-store";
 import { useUiStore } from "./stores/ui-store";
 import { buildComposerMessageContent, summarizeComposerMessageContent } from "./chat/composer-content";
+import {
+  ACTIVITY_VISIBLE_EVENTS,
+  RUN_DETAIL_REFRESH_EVENTS,
+  SESSION_RUN_LIST_REFRESH_EVENTS,
+  buildMessagePagePath,
+  mergeMessageCursor,
+  mergeRunStepsForRun,
+  mergeSavedSessionRecords,
+  readQueuedRunsFromEventData,
+  savedSessionFromSession,
+  sortRunSteps
+} from "./app-controller-utils";
 
 const COMPLETED_RUN_RESULT_POLL_LIMIT = 5;
-const MESSAGE_PAGE_SIZE = 120;
-
-function buildMessagePagePath(
-  sessionId: string,
-  options?: {
-    cursor?: string | undefined;
-    direction?: "forward" | "backward" | undefined;
-    pageSize?: number | undefined;
-  }
-) {
-  const query = new URLSearchParams({
-    pageSize: String(options?.pageSize ?? MESSAGE_PAGE_SIZE),
-    direction: options?.direction ?? "backward"
-  });
-  if (options?.cursor) {
-    query.set("cursor", options.cursor);
-  }
-
-  return `/api/v1/sessions/${sessionId}/messages?${query.toString()}`;
-}
-
-function mergeMessageCursor(current: string | null, incoming: string | undefined) {
-  const normalizedCurrent = current?.trim() ? current : null;
-  const normalizedIncoming = incoming?.trim() ? incoming : null;
-
-  if (!normalizedCurrent) {
-    return normalizedIncoming;
-  }
-  if (!normalizedIncoming) {
-    return normalizedCurrent;
-  }
-
-  const currentOffset = Number.parseInt(normalizedCurrent, 10);
-  const incomingOffset = Number.parseInt(normalizedIncoming, 10);
-  if (Number.isFinite(currentOffset) && Number.isFinite(incomingOffset)) {
-    return String(Math.min(currentOffset, incomingOffset));
-  }
-
-  return normalizedCurrent;
-}
-
-function savedSessionFromSession(sessionRecord: Session, existing?: SavedSessionRecord): SavedSessionRecord {
-  return {
-    id: sessionRecord.id,
-    workspaceId: sessionRecord.workspaceId,
-    ...(sessionRecord.parentSessionId ? { parentSessionId: sessionRecord.parentSessionId } : {}),
-    title: sessionRecord.title,
-    modelRef: sessionRecord.modelRef,
-    agentName: sessionRecord.activeAgentName,
-    lastRunAt: sessionRecord.lastRunAt,
-    createdAt: sessionRecord.createdAt,
-    lastOpenedAt: existing?.lastOpenedAt ?? sessionRecord.createdAt
-  };
-}
-
-function readQueuedRunsFromEventData(data: Record<string, unknown>): SessionQueuedRun[] | null {
-  if (!Array.isArray(data.items)) {
-    return null;
-  }
-
-  const items: SessionQueuedRun[] = [];
-  for (const item of data.items) {
-    if (!isRecord(item)) {
-      return null;
-    }
-    if (
-      typeof item.runId !== "string" ||
-      typeof item.messageId !== "string" ||
-      typeof item.content !== "string" ||
-      typeof item.createdAt !== "string" ||
-      typeof item.position !== "number"
-    ) {
-      return null;
-    }
-
-    items.push({
-      runId: item.runId,
-      messageId: item.messageId,
-      content: item.content,
-      createdAt: item.createdAt,
-      position: item.position
-    });
-  }
-
-  return items;
-}
-
-const SESSION_RUN_LIST_REFRESH_EVENTS = new Set<SessionEventContract["event"]>([
-  "run.queued",
-  "run.started",
-  "run.completed",
-  "run.failed",
-  "run.cancelled",
-  "agent.delegate.started",
-  "agent.delegate.completed",
-  "agent.delegate.failed"
-]);
-
-const RUN_DETAIL_REFRESH_EVENTS = new Set<SessionEventContract["event"]>([
-  "run.queued",
-  "run.started",
-  "run.completed",
-  "run.failed",
-  "run.cancelled",
-  "tool.started",
-  "tool.completed",
-  "tool.failed",
-  "agent.switched",
-  "agent.delegate.started",
-  "agent.delegate.completed",
-  "agent.delegate.failed"
-]);
-
-const ACTIVITY_VISIBLE_EVENTS = new Set<SessionEventContract["event"]>([
-  "run.queued",
-  "run.started",
-  "run.completed",
-  "run.failed",
-  "run.cancelled",
-  "queue.updated",
-  "agent.switched",
-  "agent.delegate.started",
-  "agent.delegate.completed",
-  "agent.delegate.failed",
-  "tool.failed"
-]);
 
 export function useAppController() {
   const {
@@ -1048,30 +933,6 @@ export function useAppController() {
     }
   }
 
-  function sortRunSteps(items: RunStep[]) {
-    return [...items].sort((left, right) => {
-      const leftTime = left.endedAt ?? left.startedAt ?? "";
-      const rightTime = right.endedAt ?? right.startedAt ?? "";
-      if (leftTime !== rightTime) {
-        return leftTime.localeCompare(rightTime);
-      }
-
-      if (left.runId !== right.runId) {
-        return left.runId.localeCompare(right.runId);
-      }
-
-      if (left.seq !== right.seq) {
-        return left.seq - right.seq;
-      }
-
-      return left.id.localeCompare(right.id);
-    });
-  }
-
-  function mergeRunStepsForRun(current: RunStep[], targetRunId: string, nextItems: RunStep[]) {
-    return sortRunSteps([...current.filter((step) => step.runId !== targetRunId), ...nextItems]);
-  }
-
   async function refreshSessionRunStepsForRuns(runs: Run[], quiet = false) {
     if (runs.length === 0) {
       startTransition(() => {
@@ -1163,14 +1024,7 @@ export function useAppController() {
     const existingById = new Map(savedSessions.map((entry) => [entry.id, entry]));
     const childRecords = childSessions.map((entry) => savedSessionFromSession(entry, existingById.get(entry.id)));
     startTransition(() => {
-      setSavedSessions((current) => {
-        const nextById = new Map(current.map((entry) => [entry.id, entry]));
-        for (const childRecord of childRecords) {
-          const existing = nextById.get(childRecord.id);
-          nextById.set(childRecord.id, existing ? { ...existing, ...childRecord } : childRecord);
-        }
-        return Array.from(nextById.values()).sort(compareSavedSessionsByRecency);
-      });
+      setSavedSessions((current) => mergeSavedSessionRecords(current, childRecords));
     });
 
     return childRecords;

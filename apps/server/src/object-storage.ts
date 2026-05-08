@@ -27,6 +27,23 @@ import {
   recordNativeWorkspaceSyncFallback
 } from "./observability/native-workspace-sync.js";
 import { recordObjectStorageOperation, type ObjectStorageMetricOperation } from "./observability/object-storage.js";
+import {
+  DEFAULT_OBJECT_STORAGE_BUNDLE_TIMEOUT_MS,
+  createObjectStorageSyncBudget,
+  enforceLocalDirectorySyncBudget,
+  hasObjectStorageSyncBudgetPolicy,
+  resolveDirectorySyncConcurrency,
+  resolveNativeInlineUploadThresholdBytes,
+  resolveObjectStorageBundleConfig,
+  resolveObjectStorageBundleTimeoutMs,
+  resolveObjectStorageMaxAttempts,
+  resolveObjectStorageMultipartPartSizeBytes,
+  resolveObjectStorageMultipartThresholdBytes,
+  resolveObjectStorageRequestTimeoutMs,
+  resolveObjectStorageSyncManifestShardFileCount,
+  shouldAssumeEmptyTrustedManagedObjectStoragePrefix,
+  shouldTrustManagedObjectStoragePrefixes
+} from "./object-storage-config.js";
 
 type AwsS3Module = typeof import("@aws-sdk/client-s3");
 type AwsS3ModuleImport = AwsS3Module | { default?: AwsS3Module | undefined };
@@ -202,18 +219,6 @@ const OBJECT_MTIME_METADATA_KEY = "oah-mtime-ms";
 const INTERNAL_SYNC_MANIFEST_RELATIVE_PATH = ".oah-sync-manifest.json";
 const INTERNAL_SYNC_MANIFEST_SHARD_PREFIX = ".oah-sync-manifest-shards";
 const INTERNAL_SYNC_BUNDLE_RELATIVE_PATH = ".oah-sync-bundle.tar";
-const DEFAULT_DIRECTORY_SYNC_CONCURRENCY = 8;
-const DEFAULT_OBJECT_STORAGE_BUNDLE_MODE = "auto";
-const DEFAULT_OBJECT_STORAGE_BUNDLE_MIN_FILE_COUNT = 16;
-const DEFAULT_OBJECT_STORAGE_BUNDLE_MIN_TOTAL_BYTES = 128 * 1024;
-const DEFAULT_OBJECT_STORAGE_BUNDLE_TIMEOUT_MS = 5 * 60 * 1000;
-const trustedManagedObjectStoragePrefixes = new Set<string>();
-const DEFAULT_NATIVE_INLINE_UPLOAD_THRESHOLD_BYTES = 128 * 1024;
-const DEFAULT_OBJECT_STORAGE_REQUEST_TIMEOUT_MS = 2 * 60 * 1000;
-const DEFAULT_OBJECT_STORAGE_MAX_ATTEMPTS = 3;
-const DEFAULT_OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES = 64 * 1024 * 1024;
-const DEFAULT_OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES = 8 * 1024 * 1024;
-const DEFAULT_OBJECT_STORAGE_SYNC_MANIFEST_SHARD_FILE_COUNT = 10_000;
 
 const DEFAULT_MANAGED_PATHS = Object.keys(DEFAULT_KEY_PREFIXES) as ManagedPathKey[];
 let awsS3ModulePromise: Promise<AwsS3Module> | undefined;

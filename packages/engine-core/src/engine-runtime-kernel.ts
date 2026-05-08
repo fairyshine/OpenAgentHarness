@@ -229,14 +229,13 @@ export function createEngineRuntimeKernel(
       dependencies.applyBeforeModelHooks(workspace, session, run, modelInput),
     applyAfterModelHooks: (workspace, session, run, modelInput, response) =>
       dependencies.applyAfterModelHooks(workspace, session, run, modelInput, response),
-    buildEngineTools: (workspace, run, session, executionContext) =>
-      dependencies.buildEngineTools(workspace, run, session, {
-        ...executionContext,
-        injectModelContextMessage: (message) => {
-          executionContext.pendingModelContextMessages ??= [];
-          executionContext.pendingModelContextMessages.push(message);
-        }
-      }),
+    buildEngineTools: (workspace, run, session, executionContext) => {
+      executionContext.injectModelContextMessage = (message) => {
+        executionContext.pendingModelContextMessages ??= [];
+        executionContext.pendingModelContextMessages.push(message);
+      };
+      return dependencies.buildEngineTools(workspace, run, session, executionContext);
+    },
     startRunStep: (input) => dependencies.runSteps.startRunStep(input),
     completeRunStep: (step, status, output) => dependencies.runSteps.completeRunStep(step, status, output),
     setRunStatusIfPossible: (runId, nextStatus) => dependencies.runState.setRunStatusIfPossible(runId, nextStatus),

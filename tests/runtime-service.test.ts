@@ -1266,7 +1266,7 @@ describe("runtime service", () => {
       workspaceId: workspace.id,
       caller,
       input: {
-        agentName: "researcher"
+        agentName: "builder"
       }
     });
     const accepted = await runtimeService.createSessionMessage({
