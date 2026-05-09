@@ -1,65 +1,46 @@
 import path from "node:path";
-import { access, mkdir, realpath, rm, stat } from "node:fs/promises";
 
-import {
-  platformModelSnapshotSchema,
-  type DistributedPlatformModelRefreshResult,
-  type HealthReport,
-  type ReadinessReport
-} from "@oah/api-contracts";
 import type { ServerConfig } from "@oah/config";
 import type {
-  EngineLogger,
   ModelGateway,
-  SandboxHostProviderKind,
   WorkspaceRecord
 } from "../../../packages/engine-core/src/types.js";
-import { AppError } from "../../../packages/engine-core/src/errors.js";
-import { ExecutionEngineService, type ExecutionRuntimeOperations } from "../../../packages/engine-core/src/execution-engine-service.js";
+import { ExecutionEngineService } from "../../../packages/engine-core/src/execution-engine-service.js";
 import { EngineService } from "../../../packages/engine-core/src/engine-service.js";
-import { createId, nowIso } from "../../../packages/engine-core/src/utils.js";
 import type { ControlPlaneRuntimeOperations } from "../../../packages/engine-core/src/control-plane-engine-service.js";
 import type { WorkspaceMaterializationManager } from "./bootstrap/workspace-materialization.js";
 import type { SandboxHost } from "./bootstrap/sandbox-host.js";
 import { LazyModelRuntime } from "./bootstrap/lazy-model-runtime.js";
 import { createLazyStorageAdmin } from "./bootstrap/lazy-storage-admin.js";
-import { describeSandboxTopology } from "./sandbox-topology.js";
 import type { WorkerRuntimeStatus } from "./bootstrap/worker-runtime.js";
 import { appendEngineLogEvent, buildRuntimeConsoleLogger } from "./engine-console.js";
 import {
   describeObjectStoragePolicy,
   objectStorageBacksManagedWorkspaces,
-  resolveManagedWorkspaceExternalRef,
   resolveObjectStorageMirrorConfig
 } from "./bootstrap/object-storage-policy.js";
-import type { EngineAdminCapabilities } from "./bootstrap/admin-capabilities.js";
 import {
   createPlatformModelCatalogService,
   type PlatformModelSnapshot
 } from "./bootstrap/platform-model-service.js";
+import { refreshDistributedPlatformModels } from "./bootstrap/platform-model-distributed-refresh.js";
 import {
   buildSingleWorkspaceConfig,
   describeEngineProcess,
   formatSingleWorkspaceLegacyWarning,
-  type EngineProcessDescriptor,
   parseConfigPath,
   parseSingleWorkspaceOptions,
   shouldStartEmbeddedWorker
 } from "./bootstrap/engine-process.js";
 import type { PlatformAgentRegistry } from "./bootstrap/workspace-registry.js";
 import {
-  cleanupWorkspaceLocalArtifacts,
   resolveArchiveExportRoot,
   resolvePostgresArchivePayloadRoot,
   resolveRuntimeStateDir,
   resolveSqliteShadowRoot,
-  resolveWorkspaceMaterializationCacheRoot,
-  type WorkspaceLocalArtifactCleanupStatus
+  resolveWorkspaceMaterializationCacheRoot
 } from "./bootstrap/engine-state-paths.js";
 import {
-  parseBooleanEnv,
-  parseNonNegativeIntEnv,
-  parseOptionalPositiveIntEnv,
   parsePositiveIntEnv,
   parsePositiveIntEnvWithMin,
   resolveObjectStorageMirrorBlockingInit,
@@ -67,7 +48,15 @@ import {
   resolveWorkspacePrewarmConfig,
   resolveWorkspaceRegistryPollingConfig
 } from "./bootstrap/bootstrap-config.js";
-import { evaluateWorkerDiskReadiness } from "./bootstrap/worker-disk-readiness.js";
+import { createLocalWorkspaceManagement } from "./bootstrap/local-workspace-management.js";
+import { createLocalWorkspaceInitializer } from "./bootstrap/local-workspace-initializer.js";
+import {
+  createPostgresMetadataRetentionService,
+  createWorkerRuntimeService
+} from "./bootstrap/runtime-background-services.js";
+import { createRuntimeHealthReports } from "./bootstrap/runtime-health-reports.js";
+import { createWorkspaceDeletionHandler } from "./bootstrap/workspace-deletion-handler.js";
+import { createWorkspaceCoordinationApi } from "./bootstrap/workspace-coordination-api.js";
 import {
   loadAdminCapabilitiesModule,
   loadConfigRuntimesModule,
@@ -95,22 +84,37 @@ import {
   selectPlacementPreferredWorkerId
 } from "./bootstrap/placement-aware-session-run-queue.js";
 import {
-  prepareRuntimeUploadCacheDir,
-  removeRuntimeFromUploadCaches,
   resolveRuntimeSourceDirForBootstrap,
-  resolveRuntimeUploadCacheDir,
-  resolveRuntimeUploadCacheDirs,
-  runtimeExistsInUploadCache
+  resolveRuntimeUploadCacheDir
 } from "./bootstrap/runtime-upload-cache.js";
 import {
   resolveRuntimeAssemblyProfile,
   resolveWorkspaceModelMetadataDiscoveryMode,
   shouldManageWorkspaceRegistry
 } from "./bootstrap/runtime-assembly-profile.js";
+import { createRuntimeManagement } from "./bootstrap/runtime-management-service.js";
+import { createWorkspaceLifecycle } from "./bootstrap/workspace-lifecycle-service.js";
 import { createWorkspacePrewarmer } from "./bootstrap/workspace-prewarmer.js";
+import type { BootstrappedRuntime, BootstrapOptions } from "./bootstrap/bootstrap-runtime-types.js";
+import {
+  fileExists,
+  isRemoteSandboxProvider,
+  isTruthyEnvValue,
+  listRepositoryWorkspaces,
+  parseStaleRunRecoveryStrategyEnv,
+  resolveInternalBaseUrl,
+  resolvePostgresMetadataRetentionConfig,
+  resolvePostgresPoolConfig,
+  resolveRuntimeInstanceId,
+  runtimeHasPersistedWorkspaceListing,
+  runtimeHasWorkspaceSnapshotListing,
+  summarizeDisabledWorkerRuntimeStatus,
+  withManagedWorkspaceExternalRef
+} from "./bootstrap/bootstrap-runtime-helpers.js";
 
 export { cleanupWorkspaceLocalArtifacts } from "./bootstrap/engine-state-paths.js";
 export type { WorkspaceLocalArtifactCleanupStatus } from "./bootstrap/engine-state-paths.js";
+export type { BootstrappedRuntime, BootstrapOptions } from "./bootstrap/bootstrap-runtime-types.js";
 export {
   resolveObjectStorageMirrorBlockingInit,
   resolveWorkspaceMaterializationConfig,
@@ -122,76 +126,8 @@ export {
   shouldManageWorkspaceRegistry
 } from "./bootstrap/runtime-assembly-profile.js";
 export { createWorkspacePrewarmer } from "./bootstrap/workspace-prewarmer.js";
-
-function hasRemoteErrorCode(error: unknown, code: string): boolean {
-  if (error instanceof AppError) {
-    return error.code === code;
-  }
-
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  try {
-    const payload = JSON.parse(error.message) as {
-      error?: {
-        code?: unknown;
-      };
-    };
-    return payload.error?.code === code;
-  } catch {
-    return false;
-  }
-}
-
-async function clearWorkspaceRootContents(input: {
-  sandboxHost: SandboxHost;
-  workspace: WorkspaceRecord;
-}): Promise<void> {
-  let lease: Awaited<ReturnType<typeof input.sandboxHost.workspaceFileAccessProvider.acquire>> | undefined;
-
-  try {
-    lease = await input.sandboxHost.workspaceFileAccessProvider.acquire({
-      workspace: input.workspace,
-      access: "write"
-    });
-    const rootPath = lease.workspace.rootPath;
-    const entries = await input.sandboxHost.workspaceFileSystem.readdir(rootPath);
-    console.info(
-      `[oah-bootstrap] Clearing sandbox workspace root for ${input.workspace.id} at ${rootPath} (${entries.length} top-level entr${
-        entries.length === 1 ? "y" : "ies"
-      })`
-    );
-    await Promise.all(
-      entries.map((entry) =>
-        input.sandboxHost.workspaceFileSystem.rm(path.posix.join(rootPath, entry.name), {
-          recursive: true,
-          force: true
-        })
-      )
-    );
-    console.info(`[oah-bootstrap] Cleared sandbox workspace root contents for ${input.workspace.id} at ${rootPath}`);
-  } catch (error) {
-    if (hasRemoteErrorCode(error, "workspace_not_found")) {
-      console.warn(
-        `[oah-bootstrap] Remote sandbox cleanup skipped for ${input.workspace.id}; workspace was already missing during deletion`
-      );
-      return;
-    }
-    throw error;
-  } finally {
-    await lease?.release();
-  }
-}
-
+export { installSignalHandlers } from "./bootstrap/signal-handlers.js";
 export { createPlacementAwareSessionRunQueue } from "./bootstrap/placement-aware-session-run-queue.js";
-
-function ownerBaseUrlMatches(left: string | undefined, right: string | undefined): boolean {
-  const normalizedLeft = left?.trim().replace(/\/+$/u, "");
-  const normalizedRight = right?.trim().replace(/\/+$/u, "");
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
-}
-
 export {
   buildSingleWorkspaceConfig,
   describeEngineProcess,
@@ -201,349 +137,7 @@ export {
   shouldStartInlineWorker
 } from "./bootstrap/engine-process.js";
 export { resolveEmbeddedWorkerPoolConfig, resolveWorkerMode } from "./bootstrap/worker-host.js";
-
-export interface BootstrapOptions {
-  argv?: string[] | undefined;
-  startWorker?: boolean | undefined;
-  processKind?: "api" | "worker" | undefined;
-  platformAgents?: PlatformAgentRegistry | undefined;
-      sandboxHostFactory?:
-    | ((input: {
-        config: ServerConfig;
-        processKind: "api" | "worker";
-        workerId: string;
-        ownerBaseUrl?: string | undefined;
-        workspaceMaterializationManager?: WorkspaceMaterializationManager | undefined;
-      }) => Promise<SandboxHost | undefined> | SandboxHost | undefined)
-    | undefined;
-}
-
 export { resolveRuntimeUploadCacheDir } from "./bootstrap/runtime-upload-cache.js";
-
-function parseStaleRunRecoveryStrategyEnv(
-  name: string,
-  fallback: "fail" | "requeue_running" | "requeue_all"
-): "fail" | "requeue_running" | "requeue_all" {
-  const raw = process.env[name]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-
-  return raw === "fail" || raw === "requeue_running" || raw === "requeue_all" ? raw : fallback;
-}
-
-function workerRegistryMatchesPlacementOwner(
-  worker: { workerId: string; runtimeInstanceId?: string | undefined },
-  ownerWorkerId: string
-): boolean {
-  return worker.workerId === ownerWorkerId || worker.runtimeInstanceId === ownerWorkerId;
-}
-
-function withManagedWorkspaceExternalRef(
-  workspace: WorkspaceRecord,
-  config: ServerConfig,
-  objectStorageMirror: import("./object-storage.js").ObjectStorageMirrorController | undefined
-): WorkspaceRecord {
-  if (workspace.externalRef) {
-    return workspace;
-  }
-
-  const externalRef =
-    resolveManagedWorkspaceExternalRef(workspace.rootPath, workspace.kind, config) ??
-    objectStorageMirror?.managedWorkspaceExternalRef(workspace.rootPath, workspace.kind, config.paths);
-  return externalRef ? { ...workspace, externalRef } : workspace;
-}
-
-async function resolveLocalWorkspaceRoot(rootPath: string): Promise<string> {
-  const resolvedRoot = path.resolve(rootPath);
-  let info;
-  try {
-    info = await stat(resolvedRoot);
-  } catch {
-    throw new AppError(400, "workspace_path_not_found", `Workspace root does not exist: ${rootPath}`);
-  }
-  if (!info.isDirectory()) {
-    throw new AppError(400, "workspace_path_not_directory", `Workspace root must be a directory: ${rootPath}`);
-  }
-  return realpath(resolvedRoot);
-}
-
-function localWorkspaceExternalRef(rootPath: string): string {
-  return `local:path:${rootPath.replaceAll("\\", "/")}`;
-}
-
-export interface BootstrappedRuntime {
-  config: ServerConfig;
-  controlPlaneEngineService: ControlPlaneRuntimeOperations;
-  executionEngineService: ExecutionRuntimeOperations;
-  runtimeService: EngineService;
-  modelGateway: ModelGateway;
-  process: EngineProcessDescriptor;
-  workspaceMode:
-    | {
-        kind: "multi";
-      }
-    | {
-        kind: "single";
-        workspaceId: string;
-        workspaceKind: "project";
-        rootPath: string;
-      };
-  listWorkspaceRuntimes?: () => Promise<Array<{ name: string }>>;
-  uploadWorkspaceRuntime?: (input: {
-    runtimeName: string;
-    zipBuffer: Buffer;
-    overwrite?: boolean | undefined;
-    requireExisting?: boolean | undefined;
-  }) => Promise<{ name: string }>;
-  deleteWorkspaceRuntime?: (input: { runtimeName: string }) => Promise<void>;
-  listPlatformModels?: () => Promise<
-    Array<{
-      id: string;
-      provider: string;
-      modelName: string;
-      url?: string;
-      hasKey: boolean;
-      metadata?: Record<string, unknown>;
-      isDefault: boolean;
-    }>
-  >;
-  getPlatformModelSnapshot?: () => Promise<PlatformModelSnapshot>;
-  refreshPlatformModels?: () => Promise<PlatformModelSnapshot>;
-  refreshDistributedPlatformModels?: () => Promise<DistributedPlatformModelRefreshResult>;
-  subscribePlatformModelSnapshot?: (
-    listener: (snapshot: PlatformModelSnapshot) => void
-  ) => (() => void);
-  importWorkspace?: (input: {
-    rootPath: string;
-    kind?: "project";
-    name?: string;
-    externalRef?: string;
-    ownerId?: string;
-    serviceName?: string;
-  }) => Promise<import("@oah/api-contracts").Workspace>;
-  registerLocalWorkspace?: (input: {
-    rootPath: string;
-    name?: string;
-    runtime?: string;
-    ownerId?: string;
-    serviceName?: string;
-  }) => Promise<import("@oah/api-contracts").Workspace>;
-  repairLocalWorkspace?: (input: {
-    workspaceId: string;
-    rootPath: string;
-    name?: string;
-  }) => Promise<import("@oah/api-contracts").Workspace>;
-  resolveWorkspaceOwnership?: (workspaceId: string) => Promise<{
-    workspaceId: string;
-    version: string;
-    ownerWorkerId: string;
-    ownerBaseUrl?: string | undefined;
-    health: "healthy" | "late";
-    lastActivityAt: string;
-    localPath?: string | undefined;
-    remotePrefix?: string | undefined;
-    isLocalOwner: boolean;
-  } | undefined>;
-  clearWorkspaceCoordination?: (workspaceId: string) => Promise<void>;
-  adminCapabilities?: EngineAdminCapabilities | undefined;
-  sandboxHostProviderKind?: SandboxHostProviderKind | undefined;
-  localOwnerBaseUrl?: string | undefined;
-  touchWorkspaceActivity?: (workspaceId: string) => Promise<void>;
-  workspaceLifecycle?: {
-    execute(input: {
-      workspaceId: string;
-      operation: "hydrate" | "flush" | "evict" | "delete" | "repair_placement";
-      force?: boolean | undefined;
-    }): Promise<{
-      workspaceId: string;
-      operation: "hydrate" | "flush" | "evict" | "delete" | "repair_placement";
-      status: "completed" | "not_available";
-      hydrated?: unknown[] | undefined;
-      flushed?: unknown[] | undefined;
-      evicted?: unknown[] | undefined;
-      skipped?: unknown[] | undefined;
-      repaired?: unknown[] | undefined;
-    }>;
-  };
-  appendEngineLog(input: {
-    sessionId: string;
-    runId?: string | undefined;
-    level: "debug" | "info" | "warn" | "error";
-    category: "run" | "model" | "tool" | "hook" | "agent" | "http" | "system";
-    message: string;
-    details?: unknown;
-    context?: import("@oah/api-contracts").EngineLogEventContext | undefined;
-  }): Promise<void>;
-  healthReport(): Promise<HealthReport>;
-  readinessReport(): Promise<ReadinessReport>;
-  beginDrain(): Promise<void>;
-  close(): Promise<void>;
-}
-
-async function fileExists(targetPath: string): Promise<boolean> {
-  try {
-    await access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return value !== undefined && /^(1|true|yes|on)$/iu.test(value.trim());
-}
-
-function resolvePostgresMetadataRetentionConfig(input: { processKind: "api" | "worker"; startWorker: boolean }) {
-  const role = process.env.OAH_METADATA_RETENTION_ROLE?.trim().toLowerCase() || "auto";
-  const processRole =
-    input.processKind === "worker" ? "worker" : input.startWorker ? "embedded_worker" : "api";
-  const defaultEnabled =
-    role === "all" ||
-    role === processRole ||
-    (role === "worker" && processRole === "embedded_worker") ||
-    (role === "auto" && process.env.OAH_PROCESS_ROLE?.trim().toLowerCase() === "controller");
-  return {
-    enabled: parseBooleanEnv("OAH_METADATA_RETENTION_ENABLED", defaultEnabled),
-    intervalMs: parsePositiveIntEnv("OAH_METADATA_RETENTION_INTERVAL_MS", 60 * 60 * 1000),
-    batchLimit: parsePositiveIntEnv("OAH_METADATA_RETENTION_BATCH_LIMIT", 1_000),
-    historyEventRetentionDays: parseNonNegativeIntEnv("OAH_HISTORY_EVENT_RETENTION_DAYS", 7),
-    sessionEventRetentionDays: parseNonNegativeIntEnv("OAH_SESSION_EVENT_RETENTION_DAYS", 14),
-    runRetentionDays: parseNonNegativeIntEnv("OAH_RUN_RETENTION_DAYS", 0)
-  };
-}
-
-function resolvePostgresPoolConfig(input: { processKind: "api" | "worker"; startWorker: boolean }) {
-  const roleDefault =
-    input.processKind === "api" && !input.startWorker
-      ? 5
-      : input.processKind === "worker"
-        ? 3
-        : 8;
-  return {
-    max: parsePositiveIntEnv("OAH_POSTGRES_POOL_MAX", roleDefault),
-    idleTimeoutMillis: parsePositiveIntEnv("OAH_POSTGRES_POOL_IDLE_TIMEOUT_MS", 30_000),
-    connectionTimeoutMillis: parsePositiveIntEnv("OAH_POSTGRES_POOL_CONNECTION_TIMEOUT_MS", 5_000)
-  };
-}
-
-async function resolveRedisReadyQueueDepth(input: {
-  redisRunQueue: unknown;
-}): Promise<number | undefined> {
-  const queue = input.redisRunQueue as { readyQueueLength?: unknown; getReadySessionCount?: unknown } | undefined;
-  if (typeof queue?.readyQueueLength === "function") {
-    return await (queue.readyQueueLength as () => Promise<number>)();
-  }
-  if (typeof queue?.getReadySessionCount === "function") {
-    return await (queue.getReadySessionCount as () => Promise<number>)();
-  }
-  return undefined;
-}
-
-function resolveRedisReadyQueueReadinessLimit(): number | undefined {
-  return parseOptionalPositiveIntEnv("OAH_REDIS_READY_QUEUE_READINESS_LIMIT");
-}
-
-function isRemoteSandboxProvider(config: Pick<ServerConfig, "sandbox">): boolean {
-  const provider = config.sandbox?.provider ?? (config.sandbox?.self_hosted?.base_url?.trim() ? "self_hosted" : "embedded");
-  return provider === "self_hosted" || provider === "e2b";
-}
-
-function runtimeHasPersistedWorkspaceListing(
-  value: unknown
-): value is {
-  listPersistedWorkspaces(): Promise<WorkspaceRecord[]>;
-} {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { listPersistedWorkspaces?: unknown }).listPersistedWorkspaces === "function"
-  );
-}
-
-function runtimeHasWorkspaceSnapshotListing(
-  value: unknown
-): value is {
-  listWorkspaceSnapshots(candidates: WorkspaceRecord[]): Promise<WorkspaceRecord[]>;
-} {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { listWorkspaceSnapshots?: unknown }).listWorkspaceSnapshots === "function"
-  );
-}
-
-async function listRepositoryWorkspaces(
-  repository: Pick<import("@oah/engine-core").WorkspaceRepository, "list">
-): Promise<WorkspaceRecord[]> {
-  const workspaces: WorkspaceRecord[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const page = await repository.list(100, cursor);
-    workspaces.push(...page);
-    cursor = page.length === 100 ? String((cursor ? Number.parseInt(cursor, 10) : 0) + 100) : undefined;
-  } while (cursor);
-
-  return workspaces;
-}
-
-function summarizeDisabledWorkerRuntimeStatus(): WorkerRuntimeStatus {
-  return {
-    mode: "disabled",
-    draining: false,
-    acceptsNewRuns: true,
-    sessionSerialBoundary: "session",
-    localSlots: [],
-    activeWorkers: [],
-    summary: {
-      active: 0,
-      healthy: 0,
-      late: 0,
-      busy: 0,
-      embedded: 0,
-      standalone: 0
-    },
-    pool: null
-  };
-}
-
-function resolveInternalBaseUrl(
-  config: Pick<ServerConfig, "server">,
-  options?: { processKind?: "api" | "worker" | undefined }
-): string | undefined {
-  const explicit = process.env.OAH_INTERNAL_BASE_URL?.trim();
-  if (explicit) {
-    return explicit.replace(/\/+$/u, "");
-  }
-
-  const host = config.server.host.trim();
-  if (!host || host === "0.0.0.0" || host === "::") {
-    if (options?.processKind === "worker") {
-      const hostname = process.env.HOSTNAME?.trim();
-      if (hostname) {
-        return `http://${hostname}:${config.server.port}`;
-      }
-    }
-    return undefined;
-  }
-
-  return `http://${host}:${config.server.port}`;
-}
-
-function resolveRuntimeInstanceId(processKind: "api" | "worker"): string {
-  const explicit = process.env.OAH_RUNTIME_INSTANCE_ID?.trim();
-  if (explicit) {
-    return explicit;
-  }
-
-  const hostname = process.env.HOSTNAME?.trim();
-  if (hostname) {
-    return `${processKind}:${hostname}`;
-  }
-
-  return `${processKind}:${process.pid}`;
-}
 
 export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<BootstrappedRuntime> {
   const argv = options.argv ?? process.argv.slice(2);
@@ -1104,63 +698,17 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       : {}),
     ...(singleWorkspace === undefined
       ? {
-          workspaceDeletionHandler: {
-            async deleteWorkspace(workspace) {
-              console.info(
-                `[oah-bootstrap] Deleting workspace ${workspace.id} (rootPath=${workspace.rootPath}, externalRef=${workspace.externalRef ?? "none"})`
-              );
-
-              if (useSelfHostedWorkspaceDelegatingInitializer) {
-                throw new AppError(
-                  409,
-                  "workspace_delete_requires_worker",
-                  `Workspace ${workspace.id} must be deleted by a self-hosted worker in API-only mode.`
-                );
-              }
-
-              if (remoteSandboxProvider && sandboxHost) {
-                await clearWorkspaceRootContents({
-                  sandboxHost,
-                  workspace
-                });
-              } else {
-                console.info(`[oah-bootstrap] No remote sandbox cleanup needed for workspace ${workspace.id}`);
-              }
-
-              const workspaceExternalRef =
-                workspace.externalRef ??
-                resolveManagedWorkspaceExternalRef(workspace.rootPath, workspace.kind, config) ??
-                objectStorageMirror?.managedWorkspaceExternalRef(workspace.rootPath, workspace.kind, config.paths);
-              if (config.object_storage && workspaceExternalRef) {
-                console.info(
-                  `[oah-object-storage] Deleting workspace backing store for ${workspace.id} using ${workspaceExternalRef}`
-                );
-                await objectStorageModule!.deleteWorkspaceExternalRefFromObjectStore(config.object_storage, workspaceExternalRef, (message) => {
-                  console.info(`[oah-object-storage] ${message}`);
-                });
-                console.info(`[oah-object-storage] Deleted workspace backing store for ${workspace.id}`);
-              } else if (config.object_storage) {
-                console.warn(
-                  `[oah-object-storage] Skipping backing-store deletion for workspace ${workspace.id}; no externalRef could be resolved`
-                );
-              } else {
-                console.info(`[oah-object-storage] No object storage configured; skipping backing-store deletion for ${workspace.id}`);
-              }
-
-              const deletedCopies = await workspaceMaterializationManager?.deleteWorkspaceCopies(workspace.id);
-              const cleanup = await cleanupWorkspaceLocalArtifacts({
-                workspace,
-                paths: config.paths,
-                sqliteShadowRoot
-              });
-              await clearWorkspaceCoordination(workspace.id);
-              console.info(
-                `[oah-bootstrap] Cleaned local artifacts for deleted workspace ${workspace.id} (${cleanup.mode}): ${cleanup.removedPaths.join(", ")}${
-                  deletedCopies && deletedCopies.length > 0 ? `; evicted copies: ${deletedCopies.map((copy) => copy.localPath).join(", ")}` : ""
-                }`
-              );
-            }
-          }
+          workspaceDeletionHandler: createWorkspaceDeletionHandler({
+            config,
+            remoteSandboxProvider,
+            sandboxHost,
+            useSelfHostedWorkspaceDelegatingInitializer,
+            objectStorageModule,
+            objectStorageMirror,
+            workspaceMaterializationManager,
+            sqliteShadowRoot,
+            clearWorkspaceCoordination
+          })
         }
       : {}),
     ...(singleWorkspace === undefined
@@ -1182,63 +730,16 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
                     sandboxHost: sandboxHost!,
                     ...(selfHostedSandboxOptions ? { selfHosted: selfHostedSandboxOptions } : {})
                   }).initialize
-                : async (input) => {
-                  const { resolveWorkspaceCreationRoot } = await loadConfigWorkspaceModule();
-                  const { initializeWorkspaceFromRuntime } = await loadConfigRuntimesModule();
-                  const workspaceId = (
-                    input as typeof input & {
-                      workspaceId?: string | undefined;
-                    }
-                  ).workspaceId?.trim() || createId("ws");
-                  const workspaceRoot = resolveWorkspaceCreationRoot({
-                    workspaceDir: config.paths.workspace_dir,
-                    name: input.name,
-                    workspaceId,
-                    rootPath: input.rootPath
-                  });
-
-                  const runtimeDir = await resolveRuntimeSourceDirForBootstrap(
-                    input.runtime,
-                    config.paths,
+                : createLocalWorkspaceInitializer({
+                    config,
+                    toolDir,
                     useRuntimeObjectStorageManagement,
-                    config.object_storage,
-                    objectStorageModule
-                  );
-
-                  await initializeWorkspaceFromRuntime(
-                    {
-                      runtimeDir,
-                      runtimeName: input.runtime,
-                      rootPath: workspaceRoot,
-                      platformToolDir: config.paths.tool_dir,
-                      platformSkillDir: config.paths.skill_dir,
-                      agentsMd: input.agentsMd,
-                      toolServers: (input as typeof input & { toolServers?: Record<string, Record<string, unknown>> | undefined }).toolServers,
-                      skills: input.skills
-                    } as Parameters<typeof initializeWorkspaceFromRuntime>[0]
-                  );
-
-                  const inferredExternalRef = resolveManagedWorkspaceExternalRef(workspaceRoot, "project", config);
-                  const targetExternalRef = input.externalRef ?? inferredExternalRef;
-                  if (config.object_storage && targetExternalRef) {
-                    await objectStorageModule!.seedWorkspaceRootToExternalRef(
-                      config.object_storage,
-                      targetExternalRef,
-                      workspaceRoot,
-                      (message) => {
-                        console.info(`[oah-object-storage] ${message}`);
-                      }
-                    );
-                  }
-
-                  const discovered = await discoverWorkspaceWithEnrichedModels(workspaceRoot, "project");
-
-                  return {
-                    ...discovered,
-                    id: workspaceId,
-                    ...(targetExternalRef ? { externalRef: targetExternalRef } : {})
-                  } as WorkspaceRecord;
-                }
+                    objectStorageModule,
+                    loadConfigWorkspaceModule,
+                    loadConfigRuntimesModule,
+                    discoverWorkspaceWithEnrichedModels: (rootPath: string, kind: "project") =>
+                      discoverWorkspaceWithEnrichedModels(rootPath, kind) as Promise<WorkspaceRecord>
+                  }).initialize
           }
         }
       : {})
@@ -1268,94 +769,13 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       })
     : runtimeService;
   const executionEngineService = new ExecutionEngineService(runtimeService);
-  const workspaceLifecycle = sandboxHost
-    ? {
-        async execute(input: {
-          workspaceId: string;
-          operation: "hydrate" | "flush" | "evict" | "delete" | "repair_placement";
-          force?: boolean | undefined;
-        }) {
-          if (input.operation === "delete") {
-            try {
-              await runtimeService.deleteWorkspace(input.workspaceId);
-            } catch (error) {
-              if (!(error instanceof Error) || (error as Error & { code?: string }).code !== "workspace_not_found") {
-                throw error;
-              }
-            }
-            await clearWorkspaceCoordination(input.workspaceId);
-            return {
-              workspaceId: input.workspaceId,
-              operation: input.operation,
-              status: "completed" as const
-            };
-          }
-
-          if (input.operation === "hydrate") {
-            const workspace = await runtimeService.getWorkspaceRecord(input.workspaceId);
-            if (workspaceMaterializationManager) {
-              const hydrated = await workspaceMaterializationManager.hydrateWorkspace(workspace);
-              return {
-                workspaceId: input.workspaceId,
-                operation: input.operation,
-                status: "completed" as const,
-                hydrated
-              };
-            }
-
-            const lease = await sandboxHost.workspaceFileAccessProvider.acquire({
-              workspace,
-              access: "read"
-            });
-            await lease.release();
-            return {
-              workspaceId: input.workspaceId,
-              operation: input.operation,
-              status: "completed" as const,
-              hydrated: []
-            };
-          }
-
-          if (input.operation === "flush") {
-            const flushed = (await workspaceMaterializationManager?.flushWorkspaceCopies(input.workspaceId)) ?? [];
-            return {
-              workspaceId: input.workspaceId,
-              operation: input.operation,
-              status: "completed" as const,
-              flushed
-            };
-          }
-
-          if (input.operation === "evict") {
-            const result =
-              (await workspaceMaterializationManager?.evictWorkspaceCopies(input.workspaceId, {
-                force: input.force
-              })) ?? {
-                evicted: [],
-                skipped: []
-              };
-            return {
-              workspaceId: input.workspaceId,
-              operation: input.operation,
-              status: "completed" as const,
-              evicted: result.evicted,
-              skipped: result.skipped
-            };
-          }
-
-          const repaired = (await workspaceMaterializationManager?.repairWorkspacePlacement(input.workspaceId)) ?? [];
-          if (repaired.length === 0) {
-            await touchWorkspaceActivity?.(input.workspaceId);
-          }
-          return {
-            workspaceId: input.workspaceId,
-            operation: input.operation,
-            status: "completed" as const,
-            repaired
-          };
-        }
-      }
-    : undefined;
+  const workspaceLifecycle = createWorkspaceLifecycle({
+    sandboxHost,
+    runtimeService,
+    workspaceMaterializationManager,
+    touchWorkspaceActivity,
+    clearWorkspaceCoordination
+  });
   const describeQueuedRun = controlPlaneRuntime
     ? (runId: string) =>
         import("./bootstrap/scoped-repositories.js").then(({ describeQueuedRunWithScopedVisibility }) =>
@@ -1379,94 +799,29 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           ...(preferredWorkerId ? { preferredWorkerId } : {})
         };
       };
-  const workerRuntime = assemblyProfile.enableWorkerRuntime
-    ? (await loadWorkerRuntimeModule()).createWorkerRuntimeControl({
-        startWorker,
-        processKind,
-        runtimeInstanceId,
-        ownerBaseUrl,
-        config,
-        redisRunQueue,
-        redisWorkerRegistry,
-        runtimeService: executionEngineService,
-        describeQueuedRun,
-        logger: {
-          info(message) {
-            console.info(message);
-          },
-          warn(message, error) {
-            console.warn(message, error);
-          },
-          error(message, error) {
-            console.error(message, error);
-          }
-        }
-      })
-    : undefined;
+  const workerRuntime = await createWorkerRuntimeService({
+    enabled: assemblyProfile.enableWorkerRuntime,
+    loadWorkerRuntimeModule,
+    startWorker,
+    processKind,
+    runtimeInstanceId,
+    ownerBaseUrl,
+    config,
+    redisRunQueue,
+    redisWorkerRegistry,
+    runtimeService: executionEngineService,
+    describeQueuedRun
+  });
   workerRuntime?.start();
-  const postgresMetadataRetentionService =
-    postgresMetadataRetentionConfig.enabled && "pool" in persistence
-      ? new (await loadMetadataRetentionModule()).PostgresMetadataRetentionService({
-          pool: persistence.pool,
-          intervalMs: postgresMetadataRetentionConfig.intervalMs,
-          batchLimit: postgresMetadataRetentionConfig.batchLimit,
-          historyEventRetentionDays: postgresMetadataRetentionConfig.historyEventRetentionDays,
-          sessionEventRetentionDays: postgresMetadataRetentionConfig.sessionEventRetentionDays,
-          runRetentionDays: postgresMetadataRetentionConfig.runRetentionDays,
-          logger: {
-            info(message) {
-              console.info(message);
-            },
-            warn(message, error) {
-              console.warn(message, error);
-            }
-          }
-        })
-      : undefined;
+  const postgresMetadataRetentionService = await createPostgresMetadataRetentionService({
+    enabled: postgresMetadataRetentionConfig.enabled,
+    persistence,
+    config: postgresMetadataRetentionConfig,
+    loadMetadataRetentionModule
+  });
   postgresMetadataRetentionService?.start();
   const closePersistence =
     "close" in persistence && typeof persistence.close === "function" ? () => persistence.close() : async () => undefined;
-
-  async function postgresCheck(): Promise<"up" | "down" | "not_configured"> {
-    if (!postgresConfigured) {
-      return "not_configured";
-    }
-
-    if (primaryStorageMode !== "postgres" || !("pool" in persistence)) {
-      return "down";
-    }
-
-    try {
-      await persistence.pool.query("select 1");
-      return "up";
-    } catch {
-      return "down";
-    }
-  }
-
-  async function redisEventsCheck(): Promise<"up" | "down" | "not_configured"> {
-    if (!redisConfigured) {
-      return "not_configured";
-    }
-
-    if (!redisBus) {
-      return "down";
-    }
-
-    return (await redisBus.ping()) ? "up" : "down";
-  }
-
-  async function redisRunQueueCheck(): Promise<"up" | "down" | "not_configured"> {
-    if (!redisConfigured) {
-      return "not_configured";
-    }
-
-    if (!redisRunQueue) {
-      return "down";
-    }
-
-    return (await redisRunQueue.ping()) ? "up" : "down";
-  }
 
   async function getWorkerStatus(): Promise<WorkerRuntimeStatus> {
     if (workerRuntime) {
@@ -1475,80 +830,18 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
 
     return summarizeDisabledWorkerRuntimeStatus();
   }
-
-  async function refreshDistributedPlatformModels(): Promise<DistributedPlatformModelRefreshResult> {
-    const snapshot = await platformModelService.refresh();
-    const activeWorkers =
-      redisWorkerRegistry && typeof redisWorkerRegistry.listActive === "function"
-        ? await redisWorkerRegistry.listActive()
-        : [];
-    const localBaseUrl = ownerBaseUrl?.replace(/\/+$/u, "");
-    const remoteTargets = new Map<string, { workerId: string; runtimeInstanceId?: string; ownerBaseUrl: string }>();
-
-    for (const entry of activeWorkers) {
-      const targetBaseUrl = entry.ownerBaseUrl?.trim().replace(/\/+$/u, "");
-      if (!targetBaseUrl) {
-        continue;
-      }
-      if (entry.runtimeInstanceId === runtimeInstanceId) {
-        continue;
-      }
-      if (localBaseUrl && targetBaseUrl === localBaseUrl) {
-        continue;
-      }
-      if (remoteTargets.has(targetBaseUrl)) {
-        continue;
-      }
-
-      remoteTargets.set(targetBaseUrl, {
-        workerId: entry.workerId,
-        ...(entry.runtimeInstanceId ? { runtimeInstanceId: entry.runtimeInstanceId } : {}),
-        ownerBaseUrl: targetBaseUrl
-      });
-    }
-
-    const targets = await Promise.all(
-      [...remoteTargets.values()].map(async (target) => {
-        try {
-          const response = await fetch(`${target.ownerBaseUrl}/internal/v1/platform-models/refresh`, {
-            method: "POST"
-          });
-
-          if (!response.ok) {
-            return {
-              ...target,
-              status: "failed" as const,
-              error: `HTTP ${response.status}`
-            };
-          }
-
-          return {
-            ...target,
-            status: "refreshed" as const,
-            snapshot: platformModelSnapshotSchema.parse(await response.json())
-          };
-        } catch (error) {
-          return {
-            ...target,
-            status: "failed" as const,
-            error: error instanceof Error ? error.message : "Unknown refresh error."
-          };
-        }
-      })
-    );
-
-    const succeeded = targets.filter((target) => target.status === "refreshed").length;
-
-    return {
-      snapshot,
-      summary: {
-        attempted: targets.length,
-        succeeded,
-        failed: targets.length - succeeded
-      },
-      targets
-    };
-  }
+  const runtimeHealthReports = createRuntimeHealthReports({
+    config,
+    runtimeProcess,
+    primaryStorageMode,
+    postgresConfigured,
+    redisConfigured,
+    persistence,
+    redisBus,
+    redisRunQueue,
+    sandboxHost,
+    getWorkerStatus
+  });
 
   return {
     config,
@@ -1563,306 +856,49 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       ? {
           listPlatformModels: () => platformModelService.listModels(),
           getPlatformModelSnapshot: () => platformModelService.getSnapshot(),
-          refreshDistributedPlatformModels,
+          refreshDistributedPlatformModels: () => refreshDistributedPlatformModels({
+            refreshLocalSnapshot: () => platformModelService.refresh(),
+            redisWorkerRegistry,
+            runtimeInstanceId,
+            ownerBaseUrl
+          }),
           subscribePlatformModelSnapshot: (listener: (snapshot: PlatformModelSnapshot) => void) =>
             platformModelService.subscribe(listener)
         }
       : {}),
     ...(singleWorkspace === undefined
       ? {
-          listWorkspaceRuntimes: async () => {
-            const { listWorkspaceRuntimes } = await loadConfigRuntimesModule();
-            const runtimesByName = new Map<string, { name: string }>();
-
-            if (useRuntimeObjectStorageManagement) {
-              for (const runtimeName of await objectStorageModule!.listRuntimeNamesFromObjectStore(config.object_storage!)) {
-                runtimesByName.set(runtimeName, { name: runtimeName });
-              }
-
-              for (const runtimeCacheDir of resolveRuntimeUploadCacheDirs(config.paths)) {
-                for (const runtime of await listWorkspaceRuntimes(runtimeCacheDir)) {
-                  runtimesByName.set(runtime.name, runtime);
-                }
-              }
-            } else {
-              for (const runtime of await listWorkspaceRuntimes(config.paths.runtime_dir)) {
-                runtimesByName.set(runtime.name, runtime);
-              }
-            }
-
-            return [...runtimesByName.values()].sort((left, right) => left.name.localeCompare(right.name));
-          },
-          uploadWorkspaceRuntime: async (input: {
-            runtimeName: string;
-            zipBuffer: Buffer;
-            overwrite?: boolean | undefined;
-            requireExisting?: boolean | undefined;
-          }) => {
-            const { uploadWorkspaceRuntime } = await loadConfigRuntimesModule();
-            if (useRuntimeObjectStorageManagement) {
-              const runtimeCacheDir = await prepareRuntimeUploadCacheDir(config.paths);
-              const runtimeCacheTarget = path.join(runtimeCacheDir, input.runtimeName);
-              const objectStorageRuntimeExists = (
-                await objectStorageModule!.listRuntimeNamesFromObjectStore(config.object_storage!)
-              ).includes(input.runtimeName);
-              const cachedRuntimeExists = await runtimeExistsInUploadCache(config.paths, input.runtimeName);
-              const runtimeExists = objectStorageRuntimeExists || cachedRuntimeExists;
-
-              if (!runtimeExists && input.requireExisting) {
-                throw new AppError(404, "runtime_not_found", `Runtime "${input.runtimeName}" does not exist`);
-              }
-
-              if (runtimeExists && !input.overwrite) {
-                throw new AppError(409, "runtime_already_exists", `Runtime "${input.runtimeName}" already exists`);
-              }
-
-              await mkdir(runtimeCacheDir, { recursive: true });
-              const runtime = await uploadWorkspaceRuntime({
-                runtimeDir: runtimeCacheDir,
-                runtimeName: input.runtimeName,
-                zipBuffer: input.zipBuffer,
-                overwrite: true
-              });
-              await objectStorageModule!.syncRuntimeDirectoryToObjectStore(
-                config.object_storage!,
-                input.runtimeName,
-                runtimeCacheTarget,
-                (message) => {
-                  console.info(`[oah-object-storage] ${message}`);
-                }
-              );
-              return runtime;
-            }
-
-            return uploadWorkspaceRuntime({
-              runtimeDir: config.paths.runtime_dir,
-              runtimeName: input.runtimeName,
-              zipBuffer: input.zipBuffer,
-              ...(input.overwrite !== undefined ? { overwrite: input.overwrite } : {}),
-              ...(input.requireExisting !== undefined ? { requireExisting: input.requireExisting } : {})
-            });
-          },
-          deleteWorkspaceRuntime: async (input: { runtimeName: string }) => {
-            const { deleteWorkspaceRuntime } = await loadConfigRuntimesModule();
-            if (useRuntimeObjectStorageManagement) {
-              const objectStorageRuntimeExists = (
-                await objectStorageModule!.listRuntimeNamesFromObjectStore(config.object_storage!)
-              ).includes(input.runtimeName);
-              const cachedRuntimeExists = await runtimeExistsInUploadCache(config.paths, input.runtimeName);
-
-              if (!objectStorageRuntimeExists && !cachedRuntimeExists) {
-                throw new AppError(404, "runtime_not_found", `Runtime "${input.runtimeName}" does not exist`);
-              }
-
-              await removeRuntimeFromUploadCaches(config.paths, input.runtimeName);
-              await objectStorageModule!.deleteRuntimeFromObjectStore(config.object_storage!, input.runtimeName, (message) => {
-                console.info(`[oah-object-storage] ${message}`);
-              });
-              return;
-            }
-
-            return deleteWorkspaceRuntime({
-              runtimeDir: config.paths.runtime_dir,
-              runtimeName: input.runtimeName
-            });
-          },
+          ...createRuntimeManagement({
+            config,
+            useRuntimeObjectStorageManagement,
+            objectStorageModule,
+            loadConfigRuntimesModule
+          }),
           ...(!remoteSandboxProvider
-            ? {
-                async importWorkspace(input) {
-                  const resolvedRoot = path.resolve(input.rootPath);
-                  const relativeToAllowed = path.relative(config.paths.workspace_dir, resolvedRoot);
-                  if (relativeToAllowed.startsWith("..") || path.isAbsolute(relativeToAllowed)) {
-                    throw new AppError(
-                      403,
-                      "workspace_path_not_allowed",
-                      `rootPath "${input.rootPath}" resolves outside the allowed directory. ` +
-                        "Workspace imports must target paths within the configured workspace_dir."
-                    );
-                  }
-
-                  const discovered = await discoverWorkspaceWithEnrichedModels(input.rootPath, "project");
-                  const existing = await workspaceRepository.getById(discovered.id);
-                  const inferredExternalRef =
-                    resolveManagedWorkspaceExternalRef(input.rootPath, "project", config) ??
-                    objectStorageMirror?.managedWorkspaceExternalRef(input.rootPath, "project", config.paths);
-                  const persisted = await workspaceRepository.upsert({
-                    ...discovered,
-                    name: input.name ?? existing?.name ?? discovered.name,
-                    createdAt: existing?.createdAt ?? discovered.createdAt,
-                    externalRef: input.externalRef ?? existing?.externalRef ?? inferredExternalRef,
-                    ...(input.ownerId
-                      ? { ownerId: input.ownerId }
-                      : existing?.ownerId
-                        ? { ownerId: existing.ownerId }
-                        : {}),
-                    ...(input.serviceName
-                      ? { serviceName: input.serviceName }
-                      : existing?.serviceName
-                        ? { serviceName: existing.serviceName }
-                        : {})
-                  });
-                  return runtimeService.getWorkspace(persisted.id);
-                },
-                async registerLocalWorkspace(input) {
-                  const rootPath = await resolveLocalWorkspaceRoot(input.rootPath);
-                  if (input.runtime) {
-                    const { applyWorkspaceRuntimeToExistingRoot } = await loadConfigRuntimesModule();
-                    const runtimeDir = await resolveRuntimeSourceDirForBootstrap(
-                      input.runtime,
-                      config.paths,
-                      useRuntimeObjectStorageManagement,
-                      config.object_storage,
-                      objectStorageModule
-                    );
-                    await applyWorkspaceRuntimeToExistingRoot({
-                      runtimeDir,
-                      runtimeName: input.runtime,
-                      rootPath,
-                      platformToolDir: config.paths.tool_dir,
-                      platformSkillDir: config.paths.skill_dir
-                    });
-                  }
-                  const discovered = await discoverWorkspaceWithEnrichedModels(rootPath, "project");
-                  const existing = await workspaceRepository.getById(discovered.id);
-                  const persisted = await workspaceRepository.upsert({
-                    ...discovered,
-                    rootPath,
-                    name: input.name ?? existing?.name ?? discovered.name,
-                    createdAt: existing?.createdAt ?? discovered.createdAt,
-                    externalRef: existing?.externalRef ?? localWorkspaceExternalRef(rootPath),
-                    ...(input.ownerId
-                      ? { ownerId: input.ownerId }
-                      : existing?.ownerId
-                        ? { ownerId: existing.ownerId }
-                        : {}),
-                    ...(input.serviceName
-                      ? { serviceName: input.serviceName }
-                      : existing?.serviceName
-                        ? { serviceName: existing.serviceName }
-                        : {})
-                  });
-                  return runtimeService.getWorkspace(persisted.id);
-                },
-                async repairLocalWorkspace(input) {
-                  const rootPath = await resolveLocalWorkspaceRoot(input.rootPath);
-                  const existing = await workspaceRepository.getById(input.workspaceId);
-                  if (!existing) {
-                    throw new AppError(404, "workspace_not_found", `Workspace ${input.workspaceId} was not found.`);
-                  }
-
-                  const discovered = await discoverWorkspaceWithEnrichedModels(rootPath, "project");
-                  const conflicting = await workspaceRepository.getById(discovered.id);
-                  if (conflicting && conflicting.id !== existing.id) {
-                    throw new AppError(
-                      409,
-                      "workspace_repair_target_conflict",
-                      `Target path is already registered as workspace ${conflicting.id}. Delete that workspace before repairing ${existing.id}.`
-                    );
-                  }
-
-                  const persisted = await workspaceRepository.upsert({
-                    ...discovered,
-                    id: existing.id,
-                    rootPath,
-                    name: input.name ?? existing.name ?? discovered.name,
-                    createdAt: existing.createdAt,
-                    updatedAt: nowIso(),
-                    externalRef: localWorkspaceExternalRef(rootPath),
-                    catalog: {
-                      ...discovered.catalog,
-                      workspaceId: existing.id
-                    },
-                    ...(existing.ownerId ? { ownerId: existing.ownerId } : {}),
-                    ...(existing.serviceName ? { serviceName: existing.serviceName } : {})
-                  });
-                  return runtimeService.getWorkspace(persisted.id);
-                }
-              }
+            ? createLocalWorkspaceManagement({
+                config,
+                workspaceRepository,
+                runtimeService,
+                objectStorageModule,
+                objectStorageMirror,
+                useRuntimeObjectStorageManagement,
+                discoverWorkspaceWithEnrichedModels: (rootPath: string, kind: "project") =>
+                  discoverWorkspaceWithEnrichedModels(rootPath, kind) as Promise<WorkspaceRecord>,
+                loadConfigRuntimesModule
+              })
             : {})
         }
       : {}),
-    ...(redisWorkspacePlacementRegistry
-      ? {
-          assignWorkspacePlacementOwnerAffinity: async (input: {
-            workspaceId: string;
-            ownerId: string;
-            overwrite?: boolean | undefined;
-          }) => {
-            await redisWorkspacePlacementRegistry.assignOwnerAffinity(input.workspaceId, input.ownerId, {
-              overwrite: input.overwrite,
-              updatedAt: new Date().toISOString()
-            });
-          },
-          releaseWorkspacePlacement: async (input: {
-            workspaceId: string;
-            state?: "unassigned" | "draining" | "evicted" | undefined;
-          }) => {
-            await redisWorkspacePlacementRegistry.releaseOwnership(input.workspaceId, {
-              state: input.state ?? "evicted",
-              updatedAt: new Date().toISOString()
-            });
-          }
-        }
-      : {}),
+    ...createWorkspaceCoordinationApi({
+      redisWorkspaceLeaseRegistry,
+      redisWorkspacePlacementRegistry,
+      redisWorkerRegistry,
+      currentWorkerId,
+      ownerBaseUrl
+    }),
     ...((redisWorkspaceLeaseRegistry || redisWorkspacePlacementRegistry)
       ? {
           clearWorkspaceCoordination
-        }
-      : {}),
-    ...((redisWorkspaceLeaseRegistry || redisWorkspacePlacementRegistry)
-      ? {
-          resolveWorkspaceOwnership: async (workspaceId: string) => {
-            const lease = await redisWorkspaceLeaseRegistry?.getByWorkspaceId?.(workspaceId);
-            if (lease) {
-              return {
-                workspaceId: lease.workspaceId,
-                version: lease.version,
-                ownerWorkerId: lease.ownerWorkerId,
-                ...(lease.ownerBaseUrl ? { ownerBaseUrl: lease.ownerBaseUrl } : {}),
-                health: lease.health,
-                lastActivityAt: lease.lastActivityAt,
-                localPath: lease.localPath,
-                ...(lease.remotePrefix ? { remotePrefix: lease.remotePrefix } : {}),
-                isLocalOwner: lease.ownerWorkerId === currentWorkerId
-              };
-            }
-
-            const placement = await redisWorkspacePlacementRegistry?.getByWorkspaceId?.(workspaceId);
-            const ownerWorkerId = placement?.ownerWorkerId?.trim();
-            const placementOwnerBaseUrl = placement?.ownerBaseUrl?.trim();
-            if (
-              !placement ||
-              !ownerWorkerId ||
-              !placementOwnerBaseUrl ||
-              placement.state === "evicted" ||
-              placement.state === "unassigned"
-            ) {
-              return undefined;
-            }
-
-            if (redisWorkerRegistry && typeof redisWorkerRegistry.listActive === "function") {
-              const activeWorkers = await redisWorkerRegistry.listActive();
-              const ownerWorker = activeWorkers.find((worker) =>
-                workerRegistryMatchesPlacementOwner(worker, ownerWorkerId)
-              );
-              if (!ownerWorker) {
-                return undefined;
-              }
-            }
-
-            return {
-              workspaceId: placement.workspaceId,
-              version: placement.version,
-              ownerWorkerId,
-              ownerBaseUrl: placementOwnerBaseUrl,
-              health: placement.state === "draining" ? "late" : "healthy",
-              lastActivityAt: placement.lastActivityAt ?? placement.updatedAt,
-              ...(placement.localPath ? { localPath: placement.localPath } : {}),
-              ...(placement.remotePrefix ? { remotePrefix: placement.remotePrefix } : {}),
-              isLocalOwner:
-                ownerWorkerId === currentWorkerId || ownerBaseUrlMatches(placementOwnerBaseUrl, ownerBaseUrl)
-            };
-          }
         }
       : {}),
     ...(adminCapabilities ? { adminCapabilities } : {}),
@@ -1876,80 +912,8 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         timestamp: new Date().toISOString()
       });
     },
-    async healthReport() {
-      const workerStatus = await getWorkerStatus();
-      const materializationDiagnostics = sandboxHost?.diagnostics().materialization;
-      const checks = {
-        postgres: await postgresCheck(),
-        redisEvents: await redisEventsCheck(),
-        redisRunQueue: await redisRunQueueCheck()
-      };
-
-      return {
-        status:
-          Object.values(checks).some((value) => value === "down") || (materializationDiagnostics?.failureCount ?? 0) > 0
-            ? "degraded"
-            : "ok",
-        storage: {
-          primary: primaryStorageMode,
-          events: redisBus ? "redis" : "memory",
-          runQueue: redisRunQueue ? "redis" : "in_process"
-        },
-        process: runtimeProcess,
-        sandbox: describeSandboxTopology(sandboxHost?.providerKind),
-        checks,
-        worker: {
-          ...workerStatus,
-          ...(materializationDiagnostics ? { materialization: materializationDiagnostics } : {})
-        }
-      };
-    },
-    async readinessReport() {
-      const workerStatus = await getWorkerStatus();
-      const workerDiskReadiness =
-        runtimeProcess.mode === "api_only"
-          ? undefined
-          : evaluateWorkerDiskReadiness({
-              paths: [
-                config.paths.workspace_dir,
-                resolveRuntimeStateDir(config.paths),
-                resolveWorkspaceMaterializationCacheRoot(config.paths)
-              ]
-            });
-      const checks = {
-        postgres: await postgresCheck(),
-        redisEvents: await redisEventsCheck(),
-        redisRunQueue: await redisRunQueueCheck()
-      };
-      const readyQueueDepth = await resolveRedisReadyQueueDepth({ redisRunQueue });
-      const readyQueueLimit = resolveRedisReadyQueueReadinessLimit();
-      const checksDown = Object.values(checks).includes("down");
-      const workerDiskPressure = workerDiskReadiness?.status === "pressure";
-      const redisReadyQueuePressure =
-        readyQueueDepth !== undefined && readyQueueLimit !== undefined && readyQueueDepth >= readyQueueLimit;
-
-      return {
-        status: workerStatus.draining || workerDiskPressure || redisReadyQueuePressure || checksDown ? "not_ready" : "ready",
-        ...(workerStatus.draining ? { reason: "draining" as const, draining: true } : {}),
-        ...(!workerStatus.draining && workerDiskPressure ? { reason: "worker_disk_pressure" as const } : {}),
-        ...(!workerStatus.draining && !workerDiskPressure && redisReadyQueuePressure
-          ? { reason: "redis_ready_queue_pressure" as const }
-          : {}),
-        ...(!workerStatus.draining && !workerDiskPressure && !redisReadyQueuePressure && checksDown
-          ? { reason: "checks_down" as const }
-          : {}),
-        checks,
-        ...(workerDiskReadiness && workerDiskPressure ? { resources: { workerDisk: workerDiskReadiness } } : {}),
-        ...(readyQueueDepth !== undefined
-          ? {
-              queue: {
-                readySessionDepth: readyQueueDepth,
-                ...(readyQueueLimit !== undefined ? { readinessLimit: readyQueueLimit } : {})
-              }
-            }
-          : {})
-      };
-    },
+    healthReport: runtimeHealthReports.healthReport,
+    readinessReport: runtimeHealthReports.readinessReport,
     async beginDrain() {
       if (workspaceMaterializationMaintenanceTimer) {
         clearInterval(workspaceMaterializationMaintenanceTimer);
@@ -1980,31 +944,4 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       await controlPlaneRuntime?.close();
     }
   };
-}
-
-export function installSignalHandlers(options: { close: () => Promise<void>; beginDrain?: (() => Promise<void>) | undefined }): void {
-  let closing: Promise<void> | undefined;
-
-  const shutdown = () => {
-    if (!closing) {
-      closing = (async () => {
-        try {
-          await options.beginDrain?.();
-          await options.close();
-        } catch (error) {
-          console.error(error);
-          process.exitCode = 1;
-        }
-      })();
-    }
-
-    return closing;
-  };
-
-  process.once("SIGINT", () => {
-    void shutdown().finally(() => process.exit());
-  });
-  process.once("SIGTERM", () => {
-    void shutdown().finally(() => process.exit());
-  });
 }

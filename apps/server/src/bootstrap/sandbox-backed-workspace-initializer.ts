@@ -1,20 +1,15 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 
-import { sandboxSchema, type CreateWorkspaceRequest } from "@oah/api-contracts";
+import type { CreateWorkspaceRequest } from "@oah/api-contracts";
 import { discoverWorkspace, initializeWorkspaceFromRuntime, type DiscoveredAgent, type PlatformModelRegistry } from "@oah/config";
 import {
   createId,
-  type WorkerRegistry,
   type WorkspaceInitializationResult,
-  type WorkspacePlacementRegistry,
   type WorkspaceRecord
 } from "@oah/engine-core";
-import * as nativeBridge from "@oah/native-bridge";
 
 import {
   observeNativeWorkspaceSyncOperation,
@@ -22,16 +17,25 @@ import {
 } from "../observability/native-workspace-sync.js";
 import type { SandboxHost } from "./sandbox-host.js";
 import { enrichWorkspaceModelsWithDiscoveredMetadata } from "./model-metadata-discovery.js";
-import { resolveSelfHostedSandboxCreateBaseUrl } from "./self-hosted-sandbox-routing.js";
+import {
+  resolveSeedArchiveTimeoutMs,
+  resolveSeedUploadConcurrency,
+  SANDBOX_WORKSPACE_ROOT,
+  shouldAttemptSeedArchiveUpload,
+  shouldWarmPreparedSeedArchive
+} from "./sandbox-workspace-seed-config.js";
+import {
+  buildPreparedSeedCacheKey,
+  nativeWorkspaceSyncAdapter
+} from "./sandbox-workspace-seed-fingerprint.js";
+import {
+  createSelfHostedSandbox,
+  type SelfHostedSandboxInitializerOptions
+} from "./self-hosted-workspace-initializer.js";
 
-const SANDBOX_WORKSPACE_ROOT = "/workspace";
-const DEFAULT_SEED_UPLOAD_CONCURRENCY = 8;
-const DEFAULT_SEED_ARCHIVE_UPLOAD_MODE = "auto";
-const DEFAULT_SEED_ARCHIVE_MIN_FILE_COUNT = 16;
-const DEFAULT_SEED_ARCHIVE_MIN_TOTAL_BYTES = 128 * 1024;
-const DEFAULT_SEED_ARCHIVE_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_DELEGATED_WORKSPACE_RECORD_WAIT_MS = 2_000;
-const DEFAULT_DELEGATED_WORKSPACE_RECORD_POLL_MS = 50;
+export { createSelfHostedWorkspaceDelegatingInitializer } from "./self-hosted-workspace-initializer.js";
+export { nativeWorkspaceSyncAdapter } from "./sandbox-workspace-seed-fingerprint.js";
+
 interface PreparedSeedCacheEntry {
   cacheRoot: string;
   preparedWorkspaceRoot: string;
@@ -67,66 +71,6 @@ interface RemoteWorkspaceEntry {
   updatedAt?: string | undefined;
 }
 
-export const nativeWorkspaceSyncAdapter = {
-  isEnabled: nativeBridge.isNativeWorkspaceSyncEnabled,
-  computeDirectoryFingerprint: nativeBridge.computeNativeDirectoryFingerprint,
-  computeDirectoryFingerprintBatch: nativeBridge.computeNativeDirectoryFingerprintBatch,
-  planSeedUpload: nativeBridge.planNativeSeedUpload,
-  buildSeedArchive: nativeBridge.buildNativeSeedArchive,
-  syncLocalToSandboxHttp: nativeBridge.syncNativeLocalToSandboxHttp
-};
-
-function resolveSeedUploadConcurrency(): number {
-  const raw = process.env.OAH_SANDBOX_SEED_UPLOAD_CONCURRENCY;
-  if (!raw || raw.trim().length === 0) {
-    return DEFAULT_SEED_UPLOAD_CONCURRENCY;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SEED_UPLOAD_CONCURRENCY;
-}
-
-function resolveSeedArchiveUploadMode(): "off" | "auto" | "force" {
-  const raw = process.env.OAH_SANDBOX_SEED_ARCHIVE_UPLOAD?.trim().toLowerCase();
-  if (!raw) {
-    return DEFAULT_SEED_ARCHIVE_UPLOAD_MODE as "auto";
-  }
-
-  if (["0", "false", "off", "no", "disabled"].includes(raw)) {
-    return "off";
-  }
-
-  if (["1", "true", "on", "yes", "enabled", "force"].includes(raw)) {
-    return "force";
-  }
-
-  return "auto";
-}
-
-function resolveSeedArchiveTimeoutMs(): number {
-  const raw = process.env.OAH_SANDBOX_SEED_ARCHIVE_TIMEOUT_MS?.trim();
-  if (!raw) {
-    return DEFAULT_SEED_ARCHIVE_TIMEOUT_MS;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SEED_ARCHIVE_TIMEOUT_MS;
-}
-
-function shouldWarmPreparedSeedArchive(): boolean {
-  return resolveSeedArchiveUploadMode() !== "off";
-}
-
-function resolveDelegatedWorkspaceRecordWaitMs(): number {
-  const raw = process.env.OAH_SELF_HOSTED_WORKSPACE_RECORD_WAIT_MS?.trim();
-  if (!raw) {
-    return DEFAULT_DELEGATED_WORKSPACE_RECORD_WAIT_MS;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_DELEGATED_WORKSPACE_RECORD_WAIT_MS;
-}
-
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\"'\"'`)}'`;
 }
@@ -147,7 +91,7 @@ async function runLocalProcess(input: {
     const timeoutHandle = setTimeout(() => {
       timeoutTriggered = true;
       child.kill("SIGTERM");
-    }, input.timeoutMs ?? DEFAULT_SEED_ARCHIVE_TIMEOUT_MS);
+      }, input.timeoutMs ?? resolveSeedArchiveTimeoutMs());
 
     child.stderr.on("data", (chunk: Buffer | string) => {
       stderr = `${stderr}${chunk.toString()}`.slice(-32_768);
@@ -159,7 +103,7 @@ async function runLocalProcess(input: {
     child.on("close", (code) => {
       clearTimeout(timeoutHandle);
       if (timeoutTriggered) {
-        reject(new Error(`Process timed out after ${input.timeoutMs ?? DEFAULT_SEED_ARCHIVE_TIMEOUT_MS}ms.`));
+        reject(new Error(`Process timed out after ${input.timeoutMs ?? resolveSeedArchiveTimeoutMs()}ms.`));
         return;
       }
       if ((code ?? 0) !== 0) {
@@ -169,150 +113,6 @@ async function runLocalProcess(input: {
       resolve();
     });
   });
-}
-
-async function collectDirectoryFingerprint(rootPath: string): Promise<string> {
-  if (nativeWorkspaceSyncAdapter.isEnabled()) {
-    try {
-      const result = await observeNativeWorkspaceSyncOperation({
-        operation: "fingerprint",
-        implementation: "rust",
-        target: rootPath,
-        logFailure: false,
-        action: () => nativeWorkspaceSyncAdapter.computeDirectoryFingerprint({ rootDir: rootPath })
-      });
-      return result.fingerprint;
-    } catch (error) {
-      recordNativeWorkspaceSyncFallback({
-        operation: "fingerprint",
-        target: rootPath,
-        error
-      });
-    }
-  }
-
-  return observeNativeWorkspaceSyncOperation({
-    operation: "fingerprint",
-    implementation: "ts",
-    target: rootPath,
-    logSuccess: false,
-    logFailure: false,
-    action: async () => {
-      const hash = createHash("sha1");
-      const visit = async (currentPath: string): Promise<void> => {
-        const entries = await readdir(currentPath, { withFileTypes: true }).catch(() => []);
-        entries.sort((left, right) => left.name.localeCompare(right.name));
-
-        for (const entry of entries) {
-          const absolutePath = path.join(currentPath, entry.name);
-          const relativePath = path.relative(rootPath, absolutePath).replaceAll(path.sep, "/");
-          const entryStat = await stat(absolutePath).catch(() => null);
-          if (!entryStat) {
-            continue;
-          }
-
-          hash.update(
-            `${entry.isDirectory() ? "dir" : "file"}:${relativePath}:${entryStat.size}:${Math.trunc(entryStat.mtimeMs)}\n`
-          );
-          if (entry.isDirectory()) {
-            await visit(absolutePath);
-          }
-        }
-      };
-
-      await visit(rootPath);
-      return hash.digest("hex");
-    }
-  });
-}
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableJson(item)).join(",")}]`;
-  }
-
-  const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
-  return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`).join(",")}}`;
-}
-
-async function buildPreparedSeedCacheKey(input: {
-  runtimeDir: string;
-  runtimeName: string;
-  platformToolDir: string;
-  platformSkillDir: string;
-  toolDir: string;
-  agentsMd?: string | undefined;
-  toolServers?: Record<string, Record<string, unknown>> | undefined;
-  skills?: Array<{ name: string; content: string }> | undefined;
-}): Promise<string> {
-  const runtimeRoot = path.join(input.runtimeDir, input.runtimeName);
-  const fingerprintInputs = [
-    { key: "runtimeRoot", rootDir: runtimeRoot },
-    { key: "platformToolDir", rootDir: input.platformToolDir },
-    { key: "platformSkillDir", rootDir: input.platformSkillDir },
-    { key: "toolDir", rootDir: input.toolDir }
-  ] as const;
-
-  const directoryFingerprints = new Map<string, string>();
-  if (nativeWorkspaceSyncAdapter.isEnabled()) {
-    try {
-      const result = await observeNativeWorkspaceSyncOperation({
-        operation: "fingerprint_batch",
-        implementation: "rust",
-        target: runtimeRoot,
-        logFailure: false,
-        metadata: {
-          directoryCount: fingerprintInputs.length
-        },
-        action: () =>
-          nativeWorkspaceSyncAdapter.computeDirectoryFingerprintBatch({
-            directories: fingerprintInputs.map((entry) => ({
-              rootDir: entry.rootDir
-            }))
-          })
-      });
-      for (const [index, entry] of result.results.entries()) {
-        const fingerprintInput = fingerprintInputs[index];
-        if (!fingerprintInput) {
-          continue;
-        }
-        directoryFingerprints.set(fingerprintInput.key, entry.fingerprint);
-      }
-    } catch (error) {
-      recordNativeWorkspaceSyncFallback({
-        operation: "fingerprint_batch",
-        target: runtimeRoot,
-        error,
-        metadata: {
-          directoryCount: fingerprintInputs.length
-        }
-      });
-    }
-  }
-
-  const hash = createHash("sha1");
-  hash.update(input.runtimeName);
-  hash.update("\n");
-  hash.update(directoryFingerprints.get("runtimeRoot") ?? (await collectDirectoryFingerprint(runtimeRoot)));
-  hash.update("\n");
-  hash.update(directoryFingerprints.get("platformToolDir") ?? (await collectDirectoryFingerprint(input.platformToolDir).catch(() => "")));
-  hash.update("\n");
-  hash.update(
-    directoryFingerprints.get("platformSkillDir") ?? (await collectDirectoryFingerprint(input.platformSkillDir).catch(() => ""))
-  );
-  hash.update("\n");
-  hash.update(directoryFingerprints.get("toolDir") ?? (await collectDirectoryFingerprint(input.toolDir).catch(() => "")));
-  hash.update("\n");
-  hash.update(input.agentsMd?.trim() ?? "");
-  hash.update("\n");
-  hash.update(stableJson(input.toolServers ?? {}));
-  hash.update("\n");
-  hash.update(stableJson(input.skills ?? []));
-  return hash.digest("hex");
 }
 
 async function runWithConcurrency<T>(
@@ -584,19 +384,6 @@ function resolveLeafEmptyRemoteDirectories(input: {
       !directories.some((directory) => directory !== candidate && directory.startsWith(childPrefix))
     );
   });
-}
-
-function shouldAttemptSeedArchiveUpload(input: PreparedSeedArchiveMetrics): boolean {
-  const mode = resolveSeedArchiveUploadMode();
-  if (mode === "off") {
-    return false;
-  }
-
-  if (mode === "force") {
-    return input.fileCount > 0;
-  }
-
-  return input.fileCount >= DEFAULT_SEED_ARCHIVE_MIN_FILE_COUNT || input.totalBytes >= DEFAULT_SEED_ARCHIVE_MIN_TOTAL_BYTES;
 }
 
 async function maybeUploadSeedArchive(input: {
@@ -974,111 +761,6 @@ function createSandboxSeedWorkspace(input: {
   };
 }
 
-async function createSelfHostedSandbox(input: {
-  request: CreateWorkspaceRequest;
-  workspaceId: string;
-  baseUrl: string;
-  headers?: Record<string, string> | undefined;
-  includeWorkspaceId?: boolean | undefined;
-  maxWorkspacesPerSandbox?: number | undefined;
-  resourceCpuPressureThreshold?: number | undefined;
-  resourceMemoryPressureThreshold?: number | undefined;
-  resourceDiskPressureThreshold?: number | undefined;
-  workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignOwnerAffinity"> | undefined;
-  workerRegistry?: Pick<WorkerRegistry, "listActive"> | undefined;
-}) {
-  const targetBaseUrl =
-    (await resolveSelfHostedSandboxCreateBaseUrl({
-      baseUrl: input.baseUrl,
-      workspace: {
-        ...(input.request.ownerId ? { ownerId: input.request.ownerId } : {}),
-        id: input.workspaceId
-      },
-      maxWorkspacesPerSandbox: input.maxWorkspacesPerSandbox,
-      resourceCpuPressureThreshold: input.resourceCpuPressureThreshold,
-      resourceMemoryPressureThreshold: input.resourceMemoryPressureThreshold,
-      resourceDiskPressureThreshold: input.resourceDiskPressureThreshold,
-      ...(input.workspacePlacementRegistry ? { workspacePlacementRegistry: input.workspacePlacementRegistry } : {}),
-      ...(input.workerRegistry ? { workerRegistry: input.workerRegistry } : {})
-    })) ?? input.baseUrl;
-  const response = await fetch(`${targetBaseUrl.replace(/\/$/, "")}/sandboxes`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(input.headers ?? {})
-    },
-    body: JSON.stringify({
-      ...(input.includeWorkspaceId ? { workspaceId: input.workspaceId } : {}),
-      name: input.request.name,
-      runtime: input.request.runtime,
-      executionPolicy: input.request.executionPolicy,
-      ...(input.request.externalRef ? { externalRef: input.request.externalRef } : {}),
-      ...(input.request.ownerId ? { ownerId: input.request.ownerId } : {}),
-      ...(input.request.serviceName ? { serviceName: input.request.serviceName } : {})
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to create self-hosted sandbox: ${response.status} ${response.statusText}`);
-  }
-
-  return sandboxSchema.parse(await response.json());
-}
-
-export function createSelfHostedWorkspaceDelegatingInitializer(options: {
-  selfHosted: {
-    baseUrl: string;
-    headers?: Record<string, string> | undefined;
-    maxWorkspacesPerSandbox?: number | undefined;
-    resourceCpuPressureThreshold?: number | undefined;
-    resourceMemoryPressureThreshold?: number | undefined;
-    resourceDiskPressureThreshold?: number | undefined;
-    workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignOwnerAffinity"> | undefined;
-    workerRegistry?: Pick<WorkerRegistry, "listActive"> | undefined;
-  };
-  getWorkspaceRecord(workspaceId: string): Promise<WorkspaceRecord | undefined>;
-}) {
-  return {
-    async initialize(input: CreateWorkspaceRequest): Promise<WorkspaceInitializationResult> {
-      const workspaceId = (
-        input as CreateWorkspaceRequest & {
-          workspaceId?: string | undefined;
-        }
-      ).workspaceId?.trim() || createId("ws");
-
-      const sandbox = await createSelfHostedSandbox({
-        request: input,
-        workspaceId,
-        baseUrl: options.selfHosted.baseUrl,
-        headers: options.selfHosted.headers,
-        includeWorkspaceId: true,
-        maxWorkspacesPerSandbox: options.selfHosted.maxWorkspacesPerSandbox,
-        resourceCpuPressureThreshold: options.selfHosted.resourceCpuPressureThreshold,
-        resourceMemoryPressureThreshold: options.selfHosted.resourceMemoryPressureThreshold,
-        resourceDiskPressureThreshold: options.selfHosted.resourceDiskPressureThreshold,
-        ...(options.selfHosted.workspacePlacementRegistry
-          ? { workspacePlacementRegistry: options.selfHosted.workspacePlacementRegistry }
-          : {}),
-        ...(options.selfHosted.workerRegistry ? { workerRegistry: options.selfHosted.workerRegistry } : {})
-      });
-
-      const waitUntilMs = Date.now() + resolveDelegatedWorkspaceRecordWaitMs();
-      let created = await options.getWorkspaceRecord(sandbox.workspaceId);
-      while (!created && Date.now() < waitUntilMs) {
-        await sleep(DEFAULT_DELEGATED_WORKSPACE_RECORD_POLL_MS);
-        created = await options.getWorkspaceRecord(sandbox.workspaceId);
-      }
-      if (!created) {
-        throw new Error(
-          `Self-hosted worker created sandbox ${sandbox.id} for workspace ${sandbox.workspaceId}, but no workspace record was visible to the API.`
-        );
-      }
-
-      return created;
-    }
-  };
-}
-
 export function createSandboxBackedWorkspaceInitializer(options: {
   runtimeDir: string;
   platformToolDir: string;
@@ -1087,16 +769,7 @@ export function createSandboxBackedWorkspaceInitializer(options: {
   platformModels: PlatformModelRegistry;
   platformAgents: Record<string, DiscoveredAgent>;
   sandboxHost: SandboxHost;
-  selfHosted?: {
-    baseUrl: string;
-    headers?: Record<string, string> | undefined;
-    maxWorkspacesPerSandbox?: number | undefined;
-    resourceCpuPressureThreshold?: number | undefined;
-    resourceMemoryPressureThreshold?: number | undefined;
-    resourceDiskPressureThreshold?: number | undefined;
-    workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignOwnerAffinity"> | undefined;
-    workerRegistry?: Pick<WorkerRegistry, "listActive"> | undefined;
-  } | undefined;
+  selfHosted?: SelfHostedSandboxInitializerOptions | undefined;
 }) {
   async function prepareSeed(
     input: CreateWorkspaceRequest,

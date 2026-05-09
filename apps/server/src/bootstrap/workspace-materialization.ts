@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -10,166 +9,44 @@ import {
   shouldExcludeWorkspaceBackingStoreRelativePath,
   syncWorkspaceRootToObjectStore,
   syncRemotePrefixToLocal,
-  type DirectoryObjectStore,
-  type ObjectStoreRequestCounts,
-  type RemoteToLocalDirectorySyncPhaseTimings
+  type DirectoryObjectStore
 } from "../object-storage.js";
+import {
+  buildCacheSuffix,
+  inferWorkspaceRootFromCacheRoot,
+  resolveWorkspaceMaterializationSource,
+  safeSegment
+} from "./workspace-materialization-paths.js";
+import {
+  WorkspaceMaterializationAggregateError,
+  WorkspaceMaterializationDrainingError,
+  WorkspaceMaterializationOperationError,
+  WorkspaceMaterializationUnsupportedVersionError,
+  type WorkspaceMaterializationDiagnostics,
+  type WorkspaceMaterializationEntry,
+  type WorkspaceMaterializationFailureDiagnostic,
+  type WorkspaceMaterializationFailureStage,
+  type WorkspaceMaterializationLease,
+  type WorkspaceMaterializationManagerOptions,
+  type WorkspaceMaterializationSnapshot,
+  type WorkspaceMaterializationSource,
+  type WorkspaceMaterializeResult
+} from "./workspace-materialization-types.js";
 
-type WorkspaceMaterializationSource =
-  | {
-      kind: "object_store";
-      bucket?: string | undefined;
-      remotePrefix: string;
-    }
-  | {
-      kind: "local_directory";
-      rootPath: string;
-    };
-
-interface WorkspaceMaterializationEntry {
-  cacheKey: string;
-  workspaceId: string;
-  version: string;
-  ownerId?: string | undefined;
-  ownerWorkerId: string;
-  source: WorkspaceMaterializationSource;
-  localPath: string;
-  dirty: boolean;
-  refCount: number;
-  materializedAt?: string | undefined;
-  lastSyncedLocalFingerprint?: string | undefined;
-  lastActivityAt: string;
-  inFlight?: Promise<WorkspaceMaterializeResult | undefined> | undefined;
-}
-
-export class WorkspaceMaterializationDrainingError extends Error {
-  constructor(message = "Workspace materialization is draining and cannot start a new object-store materialization.") {
-    super(message);
-    this.name = "WorkspaceMaterializationDrainingError";
-  }
-}
-
-export class WorkspaceMaterializationUnsupportedVersionError extends Error {
-  constructor(version: string) {
-    super(
-      `Workspace materialization only supports the live version locally. Received "${version}". ` +
-        "Restore the desired object-store state into the live workspace before using it."
-    );
-    this.name = "WorkspaceMaterializationUnsupportedVersionError";
-  }
-}
-
-export type WorkspaceMaterializationFailureStage =
-  | "materialize"
-  | "idle_flush"
-  | "idle_evict"
-  | "drain_evict"
-  | "drain_release"
-  | "delete"
-  | "close";
-
-export interface WorkspaceMaterializationFailureDiagnostic {
-  cacheKey: string;
-  workspaceId: string;
-  version: string;
-  ownerWorkerId: string;
-  sourceKind: "object_store" | "local_directory";
-  localPath: string;
-  remotePrefix?: string | undefined;
-  stage: WorkspaceMaterializationFailureStage;
-  operation: "materialize" | "flush" | "evict";
-  at: string;
-  errorMessage: string;
-  dirty: boolean;
-  refCount: number;
-  draining: boolean;
-}
-
-export class WorkspaceMaterializationOperationError extends Error {
-  readonly diagnostic: WorkspaceMaterializationFailureDiagnostic;
-  readonly cause: unknown;
-
-  constructor(diagnostic: WorkspaceMaterializationFailureDiagnostic, cause: unknown) {
-    super(
-      `Workspace materialization ${diagnostic.operation} failed during ${diagnostic.stage} for ${diagnostic.workspaceId}@${diagnostic.version}: ${diagnostic.errorMessage}`
-    );
-    this.name = "WorkspaceMaterializationOperationError";
-    this.diagnostic = diagnostic;
-    this.cause = cause;
-  }
-}
-
-export class WorkspaceMaterializationAggregateError extends Error {
-  readonly failures: WorkspaceMaterializationFailureDiagnostic[];
-
-  constructor(failures: WorkspaceMaterializationFailureDiagnostic[]) {
-    super(
-      `Workspace materialization encountered ${failures.length} failure(s): ${failures
-        .map((failure) => `${failure.workspaceId}@${failure.version}:${failure.stage}`)
-        .join(", ")}`
-    );
-    this.name = "WorkspaceMaterializationAggregateError";
-    this.failures = failures;
-  }
-}
-
-export interface WorkspaceMaterializationSnapshot {
-  cacheKey: string;
-  workspaceId: string;
-  version: string;
-  ownerWorkerId: string;
-  sourceKind: "object_store" | "local_directory";
-  localPath: string;
-  remotePrefix?: string | undefined;
-  dirty: boolean;
-  refCount: number;
-  materializedAt?: string | undefined;
-  lastActivityAt: string;
-}
-
-export interface WorkspaceMaterializationDiagnostics {
-  draining: boolean;
-  drainStartedAt?: string | undefined;
-  cachedCopies: number;
-  objectStoreCopies: number;
-  dirtyCopies: number;
-  busyCopies: number;
-  idleCopies: number;
-  failureCount: number;
-  blockerCount: number;
-  failures: WorkspaceMaterializationFailureDiagnostic[];
-}
-
-export interface WorkspaceMaterializationLease {
-  workspaceId: string;
-  version: string;
-  ownerWorkerId: string;
-  localPath: string;
-  sourceKind: "object_store" | "local_directory";
-  remotePrefix?: string | undefined;
-  materializeRequestCounts?: ObjectStoreRequestCounts | undefined;
-  materializePhaseTimings?: RemoteToLocalDirectorySyncPhaseTimings | undefined;
-  markDirty(): void;
-  touch(): void;
-  release(options?: { dirty?: boolean | undefined }): Promise<void>;
-}
-
-interface WorkspaceMaterializeResult {
-  requestCounts?: ObjectStoreRequestCounts | undefined;
-  phaseTimings?: RemoteToLocalDirectorySyncPhaseTimings | undefined;
-}
-
-export interface WorkspaceMaterializationManagerOptions {
-  cacheRoot: string;
-  workspaceRoot?: string | undefined;
-  workerId: string;
-  ownerBaseUrl?: string | undefined;
-  store: DirectoryObjectStore;
-  leaseRegistry?: WorkspaceLeaseRegistry | undefined;
-  placementRegistry?: WorkspacePlacementRegistry | undefined;
-  leaseTtlMs?: number | undefined;
-  logger?: ((message: string) => void) | undefined;
-}
+export {
+  WorkspaceMaterializationAggregateError,
+  WorkspaceMaterializationDrainingError,
+  WorkspaceMaterializationOperationError,
+  WorkspaceMaterializationUnsupportedVersionError
+} from "./workspace-materialization-types.js";
+export type {
+  WorkspaceMaterializationDiagnostics,
+  WorkspaceMaterializationFailureDiagnostic,
+  WorkspaceMaterializationFailureStage,
+  WorkspaceMaterializationLease,
+  WorkspaceMaterializationManagerOptions,
+  WorkspaceMaterializationSnapshot
+} from "./workspace-materialization-types.js";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -184,59 +61,6 @@ const MATERIALIZATION_SYNC_METADATA_DIRECTORY = ".sync-metadata";
 interface MaterializationSyncMetadata {
   localFingerprint: string;
   syncedAt: string;
-}
-
-function normalizeRemotePrefix(prefix: string): string {
-  return prefix.replace(/^\/+|\/+$/g, "");
-}
-
-function safeSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80) || "workspace";
-}
-
-function buildCacheSuffix(input: { workspaceId: string; version: string; source: WorkspaceMaterializationSource }): string {
-  const sourceKey = input.source.kind === "object_store" ? `${input.source.bucket ?? ""}:${input.source.remotePrefix}` : input.source.rootPath;
-  return createHash("sha1").update(`${input.workspaceId}:${input.version}:${sourceKey}`).digest("hex").slice(0, 12);
-}
-
-function inferWorkspaceRootFromCacheRoot(cacheRoot: string): string {
-  const normalizedCacheRoot = path.resolve(cacheRoot);
-  const cacheParent = path.dirname(normalizedCacheRoot);
-  if (path.basename(normalizedCacheRoot) === "__materialized__" && path.basename(cacheParent) === ".openharness") {
-    return path.dirname(cacheParent);
-  }
-
-  return normalizedCacheRoot;
-}
-
-function parseExternalWorkspaceRef(externalRef: string): { bucket?: string | undefined; remotePrefix: string } {
-  const parsed = new URL(externalRef);
-  if (parsed.protocol !== "s3:") {
-    throw new Error(`Unsupported workspace externalRef protocol: ${parsed.protocol}`);
-  }
-
-  return {
-    bucket: parsed.hostname || undefined,
-    remotePrefix: normalizeRemotePrefix(parsed.pathname)
-  };
-}
-
-function resolveWorkspaceMaterializationSource(
-  workspace: Pick<WorkspaceRecord, "rootPath" | "externalRef">
-): WorkspaceMaterializationSource {
-  if (!workspace.externalRef) {
-    return {
-      kind: "local_directory",
-      rootPath: workspace.rootPath
-    };
-  }
-
-  const parsed = parseExternalWorkspaceRef(workspace.externalRef);
-  return {
-    kind: "object_store",
-    bucket: parsed.bucket,
-    remotePrefix: parsed.remotePrefix
-  };
 }
 
 export class WorkspaceMaterializationManager {
