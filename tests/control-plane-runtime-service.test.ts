@@ -75,8 +75,14 @@ function createKernel(overrides: Partial<ConstructorParameters<typeof ControlPla
 }
 
 describe("ControlPlaneEngineService", () => {
-  it("refreshes workspace definitions before session creation", async () => {
-    const refreshWorkspaceDefinition = vi.fn(async () => undefined);
+  it("refreshes workspace definitions after session creation without blocking the response", async () => {
+    let resolveRefresh: (() => void) | undefined;
+    const refreshWorkspaceDefinition = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRefresh = resolve;
+        })
+    );
     const createSessionKernel = vi.fn(async () => createSession());
     const service = new ControlPlaneEngineService(
       createKernel({
@@ -89,18 +95,23 @@ describe("ControlPlaneEngineService", () => {
       }
     );
 
-    await service.createSession({
+    const session = await service.createSession({
       workspaceId: "ws_1",
       caller: { subjectRef: "user_1", authSource: "test", scopes: [], workspaceAccess: [] },
       input: { title: "Demo" }
     });
 
+    expect(session.id).toBe("ses_1");
+    expect(createSessionKernel).toHaveBeenCalledTimes(1);
     expect(refreshWorkspaceDefinition).toHaveBeenCalledTimes(1);
     expect(refreshWorkspaceDefinition).toHaveBeenCalledWith("ws_1");
-    expect(refreshWorkspaceDefinition.mock.invocationCallOrder[0]).toBeLessThan(createSessionKernel.mock.invocationCallOrder[0]);
+    expect(createSessionKernel.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshWorkspaceDefinition.mock.invocationCallOrder[0]
+    );
+    resolveRefresh?.();
   });
 
-  it("logs and swallows workspace definition refresh failures before session creation", async () => {
+  it("logs and swallows workspace definition refresh failures after session creation", async () => {
     const warn = vi.fn();
     const createSessionKernel = vi.fn(async () => createSession());
     const service = new ControlPlaneEngineService(
@@ -126,9 +137,10 @@ describe("ControlPlaneEngineService", () => {
         input: { title: "Demo" }
       })
     ).resolves.toMatchObject({ id: "ses_1" });
+    await Promise.resolve();
 
     expect(createSessionKernel).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith("Workspace definition refresh failed before session creation.", {
+    expect(warn).toHaveBeenCalledWith("Workspace definition refresh failed after session creation.", {
       workspaceId: "ws_1",
       errorMessage: "refresh failed"
     });

@@ -13,6 +13,9 @@ import { RunStateService } from "./engine/run-state.js";
 import { SessionHistoryService } from "./engine/session-history.js";
 import { RunStepService } from "./engine/run-steps.js";
 import { WorkspaceEngineService } from "./engine/workspace-engine.js";
+import { ModelResolverService } from "./engine/model-resolver.js";
+import { buildSessionRecord } from "./engine/session-creation.js";
+import { SessionRecordService } from "./engine/session-records.js";
 import type {
   CreateEngineExecutionServicesDependencies,
   EngineExecutionServices
@@ -103,6 +106,8 @@ export class EngineService {
   readonly #runSteps: RunStepService;
   readonly #runState: RunStateService;
   readonly #workspaceRuntime: WorkspaceEngineService;
+  readonly #sessionModelResolver: ModelResolverService;
+  readonly #sessionRecords: SessionRecordService;
   #runtimeKernelModule:
     | (typeof import("./engine-runtime-kernel.js"))
     | undefined;
@@ -172,6 +177,19 @@ export class EngineService {
       workspaceFiles: this.#workspaceFiles,
       workspaceFileSystem: this.#workspaceFileSystem,
       workspaceCommandExecutor: this.#workspaceCommandExecutor
+    });
+    this.#sessionModelResolver = new ModelResolverService({
+      defaultModel: this.#defaultModel,
+      platformModels: this.#platformModels
+    });
+    this.#sessionRecords = new SessionRecordService({
+      sessionRepository: this.#sessionRepository,
+      messageRepository: this.#messageRepository,
+      runRepository: this.#runRepository,
+      runStepRepository: this.#runStepRepository,
+      sessionPendingRunQueueRepository: this.#sessionPendingRunQueueRepository,
+      workspaceArchiveRepository: this.#workspaceArchiveRepository,
+      getWorkspaceRecord: (workspaceId) => this.#workspaceRuntime.getWorkspaceRecord(workspaceId)
     });
     if (this.#executionServicesMode === "eager") {
       this.#warmExecutionRuntime();
@@ -558,11 +576,22 @@ export class EngineService {
   }
 
   async createSession({ workspaceId, caller, input }: CreateSessionParams): Promise<Session> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.createSession({ workspaceId, caller, input });
+    const workspace = await this.#workspaceRuntime.getWorkspaceRecord(workspaceId);
+    return this.#sessionRepository.create(
+      buildSessionRecord({
+        workspace,
+        caller,
+        sessionInput: input,
+        normalizeModelRef: (targetWorkspace, modelRef) =>
+          this.#sessionModelResolver.normalizeSessionModelRef(targetWorkspace, modelRef),
+        createId,
+        nowIso
+      })
+    );
   }
 
   async getSession(sessionId: string): Promise<Session> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.getSession(sessionId);
+    return this.#sessionRecords.getSession(sessionId);
   }
 
   async updateSession({ sessionId, input }: UpdateSessionParams): Promise<Session> {
@@ -570,15 +599,15 @@ export class EngineService {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    await (await this.#ensureRuntimeKernel()).sessionRuntime.deleteSession(sessionId);
+    await this.#sessionRecords.deleteSession(sessionId);
   }
 
   async listWorkspaceSessions(workspaceId: string, pageSize: number, cursor?: string): Promise<SessionListResult> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.listWorkspaceSessions(workspaceId, pageSize, cursor);
+    return this.#sessionRecords.listWorkspaceSessions(workspaceId, pageSize, cursor);
   }
 
   async listChildSessions(parentSessionId: string, pageSize = 100, cursor?: string): Promise<SessionListResult> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.listChildSessions(parentSessionId, pageSize, cursor);
+    return this.#sessionRecords.listChildSessions(parentSessionId, pageSize, cursor);
   }
 
   async listSessionMessages(
@@ -587,11 +616,11 @@ export class EngineService {
     cursor?: string,
     direction: MessagePageDirection = "forward"
   ): Promise<MessageListResult> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.listSessionMessages(sessionId, pageSize, cursor, direction);
+    return this.#sessionRecords.listSessionMessages(sessionId, pageSize, cursor, direction);
   }
 
   async getSessionMessage(sessionId: string, messageId: string): Promise<Message> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.getSessionMessage(sessionId, messageId);
+    return this.#sessionRecords.getSessionMessage(sessionId, messageId);
   }
 
   async getSessionMessageContext(
@@ -600,7 +629,7 @@ export class EngineService {
     before = 20,
     after = 20
   ): Promise<MessageContextResult> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.getSessionMessageContext(sessionId, messageId, before, after);
+    return this.#sessionRecords.getSessionMessageContext(sessionId, messageId, before, after);
   }
 
   async listSessionEngineMessages(sessionId: string, pageSize = 100, cursor?: string): Promise<EngineMessageListResult> {
@@ -612,11 +641,11 @@ export class EngineService {
   }
 
   async listSessionRuns(sessionId: string, pageSize = 100, cursor?: string): Promise<RunListResult> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.listSessionRuns(sessionId, pageSize, cursor);
+    return this.#sessionRecords.listSessionRuns(sessionId, pageSize, cursor);
   }
 
   async listSessionQueuedRuns(sessionId: string): Promise<import("./types.js").SessionQueuedRunListResult> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.listSessionQueuedRuns(sessionId);
+    return this.#sessionRecords.listSessionQueuedRuns(sessionId);
   }
 
   async compactSession({ sessionId, caller, input }: CompactSessionParams): Promise<SessionCompactResult> {
@@ -772,7 +801,7 @@ export class EngineService {
   }
 
   async listRunSteps(runId: string, pageSize = 100, cursor?: string): Promise<RunStepListResult> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.listRunSteps(runId, pageSize, cursor);
+    return this.#sessionRecords.listRunSteps(runId, pageSize, cursor);
   }
 
   async createSessionMessage({ sessionId, caller, input }: CreateSessionMessageParams): Promise<MessageAcceptedResult> {

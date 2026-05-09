@@ -216,9 +216,9 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
       await this.#touchWorkspace(workspaceId);
     };
     this.createSession = async (input) => {
-      await this.#refreshWorkspaceDefinition(input.workspaceId);
       const session = await kernel.createSession(input);
       await this.#touchWorkspace(input.workspaceId);
+      this.#scheduleWorkspaceDefinitionRefresh(input.workspaceId);
       this.#scheduleWorkspacePrewarm(input.workspaceId);
       return session;
     };
@@ -328,19 +328,19 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     await this.#workspaceActivityTracker?.touchWorkspace(workspaceId);
   }
 
-  async #refreshWorkspaceDefinition(workspaceId: string): Promise<void> {
+  #scheduleWorkspaceDefinitionRefresh(workspaceId: string): void {
     if (!this.#workspaceDefinitionRefresher) {
       return;
     }
 
-    try {
-      await this.#workspaceDefinitionRefresher.refreshWorkspaceDefinition(workspaceId);
-    } catch (error) {
-      this.#logger?.warn?.("Workspace definition refresh failed before session creation.", {
-        workspaceId,
-        errorMessage: error instanceof Error ? error.message : String(error)
+    void Promise.resolve()
+      .then(() => this.#workspaceDefinitionRefresher?.refreshWorkspaceDefinition(workspaceId))
+      .catch((error: unknown) => {
+        this.#logger?.warn?.("Workspace definition refresh failed after session creation.", {
+          workspaceId,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
       });
-    }
   }
 
   #scheduleWorkspacePrewarm(workspaceId: string): void {

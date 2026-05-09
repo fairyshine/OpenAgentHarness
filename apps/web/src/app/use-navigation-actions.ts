@@ -147,22 +147,29 @@ export function useNavigationActions(params: NavigationActionParams) {
   async function removeSavedSession(sessionToRemoveId: string) {
     const sessionIdsToRemove = collectSessionTreeIds(sessionToRemoveId, params.navigation.savedSessions);
     const sessionIdsToRemoveSet = new Set(sessionIdsToRemove);
-
-    try {
-      await params.request<void>(`/api/v1/sessions/${sessionToRemoveId}`, { method: "DELETE" });
-    } catch (error) {
-      if (!isNotFoundError(error)) {
-        params.setErrorMessage(toErrorMessage(error));
-        return;
-      }
-    }
+    const previousSavedSessions = params.navigation.savedSessions;
+    const previousRecentSessions = params.navigation.recentSessions;
+    const previousExpandedSessionIds = params.navigation.expandedSessionIds;
+    const wasSelected = Boolean(params.navigation.sessionId && sessionIdsToRemoveSet.has(params.navigation.sessionId));
 
     params.navigation.setSavedSessions((current) => current.filter((entry) => !sessionIdsToRemoveSet.has(entry.id)));
     params.navigation.setRecentSessions((current) => current.filter((entry) => !sessionIdsToRemoveSet.has(entry)));
     params.navigation.setExpandedSessionIds((current) => current.filter((entry) => !sessionIdsToRemoveSet.has(entry)));
 
-    if (params.navigation.sessionId && sessionIdsToRemoveSet.has(params.navigation.sessionId)) {
+    if (wasSelected) {
       clearSessionSelection();
+    }
+
+    try {
+      await params.request<void>(`/api/v1/sessions/${sessionToRemoveId}`, { method: "DELETE" });
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        params.navigation.setSavedSessions(previousSavedSessions);
+        params.navigation.setRecentSessions(previousRecentSessions);
+        params.navigation.setExpandedSessionIds(previousExpandedSessionIds);
+        params.setErrorMessage(toErrorMessage(error));
+        return;
+      }
     }
 
     const removedChildCount = Math.max(0, sessionIdsToRemove.length - 1);
@@ -650,8 +657,6 @@ export function useNavigationActions(params: NavigationActionParams) {
       }));
       params.navigation.setShowWorkspaceCreator(false);
       expandWorkspaceInSidebar(created.id);
-      await refreshWorkspace(created.id, true);
-      await refreshWorkspaceIndex(true);
       const folderName = pathLeaf(created.rootPath);
       params.setActivity(
         folderName
@@ -659,6 +664,8 @@ export function useNavigationActions(params: NavigationActionParams) {
           : `Workspace ${created.name} 已创建 · ${created.id}`
       );
       params.setErrorMessage("");
+      void refreshWorkspace(created.id, true);
+      void refreshWorkspaceIndex(true);
     } catch (error) {
       params.setErrorMessage(toErrorMessage(error));
     }
@@ -739,18 +746,28 @@ export function useNavigationActions(params: NavigationActionParams) {
         body: JSON.stringify({})
       });
 
+      params.runtime.streamAbortRef.current?.abort();
       params.runtime.lastCursorRef.current = undefined;
+      window.clearTimeout(params.runtime.runPollingTimerRef.current);
       startTransition(() => {
+        params.navigation.setSession(created);
+        params.navigation.setSessionId(created.id);
+        params.navigation.setWorkspaceId(created.workspaceId);
+        params.navigation.setRecentSessions((current) => addRecentId(current, created.id));
+        params.runtime.setStreamState("idle");
+        params.runtime.setMessages([]);
         params.runtime.setEvents([]);
         params.runtime.setSelectedRunId("");
         params.runtime.setRun(null);
         params.runtime.setRunSteps([]);
         params.runtime.setLiveMessagesByKey({});
       });
-      await refreshSession(created.id, true);
       rememberSession(created);
+      touchSavedWorkspace(created.workspaceId);
+      expandWorkspaceInSidebar(created.workspaceId);
       params.setActivity(`Session ${created.id} 已创建`);
       params.setErrorMessage("");
+      void refreshSession(created.id, true);
     } catch (error) {
       params.setErrorMessage(toErrorMessage(error));
     }

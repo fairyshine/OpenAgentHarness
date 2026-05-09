@@ -4,12 +4,12 @@ import { validateActionInput } from "../capabilities/action-input-validation.js"
 import { AppError } from "../errors.js";
 import {
   extractTextFromContent,
-  isMessageContentForRole,
-  summarizeContentForDisplay
+  isMessageContentForRole
 } from "../execution-message-content.js";
 import type { EngineMessageProjector, TranscriptMessage } from "./message-projections.js";
 import type { ModelInputService } from "./model-input.js";
 import type { EngineMessageSyncService } from "./engine-message-sync.js";
+import { SessionRecordService } from "./session-records.js";
 import type {
   ActionRunAcceptedResult,
   CreateSessionMessageParams,
@@ -30,9 +30,9 @@ import type {
   UpdateSessionParams,
   WorkspaceRecord
 } from "../types.js";
-import { createId, encodeMessagePageCursor, nowIso, parseCursor } from "../utils.js";
-import { buildArchiveMetadata } from "./internal-helpers.js";
+import { createId, nowIso, parseCursor } from "../utils.js";
 import type { EngineMessage } from "./engine-messages.js";
+import { buildSessionRecord, resolveWorkspaceDefaultAgentName } from "./session-creation.js";
 
 const RESERVED_MESSAGE_METADATA_KEYS = new Set([
   "runtimeKind",
@@ -99,6 +99,7 @@ export class SessionEngineService {
   readonly #appendEvent: SessionEngineServiceDependencies["appendEvent"];
   readonly #enqueueRun: SessionEngineServiceDependencies["enqueueRun"];
   readonly #requestRunCancellation: SessionEngineServiceDependencies["requestRunCancellation"];
+  readonly #sessionRecords: SessionRecordService;
 
   constructor(dependencies: SessionEngineServiceDependencies) {
     this.#sessionRepository = dependencies.sessionRepository;
@@ -115,57 +116,33 @@ export class SessionEngineService {
     this.#appendEvent = dependencies.appendEvent;
     this.#enqueueRun = dependencies.enqueueRun;
     this.#requestRunCancellation = dependencies.requestRunCancellation;
+    this.#sessionRecords = new SessionRecordService({
+      sessionRepository: this.#sessionRepository,
+      messageRepository: this.#messageRepository,
+      runRepository: this.#runRepository,
+      runStepRepository: this.#runStepRepository,
+      sessionPendingRunQueueRepository: this.#sessionPendingRunQueueRepository,
+      workspaceArchiveRepository: this.#workspaceArchiveRepository,
+      getWorkspaceRecord: this.#getWorkspaceRecord
+    });
   }
 
   async createSession({ workspaceId, caller, input }: CreateSessionParams): Promise<Session> {
     const workspace = await this.#getWorkspaceRecord(workspaceId);
-    const now = nowIso();
-    const activeAgentName = input.agentName ?? this.#resolveWorkspaceDefaultAgentName(workspace);
-    const modelRef = this.#modelInputs.normalizeSessionModelRef(workspace, input.modelRef);
-    if (!activeAgentName) {
-      throw new AppError(
-        409,
-        "missing_default_agent",
-        `Workspace ${workspaceId} has no default agent. Provide agentName explicitly or configure .openharness/settings.yaml.`
-      );
-    }
-
-    if (Object.keys(workspace.agents).length > 0 && !workspace.agents[activeAgentName]) {
-      throw new AppError(404, "agent_not_found", `Agent ${activeAgentName} was not found in workspace ${workspaceId}.`);
-    }
-
-    const initialAgent = workspace.agents[activeAgentName];
-    if (initialAgent?.mode === "subagent") {
-      throw new AppError(
-        409,
-        "invalid_session_agent_target",
-        `Agent ${activeAgentName} is a subagent and cannot be set as the active session agent.`
-      );
-    }
-
-    const session: Session = {
-      id: createId("ses"),
-      workspaceId: workspace.id,
-      subjectRef: caller.subjectRef,
-      ...(modelRef ? { modelRef } : {}),
-      agentName: input.agentName,
-      activeAgentName,
-      title: input.title,
-      status: "active",
-      createdAt: now,
-      updatedAt: now
-    };
-
-    return this.#sessionRepository.create(session);
+    return this.#sessionRepository.create(
+      buildSessionRecord({
+        workspace,
+        caller,
+        sessionInput: input,
+        normalizeModelRef: (targetWorkspace, modelRef) => this.#modelInputs.normalizeSessionModelRef(targetWorkspace, modelRef),
+        createId,
+        nowIso
+      })
+    );
   }
 
   async getSession(sessionId: string): Promise<Session> {
-    const session = await this.#sessionRepository.getById(sessionId);
-    if (!session) {
-      throw new AppError(404, "session_not_found", `Session ${sessionId} was not found.`);
-    }
-
-    return session;
+    return this.#sessionRecords.getSession(sessionId);
   }
 
   async updateSession({ sessionId, input }: UpdateSessionParams): Promise<Session> {
@@ -225,61 +202,15 @@ export class SessionEngineService {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    const session = await this.getSession(sessionId);
-    const workspace = await this.#getWorkspaceRecord(session.workspaceId);
-    const workspaceSessions = await this.#listAllWorkspaceSessions(session.workspaceId);
-    const childSessionIdsByParentId = new Map<string, string[]>();
-
-    for (const candidate of workspaceSessions) {
-      if (!candidate.parentSessionId) {
-        continue;
-      }
-
-      const childIds = childSessionIdsByParentId.get(candidate.parentSessionId) ?? [];
-      childIds.push(candidate.id);
-      childSessionIdsByParentId.set(candidate.parentSessionId, childIds);
-    }
-
-    const deletionOrder: string[] = [];
-    const visit = (targetSessionId: string) => {
-      for (const childSessionId of childSessionIdsByParentId.get(targetSessionId) ?? []) {
-        visit(childSessionId);
-      }
-      deletionOrder.push(targetSessionId);
-    };
-
-    visit(sessionId);
-
-    if (this.#workspaceArchiveRepository) {
-      await this.#workspaceArchiveRepository.archiveSessionTree({
-        workspace,
-        rootSessionId: sessionId,
-        sessionIds: deletionOrder,
-        ...buildArchiveMetadata()
-      });
-    }
-
-    for (const targetSessionId of deletionOrder) {
-      await this.#sessionRepository.delete(targetSessionId);
-    }
+    await this.#sessionRecords.deleteSession(sessionId);
   }
 
   async listWorkspaceSessions(workspaceId: string, pageSize: number, cursor?: string): Promise<SessionListResult> {
-    await this.#getWorkspaceRecord(workspaceId);
-    const startIndex = parseCursor(cursor);
-    const items = await this.#sessionRepository.listByWorkspaceId(workspaceId, pageSize, cursor);
-    const nextCursor = items.length === pageSize ? String(startIndex + pageSize) : undefined;
-
-    return nextCursor === undefined ? { items } : { items, nextCursor };
+    return this.#sessionRecords.listWorkspaceSessions(workspaceId, pageSize, cursor);
   }
 
   async listChildSessions(parentSessionId: string, pageSize: number, cursor?: string): Promise<SessionListResult> {
-    await this.getSession(parentSessionId);
-    const startIndex = parseCursor(cursor);
-    const items = await this.#sessionRepository.listChildrenByParentSessionId(parentSessionId, pageSize, cursor);
-    const nextCursor = items.length === pageSize ? String(startIndex + pageSize) : undefined;
-
-    return nextCursor === undefined ? { items } : { items, nextCursor };
+    return this.#sessionRecords.listChildSessions(parentSessionId, pageSize, cursor);
   }
 
   async listSessionMessages(
@@ -288,33 +219,11 @@ export class SessionEngineService {
     cursor?: string,
     direction: MessagePageDirection = "forward"
   ): Promise<MessageListResult> {
-    await this.getSession(sessionId);
-    const page = await this.#messageRepository.listPageBySessionId({
-      sessionId,
-      pageSize,
-      cursor,
-      direction
-    });
-    const boundaryMessage = direction === "backward" ? page.items[0] : page.items.at(-1);
-    const nextCursor =
-      page.hasMore && boundaryMessage
-        ? encodeMessagePageCursor({
-            createdAt: boundaryMessage.createdAt,
-            id: boundaryMessage.id
-          })
-        : undefined;
-
-    return nextCursor === undefined ? { items: page.items } : { items: page.items, nextCursor };
+    return this.#sessionRecords.listSessionMessages(sessionId, pageSize, cursor, direction);
   }
 
   async getSessionMessage(sessionId: string, messageId: string): Promise<Message> {
-    await this.getSession(sessionId);
-    const message = await this.#messageRepository.getById(messageId);
-    if (!message || message.sessionId !== sessionId) {
-      throw new AppError(404, "message_not_found", `Message ${messageId} was not found in session ${sessionId}.`);
-    }
-
-    return message;
+    return this.#sessionRecords.getSessionMessage(sessionId, messageId);
   }
 
   async getSessionMessageContext(
@@ -323,37 +232,7 @@ export class SessionEngineService {
     before = 20,
     after = 20
   ): Promise<MessageContextResult> {
-    const anchor = await this.getSessionMessage(sessionId, messageId);
-    const anchorCursor = encodeMessagePageCursor({
-      createdAt: anchor.createdAt,
-      id: anchor.id
-    });
-    const [beforePage, afterPage] = await Promise.all([
-      before > 0
-        ? this.#messageRepository.listPageBySessionId({
-            sessionId,
-            pageSize: before,
-            cursor: anchorCursor,
-            direction: "backward"
-          })
-        : Promise.resolve({ items: [], hasMore: false }),
-      after > 0
-        ? this.#messageRepository.listPageBySessionId({
-            sessionId,
-            pageSize: after,
-            cursor: anchorCursor,
-            direction: "forward"
-          })
-        : Promise.resolve({ items: [], hasMore: false })
-    ]);
-
-    return {
-      anchor,
-      before: beforePage.items,
-      after: afterPage.items,
-      hasMoreBefore: beforePage.hasMore,
-      hasMoreAfter: afterPage.hasMore
-    };
+    return this.#sessionRecords.getSessionMessageContext(sessionId, messageId, before, after);
   }
 
   async listSessionEngineMessages(sessionId: string, pageSize = 100, cursor?: string): Promise<EngineMessageListResult> {
@@ -387,23 +266,11 @@ export class SessionEngineService {
   }
 
   async listSessionRuns(sessionId: string, pageSize = 100, cursor?: string): Promise<RunListResult> {
-    await this.getSession(sessionId);
-    const runs = await this.#runRepository.listBySessionId(sessionId);
-    const startIndex = parseCursor(cursor);
-    const items = runs.slice(startIndex, startIndex + pageSize);
-    const nextCursor = startIndex + pageSize < runs.length ? String(startIndex + pageSize) : undefined;
-
-    return nextCursor === undefined ? { items } : { items, nextCursor };
+    return this.#sessionRecords.listSessionRuns(sessionId, pageSize, cursor);
   }
 
   async listRunSteps(runId: string, pageSize = 100, cursor?: string): Promise<RunStepListResult> {
-    await this.#getRun(runId);
-    const steps = await this.#runStepRepository.listByRunId(runId);
-    const startIndex = parseCursor(cursor);
-    const items = steps.slice(startIndex, startIndex + pageSize);
-    const nextCursor = startIndex + pageSize < steps.length ? String(startIndex + pageSize) : undefined;
-
-    return nextCursor === undefined ? { items } : { items, nextCursor };
+    return this.#sessionRecords.listRunSteps(runId, pageSize, cursor);
   }
 
   async createSessionMessage({ sessionId, caller, input }: CreateSessionMessageParams): Promise<MessageAcceptedResult> {
@@ -513,14 +380,11 @@ export class SessionEngineService {
   }
 
   async listSessionQueuedRuns(sessionId: string): Promise<SessionQueuedRunListResult> {
-    await this.getSession(sessionId);
-    return {
-      items: await this.#collectSessionQueuedRuns(sessionId, { healStaleEntries: true })
-    };
+    return this.#sessionRecords.listSessionQueuedRuns(sessionId);
   }
 
   async #removeQueuedRunBestEffort(sessionId: string, runId: string): Promise<void> {
-    await this.#sessionPendingRunQueueRepository.remove(runId).catch(() => undefined);
+    await this.#sessionRecords.removeQueuedRunBestEffort(sessionId, runId);
     await this.#appendQueueUpdatedEvent(sessionId, runId, "removed").catch(() => undefined);
   }
 
@@ -530,7 +394,7 @@ export class SessionEngineService {
     action: "enqueued" | "promoted" | "dequeued" | "removed",
     queuedPosition?: number
   ): Promise<void> {
-    const items = await this.#collectSessionQueuedRuns(sessionId, { healStaleEntries: false });
+    const items = await this.#sessionRecords.collectSessionQueuedRuns(sessionId, { healStaleEntries: false });
     await this.#appendEvent({
       sessionId,
       runId,
@@ -652,56 +516,6 @@ export class SessionEngineService {
     };
   }
 
-  async #collectSessionQueuedRuns(
-    sessionId: string,
-    options: {
-      healStaleEntries: boolean;
-    }
-  ): Promise<SessionQueuedRunListResult["items"]> {
-    const entries = await this.#sessionPendingRunQueueRepository.listBySessionId(sessionId);
-    const items: SessionQueuedRunListResult["items"] = [];
-
-    for (const entry of entries) {
-      try {
-        const run = await this.#runRepository.getById(entry.runId).catch(() => null);
-        const messageId = run?.triggerType === "message" ? run.triggerRef : undefined;
-
-        if (!run || run.sessionId !== sessionId || run.status !== "queued" || !messageId) {
-          if (options.healStaleEntries) {
-            await this.#removeQueuedRunBestEffort(sessionId, entry.runId);
-          }
-          continue;
-        }
-
-        const message = await this.#messageRepository.getById(messageId).catch(() => null);
-        if (!message) {
-          continue;
-        }
-
-        if (message.sessionId !== sessionId) {
-          if (options.healStaleEntries) {
-            await this.#removeQueuedRunBestEffort(sessionId, entry.runId);
-          }
-          continue;
-        }
-
-        items.push({
-          runId: entry.runId,
-          messageId,
-          content: summarizeContentForDisplay(message.content),
-          createdAt: entry.createdAt,
-          position: items.length + 1
-        });
-      } catch {
-        if (options.healStaleEntries) {
-          await this.#removeQueuedRunBestEffort(sessionId, entry.runId);
-        }
-      }
-    }
-
-    return items;
-  }
-
   async #retimestampQueuedMessageForDispatch(runId: string, sessionId: string, dispatchAt: string): Promise<void> {
     const run = await this.#runRepository.getById(runId).catch(() => null);
     if (!run || run.sessionId !== sessionId || run.triggerType !== "message" || !run.triggerRef) {
@@ -760,7 +574,7 @@ export class SessionEngineService {
       }
     }
 
-    const resolvedAgentName = agentName ?? session?.activeAgentName ?? this.#resolveWorkspaceDefaultAgentName(workspace);
+    const resolvedAgentName = agentName ?? session?.activeAgentName ?? resolveWorkspaceDefaultAgentName(workspace);
     if (resolvedAgentName && Object.keys(workspace.agents).length > 0 && !workspace.agents[resolvedAgentName]) {
       throw new AppError(404, "agent_not_found", `Agent ${resolvedAgentName} was not found in workspace ${workspaceId}.`);
     }
@@ -816,22 +630,6 @@ export class SessionEngineService {
       actionName,
       sessionId: session.id
     };
-  }
-
-  #resolveWorkspaceDefaultAgentName(workspace: WorkspaceRecord): string | undefined {
-    if (workspace.defaultAgent) {
-      return workspace.defaultAgent;
-    }
-
-    const assistantAgent = workspace.agents.assistant;
-    if (assistantAgent && assistantAgent.mode !== "subagent") {
-      return assistantAgent.name;
-    }
-
-    return Object.values(workspace.agents)
-      .filter((agent) => agent.mode === "primary" || agent.mode === "all")
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .at(0)?.name;
   }
 
   async #sessionHasStarted(sessionId: string): Promise<boolean> {
@@ -895,16 +693,4 @@ export class SessionEngineService {
     }
   }
 
-  async #listAllWorkspaceSessions(workspaceId: string): Promise<Session[]> {
-    const pageSize = 200;
-    const items: Session[] = [];
-
-    for (let offset = 0; ; offset += pageSize) {
-      const page = await this.#sessionRepository.listByWorkspaceId(workspaceId, pageSize, String(offset));
-      items.push(...page);
-      if (page.length < pageSize) {
-        return items;
-      }
-    }
-  }
 }
