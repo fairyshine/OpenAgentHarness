@@ -132,7 +132,7 @@ export function useSessionSubmitActions(input: {
         refreshes.push(input.refreshRun(accepted.runId, true), input.refreshRunSteps(accepted.runId, true));
       }
 
-      await Promise.all(refreshes);
+      void Promise.all(refreshes);
       input.setActivity(
         options?.activityLabel ??
           (shouldDisplayAsQueued ? `消息已加入后续队列，run=${accepted.runId}` : `消息已入队，run=${accepted.runId}`)

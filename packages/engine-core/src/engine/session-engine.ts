@@ -9,6 +9,7 @@ import {
 import type { EngineMessageProjector, TranscriptMessage } from "./message-projections.js";
 import type { ModelInputService } from "./model-input.js";
 import type { EngineMessageSyncService } from "./engine-message-sync.js";
+import { SessionMessageCreationService } from "./session-message-creation.js";
 import { SessionRecordService } from "./session-records.js";
 import type {
   ActionRunAcceptedResult,
@@ -33,34 +34,6 @@ import type {
 import { createId, nowIso, parseCursor } from "../utils.js";
 import type { EngineMessage } from "./engine-messages.js";
 import { buildSessionRecord, resolveWorkspaceDefaultAgentName } from "./session-creation.js";
-
-const RESERVED_MESSAGE_METADATA_KEYS = new Set([
-  "runtimeKind",
-  "origin",
-  "mode",
-  "source",
-  "synthetic",
-  "taskNotification",
-  "pendingTaskNotificationId",
-  "delegatedUpdate",
-  "delegatedChildRunId",
-  "delegatedChildSessionId",
-  "delegatedTaskId",
-  "delegatedToolUseId",
-  "outputRef",
-  "outputFile"
-]);
-
-function sanitizeUserMessageMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  if (!metadata) {
-    return undefined;
-  }
-
-  const sanitized = Object.fromEntries(
-    Object.entries(metadata).filter(([key]) => !RESERVED_MESSAGE_METADATA_KEYS.has(key))
-  );
-  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
-}
 
 export interface SessionEngineServiceDependencies {
   sessionRepository: EngineServiceOptions["sessionRepository"];
@@ -100,6 +73,7 @@ export class SessionEngineService {
   readonly #enqueueRun: SessionEngineServiceDependencies["enqueueRun"];
   readonly #requestRunCancellation: SessionEngineServiceDependencies["requestRunCancellation"];
   readonly #sessionRecords: SessionRecordService;
+  readonly #sessionMessageCreation: SessionMessageCreationService;
 
   constructor(dependencies: SessionEngineServiceDependencies) {
     this.#sessionRepository = dependencies.sessionRepository;
@@ -123,7 +97,17 @@ export class SessionEngineService {
       runStepRepository: this.#runStepRepository,
       sessionPendingRunQueueRepository: this.#sessionPendingRunQueueRepository,
       workspaceArchiveRepository: this.#workspaceArchiveRepository,
-      getWorkspaceRecord: this.#getWorkspaceRecord
+      getWorkspaceRecord: this.#getWorkspaceRecord,
+      normalizeModelRef: (workspace, modelRef) => this.#modelInputs.normalizeSessionModelRef(workspace, modelRef)
+    });
+    this.#sessionMessageCreation = new SessionMessageCreationService({
+      messageRepository: this.#messageRepository,
+      runRepository: this.#runRepository,
+      sessionPendingRunQueueRepository: this.#sessionPendingRunQueueRepository,
+      sessionRecords: this.#sessionRecords,
+      appendEvent: this.#appendEvent,
+      enqueueRun: this.#enqueueRun,
+      requestRunCancellation: this.#requestRunCancellation
     });
   }
 
@@ -146,59 +130,7 @@ export class SessionEngineService {
   }
 
   async updateSession({ sessionId, input }: UpdateSessionParams): Promise<Session> {
-    const session = await this.getSession(sessionId);
-    const workspace = await this.#getWorkspaceRecord(session.workspaceId);
-    let nextActiveAgentName = session.activeAgentName;
-    let nextModelRef = session.modelRef;
-
-    if (input.activeAgentName !== undefined) {
-      const targetAgent = workspace.agents[input.activeAgentName];
-      if (!targetAgent) {
-        throw new AppError(
-          404,
-          "agent_not_found",
-          `Agent ${input.activeAgentName} was not found in workspace ${workspace.id}.`
-        );
-      }
-
-      if (targetAgent.mode === "subagent") {
-        throw new AppError(
-          409,
-          "invalid_session_agent_target",
-          `Agent ${input.activeAgentName} is a subagent and cannot be set as the active session agent.`
-        );
-      }
-
-      nextActiveAgentName = input.activeAgentName;
-    }
-
-    if (input.modelRef !== undefined) {
-      const normalizedModelRef =
-        input.modelRef === null ? undefined : this.#modelInputs.normalizeSessionModelRef(workspace, input.modelRef);
-      if (normalizedModelRef !== session.modelRef && (await this.#sessionHasStarted(session.id))) {
-        throw new AppError(
-          409,
-          "session_model_locked",
-          `Session ${session.id} model cannot be changed after the conversation has started.`
-        );
-      }
-
-      nextModelRef = normalizedModelRef;
-    }
-
-    const updatedSession: Session = {
-      ...session,
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      activeAgentName: nextActiveAgentName,
-      updatedAt: nowIso()
-    };
-    if (nextModelRef) {
-      updatedSession.modelRef = nextModelRef;
-    } else {
-      delete updatedSession.modelRef;
-    }
-
-    return this.#sessionRepository.update(updatedSession);
+    return this.#sessionRecords.updateSession({ sessionId, input });
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -274,109 +206,7 @@ export class SessionEngineService {
   }
 
   async createSessionMessage({ sessionId, caller, input }: CreateSessionMessageParams): Promise<MessageAcceptedResult> {
-    const session = await this.getSession(sessionId);
-    const now = nowIso();
-    const messageId = createId("msg");
-    const runId = createId("run");
-    const userMetadata = sanitizeUserMessageMetadata(input.metadata);
-
-    const message: Message = {
-      id: messageId,
-      sessionId,
-      runId,
-      role: "user",
-      origin: "user",
-      mode: "prompt",
-      content: input.content,
-      ...(userMetadata ? { metadata: userMetadata } : {}),
-      createdAt: now
-    };
-
-    const run: Run = {
-      id: runId,
-      workspaceId: session.workspaceId,
-      sessionId: session.id,
-      initiatorRef: caller.subjectRef,
-      triggerType: "message",
-      triggerRef: messageId,
-      agentName: session.activeAgentName,
-      effectiveAgentName: session.activeAgentName,
-      switchCount: 0,
-      status: "queued",
-      createdAt: now
-    };
-
-    await this.#runRepository.create(run);
-    await this.#messageRepository.create(message);
-    await this.#appendEvent({
-      sessionId: session.id,
-      runId: run.id,
-      event: "run.queued",
-      data: {
-        runId: run.id,
-        sessionId: session.id,
-        status: "queued"
-      }
-    });
-
-    const runningRunBehavior = input.runningRunBehavior ?? "queue";
-    const sessionQueueState = await this.#getSessionQueueState(session.id, {
-      excludeRunIds: [run.id]
-    });
-
-    if (runningRunBehavior === "interrupt") {
-      if (sessionQueueState.hasActiveRun || sessionQueueState.pendingRunIds.size > 0) {
-        const queuedEntry = await this.#sessionPendingRunQueueRepository.enqueue({
-          sessionId: session.id,
-          runId: run.id,
-          createdAt: now
-        });
-        await this.#sessionPendingRunQueueRepository.promote(run.id);
-        await this.#appendQueueUpdatedEvent(session.id, run.id, "promoted", queuedEntry.position);
-        const nextPendingRunIds = new Set(sessionQueueState.pendingRunIds);
-        nextPendingRunIds.add(run.id);
-        if (sessionQueueState.hasActiveRun) {
-          await this.#interruptActiveSessionRuns(session.id, nextPendingRunIds);
-        } else {
-          await this.dispatchNextQueuedRun(session.id);
-        }
-        return {
-          messageId: message.id,
-          runId: run.id,
-          status: "queued",
-          delivery: "session_queue",
-          queuedPosition: queuedEntry.position,
-          createdAt: now
-        };
-      } else {
-        await this.#enqueueRun(session.id, run.id);
-      }
-    } else if (sessionQueueState.hasActiveRun || sessionQueueState.pendingRunIds.size > 0) {
-      const queuedEntry = await this.#sessionPendingRunQueueRepository.enqueue({
-        sessionId: session.id,
-        runId: run.id,
-        createdAt: now
-      });
-      await this.#appendQueueUpdatedEvent(session.id, run.id, "enqueued", queuedEntry.position);
-      return {
-        messageId: message.id,
-        runId: run.id,
-        status: "queued",
-        delivery: "session_queue",
-        queuedPosition: queuedEntry.position,
-        createdAt: now
-      };
-    } else {
-      await this.#enqueueRun(session.id, run.id);
-    }
-
-    return {
-      messageId: message.id,
-      runId: run.id,
-      status: "queued",
-      delivery: "active_run",
-      createdAt: now
-    };
+    return this.#sessionMessageCreation.createSessionMessage({ sessionId, caller, input });
   }
 
   async listSessionQueuedRuns(sessionId: string): Promise<SessionQueuedRunListResult> {
@@ -394,18 +224,7 @@ export class SessionEngineService {
     action: "enqueued" | "promoted" | "dequeued" | "removed",
     queuedPosition?: number
   ): Promise<void> {
-    const items = await this.#sessionRecords.collectSessionQueuedRuns(sessionId, { healStaleEntries: false });
-    await this.#appendEvent({
-      sessionId,
-      runId,
-      event: "queue.updated",
-      data: {
-        runId,
-        action,
-        items,
-        ...(typeof queuedPosition === "number" ? { queuedPosition } : {})
-      }
-    });
+    await this.#sessionMessageCreation.appendQueueUpdatedEvent(sessionId, runId, action, queuedPosition);
   }
 
   async guideQueuedRun(runId: string): Promise<GuideQueuedRunResult> {
@@ -444,21 +263,7 @@ export class SessionEngineService {
   }
 
   async dispatchNextQueuedRun(sessionId: string): Promise<string | undefined> {
-    const sessionQueueState = await this.#getSessionQueueState(sessionId);
-    if (sessionQueueState.hasActiveRun) {
-      return undefined;
-    }
-
-    const nextQueuedRun = await this.#sessionPendingRunQueueRepository.dequeueNext(sessionId);
-    if (!nextQueuedRun) {
-      return undefined;
-    }
-
-    const dispatchAt = nowIso();
-    await this.#retimestampQueuedMessageForDispatch(nextQueuedRun.runId, sessionId, dispatchAt);
-    await this.#appendQueueUpdatedEvent(sessionId, nextQueuedRun.runId, "dequeued", nextQueuedRun.position);
-    await this.#enqueueRun(sessionId, nextQueuedRun.runId);
-    return nextQueuedRun.runId;
+    return this.#sessionMessageCreation.dispatchNextQueuedRun(sessionId);
   }
 
   async #interruptActiveSessionRuns(sessionId: string, pendingRunIds?: ReadonlySet<string>): Promise<void> {
@@ -630,14 +435,6 @@ export class SessionEngineService {
       actionName,
       sessionId: session.id
     };
-  }
-
-  async #sessionHasStarted(sessionId: string): Promise<boolean> {
-    const [messages, runs] = await Promise.all([
-      this.#messageRepository.listBySessionId(sessionId),
-      this.#runRepository.listBySessionId(sessionId)
-    ]);
-    return messages.length > 0 || runs.length > 0;
   }
 
   #toTranscriptMessage(

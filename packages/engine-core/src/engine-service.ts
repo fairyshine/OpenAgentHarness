@@ -15,6 +15,7 @@ import { RunStepService } from "./engine/run-steps.js";
 import { WorkspaceEngineService } from "./engine/workspace-engine.js";
 import { ModelResolverService } from "./engine/model-resolver.js";
 import { buildSessionRecord } from "./engine/session-creation.js";
+import { SessionMessageCreationService } from "./engine/session-message-creation.js";
 import { SessionRecordService } from "./engine/session-records.js";
 import type {
   CreateEngineExecutionServicesDependencies,
@@ -108,6 +109,7 @@ export class EngineService {
   readonly #workspaceRuntime: WorkspaceEngineService;
   readonly #sessionModelResolver: ModelResolverService;
   readonly #sessionRecords: SessionRecordService;
+  readonly #sessionMessageCreation: SessionMessageCreationService;
   #runtimeKernelModule:
     | (typeof import("./engine-runtime-kernel.js"))
     | undefined;
@@ -189,7 +191,17 @@ export class EngineService {
       runStepRepository: this.#runStepRepository,
       sessionPendingRunQueueRepository: this.#sessionPendingRunQueueRepository,
       workspaceArchiveRepository: this.#workspaceArchiveRepository,
-      getWorkspaceRecord: (workspaceId) => this.#workspaceRuntime.getWorkspaceRecord(workspaceId)
+      getWorkspaceRecord: (workspaceId) => this.#workspaceRuntime.getWorkspaceRecord(workspaceId),
+      normalizeModelRef: (workspace, modelRef) => this.#sessionModelResolver.normalizeSessionModelRef(workspace, modelRef)
+    });
+    this.#sessionMessageCreation = new SessionMessageCreationService({
+      messageRepository: this.#messageRepository,
+      runRepository: this.#runRepository,
+      sessionPendingRunQueueRepository: this.#sessionPendingRunQueueRepository,
+      sessionRecords: this.#sessionRecords,
+      appendEvent: (input) => this.#appendSessionEvent(input),
+      enqueueRun: (sessionId, runId) => this.#enqueueRunForExecution(sessionId, runId),
+      requestRunCancellation: (runId) => this.#requestRunCancellation(runId)
     });
     if (this.#executionServicesMode === "eager") {
       this.#warmExecutionRuntime();
@@ -200,6 +212,52 @@ export class EngineService {
     void this.#ensureRuntimeKernel().then((runtimeKernel) => {
       this.#executionServices ??= this.#createExecutionServices(runtimeKernel);
     });
+  }
+
+  async #appendSessionEvent(input: {
+    sessionId: string;
+    runId: string;
+    event: "run.queued" | "queue.updated";
+    data: Record<string, unknown>;
+  }): Promise<SessionEvent> {
+    const event = await this.#sessionEventStore.append(input);
+    if (input.event === "run.queued" || input.event === "queue.updated") {
+      void this.#engineMessageRepository
+        ?.listBySessionId(input.sessionId)
+        .then((storedEngineMessages) => {
+          if (storedEngineMessages.length === 0) {
+            return;
+          }
+          return this.#ensureRuntimeKernel().then((runtimeKernel) =>
+            runtimeKernel.engineMessageSync.scheduleEngineMessageSync(input.sessionId)
+          );
+        })
+        .catch((error: unknown) => {
+          this.#logger?.warn?.("Failed to schedule engine message sync after session event.", {
+            sessionId: input.sessionId,
+            event: input.event,
+            errorMessage: error instanceof Error ? error.message : String(error)
+          });
+        });
+    }
+    return event;
+  }
+
+  async #enqueueRunForExecution(_sessionId: string, runId: string): Promise<void> {
+    if (this.#runQueue) {
+      const run = await this.getRun(runId);
+      await this.#runQueue.enqueue(run.sessionId ?? _sessionId, runId);
+      return;
+    }
+
+    void this.#ensureRuntimeKernel()
+      .then((runtimeKernel) => runtimeKernel.runProcessor.processRun(runId))
+      .catch((error: unknown) => {
+        this.#logger?.error?.("Failed to process queued run.", {
+          runId,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      });
   }
 
   async #loadRuntimeKernelModule(): Promise<typeof import("./engine-runtime-kernel.js")> {
@@ -595,7 +653,7 @@ export class EngineService {
   }
 
   async updateSession({ sessionId, input }: UpdateSessionParams): Promise<Session> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.updateSession({ sessionId, input });
+    return this.#sessionRecords.updateSession({ sessionId, input });
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -805,7 +863,7 @@ export class EngineService {
   }
 
   async createSessionMessage({ sessionId, caller, input }: CreateSessionMessageParams): Promise<MessageAcceptedResult> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.createSessionMessage({ sessionId, caller, input });
+    return this.#sessionMessageCreation.createSessionMessage({ sessionId, caller, input });
   }
 
   async triggerActionRun({

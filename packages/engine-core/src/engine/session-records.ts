@@ -7,6 +7,7 @@ import type {
   MessageContextResult,
   MessageListResult,
   MessagePageDirection,
+  UpdateSessionParams,
   RunListResult,
   RunStepListResult,
   SessionListResult,
@@ -25,6 +26,7 @@ export interface SessionRecordServiceDependencies {
   sessionPendingRunQueueRepository: EngineServiceOptions["sessionPendingRunQueueRepository"];
   workspaceArchiveRepository?: WorkspaceArchiveRepository | undefined;
   getWorkspaceRecord: (workspaceId: string) => Promise<WorkspaceRecord>;
+  normalizeModelRef: (workspace: WorkspaceRecord, modelRef?: string) => string | undefined;
 }
 
 export class SessionRecordService {
@@ -35,6 +37,7 @@ export class SessionRecordService {
   readonly #sessionPendingRunQueueRepository: EngineServiceOptions["sessionPendingRunQueueRepository"];
   readonly #workspaceArchiveRepository: WorkspaceArchiveRepository | undefined;
   readonly #getWorkspaceRecord: SessionRecordServiceDependencies["getWorkspaceRecord"];
+  readonly #normalizeModelRef: SessionRecordServiceDependencies["normalizeModelRef"];
 
   constructor(dependencies: SessionRecordServiceDependencies) {
     this.#sessionRepository = dependencies.sessionRepository;
@@ -44,6 +47,7 @@ export class SessionRecordService {
     this.#sessionPendingRunQueueRepository = dependencies.sessionPendingRunQueueRepository;
     this.#workspaceArchiveRepository = dependencies.workspaceArchiveRepository;
     this.#getWorkspaceRecord = dependencies.getWorkspaceRecord;
+    this.#normalizeModelRef = dependencies.normalizeModelRef;
   }
 
   async getSession(sessionId: string): Promise<Session> {
@@ -53,6 +57,61 @@ export class SessionRecordService {
     }
 
     return session;
+  }
+
+  async updateSession({ sessionId, input }: UpdateSessionParams): Promise<Session> {
+    const session = await this.getSession(sessionId);
+    const workspace = await this.#getWorkspaceRecord(session.workspaceId);
+    let nextActiveAgentName = session.activeAgentName;
+    let nextModelRef = session.modelRef;
+
+    if (input.activeAgentName !== undefined) {
+      const targetAgent = workspace.agents[input.activeAgentName];
+      if (!targetAgent) {
+        throw new AppError(
+          404,
+          "agent_not_found",
+          `Agent ${input.activeAgentName} was not found in workspace ${workspace.id}.`
+        );
+      }
+
+      if (targetAgent.mode === "subagent") {
+        throw new AppError(
+          409,
+          "invalid_session_agent_target",
+          `Agent ${input.activeAgentName} is a subagent and cannot be set as the active session agent.`
+        );
+      }
+
+      nextActiveAgentName = input.activeAgentName;
+    }
+
+    if (input.modelRef !== undefined) {
+      const normalizedModelRef = input.modelRef === null ? undefined : this.#normalizeModelRef(workspace, input.modelRef);
+      if (normalizedModelRef !== session.modelRef && (await this.#sessionHasStarted(session.id))) {
+        throw new AppError(
+          409,
+          "session_model_locked",
+          `Session ${session.id} model cannot be changed after the conversation has started.`
+        );
+      }
+
+      nextModelRef = normalizedModelRef;
+    }
+
+    const updatedSession: Session = {
+      ...session,
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      activeAgentName: nextActiveAgentName,
+      updatedAt: new Date().toISOString()
+    };
+    if (nextModelRef) {
+      updatedSession.modelRef = nextModelRef;
+    } else {
+      delete updatedSession.modelRef;
+    }
+
+    return this.#sessionRepository.update(updatedSession);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -275,6 +334,15 @@ export class SessionRecordService {
 
   async removeQueuedRunBestEffort(sessionId: string, runId: string): Promise<void> {
     await this.#sessionPendingRunQueueRepository.remove(runId).catch(() => undefined);
+  }
+
+  async #sessionHasStarted(sessionId: string): Promise<boolean> {
+    const [messages, runs] = await Promise.all([
+      this.#messageRepository.listBySessionId(sessionId),
+      this.#runRepository.listBySessionId(sessionId)
+    ]);
+
+    return messages.length > 0 || runs.length > 0;
   }
 
   async #listAllWorkspaceSessions(workspaceId: string): Promise<Session[]> {

@@ -69,8 +69,8 @@ function useSessionSettingsActions(input: {
       }
 
       if (input.sessionId === targetId) {
-        await input.refreshSessionById(targetId, true);
-        await input.refreshSessionRuns(true, { includeSteps: true });
+        void input.refreshSessionById(targetId, true);
+        void input.refreshSessionRuns(true, { includeSteps: true });
       }
 
       return true;
@@ -119,7 +119,7 @@ function useSessionSettingsActions(input: {
       }
 
       if (input.sessionId === targetId) {
-        await input.refreshSessionById(targetId, true);
+        void input.refreshSessionById(targetId, true);
       }
 
       return true;

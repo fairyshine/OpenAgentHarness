@@ -672,7 +672,7 @@ export function useNavigationActions(params: NavigationActionParams) {
   }
 
   async function refreshSession(targetId = params.navigation.sessionId, quiet = false) {
-    const nextSessionId = targetId.trim();
+      const nextSessionId = targetId.trim();
     if (!nextSessionId) {
       return;
     }
@@ -698,6 +698,7 @@ export function useNavigationActions(params: NavigationActionParams) {
 
     try {
       const sessionResponse = await params.request<Session>(`/api/v1/sessions/${nextSessionId}`);
+      params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: nextSessionId, at: Date.now() };
       const nextWorkspaceId = sessionResponse.workspaceId;
       const workspaceChanged = params.navigation.workspace?.id !== nextWorkspaceId;
 

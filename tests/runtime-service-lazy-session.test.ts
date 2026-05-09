@@ -1,64 +1,72 @@
 import { describe, expect, it } from "vitest";
 
 import { EngineService, createId, nowIso } from "@oah/engine-core";
+import type { RunQueue } from "@oah/engine-core";
 import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
 import { FakeModelGateway } from "./helpers/fake-model-runtime";
 
 async function createLazyRuntime() {
-    const persistence = createMemoryRuntimePersistence();
-    let executionProviderAcquired = false;
-    const runtimeService = new EngineService({
-      defaultModel: "openai-default",
-      modelGateway: new FakeModelGateway(),
-      executionServicesMode: "lazy",
-      ...persistence,
-      workspaceExecutionProvider: {
-        async acquire() {
-          executionProviderAcquired = true;
-          return {
-            commandExecutor: undefined,
-            fileSystem: undefined,
-            async release() {
-              return undefined;
-            }
-          };
-        }
-      },
-      workspaceInitializer: {
-        async initialize(input) {
-          return {
-            rootPath: input.rootPath,
-            settings: {
-              defaultAgent: "default",
-              skillDirs: []
-            },
-            defaultAgent: "default",
-            workspaceModels: {},
-            agents: {
-              default: {
-                name: "default",
-                mode: "primary"
-              }
-            },
-            actions: {},
-            skills: {},
-            toolServers: {},
-            hooks: {},
-            catalog: {
-              workspaceId: "runtime",
-              agents: [{ name: "default", mode: "primary", source: "workspace" }],
-              models: [],
-              actions: [],
-              skills: [],
-              tools: [],
-              hooks: [],
-              nativeTools: []
-            }
-          };
-        }
+  const persistence = createMemoryRuntimePersistence();
+  let executionProviderAcquired = false;
+  const enqueuedRuns: Array<{ sessionId: string; runId: string }> = [];
+  const runQueue: RunQueue = {
+    async enqueue(sessionId, runId) {
+      enqueuedRuns.push({ sessionId, runId });
+    }
+  };
+  const runtimeService = new EngineService({
+    defaultModel: "openai-default",
+    modelGateway: new FakeModelGateway(),
+    executionServicesMode: "lazy",
+    ...persistence,
+    runQueue,
+    workspaceExecutionProvider: {
+      async acquire() {
+        executionProviderAcquired = true;
+        return {
+          commandExecutor: undefined,
+          fileSystem: undefined,
+          async release() {
+            return undefined;
+          }
+        };
       }
-    });
+    },
+    workspaceInitializer: {
+      async initialize(input) {
+        return {
+          rootPath: input.rootPath,
+          settings: {
+            defaultAgent: "default",
+            skillDirs: []
+          },
+          defaultAgent: "default",
+          workspaceModels: {},
+          agents: {
+            default: {
+              name: "default",
+              mode: "primary"
+            }
+          },
+          actions: {},
+          skills: {},
+          toolServers: {},
+          hooks: {},
+          catalog: {
+            workspaceId: "runtime",
+            agents: [{ name: "default", mode: "primary", source: "workspace" }],
+            models: [],
+            actions: [],
+            skills: [],
+            tools: [],
+            hooks: [],
+            nativeTools: []
+          }
+        };
+      }
+    }
+  });
 
     const workspace = await runtimeService.createWorkspace({
       input: {
@@ -73,6 +81,7 @@ async function createLazyRuntime() {
     persistence,
     runtimeService,
     workspace,
+    enqueuedRuns,
     executionProviderAcquired: () => executionProviderAcquired
   };
 }
@@ -173,6 +182,27 @@ describe("runtime service lazy session access", () => {
       items: [expect.objectContaining({ runId: run.id, messageId: "msg_1" })]
     });
 
+    expect(executionProviderAcquired()).toBe(false);
+  });
+
+  it("accepts a session message without initializing execution runtime services", async () => {
+    const { runtimeService, workspace, enqueuedRuns, executionProviderAcquired } = await createLazyRuntime();
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller: { subjectRef: "test:user" },
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller: { subjectRef: "test:user" },
+      input: { content: "hello" }
+    });
+
+    await expect(runtimeService.listSessionMessages(session.id, 20)).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: accepted.messageId, runId: accepted.runId })]
+    });
+    expect(enqueuedRuns).toEqual([{ sessionId: session.id, runId: accepted.runId }]);
     expect(executionProviderAcquired()).toBe(false);
   });
 });

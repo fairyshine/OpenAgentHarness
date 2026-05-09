@@ -170,6 +170,7 @@ export function useAppController() {
   const runRefreshTimerRef = useRef<number | undefined>(undefined);
   const workspaceIndexRefreshTimerRef = useRef<number | undefined>(undefined);
   const runPollingTimerRef = useRef<number | undefined>(undefined);
+  const lastExplicitSessionRefreshRef = useRef<{ sessionId: string; at: number } | null>(null);
   const conversationThreadRef = useRef<HTMLDivElement | null>(null);
   const conversationTailRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoFollowConversationRef = useRef(true);
@@ -444,7 +445,8 @@ export function useAppController() {
       setStreamState,
       streamAbortRef,
       lastCursorRef,
-      runPollingTimerRef
+      runPollingTimerRef,
+      lastExplicitSessionRefreshRef
     }
   });
 
@@ -699,6 +701,10 @@ export function useAppController() {
 
   useEffect(() => {
     if (sessionId.trim()) {
+      const recentExplicitRefresh = lastExplicitSessionRefreshRef.current;
+      if (recentExplicitRefresh?.sessionId === sessionId && Date.now() - recentExplicitRefresh.at < 1_000) {
+        return;
+      }
       void navigationActions.refreshSession(sessionId, true);
       void refreshSessionRuns(true, { includeSteps: true });
       return;

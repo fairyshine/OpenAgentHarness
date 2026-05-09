@@ -62,6 +62,7 @@ interface NavigationActionParams {
     streamAbortRef: MutableRefObject<AbortController | null>;
     lastCursorRef: MutableRefObject<string | undefined>;
     runPollingTimerRef: MutableRefObject<number | undefined>;
+    lastExplicitSessionRefreshRef: MutableRefObject<{ sessionId: string; at: number } | null>;
   };
 }
 
