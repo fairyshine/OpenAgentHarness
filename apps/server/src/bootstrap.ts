@@ -1,4 +1,3 @@
-import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { access, mkdir, realpath, rm, stat } from "node:fs/promises";
 
@@ -13,7 +12,6 @@ import type {
   EngineLogger,
   ModelGateway,
   SandboxHostProviderKind,
-  WorkspacePrewarmer,
   WorkspaceRecord
 } from "../../../packages/engine-core/src/types.js";
 import { AppError } from "../../../packages/engine-core/src/errors.js";
@@ -96,6 +94,20 @@ import {
   createPlacementAwareSessionRunQueue,
   selectPlacementPreferredWorkerId
 } from "./bootstrap/placement-aware-session-run-queue.js";
+import {
+  prepareRuntimeUploadCacheDir,
+  removeRuntimeFromUploadCaches,
+  resolveRuntimeSourceDirForBootstrap,
+  resolveRuntimeUploadCacheDir,
+  resolveRuntimeUploadCacheDirs,
+  runtimeExistsInUploadCache
+} from "./bootstrap/runtime-upload-cache.js";
+import {
+  resolveRuntimeAssemblyProfile,
+  resolveWorkspaceModelMetadataDiscoveryMode,
+  shouldManageWorkspaceRegistry
+} from "./bootstrap/runtime-assembly-profile.js";
+import { createWorkspacePrewarmer } from "./bootstrap/workspace-prewarmer.js";
 
 export { cleanupWorkspaceLocalArtifacts } from "./bootstrap/engine-state-paths.js";
 export type { WorkspaceLocalArtifactCleanupStatus } from "./bootstrap/engine-state-paths.js";
@@ -104,6 +116,12 @@ export {
   resolveWorkspaceMaterializationConfig,
   resolveWorkspacePrewarmConfig
 } from "./bootstrap/bootstrap-config.js";
+export {
+  resolveRuntimeAssemblyProfile,
+  resolveWorkspaceModelMetadataDiscoveryMode,
+  shouldManageWorkspaceRegistry
+} from "./bootstrap/runtime-assembly-profile.js";
+export { createWorkspacePrewarmer } from "./bootstrap/workspace-prewarmer.js";
 
 function hasRemoteErrorCode(error: unknown, code: string): boolean {
   if (error instanceof AppError) {
@@ -200,105 +218,7 @@ export interface BootstrapOptions {
     | undefined;
 }
 
-export function resolveRuntimeUploadCacheDir(paths: Pick<ServerConfig["paths"], "workspace_dir" | "runtime_state_dir">): string {
-  return resolveRuntimeUploadCacheDirs(paths)[0]!;
-}
-
-function resolveRuntimeUploadCacheDirs(paths: Pick<ServerConfig["paths"], "workspace_dir" | "runtime_state_dir">): string[] {
-  const assetRoot = process.env.OAH_DEPLOY_ROOT?.trim() || process.env.OAH_HOME?.trim();
-  const candidates = [
-    ...(process.env.OAH_DEPLOY_ROOT?.trim() ? [path.join(path.resolve(process.env.OAH_DEPLOY_ROOT.trim()), "runtimes")] : []),
-    ...(process.env.OAH_HOME?.trim() ? [path.join(path.resolve(process.env.OAH_HOME.trim()), "runtimes")] : []),
-    path.join(resolveRuntimeStateDir(paths), "runtimes")
-  ];
-
-  if (assetRoot) {
-    return [...new Set(candidates)];
-  }
-
-  return [path.join(resolveRuntimeStateDir(paths), "runtimes")];
-}
-
-async function prepareRuntimeUploadCacheDir(paths: Pick<ServerConfig["paths"], "workspace_dir" | "runtime_state_dir">): Promise<string> {
-  let lastError: unknown;
-  for (const candidate of resolveRuntimeUploadCacheDirs(paths)) {
-    try {
-      await mkdir(candidate, { recursive: true });
-      await access(candidate, fsConstants.W_OK);
-      return candidate;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw new Error(
-    `Unable to prepare a writable runtime upload cache directory: ${
-      lastError instanceof Error ? lastError.message : String(lastError)
-    }`
-  );
-}
-
-async function pathExistsForBootstrap(targetPath: string): Promise<boolean> {
-  return stat(targetPath)
-    .then(() => true)
-    .catch((error) => {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        return false;
-      }
-      throw error;
-    });
-}
-
-async function runtimeExistsInUploadCache(
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "runtime_state_dir">,
-  runtimeName: string
-): Promise<boolean> {
-  for (const runtimeCacheDir of resolveRuntimeUploadCacheDirs(paths)) {
-    if (await pathExistsForBootstrap(path.join(runtimeCacheDir, runtimeName))) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-async function removeRuntimeFromUploadCaches(
-  paths: Pick<ServerConfig["paths"], "workspace_dir" | "runtime_state_dir">,
-  runtimeName: string
-): Promise<void> {
-  await Promise.all(
-    resolveRuntimeUploadCacheDirs(paths).map(async (runtimeCacheDir) => {
-      await rm(path.join(runtimeCacheDir, runtimeName), { recursive: true, force: true });
-    })
-  );
-}
-
-async function resolveRuntimeSourceDirForBootstrap(
-  runtimeName: string,
-  paths: Pick<ServerConfig["paths"], "runtime_dir" | "workspace_dir" | "runtime_state_dir">,
-  useRuntimeUploadCache: boolean,
-  objectStorage: ServerConfig["object_storage"] | undefined,
-  objectStorageModule: typeof import("./object-storage.js") | undefined
-): Promise<string> {
-  if (useRuntimeUploadCache) {
-    for (const runtimeCacheDir of resolveRuntimeUploadCacheDirs(paths)) {
-      if (await pathExistsForBootstrap(path.join(runtimeCacheDir, runtimeName))) {
-        return runtimeCacheDir;
-      }
-    }
-  }
-
-  if (objectStorage) {
-    const runtimeCacheDir = await prepareRuntimeUploadCacheDir(paths);
-    const runtimeCacheTarget = path.join(runtimeCacheDir, runtimeName);
-    await objectStorageModule!.syncRuntimeDirectoryFromObjectStore(objectStorage, runtimeName, runtimeCacheTarget, (message) => {
-      console.info(`[oah-object-storage] ${message}`);
-    });
-    return runtimeCacheDir;
-  }
-
-  return paths.runtime_dir;
-}
+export { resolveRuntimeUploadCacheDir } from "./bootstrap/runtime-upload-cache.js";
 
 function parseStaleRunRecoveryStrategyEnv(
   name: string,
@@ -568,56 +488,6 @@ async function listRepositoryWorkspaces(
   return workspaces;
 }
 
-export interface RuntimeAssemblyProfile {
-  id: "api_control_plane" | "api_embedded_runtime" | "worker_executor";
-  executionServicesMode: "eager" | "lazy";
-  enablePlatformModelLiveReload: boolean;
-  enableWorkerRuntime: boolean;
-  enableAdminCapabilities: boolean;
-  enableControlPlaneFacade: boolean;
-}
-
-export type WorkspaceModelMetadataDiscoveryMode = "eager" | "background" | "manual";
-
-export function resolveRuntimeAssemblyProfile(options: {
-  processKind: "api" | "worker";
-  startWorker: boolean;
-  remoteSandboxProvider: boolean;
-}): RuntimeAssemblyProfile {
-  void options.remoteSandboxProvider;
-
-  if (options.processKind === "worker") {
-    return {
-      id: "worker_executor",
-      executionServicesMode: "lazy",
-      enablePlatformModelLiveReload: false,
-      enableWorkerRuntime: true,
-      enableAdminCapabilities: false,
-      enableControlPlaneFacade: false
-    };
-  }
-
-  if (!options.startWorker) {
-    return {
-      id: "api_control_plane",
-      executionServicesMode: "lazy",
-      enablePlatformModelLiveReload: false,
-      enableWorkerRuntime: false,
-      enableAdminCapabilities: true,
-      enableControlPlaneFacade: true
-    };
-  }
-
-  return {
-    id: "api_embedded_runtime",
-    executionServicesMode: "eager",
-    enablePlatformModelLiveReload: false,
-    enableWorkerRuntime: true,
-    enableAdminCapabilities: true,
-    enableControlPlaneFacade: true
-  };
-}
-
 function summarizeDisabledWorkerRuntimeStatus(): WorkerRuntimeStatus {
   return {
     mode: "disabled",
@@ -636,33 +506,6 @@ function summarizeDisabledWorkerRuntimeStatus(): WorkerRuntimeStatus {
     },
     pool: null
   };
-}
-
-export function shouldManageWorkspaceRegistry(options: {
-  processKind: "api" | "worker";
-  hasSingleWorkspace: boolean;
-  remoteSandboxProvider: boolean;
-}): boolean {
-  return options.processKind !== "worker" && !options.hasSingleWorkspace && !options.remoteSandboxProvider;
-}
-
-export function resolveWorkspaceModelMetadataDiscoveryMode(options: {
-  processKind: "api" | "worker";
-  hasSingleWorkspace: boolean;
-  managesWorkspaceRegistry: boolean;
-}): WorkspaceModelMetadataDiscoveryMode {
-  if (options.processKind !== "api") {
-    return "eager";
-  }
-
-  if (options.hasSingleWorkspace || !options.managesWorkspaceRegistry) {
-    return "eager";
-  }
-
-  // Multi-workspace API boot favors a lighter control-plane footprint. Keep
-  // workspace discovery live, but only enrich workspace model metadata when a
-  // refresh path explicitly needs it.
-  return "manual";
 }
 
 function resolveInternalBaseUrl(
@@ -700,62 +543,6 @@ function resolveRuntimeInstanceId(processKind: "api" | "worker"): string {
   }
 
   return `${processKind}:${process.pid}`;
-}
-
-export function createWorkspacePrewarmer(options: {
-  sandboxHost: SandboxHost;
-  getWorkspaceRecord(workspaceId: string): Promise<WorkspaceRecord>;
-  delayMs?: number | undefined;
-  coalesceWindowMs?: number | undefined;
-}): WorkspacePrewarmer {
-  const inFlightByWorkspaceId = new Map<string, Promise<void>>();
-  const lastCompletedAtByWorkspaceId = new Map<string, number>();
-
-  return {
-    async prewarmWorkspace(workspaceId: string): Promise<void> {
-      const normalizedWorkspaceId = workspaceId.trim();
-      if (normalizedWorkspaceId.length === 0) {
-        return;
-      }
-
-      const coalesceWindowMs = Math.max(0, options.coalesceWindowMs ?? 0);
-      const lastCompletedAt = lastCompletedAtByWorkspaceId.get(normalizedWorkspaceId);
-      if (
-        coalesceWindowMs > 0 &&
-        typeof lastCompletedAt === "number" &&
-        Date.now() - lastCompletedAt < coalesceWindowMs
-      ) {
-        return;
-      }
-
-      const existingTask = inFlightByWorkspaceId.get(normalizedWorkspaceId);
-      if (existingTask) {
-        await existingTask;
-        return;
-      }
-
-      let task: Promise<void>;
-      task = (async () => {
-        if ((options.delayMs ?? 0) > 0) {
-          await new Promise((resolve) => setTimeout(resolve, options.delayMs));
-        }
-        const workspace = await options.getWorkspaceRecord(normalizedWorkspaceId);
-        const lease = await options.sandboxHost.workspaceFileAccessProvider.acquire({
-          workspace,
-          access: "read"
-        });
-        await lease.release();
-        lastCompletedAtByWorkspaceId.set(normalizedWorkspaceId, Date.now());
-      })().finally(() => {
-        if (inFlightByWorkspaceId.get(normalizedWorkspaceId) === task) {
-          inFlightByWorkspaceId.delete(normalizedWorkspaceId);
-        }
-      });
-
-      inFlightByWorkspaceId.set(normalizedWorkspaceId, task);
-      await task;
-    }
-  };
 }
 
 export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<BootstrappedRuntime> {

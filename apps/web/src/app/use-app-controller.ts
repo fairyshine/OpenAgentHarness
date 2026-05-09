@@ -1,59 +1,26 @@
 import { startTransition, useDeferredValue, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { useShallow } from "zustand/shallow";
 
 import {
-  type ActionRunAccepted,
-  type CreateMessageRequest,
-  type GuideQueuedRunAccepted,
-  healthReportSchema,
   readinessReportSchema,
-  systemProfileSchema,
-  type MessageAccepted,
-  type MessagePage,
-  type ModelGenerateResponse,
   type Run,
   type RunPage,
-  type Session,
   type RunStep,
-  type SessionPage,
-  type SessionQueue,
   type SessionQueuedRun,
-  type SessionTerminalInputAccepted,
-  type SessionTerminalSnapshot,
-  type SessionEventContract
 } from "@oah/api-contracts";
 
 import {
   buildRuntimeConsoleEntries,
-  buildMessageRecord,
-  buildUrl,
-  contentToolRefs,
-  consumeSse,
   downloadJsonFile,
-  hasDisplayableRunMessages,
-  inferCompletedMessageRole,
   isNotFoundError,
-  isRecord,
-  isTerminalRunEvent,
-  isTerminalRunStatus,
-  normalizeMessageContent,
   sanitizeFileSegment,
   serviceScopeMatches,
   toErrorSummary,
   toErrorMessage,
-  mergeSessionMessages,
-  upsertSessionMessage,
   type AppRequestErrorSummary,
-  type SavedSessionRecord,
   type HealthReportResponse,
   type LiveConversationMessageRecord,
-  type PlatformModelListResponse,
-  type PlatformModelRecord,
-  type ModelProviderListResponse,
   type ReadinessReportResponse,
   type RuntimeConsoleEntry,
-  type PlatformModelSnapshotResponse,
-  type SseFrame,
   type SystemProfileResponse
 } from "./support";
 import { useNavigationActions } from "./use-navigation-actions";
@@ -64,29 +31,25 @@ import { useSidebarDerivedState } from "./use-sidebar-derived-state";
 import { useNavigationState } from "./use-navigation-state";
 import { useStorageController } from "./use-storage-controller";
 import { useWorkspaceFileManager } from "./use-workspace-file-manager";
-import { useHealthStore } from "./stores/health-store";
-import { useModelsStore } from "./stores/models-store";
-import { useSessionAgentStore } from "./stores/session-agent-store";
-import { useSettingsStore } from "./stores/settings-store";
-import { useStreamStore } from "./stores/stream-store";
-import { useUiStore } from "./stores/ui-store";
-import { buildComposerMessageContent, summarizeComposerMessageContent } from "./chat/composer-content";
+import { useSessionEventHandler } from "./use-session-event-handler";
+import { useSessionMessages } from "./use-session-messages";
+import { useSessionRunActions } from "./use-session-run-actions";
+import { useSessionSubmitActions } from "./use-session-submit-actions";
+import { useSessionUtilityActions } from "./use-session-utility-actions";
+import { useSessionSettingsActions } from "./use-session-settings-actions";
+import { useSystemModelActions } from "./use-system-model-actions";
+import { usePlatformModelStream } from "./use-platform-model-stream";
+import { useSelectedRunPolling } from "./use-selected-run-polling";
+import { useSessionEventStream } from "./use-session-event-stream";
+import { useAppControllerStores } from "./use-app-controller-stores";
+import { useAppControllerSurfaceProps } from "./use-app-controller-surface-props";
 import {
-  ACTIVITY_VISIBLE_EVENTS,
-  RUN_DETAIL_REFRESH_EVENTS,
-  SESSION_RUN_LIST_REFRESH_EVENTS,
   buildMessagePagePath,
-  mergeMessageCursor,
-  mergeRunStepsForRun,
-  mergeSavedSessionRecords,
-  readQueuedRunsFromEventData,
-  savedSessionFromSession,
   sortRunSteps
 } from "./app-controller-utils";
 
-const COMPLETED_RUN_RESULT_POLL_LIMIT = 5;
-
 export function useAppController() {
+  const stores = useAppControllerStores();
   const {
     connection,
     workspaceRuntimeFilter,
@@ -96,18 +59,7 @@ export function useAppController() {
     setWorkspaceRuntimeFilter,
     setServiceScope,
     setModelDraft
-  } = useSettingsStore(
-    useShallow((state) => ({
-      connection: state.connection,
-      workspaceRuntimeFilter: state.workspaceRuntimeFilter,
-      serviceScope: state.serviceScope,
-      modelDraft: state.modelDraft,
-      setConnection: state.setConnection,
-      setWorkspaceRuntimeFilter: state.setWorkspaceRuntimeFilter,
-      setServiceScope: state.setServiceScope,
-      setModelDraft: state.setModelDraft
-    }))
-  );
+  } = stores.settings;
   const {
     messages,
     events,
@@ -127,48 +79,9 @@ export function useAppController() {
     setStreamState,
     setGenerateOutput,
     setGenerateBusy
-  } = useStreamStore(
-    useShallow((state) => ({
-      messages: state.messages,
-      events: state.events,
-      selectedRunId: state.selectedRunId,
-      sessionRuns: state.sessionRuns,
-      run: state.run,
-      runSteps: state.runSteps,
-      liveMessagesByKey: state.liveMessagesByKey,
-      streamState: state.streamState,
-      setMessages: state.setMessages,
-      setEvents: state.setEvents,
-      setSelectedRunId: state.setSelectedRunId,
-      setSessionRuns: state.setSessionRuns,
-      setRun: state.setRun,
-      setRunSteps: state.setRunSteps,
-      setLiveMessagesByKey: state.setLiveMessagesByKey,
-      setStreamState: state.setStreamState,
-      setGenerateOutput: state.setGenerateOutput,
-      setGenerateBusy: state.setGenerateBusy
-    }))
-  );
-  const { healthStatus, systemProfile, healthReport, readinessReport, setHealthStatus, setSystemProfile, setHealthReport, setReadinessReport } = useHealthStore(
-    useShallow((state) => ({
-      healthStatus: state.healthStatus,
-      systemProfile: state.systemProfile,
-      healthReport: state.healthReport,
-      readinessReport: state.readinessReport,
-      setHealthStatus: state.setHealthStatus,
-      setSystemProfile: state.setSystemProfile,
-      setHealthReport: state.setHealthReport,
-      setReadinessReport: state.setReadinessReport
-    }))
-  );
-  const { modelProviders, platformModels, setModelProviders, setPlatformModels } = useModelsStore(
-    useShallow((state) => ({
-      modelProviders: state.modelProviders,
-      platformModels: state.platformModels,
-      setModelProviders: state.setModelProviders,
-      setPlatformModels: state.setPlatformModels
-    }))
-  );
+  } = stores.stream;
+  const { healthStatus, systemProfile, healthReport, readinessReport, setHealthStatus, setSystemProfile, setHealthReport, setReadinessReport } = stores.health;
+  const { modelProviders, platformModels, setModelProviders, setPlatformModels } = stores.models;
   const {
     surfaceMode,
     mainViewMode,
@@ -197,37 +110,7 @@ export function useAppController() {
     setErrorMessage,
     setActiveError,
     setStreamRevision
-  } = useUiStore(
-    useShallow((state) => ({
-      surfaceMode: state.surfaceMode,
-      mainViewMode: state.mainViewMode,
-      inspectorTab: state.inspectorTab,
-      timelineInspectorMode: state.timelineInspectorMode,
-      selectedTraceId: state.selectedTraceId,
-      selectedMessageId: state.selectedMessageId,
-      selectedStepId: state.selectedStepId,
-      selectedEventId: state.selectedEventId,
-      consoleOpen: state.consoleOpen,
-      consoleFilter: state.consoleFilter,
-      errorMessage: state.errorMessage,
-      activeError: state.activeError,
-      streamRevision: state.streamRevision,
-      setSurfaceMode: state.setSurfaceMode,
-      setMainViewMode: state.setMainViewMode,
-      setInspectorTab: state.setInspectorTab,
-      setTimelineInspectorMode: state.setTimelineInspectorMode,
-      setSelectedTraceId: state.setSelectedTraceId,
-      setSelectedMessageId: state.setSelectedMessageId,
-      setSelectedStepId: state.setSelectedStepId,
-      setSelectedEventId: state.setSelectedEventId,
-      setConsoleOpen: state.setConsoleOpen,
-      setConsoleFilter: state.setConsoleFilter,
-      setActivity: state.setActivity,
-      setErrorMessage: state.setErrorMessage,
-      setActiveError: state.setActiveError,
-      setStreamRevision: state.setStreamRevision
-    }))
-  );
+  } = stores.ui;
   const {
     pendingSessionAgentName,
     switchingSessionAgentId,
@@ -237,18 +120,7 @@ export function useAppController() {
     setSwitchingSessionAgentId,
     setPendingSessionModelRef,
     setSwitchingSessionModelId
-  } = useSessionAgentStore(
-    useShallow((state) => ({
-      pendingSessionAgentName: state.pendingSessionAgentName,
-      switchingSessionAgentId: state.switchingSessionAgentId,
-      pendingSessionModelRef: state.pendingSessionModelRef,
-      switchingSessionModelId: state.switchingSessionModelId,
-      setPendingSessionAgentName: state.setPendingSessionAgentName,
-      setSwitchingSessionAgentId: state.setSwitchingSessionAgentId,
-      setPendingSessionModelRef: state.setPendingSessionModelRef,
-      setSwitchingSessionModelId: state.setSwitchingSessionModelId
-    }))
-  );
+  } = stores.sessionAgent;
   const navigation = useNavigationState();
   const {
     workspaceDraft,
@@ -290,28 +162,14 @@ export function useAppController() {
   } = navigation;
 
   const deferredEvents = useDeferredValue(events);
-  const [messagesNextCursor, setMessagesNextCursor] = useState<string | null>(null);
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [sessionQueuedRuns, setSessionQueuedRuns] = useState<SessionQueuedRun[]>([]);
-  const completedRunResultPollsRef = useRef<Record<string, number>>({});
   const streamAbortRef = useRef<AbortController | null>(null);
-  const platformModelStreamAbortRef = useRef<AbortController | null>(null);
   const activeSessionIdRef = useRef("");
   const lastCursorRef = useRef<string | undefined>(undefined);
   const messageRefreshTimerRef = useRef<number | undefined>(undefined);
-  const messageRefreshSeqRef = useRef(0);
-  const olderMessagesSeqRef = useRef(0);
-  const sessionQueueRefreshSeqRef = useRef(0);
-  const sidebarSessionRunsRefreshSeqRef = useRef(0);
   const runRefreshTimerRef = useRef<number | undefined>(undefined);
   const workspaceIndexRefreshTimerRef = useRef<number | undefined>(undefined);
   const runPollingTimerRef = useRef<number | undefined>(undefined);
-  const platformModelReconnectTimerRef = useRef<number | undefined>(undefined);
-  const sessionAgentSwitchRef = useRef<{ sessionId: string; promise: Promise<boolean> } | null>(null);
-  const sessionAgentSwitchSeqRef = useRef(0);
-  const sessionModelUpdateRef = useRef<{ sessionId: string; promise: Promise<boolean> } | null>(null);
-  const sessionModelUpdateSeqRef = useRef(0);
   const conversationThreadRef = useRef<HTMLDivElement | null>(null);
   const conversationTailRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoFollowConversationRef = useRef(true);
@@ -420,6 +278,46 @@ export function useAppController() {
     setConsoleFilter("errors");
   });
 
+  const {
+    messagesNextCursor,
+    messagesLoading,
+    loadingOlderMessages,
+    setMessagesLoading,
+    refreshMessages,
+    loadOlderMessages,
+    resetMessagePaging,
+    mergeMessagePageCursor
+  } = useSessionMessages({
+    sessionId,
+    activeSessionIdRef,
+    request,
+    setMessages,
+    setLiveMessagesByKey,
+    clearActiveError,
+    reportError
+  });
+
+  const { refreshSessionRuns, refreshSidebarSessionRuns, refreshRun, refreshRunSteps, refreshSessionQueue } =
+    useSessionRunActions({
+      sessionId,
+      selectedRunId,
+      activeSessionIdRef,
+      visibleSidebarSessionIds,
+      savedSessions,
+      sessionsByWorkspaceId,
+      sidebarSessionRunsById,
+      request,
+      clearActiveError,
+      reportError,
+      setSelectedRunId,
+      setSessionRuns,
+      setRun,
+      setRunSteps,
+      setSessionQueuedRuns,
+      setSavedSessions,
+      setSidebarSessionRunsById
+    });
+
   useEffect(() => {
     if (!errorMessage) {
       setActiveError(null);
@@ -447,8 +345,6 @@ export function useAppController() {
 
     streamAbortRef.current?.abort();
     lastCursorRef.current = undefined;
-    sessionAgentSwitchRef.current = null;
-    sessionModelUpdateRef.current = null;
     window.clearTimeout(messageRefreshTimerRef.current);
     window.clearTimeout(runRefreshTimerRef.current);
     window.clearTimeout(workspaceIndexRefreshTimerRef.current);
@@ -477,10 +373,9 @@ export function useAppController() {
       setSwitchingSessionModelId(null);
       setStreamState("idle");
     });
-    setMessagesNextCursor(null);
+    resetMessagePaging();
     setMessagesLoading(false);
-    setLoadingOlderMessages(false);
-  }, [activeWorkspaceId, normalizedServiceScope, savedWorkspaces, setCatalog, setSession, setSessionId, setWorkspace, setWorkspaceId, workspace]);
+  }, [activeWorkspaceId, normalizedServiceScope, resetMessagePaging, savedWorkspaces, setCatalog, setSession, setSessionId, setWorkspace, setWorkspaceId, workspace]);
 
   const storageInspectionEnabled = systemProfile?.capabilities.storageInspection ?? true;
 
@@ -594,903 +489,76 @@ export function useAppController() {
     }, 140);
   }
 
-  async function pingHealth() {
-    try {
-      setHealthStatus("checking");
-      const [profilePayload, healthResponse, readinessResponse] = await Promise.all([
-        fetch(buildUrl(connection.baseUrl, "/api/v1/system/profile"))
-          .then((response) => (response.ok ? readJsonResponse<SystemProfileResponse>(response) : null))
-          .then((payload) => (payload ? systemProfileSchema.parse(payload) : null))
-          .catch(() => null),
-        fetch(buildUrl(connection.baseUrl, "/healthz")),
-        fetch(buildUrl(connection.baseUrl, "/readyz"))
-      ]);
-
-      if (!healthResponse.ok) {
-        throw new Error(`${healthResponse.status} ${healthResponse.statusText}`);
-      }
-
-      const healthPayload = healthReportSchema.parse((await readJsonResponse<HealthReportResponse>(healthResponse)) ?? null);
-      const readinessPayload = await readJsonResponse<ReadinessReportResponse>(readinessResponse)
-        .then((payload) => (payload ? readinessReportSchema.parse(payload) : null))
-        .catch(() => null);
-
-      setSystemProfile(profilePayload);
-      setHealthReport(healthPayload);
-      setReadinessReport(readinessPayload);
-      setHealthStatus(healthPayload?.status ?? (readinessResponse.ok ? "ok" : "degraded"));
-      setActivity(
-        healthPayload?.status === "degraded" || readinessPayload?.status === "not_ready"
-          ? "服务探针发现降级项"
-          : "服务健康检查通过"
-      );
-      clearActiveError();
-    } catch (error) {
-      setHealthStatus("error");
-      setSystemProfile(null);
-      setHealthReport(null);
-      setReadinessReport(null);
-      reportError(error);
-    }
-  }
-
-  async function refreshModelProviders(quiet = false) {
-    try {
-      const response = await request<ModelProviderListResponse>("/api/v1/model-providers");
-      startTransition(() => {
-        setModelProviders(response.items);
-      });
-      if (!quiet) {
-        setActivity(`已加载 ${response.items.length} 个模型 provider`);
-        clearActiveError();
-      }
-    } catch (error) {
-      if (!quiet) {
-        reportError(error);
-      }
-    }
-  }
-
-  async function refreshPlatformModels(quiet = false) {
-    try {
-      const response = await request<PlatformModelListResponse>("/api/v1/platform-models");
-      startTransition(() => {
-        setPlatformModels(response.items);
-      });
-      if (!quiet) {
-        setActivity(`已加载 ${response.items.length} 个平台模型`);
-        clearActiveError();
-      }
-    } catch (error) {
-      if (!quiet) {
-        reportError(error);
-      }
-    }
-  }
-
-  const handlePlatformModelSnapshot = useEffectEvent((snapshot: PlatformModelSnapshotResponse, quiet = false) => {
-    startTransition(() => {
-      setPlatformModels(snapshot.items);
-    });
-    if (!quiet) {
-      setActivity(`平台模型已热更新，当前 ${snapshot.items.length} 个`);
-    }
+  const { pingHealth, refreshModelProviders, refreshPlatformModels, handlePlatformModelSnapshot } = useSystemModelActions({
+    connection,
+    request,
+    setActivity,
+    clearActiveError,
+    reportError,
+    setHealthStatus,
+    setSystemProfile,
+    setHealthReport,
+    setReadinessReport,
+    setModelProviders,
+    setPlatformModels
   });
 
-  async function refreshMessages(
-    quiet = false,
-    options?: {
-      reset?: boolean | undefined;
-    }
-  ) {
-    const targetSessionId = sessionId.trim();
-    if (!targetSessionId) {
-      startTransition(() => {
-        setMessages([]);
-        setMessagesNextCursor(null);
-      });
-      return;
-    }
-
-    const refreshSeq = messageRefreshSeqRef.current + 1;
-    messageRefreshSeqRef.current = refreshSeq;
-    setMessagesLoading(true);
-
-    try {
-      const messagePage = await request<MessagePage>(buildMessagePagePath(targetSessionId));
-      if (activeSessionIdRef.current !== targetSessionId || messageRefreshSeqRef.current !== refreshSeq) {
-        return;
-      }
-
-      startTransition(() => {
-        setMessages((current) => (options?.reset ? messagePage.items : mergeSessionMessages(current, messagePage.items)));
-        setMessagesNextCursor((current) =>
-          options?.reset ? (messagePage.nextCursor ?? null) : mergeMessageCursor(current, messagePage.nextCursor)
-        );
-        setLiveMessagesByKey((current) =>
-          Object.fromEntries(
-            Object.entries(current).filter(([, entry]) => {
-              if (entry.role !== "user" || !entry.persistedMessageId) {
-                return true;
-              }
-
-              return !messagePage.items.some((message) => message.id === entry.persistedMessageId);
-            })
-          )
-        );
-      });
-      if (!quiet) {
-        clearActiveError();
-      }
-    } catch (error) {
-      if (!quiet) {
-        reportError(error);
-      }
-    } finally {
-      if (messageRefreshSeqRef.current === refreshSeq) {
-        setMessagesLoading(false);
-      }
-    }
-  }
-
-  async function loadOlderMessages() {
-    const targetSessionId = sessionId.trim();
-    const cursor = messagesNextCursor?.trim();
-    if (!targetSessionId || !cursor || loadingOlderMessages) {
-      return;
-    }
-
-    const olderSeq = olderMessagesSeqRef.current + 1;
-    olderMessagesSeqRef.current = olderSeq;
-    setLoadingOlderMessages(true);
-
-    try {
-      const messagePage = await request<MessagePage>(buildMessagePagePath(targetSessionId, { cursor }));
-      if (activeSessionIdRef.current !== targetSessionId || olderMessagesSeqRef.current !== olderSeq) {
-        return;
-      }
-
-      startTransition(() => {
-        setMessages((current) => mergeSessionMessages(current, messagePage.items));
-        setMessagesNextCursor(messagePage.nextCursor ?? null);
-      });
-      clearActiveError();
-    } catch (error) {
-      reportError(error);
-    } finally {
-      if (olderMessagesSeqRef.current === olderSeq) {
-        setLoadingOlderMessages(false);
-      }
-    }
-  }
-
-  async function refreshSessionRunStepsForRuns(runs: Run[], quiet = false) {
-    if (runs.length === 0) {
-      startTransition(() => {
-        setRunSteps([]);
-      });
-      return;
-    }
-
-    try {
-      const pages = await Promise.all(
-        runs.map(async (sessionRun) => {
-          const page = await request<{ items: RunStep[] }>(`/api/v1/runs/${sessionRun.id}/steps?pageSize=200`);
-          return page.items;
-        })
-      );
-
-      startTransition(() => {
-        setRunSteps(sortRunSteps(pages.flatMap((items) => items)));
-      });
-
-      if (!quiet) {
-        clearActiveError();
-      }
-    } catch (error) {
-      if (!quiet) {
-        reportError(error);
-      }
-    }
-  }
-
-  async function refreshSessionRuns(quiet = false, options?: { includeSteps?: boolean }) {
-    if (!sessionId.trim()) {
-      return;
-    }
-
-    try {
-      const page = await request<RunPage>(`/api/v1/sessions/${sessionId}/runs?pageSize=200`);
-      startTransition(() => {
-        setSessionRuns(page.items);
-      });
-      if (options?.includeSteps) {
-        await refreshSessionRunStepsForRuns(page.items, true);
-      }
-
-      const activeSelectedRunId = selectedRunId.trim();
-      const nextSelectedRun = page.items.find((item) => item.id === activeSelectedRunId) ?? page.items[0];
-      if (nextSelectedRun && nextSelectedRun.id !== activeSelectedRunId) {
-        startTransition(() => {
-          setSelectedRunId(nextSelectedRun.id);
-          setRun(nextSelectedRun);
-        });
-      } else if (!nextSelectedRun) {
-        startTransition(() => {
-          setSelectedRunId("");
-          setRun(null);
-          setRunSteps([]);
-        });
-      }
-
-      if (!quiet) {
-        clearActiveError();
-      }
-    } catch (error) {
-      if (!quiet) {
-        reportError(error);
-      }
-    }
-  }
-
-  async function refreshVisibleSidebarChildSessions(rootSessionIds: string[]): Promise<SavedSessionRecord[]> {
-    const parentSessionIds = Array.from(new Set(rootSessionIds.map((entry) => entry.trim()).filter(Boolean)));
-    if (parentSessionIds.length === 0) {
-      return [];
-    }
-
-    const pages = await Promise.allSettled(
-      parentSessionIds.map(async (parentSessionId) => {
-        const page = await request<SessionPage>(`/api/v1/sessions/${parentSessionId}/children?pageSize=100`);
-        return page.items;
-      })
-    );
-    const childSessions = pages
-      .filter((result): result is PromiseFulfilledResult<Session[]> => result.status === "fulfilled")
-      .flatMap((result) => result.value);
-    if (childSessions.length === 0) {
-      return [];
-    }
-
-    const existingById = new Map(savedSessions.map((entry) => [entry.id, entry]));
-    const childRecords = childSessions.map((entry) => savedSessionFromSession(entry, existingById.get(entry.id)));
-    startTransition(() => {
-      setSavedSessions((current) => mergeSavedSessionRecords(current, childRecords));
+  const { sessionAgentSwitchRef, sessionModelUpdateRef, switchSessionAgent, updateSessionModel } =
+    useSessionSettingsActions({
+      sessionId,
+      session,
+      refreshSessionRuns,
+      refreshSessionById: navigationActions.refreshSession,
+      switchSessionAgentById: navigationActions.switchSessionAgent,
+      updateSessionModelById: navigationActions.updateSessionModel,
+      setSession,
+      setPendingSessionAgentName,
+      setSwitchingSessionAgentId,
+      setPendingSessionModelRef,
+      setSwitchingSessionModelId
     });
 
-    return childRecords;
-  }
+  const { sendMessage, guideMessage, answerAskUserQuestion, guideQueuedSessionInput, cancelCurrentRun } =
+    useSessionSubmitActions({
+      sessionId,
+      selectedRunId,
+      sessionAgentSwitchRef,
+      sessionModelUpdateRef,
+      shouldAutoFollowConversationRef,
+      request,
+      refreshMessages,
+      refreshSessionRuns,
+      refreshRun,
+      refreshRunSteps,
+      refreshSessionQueue,
+      setActivity,
+      clearActiveError,
+      reportError,
+      openConsoleForErrors,
+      setSelectedRunId,
+      setLiveMessagesByKey,
+      setSessionQueuedRuns,
+      setStreamRevision
+    });
 
-  async function refreshSidebarSessionRuns(quiet = true): Promise<boolean> {
-    const sessionIds = visibleSidebarSessionIds.slice(0, 80);
-    const seq = ++sidebarSessionRunsRefreshSeqRef.current;
-
-    if (sessionIds.length === 0) {
-      startTransition(() => {
-        setSidebarSessionRunsById({});
-      });
-      return false;
-    }
-
-    try {
-      const refreshedChildSessions = await refreshVisibleSidebarChildSessions(sessionIds);
-      const workspaceSessionsById = new Map<string, SavedSessionRecord[]>();
-      for (const [targetWorkspaceId, workspaceSessions] of sessionsByWorkspaceId) {
-        workspaceSessionsById.set(targetWorkspaceId, [...workspaceSessions]);
-      }
-      for (const childSession of refreshedChildSessions) {
-        const workspaceSessions = workspaceSessionsById.get(childSession.workspaceId) ?? [];
-        const existingIndex = workspaceSessions.findIndex((entry) => entry.id === childSession.id);
-        if (existingIndex >= 0) {
-          workspaceSessions[existingIndex] = {
-            ...workspaceSessions[existingIndex],
-            ...childSession
-          };
-        } else {
-          workspaceSessions.push(childSession);
-        }
-        workspaceSessionsById.set(childSession.workspaceId, workspaceSessions);
-      }
-      const effectiveSessionIds = Array.from(
-        new Set(
-          [
-            ...sessionIds,
-            ...refreshedChildSessions
-              .filter((entry) => entry.parentSessionId && sessionIds.includes(entry.parentSessionId))
-              .map((entry) => entry.id)
-          ].slice(0, 120)
-        )
-      );
-      const entries = await Promise.all(
-        effectiveSessionIds.map(async (targetSessionId) => {
-          const page = await request<RunPage>(`/api/v1/sessions/${targetSessionId}/runs?pageSize=20`);
-          return [targetSessionId, page.items] as const;
-        })
-      );
-
-      if (seq !== sidebarSessionRunsRefreshSeqRef.current) {
-        return false;
-      }
-
-      const activeRunEntries = entries.filter(([, runs]) => runs.some((item) => !isTerminalRunStatus(item.status)));
-      const activeRunEntryIds = new Set(activeRunEntries.map(([targetSessionId]) => targetSessionId));
-      const activeRunParentIds = new Set<string>();
-      for (const workspaceSessions of workspaceSessionsById.values()) {
-        for (const sessionEntry of workspaceSessions) {
-          if (sessionEntry.parentSessionId && activeRunEntryIds.has(sessionEntry.id)) {
-            activeRunParentIds.add(sessionEntry.parentSessionId);
-          }
-        }
-      }
-      const hasNonTerminalRun = activeRunEntries.length > 0;
-
-      startTransition(() => {
-        const retainedIdSet = new Set(effectiveSessionIds);
-        const visibleIdSet = new Set(sessionIds);
-        setSidebarSessionRunsById((current) => {
-          const next: Record<string, Run[]> = {};
-          for (const [targetSessionId, runs] of Object.entries(current)) {
-            if (retainedIdSet.has(targetSessionId)) {
-              next[targetSessionId] = runs;
-            }
-          }
-          for (const [targetSessionId, runs] of entries) {
-            next[targetSessionId] = runs;
-          }
-          for (const parentSessionId of activeRunParentIds) {
-            if (!visibleIdSet.has(parentSessionId) || next[parentSessionId]?.some((item) => !isTerminalRunStatus(item.status))) {
-              continue;
-            }
-
-            const representativeRun = activeRunEntries
-              .find(([targetSessionId]) => {
-                for (const workspaceSessions of workspaceSessionsById.values()) {
-                  const childSession = workspaceSessions.find((entry) => entry.id === targetSessionId);
-                  if (childSession?.parentSessionId === parentSessionId) {
-                    return true;
-                  }
-                }
-                return false;
-              })
-              ?.[1]
-              .find((item) => !isTerminalRunStatus(item.status));
-            if (representativeRun) {
-              next[parentSessionId] = [
-                {
-                  ...representativeRun,
-                  id: `${parentSessionId}:active-child:${representativeRun.id}`,
-                  sessionId: parentSessionId,
-                  metadata: {
-                    ...(representativeRun.metadata ?? {}),
-                    statusDerivedFromChildRunId: representativeRun.id,
-                    statusDerivedFromChildSessionId: representativeRun.sessionId
-                  }
-                },
-                ...(next[parentSessionId] ?? [])
-              ];
-            }
-          }
-          return next;
-        });
-      });
-
-      return hasNonTerminalRun;
-    } catch (error) {
-      if (!quiet) {
-        reportError(error);
-      }
-      return Object.values(sidebarSessionRunsById)
-        .flat()
-        .some((item) => !isTerminalRunStatus(item.status));
-    }
-  }
-
-  async function refreshRun(targetId = selectedRunId, quiet = false) {
-    if (!targetId.trim()) {
-      return;
-    }
-
-    try {
-      const runResponse = await request<Run>(`/api/v1/runs/${targetId}`);
-      startTransition(() => {
-        setRun(runResponse);
-        setSelectedRunId(targetId);
-      });
-      if (!quiet) {
-        clearActiveError();
-      }
-    } catch (error) {
-      if (!quiet) {
-        reportError(error);
-      }
-    }
-  }
-
-  async function refreshRunSteps(targetId = selectedRunId, quiet = false) {
-    if (!targetId.trim()) {
-      return;
-    }
-
-    try {
-      const page = await request<{ items: RunStep[] }>(`/api/v1/runs/${targetId}/steps?pageSize=200`);
-      startTransition(() => {
-        setRunSteps((current) => mergeRunStepsForRun(current, targetId, page.items));
-      });
-      if (!quiet) {
-        clearActiveError();
-      }
-    } catch (error) {
-      if (!quiet) {
-        reportError(error);
-      }
-    }
-  }
-
-  async function refreshSessionQueue(quiet = false) {
-    const targetSessionId = sessionId.trim();
-    if (!targetSessionId) {
-      startTransition(() => {
-        setSessionQueuedRuns([]);
-      });
-      return;
-    }
-
-    const refreshSeq = sessionQueueRefreshSeqRef.current + 1;
-    sessionQueueRefreshSeqRef.current = refreshSeq;
-
-    try {
-      const queue = await request<SessionQueue>(`/api/v1/sessions/${targetSessionId}/queue`);
-      if (activeSessionIdRef.current !== targetSessionId || sessionQueueRefreshSeqRef.current !== refreshSeq) {
-        return;
-      }
-
-      startTransition(() => {
-        setSessionQueuedRuns(queue.items);
-      });
-      if (!quiet) {
-        clearActiveError();
-      }
-    } catch (error) {
-      if (!quiet) {
-        reportError(error);
-      }
-    }
-  }
-
-  useEffect(() => {
-    setPendingSessionAgentName(null);
-    setSwitchingSessionAgentId(null);
-    sessionAgentSwitchRef.current = null;
-    setPendingSessionModelRef(null);
-    setSwitchingSessionModelId(null);
-    sessionModelUpdateRef.current = null;
-  }, [session?.id]);
-
-  async function switchSessionAgent(targetId: string, activeAgentName: string) {
-    const nextAgentName = activeAgentName.trim();
-    if (!targetId.trim() || !nextAgentName) {
-      return false;
-    }
-
-    const currentSession = session?.id === targetId ? session : null;
-    const switchSeq = sessionAgentSwitchSeqRef.current + 1;
-    sessionAgentSwitchSeqRef.current = switchSeq;
-    setSwitchingSessionAgentId(targetId);
-    if (currentSession) {
-      setPendingSessionAgentName(nextAgentName);
-      setSession({
-        ...currentSession,
-        activeAgentName: nextAgentName,
-        updatedAt: new Date().toISOString()
-      });
-    }
-
-    const switchPromise = navigationActions.switchSessionAgent(targetId, nextAgentName).then((updated) => updated !== null);
-    sessionAgentSwitchRef.current = {
-      sessionId: targetId,
-      promise: switchPromise
-    };
-
-    try {
-      const switched = await switchPromise;
-      if (!switched) {
-        if (currentSession) {
-          setSession(currentSession);
-        }
-        return false;
-      }
-
-      if (sessionId === targetId) {
-        await navigationActions.refreshSession(targetId, true);
-        await refreshSessionRuns(true, { includeSteps: true });
-      }
-
-      return true;
-    } finally {
-      if (sessionAgentSwitchSeqRef.current === switchSeq) {
-        sessionAgentSwitchRef.current = null;
-        setSwitchingSessionAgentId(null);
-        setPendingSessionAgentName(null);
-      }
-    }
-  }
-
-  async function updateSessionModel(targetId: string, modelRef: string | null) {
-    if (!targetId.trim()) {
-      return false;
-    }
-
-    const currentSession = session?.id === targetId ? session : null;
-    const normalizedModelRef = modelRef?.trim() ? modelRef.trim() : null;
-    const updateSeq = sessionModelUpdateSeqRef.current + 1;
-    sessionModelUpdateSeqRef.current = updateSeq;
-    setSwitchingSessionModelId(targetId);
-    setPendingSessionModelRef(normalizedModelRef);
-    if (currentSession) {
-      setSession({
-        ...currentSession,
-        ...(normalizedModelRef ? { modelRef: normalizedModelRef } : {}),
-        ...(normalizedModelRef === null ? { modelRef: undefined } : {}),
-        updatedAt: new Date().toISOString()
-      });
-    }
-
-    const updatePromise = navigationActions.updateSessionModel(targetId, normalizedModelRef).then((updated) => updated !== null);
-    sessionModelUpdateRef.current = {
-      sessionId: targetId,
-      promise: updatePromise
-    };
-
-    try {
-      const updated = await updatePromise;
-      if (!updated) {
-        if (currentSession) {
-          setSession(currentSession);
-        }
-        return false;
-      }
-
-      if (sessionId === targetId) {
-        await navigationActions.refreshSession(targetId, true);
-      }
-
-      return true;
-    } finally {
-      if (sessionModelUpdateSeqRef.current === updateSeq) {
-        sessionModelUpdateRef.current = null;
-        setSwitchingSessionModelId(null);
-        setPendingSessionModelRef(null);
-      }
-    }
-  }
-
-  const submitSessionMessage = useEffectEvent(
-    async (
-      content: CreateMessageRequest["content"],
-      options?: {
-        clearDraft?: boolean;
-        runningRunBehavior?: "queue" | "interrupt";
-        activityLabel?: string;
-      }
-    ) => {
-      if (!sessionId.trim()) {
-        reportError("请先创建或加载 session。");
-        return;
-      }
-
-      const contentPreview = summarizeComposerMessageContent(content).trim();
-      if (!contentPreview) {
-        return;
-      }
-
-      const pendingAgentSwitch = sessionAgentSwitchRef.current;
-      if (pendingAgentSwitch?.sessionId === sessionId) {
-        const switched = await pendingAgentSwitch.promise;
-        if (!switched) {
-          return;
-        }
-      }
-
-      const pendingModelUpdate = sessionModelUpdateRef.current;
-      if (pendingModelUpdate?.sessionId === sessionId) {
-        const updated = await pendingModelUpdate.promise;
-        if (!updated) {
-          return;
-        }
-      }
-
-      const runningRunBehavior = options?.runningRunBehavior ?? "queue";
-
-      shouldAutoFollowConversationRef.current = true;
-      const accepted = await request<MessageAccepted>(`/api/v1/sessions/${sessionId}/messages`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          content,
-          runningRunBehavior
-        })
-      });
-      const shouldDisplayAsQueued = accepted.delivery === "session_queue";
-
-      startTransition(() => {
-        if (options?.clearDraft !== false) {
-          useStreamStore.getState().setDraftMessage("");
-          useStreamStore.getState().setDraftAttachments([]);
-        }
-        if (shouldDisplayAsQueued) {
-          setSessionQueuedRuns((current) => {
-            const nextCreatedAt = accepted.createdAt ?? new Date().toISOString();
-            const nextPosition = accepted.queuedPosition ?? current.length + 1;
-            const nextItem: SessionQueuedRun = {
-              runId: accepted.runId,
-              messageId: accepted.messageId,
-              content: contentPreview,
-              createdAt: nextCreatedAt,
-              position: nextPosition
-            };
-            const deduped = current.filter((item) => item.runId !== accepted.runId);
-            return [...deduped, nextItem].sort((left, right) => left.position - right.position);
-          });
-        }
-        if (!shouldDisplayAsQueued) {
-          setSelectedRunId(accepted.runId);
-          setLiveMessagesByKey((current) => ({
-            ...current,
-            [`pending-user:${accepted.messageId}`]: {
-              persistedMessageId: accepted.messageId,
-              runId: "",
-              sessionId,
-              role: "user",
-              content,
-              createdAt: new Date().toISOString()
-            }
-          }));
-        }
-      });
-      setStreamRevision((current) => current + 1);
-      const refreshes: Array<Promise<unknown>> = [refreshSessionRuns(true, { includeSteps: true })];
-      if (!shouldDisplayAsQueued) {
-        refreshes.unshift(refreshMessages(true));
-      }
-      if (!shouldDisplayAsQueued) {
-        refreshes.push(refreshRun(accepted.runId, true), refreshRunSteps(accepted.runId, true));
-      }
-
-      await Promise.all(refreshes);
-      setActivity(
-        options?.activityLabel ??
-          (shouldDisplayAsQueued ? `消息已加入后续队列，run=${accepted.runId}` : `消息已入队，run=${accepted.runId}`)
-      );
-      clearActiveError();
-    }
-  );
-
-  async function sendMessage() {
-    if (!sessionId.trim()) {
-      reportError("请先创建或加载 session。");
-      return;
-    }
-
-    const { draftMessage, draftAttachments } = useStreamStore.getState();
-    const content = buildComposerMessageContent(draftMessage, draftAttachments);
-    if (!content) {
-      return;
-    }
-
-    try {
-      await submitSessionMessage(content, {
-        clearDraft: true
-      });
-    } catch (error) {
-      reportError(error);
-      openConsoleForErrors();
-    }
-  }
-
-  async function guideMessage() {
-    if (!sessionId.trim()) {
-      reportError("请先创建或加载 session。");
-      return;
-    }
-
-    const { draftMessage, draftAttachments } = useStreamStore.getState();
-    const content = buildComposerMessageContent(draftMessage, draftAttachments);
-    if (!content) {
-      return;
-    }
-
-    try {
-      await submitSessionMessage(content, {
-        clearDraft: true,
-        runningRunBehavior: "interrupt",
-        activityLabel: "已引导当前 run，正在切换到新的处理轮次"
-      });
-    } catch (error) {
-      reportError(error);
-      openConsoleForErrors();
-    }
-  }
-
-  async function answerAskUserQuestion(answer: string) {
-    if (!sessionId.trim()) {
-      reportError("请先创建或加载 session。");
-      return;
-    }
-
-    try {
-      await submitSessionMessage(answer, {
-        clearDraft: false,
-        runningRunBehavior: "interrupt",
-        activityLabel: "已发送问题答复，正在继续当前对话"
-      });
-    } catch (error) {
-      reportError(error);
-      openConsoleForErrors();
-    }
-  }
-
-  async function guideQueuedSessionInput(runId: string) {
-    if (!sessionId.trim() || !runId.trim()) {
-      reportError("请先创建或加载 session。");
-      return;
-    }
-
-    try {
-      await request<GuideQueuedRunAccepted>(`/api/v1/runs/${runId}/guide`, {
-        method: "POST"
-      });
-      await refreshSessionRuns(true, { includeSteps: true });
-      setActivity("已引导排队消息，正在切换到新的处理轮次");
-      clearActiveError();
-    } catch (error) {
-      const summary = toErrorSummary(error);
-      if (summary?.code === "queued_run_not_found") {
-        await Promise.all([refreshSessionQueue(true), refreshSessionRuns(true, { includeSteps: true })]);
-        setActivity("该排队消息已离开队列，已刷新当前状态");
-        clearActiveError();
-        return;
-      }
-      reportError(error);
-      openConsoleForErrors();
-    }
-  }
-
-  async function cancelCurrentRun() {
-    if (!selectedRunId.trim()) {
-      return;
-    }
-
-    try {
-      await request(`/api/v1/runs/${selectedRunId}/cancel`, {
-        method: "POST"
-      });
-      await refreshRun(selectedRunId, true);
-      setActivity(`已请求取消 run ${selectedRunId}`);
-      clearActiveError();
-    } catch (error) {
-      reportError(error);
-      openConsoleForErrors();
-    }
-  }
-
-  async function refreshSessionTerminal(
-    targetSessionId: string,
-    terminalId: string
-  ): Promise<SessionTerminalSnapshot | null> {
-    const normalizedSessionId = targetSessionId.trim();
-    const normalizedTerminalId = terminalId.trim();
-    if (!normalizedSessionId || !normalizedTerminalId) {
-      return null;
-    }
-
-    return request<SessionTerminalSnapshot>(
-      `/api/v1/sessions/${normalizedSessionId}/terminals/${encodeURIComponent(normalizedTerminalId)}?maxBytes=262144`
-    );
-  }
-
-  async function sendSessionTerminalInput(input: {
-    sessionId: string;
-    terminalId: string;
-    input: string;
-    appendNewline?: boolean | undefined;
-  }): Promise<SessionTerminalInputAccepted | null> {
-    const normalizedSessionId = input.sessionId.trim();
-    const normalizedTerminalId = input.terminalId.trim();
-    if (!normalizedSessionId || !normalizedTerminalId) {
-      return null;
-    }
-
-    return request<SessionTerminalInputAccepted>(
-      `/api/v1/sessions/${normalizedSessionId}/terminals/${encodeURIComponent(normalizedTerminalId)}/input`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          input: input.input,
-          appendNewline: input.appendNewline ?? true
-        })
-      }
-    );
-  }
-
-  async function triggerWorkspaceAction(input: {
-    workspaceId: string;
-    actionName: string;
-    input?: unknown;
-  }): Promise<boolean> {
-    const targetWorkspaceId = input.workspaceId.trim();
-    const targetActionName = input.actionName.trim();
-    if (!targetWorkspaceId || !targetActionName) {
-      return false;
-    }
-
-    try {
-      const attachedSessionId =
-        session?.workspaceId === targetWorkspaceId && session.id.trim().length > 0 ? session.id : undefined;
-      const accepted = await request<ActionRunAccepted>(
-        `/api/v1/workspaces/${targetWorkspaceId}/actions/${encodeURIComponent(targetActionName)}/runs`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json"
-          },
-          body: JSON.stringify({
-            ...(attachedSessionId ? { sessionId: attachedSessionId } : {}),
-            ...(input.input !== undefined ? { input: input.input } : {}),
-            triggerSource: "user"
-          })
-        }
-      );
-
-      if (accepted.sessionId && accepted.sessionId !== sessionId) {
-        await navigationActions.refreshSession(accepted.sessionId, true);
-      } else if (accepted.sessionId) {
-        await refreshSessionRuns(true, { includeSteps: true });
-      }
-
-      startTransition(() => {
-        setSelectedRunId(accepted.runId);
-      });
-      await Promise.all([refreshRun(accepted.runId, true), refreshRunSteps(accepted.runId, true)]);
-      setActivity(`Action 已入队，run=${accepted.runId}`);
-      clearActiveError();
-      return true;
-    } catch (error) {
-      reportError(error);
-      return false;
-    }
-  }
-
-  async function generateOnce() {
-    try {
-      setGenerateBusy(true);
-      const response = await request<ModelGenerateResponse>(
-        "/internal/v1/models/generate",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json"
-          },
-          body: JSON.stringify({
-            prompt: modelDraft.prompt.trim(),
-            ...(modelDraft.model.trim() ? { model: modelDraft.model.trim() } : {})
-          })
-        }
-      );
-      setGenerateOutput(response);
-      setActivity(`内部模型运行时 generate 成功，model=${response.model}`);
-      clearActiveError();
-    } catch (error) {
-      reportError(error);
-      openConsoleForErrors();
-    } finally {
-      setGenerateBusy(false);
-    }
-  }
+  const { refreshSessionTerminal, sendSessionTerminalInput, triggerWorkspaceAction, generateOnce } =
+    useSessionUtilityActions({
+      sessionId,
+      session,
+      modelDraft,
+      request,
+      refreshSessionById: navigationActions.refreshSession,
+      refreshSessionRuns,
+      refreshRun,
+      refreshRunSteps,
+      setActivity,
+      clearActiveError,
+      reportError,
+      openConsoleForErrors,
+      setSelectedRunId,
+      setGenerateOutput,
+      setGenerateBusy
+    });
 
   function syncCurrentSessionAgent(agentName: string, updatedAt: string) {
     const nextAgentName = agentName.trim();
@@ -1514,378 +582,74 @@ export function useAppController() {
     });
   }
 
-  const handleSessionEvent = useEffectEvent((frame: SseFrame) => {
-    const event = {
-      id: frame.cursor ?? crypto.randomUUID(),
-      cursor: frame.cursor ?? String(Date.now()),
-      sessionId,
-      runId: typeof frame.data.runId === "string" ? frame.data.runId : undefined,
-      event: frame.event as SessionEventContract["event"],
-      data: frame.data,
-      createdAt: frame.createdAt ?? new Date().toISOString()
-    } satisfies SessionEventContract;
+  const handleSessionEvent = useSessionEventHandler({
+    sessionId,
+    messages,
+    liveMessagesByKey,
+    lastCursorRef,
+    setEvents,
+    setSelectedRunId,
+    setMessages,
+    setLiveMessagesByKey,
+    setSessionQueuedRuns,
+    setActivity,
+    scheduleMessagesRefresh,
+    scheduleRunRefresh,
+    scheduleWorkspaceIndexRefresh,
+    refreshSessionQueue,
+    refreshSessionRuns,
+    refreshSidebarSessionRuns,
+    refreshSessionById: navigationActions.refreshSession,
+    syncCurrentSessionAgent
+  });
 
-    if (frame.cursor) {
-      lastCursorRef.current = frame.cursor;
-    }
+  usePlatformModelStream({
+    connection,
+    onSnapshot: handlePlatformModelSnapshot
+  });
 
-    startTransition(() => {
-      setEvents((current) => [event, ...current].slice(0, 5000));
-    });
+  useSessionEventStream({
+    connection,
+    sessionId,
+    sessionRecordId: session?.id,
+    streamRevision,
+    streamAbortRef,
+    lastCursorRef,
+    setStreamState,
+    onFrame: handleSessionEvent,
+    onMissingSession: () => {
+      navigationActions.clearSessionSelection(sessionId, { forgetSession: true });
+      setActivity(`Session ${sessionId} 不存在，已清除本地选择`);
+      clearActiveError();
+    },
+    reportError,
+    openConsoleForErrors
+  });
 
-    if (event.runId) {
-      setSelectedRunId((current) => current || event.runId || "");
-    }
-
-    const eventMessageId = typeof event.data.messageId === "string" ? event.data.messageId : undefined;
-    const eventMetadata = isRecord(event.data.metadata) ? event.data.metadata : undefined;
-    const eventStructuredContent = normalizeMessageContent(event.data.content);
-    const eventToolCallId = typeof event.data.toolCallId === "string" ? event.data.toolCallId : undefined;
-    const eventToolName = typeof event.data.toolName === "string" ? event.data.toolName : undefined;
-    const eventToolStatus =
-      eventMetadata?.toolStatus === "running" ||
-      eventMetadata?.toolStatus === "started" ||
-      eventMetadata?.toolStatus === "completed" ||
-      eventMetadata?.toolStatus === "failed"
-        ? eventMetadata.toolStatus
-        : undefined;
-    const eventQueueSnapshot = event.event === "queue.updated" ? readQueuedRunsFromEventData(event.data) : null;
-    const eventQueueAction = typeof event.data.action === "string" ? event.data.action : undefined;
-
-    const normalizeToolCallInput = (value: unknown): Record<string, unknown> | undefined => {
-      if (isRecord(value)) {
-        return value;
-      }
-
-      if (value === undefined) {
-        return undefined;
-      }
-
-      return {
-        value
-      };
-    };
-
-    const normalizeToolResultOutput = (value: unknown, failed: boolean, fallback?: string) => {
-      if (isRecord(value) && typeof value.type === "string") {
-        return value;
-      }
-
-      if (typeof value === "string") {
-        return {
-          type: failed ? "error-text" : "text",
-          value
-        };
-      }
-
-      if (value === undefined) {
-        return {
-          type: failed ? "error-text" : "text",
-          value: fallback ?? (failed ? "Tool execution failed." : "")
-        };
-      }
-
-      return {
-        type: failed ? "error-json" : "json",
-        value
-      };
-    };
-
-    const upsertLiveToolMessage = (input: {
-      key: string;
-      role: "assistant" | "tool";
-      content: Message["content"];
-      createdAt: string;
-      metadata?: Record<string, unknown>;
-      toolCallId?: string;
-    }) => {
-      setLiveMessagesByKey((current) => {
-        const existingEntry = current[input.key];
-        return {
-          ...current,
-          [input.key]: {
-            ...(existingEntry?.persistedMessageId ? { persistedMessageId: existingEntry.persistedMessageId } : {}),
-            ...(() => {
-              const toolCallId = input.toolCallId ?? existingEntry?.toolCallId;
-              return toolCallId ? { toolCallId } : {};
-            })(),
-            runId: event.runId ?? "",
-            sessionId,
-            role: input.role,
-            content: input.content,
-            ...(() => {
-              const metadata = {
-                ...(isRecord(existingEntry?.metadata) ? existingEntry.metadata : {}),
-                ...(eventMetadata ?? {}),
-                ...(input.metadata ?? {})
-              };
-              return Object.keys(metadata).length > 0 ? { metadata } : {};
-            })(),
-            createdAt: existingEntry?.createdAt ?? input.createdAt
-          }
-        };
-      });
-    };
-
-    if (
-      event.event === "message.delta" &&
-      typeof event.runId === "string" &&
-      typeof eventMessageId === "string" &&
-      (typeof event.data.delta === "string" || eventStructuredContent !== null)
-    ) {
-      const runId = event.runId;
-      const liveMessageKey = `message:${eventMessageId}`;
-      const needsMessageHydration =
-        !liveMessagesByKey[liveMessageKey] &&
-        !messages.some((message) => message.id === eventMessageId);
-      setLiveMessagesByKey((current) => ({
-        ...current,
-        [liveMessageKey]: {
-          persistedMessageId: eventMessageId,
-          runId,
-          sessionId,
-          role: "assistant",
-          content:
-            eventStructuredContent ??
-            `${typeof current[liveMessageKey]?.content === "string" ? current[liveMessageKey].content : ""}${
-              typeof event.data.delta === "string" ? event.data.delta : ""
-            }`,
-          ...(() => {
-            const metadata = current[liveMessageKey]?.metadata ?? eventMetadata;
-            return metadata ? { metadata } : {};
-          })(),
-          createdAt: current[liveMessageKey]?.createdAt ?? event.createdAt
-        }
-      }));
-      if (needsMessageHydration) {
-        scheduleMessagesRefresh();
-      }
-    }
-
-    if (event.event === "tool.started" && typeof event.runId === "string" && eventToolCallId && eventToolName) {
-      const toolCallContent = normalizeMessageContent([
-        {
-          type: "tool-call",
-          toolCallId: eventToolCallId,
-          toolName: eventToolName,
-          input: normalizeToolCallInput(event.data.input) ?? {}
-        }
-      ]);
-      if (toolCallContent !== null) {
-        const toolCallMessage = buildMessageRecord({
-          id: `live-tool-call:${eventToolCallId}`,
-          sessionId,
-          runId: event.runId,
-          role: "assistant",
-          content: toolCallContent,
-          ...(eventMetadata ? { metadata: eventMetadata } : {}),
-          createdAt: event.createdAt
-        });
-        if (toolCallMessage) {
-          upsertLiveToolMessage({
-            key: `tool-call:${eventToolCallId}`,
-            role: "assistant",
-            content: toolCallMessage.content,
-            createdAt: event.createdAt,
-            metadata: {
-              toolStatus: "running",
-              ...(typeof event.data.sourceType === "string" ? { toolSourceType: event.data.sourceType } : {})
-            },
-            toolCallId: eventToolCallId
-          });
-        }
-      }
-    }
-
-    if (
-      (event.event === "tool.completed" || event.event === "tool.failed") &&
-      typeof event.runId === "string" &&
-      eventToolCallId &&
-      eventToolName
-    ) {
-      const toolResultContent = normalizeMessageContent([
-        {
-          type: "tool-result",
-          toolCallId: eventToolCallId,
-          toolName: eventToolName,
-          output: normalizeToolResultOutput(
-            event.data.output,
-            event.event === "tool.failed",
-            typeof event.data.errorMessage === "string" ? event.data.errorMessage : undefined
-          )
-        }
-      ]);
-      if (toolResultContent !== null) {
-        const toolResultMessage = buildMessageRecord({
-          id: `live-tool-result:${eventToolCallId}`,
-          sessionId,
-          runId: event.runId,
-          role: "tool",
-          content: toolResultContent,
-          ...(eventMetadata ? { metadata: eventMetadata } : {}),
-          createdAt: event.createdAt
-        });
-        if (toolResultMessage) {
-          upsertLiveToolMessage({
-            key: `tool-result:${eventToolCallId}`,
-            role: "tool",
-            content: toolResultMessage.content,
-            createdAt: event.createdAt,
-            metadata: {
-              toolStatus: event.event === "tool.failed" ? "failed" : (eventToolStatus ?? "completed"),
-              ...(typeof event.data.sourceType === "string" ? { toolSourceType: event.data.sourceType } : {}),
-              ...(typeof event.data.durationMs === "number" ? { toolDurationMs: event.data.durationMs } : {})
-            },
-            toolCallId: eventToolCallId
-          });
-        }
-        setLiveMessagesByKey((current) => {
-          const toolCallKey = `tool-call:${eventToolCallId}`;
-          const currentEntry = current[toolCallKey];
-          if (!currentEntry) {
-            return current;
-          }
-
-          return {
-            ...current,
-            [toolCallKey]: {
-              ...currentEntry,
-              metadata: {
-                ...(isRecord(currentEntry.metadata) ? currentEntry.metadata : {}),
-                toolStatus: event.event === "tool.failed" ? "failed" : (eventToolStatus ?? "completed"),
-                ...(typeof event.data.sourceType === "string" ? { toolSourceType: event.data.sourceType } : {}),
-                ...(typeof event.data.durationMs === "number" ? { toolDurationMs: event.data.durationMs } : {})
-              }
-            }
-          };
-        });
-      }
-    }
-
-    if (event.event === "message.completed" && typeof event.runId === "string") {
-      const messageId = eventMessageId;
-      const runId = event.runId;
-      const content = normalizeMessageContent(event.data.content);
-      if (messageId && content !== null) {
-        startTransition(() => {
-          setMessages((current) => {
-            const existingMessage = current.find((message) => message.id === messageId);
-            const completedMessage = buildMessageRecord({
-              id: messageId,
-              sessionId,
-              runId,
-              role: inferCompletedMessageRole(event.data),
-              content,
-              ...(() => {
-                const metadata =
-                  existingMessage?.metadata ?? liveMessagesByKey[`message:${messageId}`]?.metadata ?? eventMetadata;
-                return metadata ? { metadata } : {};
-              })(),
-              createdAt:
-                existingMessage?.createdAt ?? liveMessagesByKey[`message:${messageId}`]?.createdAt ?? event.createdAt
-            });
-            return completedMessage ? upsertSessionMessage(current, completedMessage) : current;
-          });
-        });
-      }
-      setLiveMessagesByKey((current) => {
-        const next = { ...current };
-        if (messageId) {
-          delete next[`message:${messageId}`];
-        }
-        if (content !== null) {
-          const completedRefs = new Set(
-            contentToolRefs(content).map((ref) => `${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`)
-          );
-          for (const [key, entry] of Object.entries(next)) {
-            const entryRefs = contentToolRefs(entry.content).map(
-              (ref) => `${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`
-            );
-            if (entryRefs.some((ref) => completedRefs.has(ref))) {
-              delete next[key];
-            }
-          }
-        }
-        return next;
-      });
-      scheduleMessagesRefresh();
-      scheduleRunRefresh(runId);
-    }
-
-    if (event.event === "agent.switched" && typeof event.data.toAgent === "string") {
-      syncCurrentSessionAgent(event.data.toAgent, event.createdAt);
-      scheduleMessagesRefresh();
-    }
-
-    if (event.event === "queue.updated") {
-      if (eventQueueSnapshot) {
-        startTransition(() => {
-          setSessionQueuedRuns(eventQueueSnapshot);
-        });
-      } else {
-        void refreshSessionQueue(true);
-      }
-      if (eventQueueAction === "dequeued" || eventQueueAction === "removed") {
-        scheduleMessagesRefresh();
-      }
-    }
-
-    if (
-      typeof event.runId === "string" &&
-      [
-        "run.queued",
-        "run.started",
-        "run.completed",
-        "run.failed",
-        "run.cancelled",
-        "tool.started",
-        "tool.completed",
-        "tool.failed",
-        "agent.switched",
-        "agent.delegate.started",
-        "agent.delegate.completed",
-        "agent.delegate.failed"
-      ].includes(event.event)
-    ) {
-      if (SESSION_RUN_LIST_REFRESH_EVENTS.has(event.event)) {
-        void refreshSessionRuns(true);
-      }
-      if (RUN_DETAIL_REFRESH_EVENTS.has(event.event)) {
-        scheduleRunRefresh(event.runId);
-      }
-    }
-
-    if (event.event === "agent.delegate.started") {
-      scheduleWorkspaceIndexRefresh();
-    }
-
-    if (
-      event.event === "agent.delegate.started" ||
-      event.event === "agent.delegate.completed" ||
-      event.event === "agent.delegate.failed"
-    ) {
-      void refreshSidebarSessionRuns(true);
-    }
-
-    if (typeof event.runId === "string" && isTerminalRunEvent(event.event)) {
-      void navigationActions.refreshSession(sessionId, true);
-      scheduleMessagesRefresh();
-    }
-
-    if (ACTIVITY_VISIBLE_EVENTS.has(event.event)) {
-      setActivity(`${event.event}${event.runId ? ` · ${event.runId}` : ""}`);
-    }
+  useSelectedRunPolling({
+    connection,
+    sessionId,
+    selectedRunIdValue,
+    run,
+    streamState,
+    request,
+    runPollingTimerRef,
+    mergeMessagePageCursor,
+    reportError,
+    setRun,
+    setSessionRuns,
+    setRunSteps,
+    setMessages,
+    setLiveMessagesByKey
   });
 
   useEffect(() => {
     return () => {
       streamAbortRef.current?.abort();
-      platformModelStreamAbortRef.current?.abort();
       window.clearTimeout(messageRefreshTimerRef.current);
       window.clearTimeout(runRefreshTimerRef.current);
       window.clearTimeout(workspaceIndexRefreshTimerRef.current);
       window.clearTimeout(runPollingTimerRef.current);
-      window.clearTimeout(platformModelReconnectTimerRef.current);
     };
   }, []);
 
@@ -1909,9 +673,7 @@ export function useAppController() {
 
   useEffect(() => {
     shouldAutoFollowConversationRef.current = true;
-    setMessagesNextCursor(null);
-    setLoadingOlderMessages(false);
-    olderMessagesSeqRef.current = 0;
+    resetMessagePaging();
 
     if (!sessionId.trim()) {
       startTransition(() => {
@@ -1933,85 +695,6 @@ export function useAppController() {
     void navigationActions.refreshWorkspaceRuntimes(true);
     void refreshModelProviders(true);
     void refreshPlatformModels(true);
-  }, [connection.baseUrl, connection.token]);
-
-  useEffect(() => {
-    platformModelStreamAbortRef.current?.abort();
-    window.clearTimeout(platformModelReconnectTimerRef.current);
-
-    let cancelled = false;
-
-    const connect = () => {
-      if (cancelled) {
-        return;
-      }
-
-      const controller = new AbortController();
-      platformModelStreamAbortRef.current = controller;
-
-      void (async () => {
-        try {
-          const headers = new Headers();
-          const token = connection.token.trim();
-          if (token) {
-            headers.set("authorization", `Bearer ${token}`);
-          }
-
-          const response = await fetch(buildUrl(connection.baseUrl, "/api/v1/platform-models/events"), {
-            signal: controller.signal,
-            headers
-          });
-
-          if (response.status === 404 || response.status === 501) {
-            return;
-          }
-
-          if (!response.ok) {
-            throw new Error(`${response.status} ${response.statusText}`);
-          }
-
-          await consumeSse(
-            response,
-            (frame) => {
-              const revision = frame.data.revision;
-              const items = frame.data.items;
-              if (typeof revision !== "number" || !Array.isArray(items)) {
-                return;
-              }
-
-              handlePlatformModelSnapshot(
-                {
-                  revision,
-                  items: items as PlatformModelRecord[]
-                },
-                frame.event === "platform-models.snapshot"
-              );
-            },
-            controller.signal
-          );
-        } catch (error) {
-          if (controller.signal.aborted || cancelled) {
-            return;
-          }
-
-          if (isNotFoundError(error)) {
-            return;
-          }
-        }
-
-        if (!controller.signal.aborted && !cancelled) {
-          platformModelReconnectTimerRef.current = window.setTimeout(connect, 1_500);
-        }
-      })();
-    };
-
-    connect();
-
-    return () => {
-      cancelled = true;
-      platformModelStreamAbortRef.current?.abort();
-      window.clearTimeout(platformModelReconnectTimerRef.current);
-    };
   }, [connection.baseUrl, connection.token]);
 
   useEffect(() => {
@@ -2054,170 +737,6 @@ export function useAppController() {
       window.clearTimeout(timer);
     };
   }, [connection.baseUrl, connection.token, visibleSidebarSessionKey]);
-
-  useEffect(() => {
-    if (!sessionId.trim() || session?.id !== sessionId) {
-      streamAbortRef.current?.abort();
-      setStreamState("idle");
-      return;
-    }
-
-    const controller = new AbortController();
-    streamAbortRef.current?.abort();
-    streamAbortRef.current = controller;
-    setStreamState("connecting");
-    const listeningTimer = window.setTimeout(() => {
-      if (!controller.signal.aborted) {
-        setStreamState((current) => (current === "connecting" ? "listening" : current));
-      }
-    }, 1200);
-
-    const query = new URLSearchParams();
-    if (lastCursorRef.current) {
-      query.set("cursor", lastCursorRef.current);
-    }
-
-    void (async () => {
-      try {
-        const headers = new Headers();
-        const token = connection.token.trim();
-        if (token) {
-          headers.set("authorization", `Bearer ${token}`);
-        }
-        const response = await fetch(
-          buildUrl(connection.baseUrl, `/api/v1/sessions/${sessionId}/events${query.size > 0 ? `?${query.toString()}` : ""}`),
-          {
-            signal: controller.signal,
-            headers
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error(`${response.status} ${response.statusText}`);
-        }
-
-        setStreamState("open");
-        await consumeSse(response, handleSessionEvent, controller.signal);
-        if (!controller.signal.aborted) {
-          setStreamState("idle");
-        }
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          if (isNotFoundError(error)) {
-            navigationActions.clearSessionSelection(sessionId, { forgetSession: true });
-            setActivity(`Session ${sessionId} 不存在，已清除本地选择`);
-            clearActiveError();
-            return;
-          }
-          setStreamState("error");
-          reportError(error);
-          openConsoleForErrors();
-        }
-      }
-    })();
-
-    return () => {
-      window.clearTimeout(listeningTimer);
-      controller.abort();
-    };
-  }, [
-    connection.baseUrl,
-    connection.token,
-    session?.id,
-    sessionId,
-    streamRevision
-  ]);
-
-  useEffect(() => {
-    window.clearTimeout(runPollingTimerRef.current);
-
-    if (!sessionId.trim() || !selectedRunIdValue) {
-      if (selectedRunIdValue) {
-        delete completedRunResultPollsRef.current[selectedRunIdValue];
-      }
-      return;
-    }
-
-    if (run?.id === selectedRunIdValue && isTerminalRunStatus(run.status)) {
-      delete completedRunResultPollsRef.current[selectedRunIdValue];
-      return;
-    }
-
-    let cancelled = false;
-
-    const pollRunSnapshot = async () => {
-      try {
-        const [nextRun, nextSteps, nextMessages] = await Promise.all([
-          request<Run>(`/api/v1/runs/${selectedRunIdValue}`),
-          request<{ items: RunStep[] }>(`/api/v1/runs/${selectedRunIdValue}/steps?pageSize=200`),
-          request<MessagePage>(buildMessagePagePath(sessionId))
-        ]);
-
-        if (cancelled) {
-          return;
-        }
-
-        startTransition(() => {
-          setRun(nextRun);
-          setSessionRuns((current) => {
-            const next = [...current.filter((item) => item.id !== nextRun.id), nextRun];
-            return next.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
-          });
-          setRunSteps((current) => mergeRunStepsForRun(current, selectedRunIdValue, nextSteps.items));
-          setMessages((current) => mergeSessionMessages(current, nextMessages.items));
-          setMessagesNextCursor((current) => mergeMessageCursor(current, nextMessages.nextCursor));
-        });
-
-        const hasPersistedRunOutput = hasDisplayableRunMessages(nextMessages.items, selectedRunIdValue);
-        const completedRunResultPolls = completedRunResultPollsRef.current[selectedRunIdValue] ?? 0;
-        const shouldKeepPollingForCompletedMessage =
-          nextRun.status === "completed" &&
-          !hasPersistedRunOutput &&
-          completedRunResultPolls < COMPLETED_RUN_RESULT_POLL_LIMIT;
-
-        if (nextRun.status === "completed" && !hasPersistedRunOutput) {
-          completedRunResultPollsRef.current[selectedRunIdValue] = completedRunResultPolls + 1;
-        } else {
-          delete completedRunResultPollsRef.current[selectedRunIdValue];
-        }
-
-        if (!isTerminalRunStatus(nextRun.status) || shouldKeepPollingForCompletedMessage) {
-          runPollingTimerRef.current = window.setTimeout(() => {
-            void pollRunSnapshot();
-          }, shouldKeepPollingForCompletedMessage ? 400 : 1000);
-          return;
-        }
-
-        setLiveMessagesByKey((current) => {
-          return Object.fromEntries(
-            Object.entries(current).filter(([, entry]) => entry.runId !== selectedRunIdValue)
-          );
-        });
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        runPollingTimerRef.current = window.setTimeout(() => {
-          void pollRunSnapshot();
-        }, 1500);
-
-        if (streamState === "error") {
-          reportError(error);
-        }
-      }
-    };
-
-    runPollingTimerRef.current = window.setTimeout(() => {
-      void pollRunSnapshot();
-    }, 600);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(runPollingTimerRef.current);
-      delete completedRunResultPollsRef.current[selectedRunIdValue];
-    };
-  }, [connection.baseUrl, connection.token, run?.id, run?.status, selectedRunIdValue, sessionId, streamState]);
 
   const latestEvent = deferredEvents[0];
   const inspectorSubtitle =
@@ -2306,315 +825,112 @@ export function useAppController() {
   const handleInspectConsoleEntry = useEffectEvent((entry: RuntimeConsoleEntry) => {
     inspectConsoleEntry(entry);
   });
-  const providerSurfaceProps = useMemo(
-    () => ({
-      pingHealth: handlePingHealth,
-      refreshModelProviders: handleRefreshModelProviders,
-      refreshPlatformModels: handleRefreshPlatformModels,
-      generateOnce: handleGenerateOnce
-    }),
-    [handleGenerateOnce, handlePingHealth, handleRefreshModelProviders, handleRefreshPlatformModels]
-  );
-  const sidebarSurfaceProps = useMemo(
-    () => ({
-      serviceScope: normalizedServiceScope,
-      serviceScopeOptions,
-      systemProfile,
-      selectedServiceScopeLabel,
-      workspaceRuntimeFilterOptions,
-      filteredSavedWorkspaces,
-      orderedSavedWorkspaces,
-      savedSessionsCount: filteredSavedSessionsCount,
-      totalSavedSessionsCount: savedSessions.length,
-      workspaceManagementEnabled,
-      showWorkspaceCreator,
-      setShowWorkspaceCreator,
-      activeWorkspaceId,
-      expandWorkspaceInSidebar: navigationActions.expandWorkspaceInSidebar,
-      workspaceDraft,
-      setWorkspaceDraft,
-      workspaceRuntimes,
-      createWorkspace: navigationActions.createWorkspace,
-      refreshWorkspaceRuntimes: navigationActions.refreshWorkspaceRuntimes,
-      uploadWorkspaceRuntime: navigationActions.uploadWorkspaceRuntime,
-      updateWorkspaceRuntime: navigationActions.updateWorkspaceRuntime,
-      deleteWorkspaceRuntime: navigationActions.deleteWorkspaceRuntime,
-      refreshWorkspaceIndex: navigationActions.refreshWorkspaceIndex,
-      createSession: navigationActions.createSession,
-      sessionId,
-      sessionRuns: sidebarSessionRuns,
-      refreshSessionById: navigationActions.refreshSession,
-      removeSavedSession: navigationActions.removeSavedSession,
-      renameSession: navigationActions.renameSession,
-      sessionsByWorkspaceId,
-      expandedWorkspaceIds,
-      expandedSessionIds,
-      openWorkspace: navigationActions.openWorkspace,
-      toggleWorkspaceExpansion: navigationActions.toggleWorkspaceExpansion,
-      toggleSessionExpansion: (targetId: string) =>
-        setExpandedSessionIds((current) =>
-          current.includes(targetId) ? current.filter((entry) => entry !== targetId) : [targetId, ...current].slice(0, 64)
-        ),
-      deleteWorkspace: navigationActions.deleteWorkspace,
-      deleteWorkspacesForRuntime: navigationActions.deleteWorkspacesForRuntime,
-      storageOverview: storageController.storageSurfaceProps.storageOverview,
-      storageRedisEnabled: storageController.storageSurfaceProps.storageRedisEnabled,
-      storageBrowserTab: storageController.storageSurfaceProps.storageBrowserTab,
-      onStorageBrowserTabChange: storageController.storageSurfaceProps.onStorageBrowserTabChange,
-      onRefreshStorageOverview: storageController.storageSurfaceProps.onRefreshStorageOverview,
-      selectedStorageTable: storageController.storageSurfaceProps.selectedStorageTable,
-      onSelectStorageTable: storageController.storageSurfaceProps.onSelectStorageTable,
-      storageTableSearch: storageController.storageSurfaceProps.storageTableSearch,
-      onStorageTableSearchChange: storageController.storageSurfaceProps.onStorageTableSearchChange,
-      storageTableWorkspaceId: storageController.storageSurfaceProps.storageTableWorkspaceId,
-      onStorageTableWorkspaceIdChange: storageController.storageSurfaceProps.onStorageTableWorkspaceIdChange,
-      storageTableSessionId: storageController.storageSurfaceProps.storageTableSessionId,
-      onStorageTableSessionIdChange: storageController.storageSurfaceProps.onStorageTableSessionIdChange,
-      storageTableRunId: storageController.storageSurfaceProps.storageTableRunId,
-      onStorageTableRunIdChange: storageController.storageSurfaceProps.onStorageTableRunIdChange,
-      storageTableStatus: storageController.storageSurfaceProps.storageTableStatus,
-      onStorageTableStatusChange: storageController.storageSurfaceProps.onStorageTableStatusChange,
-      storageTableErrorCode: storageController.storageSurfaceProps.storageTableErrorCode,
-      onStorageTableErrorCodeChange: storageController.storageSurfaceProps.onStorageTableErrorCodeChange,
-      storageTableRecoveryState: storageController.storageSurfaceProps.storageTableRecoveryState,
-      onStorageTableRecoveryStateChange: storageController.storageSurfaceProps.onStorageTableRecoveryStateChange,
-      onRefreshStorageTable: storageController.storageSurfaceProps.onRefreshStorageTable,
-      onClearStorageTableFilters: storageController.storageSurfaceProps.onClearStorageTableFilters,
-      redisKeyPattern: storageController.storageSurfaceProps.redisKeyPattern,
-      onRedisKeyPatternChange: storageController.storageSurfaceProps.onRedisKeyPatternChange,
-      redisKeyPage: storageController.storageSurfaceProps.redisKeyPage,
-      selectedRedisKey: storageController.storageSurfaceProps.selectedRedisKey,
-      onSelectRedisKey: storageController.storageSurfaceProps.onSelectRedisKey,
-      onRefreshRedisKeys: storageController.storageSurfaceProps.onRefreshRedisKeys,
-      storageBusy: storageController.storageSurfaceProps.storageBusy,
-      storageInspectionEnabled,
-      pingHealth: handlePingHealth,
-      refreshModelProviders: handleRefreshModelProviders,
-      refreshPlatformModels: handleRefreshPlatformModels,
-      modelProviders
-    }),
-    [
-      activeWorkspaceId,
-      expandedSessionIds,
-      expandedWorkspaceIds,
-      filteredSavedSessionsCount,
-      filteredSavedWorkspaces,
-      handlePingHealth,
-      handleRefreshModelProviders,
-      handleRefreshPlatformModels,
-      modelProviders,
-      navigationActions.createSession,
-      navigationActions.createWorkspace,
-      navigationActions.deleteWorkspace,
-      navigationActions.deleteWorkspacesForRuntime,
-      navigationActions.deleteWorkspaceRuntime,
-      navigationActions.expandWorkspaceInSidebar,
-      navigationActions.openWorkspace,
-      navigationActions.refreshSession,
-      navigationActions.refreshWorkspaceIndex,
-      navigationActions.refreshWorkspaceRuntimes,
-      navigationActions.removeSavedSession,
-      navigationActions.renameSession,
-      navigationActions.toggleWorkspaceExpansion,
-      navigationActions.updateWorkspaceRuntime,
-      navigationActions.uploadWorkspaceRuntime,
-      normalizedServiceScope,
-      orderedSavedWorkspaces,
-      savedSessions.length,
-      serviceScopeOptions,
-      selectedServiceScopeLabel,
-      sessionId,
-      sidebarSessionRuns,
-      sessionsByWorkspaceId,
-      setExpandedSessionIds,
-      setShowWorkspaceCreator,
-      setWorkspaceDraft,
-      showWorkspaceCreator,
-      systemProfile,
-      storageController.storageSurfaceProps.onClearStorageTableFilters,
-      storageController.storageSurfaceProps.onRedisKeyPatternChange,
-      storageController.storageSurfaceProps.onRefreshRedisKeys,
-      storageController.storageSurfaceProps.onRefreshStorageOverview,
-      storageController.storageSurfaceProps.onRefreshStorageTable,
-      storageController.storageSurfaceProps.onSelectRedisKey,
-      storageController.storageSurfaceProps.onSelectStorageTable,
-      storageController.storageSurfaceProps.onStorageBrowserTabChange,
-      storageController.storageSurfaceProps.onStorageTableErrorCodeChange,
-      storageController.storageSurfaceProps.onStorageTableRecoveryStateChange,
-      storageController.storageSurfaceProps.onStorageTableRunIdChange,
-      storageController.storageSurfaceProps.onStorageTableSearchChange,
-      storageController.storageSurfaceProps.onStorageTableSessionIdChange,
-      storageController.storageSurfaceProps.onStorageTableStatusChange,
-      storageController.storageSurfaceProps.onStorageTableWorkspaceIdChange,
-      storageController.storageSurfaceProps.redisKeyPage,
-      storageController.storageSurfaceProps.redisKeyPattern,
-      storageController.storageSurfaceProps.selectedRedisKey,
-      storageController.storageSurfaceProps.selectedStorageTable,
-      storageController.storageSurfaceProps.storageBrowserTab,
-      storageController.storageSurfaceProps.storageBusy,
-      storageController.storageSurfaceProps.storageOverview,
-      storageController.storageSurfaceProps.storageRedisEnabled,
-      storageController.storageSurfaceProps.storageTableErrorCode,
-      storageController.storageSurfaceProps.storageTableRecoveryState,
-      storageController.storageSurfaceProps.storageTableRunId,
-      storageController.storageSurfaceProps.storageTableSearch,
-      storageController.storageSurfaceProps.storageTableSessionId,
-      storageController.storageSurfaceProps.storageTableStatus,
-      storageController.storageSurfaceProps.storageTableWorkspaceId,
-      storageInspectionEnabled,
-      workspaceDraft,
-      workspaceManagementEnabled,
-      workspaceRuntimeFilterOptions,
-      workspaceRuntimes
-    ]
-  );
-  const runtimeDetailSurfaceProps = useMemo(
-    () => ({
-      mainViewMode,
-      setMainViewMode,
-      setSurfaceMode,
-      hasActiveSession,
-      currentSessionName,
-      currentWorkspaceName,
-      inspectorSubtitle,
-      latestEvent,
-      session,
-      workspace,
-      workspaceId,
-      sessionRuns,
-      refreshSessionRuns: handleRefreshSessionRuns,
-      sessionEvents: events,
-      deferredEvents,
-      messageFeed,
-      refreshRunById: handleRefreshRunById,
-      refreshRunStepsById: handleRefreshRunStepsById,
-      openSessionById: navigationActions.refreshSession,
-      conversationThreadRef,
-      conversationTailRef,
-      shouldAutoFollowConversationRef,
-      hasMoreMessages: Boolean(messagesNextCursor),
-      messagesLoading,
-      loadingOlderMessages,
-      queuedSessionRuns: sessionQueuedRuns,
-      loadOlderMessages: handleLoadOlderMessages,
-      refreshMessages: handleRefreshMessages,
-      sendMessage: handleSendMessage,
-      answerAskUserQuestion: handleAnswerAskUserQuestion,
-      guideMessage: handleGuideMessage,
-      guideQueuedSessionInput: handleGuideQueuedSessionInput,
-      guideMessageSupported: true,
-      refreshRun: handleRefreshRun,
-      refreshRunSteps: handleRefreshRunSteps,
-      cancelCurrentRun: handleCancelCurrentRun,
-      refreshSessionTerminal,
-      sendSessionTerminalInput,
-      modelCallTraces,
-      latestModelCallTrace,
-      firstModelCallTrace,
-      composedSystemMessages,
-      selectedSessionMessage,
-      selectedMessageSystemMessages,
-      selectedModelCallTrace,
-      storedMessageCounts,
-      latestModelMessageCounts,
-      resolvedModelNames,
-      resolvedModelRefs,
-      allEngineTools,
-      allEngineToolNames,
-      allAdvertisedToolNames,
-      allToolServers,
-      downloadSessionTrace,
-      selectedRunStep,
-      selectedSessionEvent,
-      catalog,
-      isSwitchingSessionAgent: switchingSessionAgentId === session?.id && pendingSessionAgentName !== null,
-      switchSessionAgent: handleSwitchSessionAgent,
-      isSwitchingSessionModel: switchingSessionModelId === session?.id,
-      updateSessionModel: handleUpdateSessionModel,
-      triggerWorkspaceAction,
-      refreshWorkspace: handleRefreshWorkspace,
-      isRunning: hasActiveSessionRun,
-      fileManager: workspaceFileManager.fileManagerSurfaceProps
-    }),
-    [
-      allAdvertisedToolNames,
-      allEngineToolNames,
-      allEngineTools,
-      allToolServers,
-      catalog,
-      composedSystemMessages,
-      conversationTailRef,
-      conversationThreadRef,
-      currentSessionName,
-      currentWorkspaceName,
-      deferredEvents,
-      downloadSessionTrace,
-      events,
-      workspaceFileManager.fileManagerSurfaceProps,
-      firstModelCallTrace,
-      handleCancelCurrentRun,
-      handleAnswerAskUserQuestion,
-      handleGuideMessage,
-      navigationActions.refreshSession,
-      handleGuideQueuedSessionInput,
-      handleLoadOlderMessages,
-      handleRefreshMessages,
-      handleRefreshRun,
-      handleRefreshRunById,
-      handleRefreshRunSteps,
-      handleRefreshRunStepsById,
-      handleRefreshSessionRuns,
-      handleRefreshWorkspace,
-      handleSendMessage,
-      refreshSessionTerminal,
-      sendSessionTerminalInput,
-      handleSwitchSessionAgent,
-      handleUpdateSessionModel,
-      hasActiveSession,
-      hasActiveSessionRun,
-      inspectorSubtitle,
-      latestEvent,
-      latestModelCallTrace,
-      latestModelMessageCounts,
-      loadingOlderMessages,
-      mainViewMode,
-      messageFeed,
-      messagesLoading,
-      messagesNextCursor,
-      modelCallTraces,
-      pendingSessionAgentName,
-      queuedMessageIds,
-      resolvedModelNames,
-      resolvedModelRefs,
-      selectedModelCallTrace,
-      selectedRunStep,
-      selectedSessionEvent,
-      selectedSessionMessage,
-      selectedMessageSystemMessages,
-      session,
-      sessionRuns,
-      sessionQueuedRuns,
-      setMainViewMode,
-      setSurfaceMode,
-      shouldAutoFollowConversationRef,
-      storedMessageCounts,
-      switchingSessionAgentId,
-      switchingSessionModelId,
-      triggerWorkspaceAction,
-      workspace,
-      workspaceFileManager.fileManagerSurfaceProps,
-      workspaceId
-    ]
-  );
-  const consolePanelProps = useMemo(
-    () => ({
-      isOpen: consoleOpen && surfaceMode === "engine",
-      entries: consoleEntries,
-      onEntryInspect: handleInspectConsoleEntry,
-      openErrors: openConsoleForErrors
-    }),
-    [consoleEntries, consoleOpen, handleInspectConsoleEntry, openConsoleForErrors, surfaceMode]
-  );
+  const {
+    consolePanelProps,
+    providerSurfaceProps,
+    runtimeDetailSurfaceProps,
+    sidebarSurfaceProps
+  } = useAppControllerSurfaceProps({
+    activeWorkspaceId,
+    allAdvertisedToolNames,
+    allEngineToolNames,
+    allEngineTools,
+    allToolServers,
+    catalog,
+    composedSystemMessages,
+    consoleEntries,
+    consoleOpen,
+    conversationTailRef,
+    conversationThreadRef,
+    currentSessionName,
+    currentWorkspaceName,
+    deferredEvents,
+    downloadSessionTrace,
+    events,
+    expandedSessionIds,
+    expandedWorkspaceIds,
+    filteredSavedSessionsCount,
+    filteredSavedWorkspaces,
+    firstModelCallTrace,
+    handleAnswerAskUserQuestion,
+    handleCancelCurrentRun,
+    handleGenerateOnce,
+    handleGuideMessage,
+    handleGuideQueuedSessionInput,
+    handleInspectConsoleEntry,
+    handleLoadOlderMessages,
+    handlePingHealth,
+    handleRefreshMessages,
+    handleRefreshModelProviders,
+    handleRefreshPlatformModels,
+    handleRefreshRun,
+    handleRefreshRunById,
+    handleRefreshRunSteps,
+    handleRefreshRunStepsById,
+    handleRefreshSessionRuns,
+    handleRefreshWorkspace,
+    handleSendMessage,
+    handleSwitchSessionAgent,
+    handleUpdateSessionModel,
+    hasActiveSession,
+    hasActiveSessionRun,
+    inspectorSubtitle,
+    latestEvent,
+    latestModelCallTrace,
+    latestModelMessageCounts,
+    loadingOlderMessages,
+    mainViewMode,
+    messageFeed,
+    messagesLoading,
+    messagesNextCursor,
+    modelCallTraces,
+    modelProviders,
+    navigationActions,
+    normalizedServiceScope,
+    openConsoleForErrors,
+    orderedSavedWorkspaces,
+    pendingSessionAgentName,
+    refreshSessionTerminal,
+    resolvedModelNames,
+    resolvedModelRefs,
+    savedSessions,
+    selectedMessageSystemMessages,
+    selectedModelCallTrace,
+    selectedRunStep,
+    selectedServiceScopeLabel,
+    selectedSessionEvent,
+    selectedSessionMessage,
+    sendSessionTerminalInput,
+    serviceScopeOptions,
+    session,
+    sessionId,
+    sessionQueuedRuns,
+    sessionRuns,
+    sessionsByWorkspaceId,
+    setExpandedSessionIds,
+    setMainViewMode,
+    setShowWorkspaceCreator,
+    setSurfaceMode,
+    setWorkspaceDraft,
+    shouldAutoFollowConversationRef,
+    showWorkspaceCreator,
+    sidebarSessionRuns,
+    storageController,
+    storageInspectionEnabled,
+    storedMessageCounts,
+    surfaceMode,
+    switchingSessionAgentId,
+    switchingSessionModelId,
+    systemProfile,
+    triggerWorkspaceAction,
+    workspace,
+    workspaceDraft,
+    workspaceFileManager,
+    workspaceId,
+    workspaceManagementEnabled,
+    workspaceRuntimeFilterOptions,
+    workspaceRuntimes
+  });
 
   return {
     errorMessage,

@@ -10,6 +10,7 @@ import {
   renderAwaitedRunSummary,
   taskOutputPath
 } from "./agent-delegation-messages.js";
+import { extractRunOutputContent } from "./agent-output-content.js";
 import type { AgentTaskNotificationRecord, AgentTaskRecord, AgentTaskStatus, WorkspaceRecord } from "../types.js";
 import type {
   AgentCoordinationHelpers,
@@ -924,7 +925,12 @@ export class AgentCoordinationService {
     }
 
     const messages = await this.#persistence.messages.listBySessionId(run.sessionId);
-    const outputContent = this.#extractRunOutputContent(messages, run.id);
+    const outputContent = extractRunOutputContent({
+      messages,
+      runId: run.id,
+      extractMessageDisplayText: (message) => this.#helpers.extractMessageDisplayText(message),
+      hasMeaningfulText: (content) => this.#helpers.hasMeaningfulText(content)
+    });
     if (this.#helpers.hasMeaningfulText(outputContent)) {
       return { run, outputContent };
     }
@@ -944,123 +950,6 @@ export class AgentCoordinationService {
     }
 
     return { run };
-  }
-
-  #extractRunOutputContent(messages: Message[], runId: string): string | undefined {
-    const runMessages = messages.filter((message) => message.runId === runId);
-    const assistantMessages = [...runMessages].reverse().filter((message) => message.role === "assistant");
-    let sawAssistantText = false;
-
-    for (const assistantMessage of assistantMessages) {
-      const assistantContent = this.#helpers.extractMessageDisplayText(assistantMessage);
-      if (!this.#helpers.hasMeaningfulText(assistantContent)) {
-        continue;
-      }
-
-      sawAssistantText = true;
-      if (this.#isAssistantMessageStillUsingTools(assistantMessage)) {
-        if (this.#isAssistantMessagePureToolUse(assistantMessage)) {
-          continue;
-        }
-        return undefined;
-      }
-
-      if (!this.#looksLikeIntermediateSubagentProgress(assistantContent)) {
-        return assistantContent;
-      }
-    }
-
-    if (sawAssistantText) {
-      return undefined;
-    }
-
-    const failedToolMessage = [...runMessages].reverse().find((message) => this.#isFailedToolResultMessage(message));
-    const failedToolContent = failedToolMessage ? this.#helpers.extractMessageDisplayText(failedToolMessage) : undefined;
-    return this.#helpers.hasMeaningfulText(failedToolContent) ? failedToolContent : undefined;
-  }
-
-  #isFailedToolResultMessage(message: Message): boolean {
-    if (message.role !== "tool") {
-      return false;
-    }
-
-    if (message.metadata?.toolStatus === "failed") {
-      return true;
-    }
-
-    if (!Array.isArray(message.content)) {
-      return false;
-    }
-
-    return message.content.some((part) => {
-      if (part.type !== "tool-result") {
-        return false;
-      }
-      const output = part.output;
-      return isRecord(output) && (output.type === "error-text" || output.type === "error-json");
-    });
-  }
-
-  #isAssistantMessageStillUsingTools(message: Message | undefined): boolean {
-    if (!message || message.role !== "assistant" || !Array.isArray(message.content)) {
-      return false;
-    }
-
-    return message.content.some((part) => part.type === "tool-call");
-  }
-
-  #isAssistantMessagePureToolUse(message: Message | undefined): boolean {
-    if (!message || message.role !== "assistant" || !Array.isArray(message.content) || message.content.length === 0) {
-      return false;
-    }
-
-    return message.content.every((part) => {
-      if (part.type === "tool-call") {
-        return true;
-      }
-      if (part.type === "text" && typeof part.text === "string") {
-        return part.text.trim().length === 0;
-      }
-      return false;
-    });
-  }
-
-  #looksLikeIntermediateSubagentProgress(content: string): boolean {
-    const trimmed = content.trim();
-    if (!trimmed) {
-      return true;
-    }
-
-    const normalized = trimmed.toLowerCase();
-    const progressPrefixes = [
-      "let me ",
-      "now let me ",
-      "i need to ",
-      "i will ",
-      "i'll ",
-      "i should ",
-      "让我",
-      "我需要",
-      "我将",
-      "现在让我",
-      "继续搜索",
-      "尝试搜索"
-    ];
-    const progressFragments = [
-      "let me try",
-      "let me search",
-      "let me continue",
-      "try to find",
-      "search for",
-      "获取成功了",
-      "重新搜索",
-      "继续搜索",
-      "尝试搜索"
-    ];
-    return (
-      progressPrefixes.some((marker) => normalized.startsWith(marker)) ||
-      progressFragments.some((marker) => normalized.includes(marker))
-    );
   }
 
   async #ensureDelegatedOutputFollowUpRun(completedRun: Run, messages: Message[]): Promise<Run> {
