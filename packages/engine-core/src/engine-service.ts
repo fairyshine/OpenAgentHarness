@@ -221,17 +221,12 @@ export class EngineService {
     data: Record<string, unknown>;
   }): Promise<SessionEvent> {
     const event = await this.#sessionEventStore.append(input);
+    if (input.event === "run.queued") {
+      await this.#touchWorkspaceActivityForRunEvent(input.runId, input.sessionId);
+    }
     if (input.event === "run.queued" || input.event === "queue.updated") {
-      void this.#engineMessageRepository
-        ?.listBySessionId(input.sessionId)
-        .then((storedEngineMessages) => {
-          if (storedEngineMessages.length === 0) {
-            return;
-          }
-          return this.#ensureRuntimeKernel().then((runtimeKernel) =>
-            runtimeKernel.engineMessageSync.scheduleEngineMessageSync(input.sessionId)
-          );
-        })
+      void this.#ensureRuntimeKernel()
+        .then((runtimeKernel) => runtimeKernel.engineMessageSync.scheduleEngineMessageSync(input.sessionId))
         .catch((error: unknown) => {
           this.#logger?.warn?.("Failed to schedule engine message sync after session event.", {
             sessionId: input.sessionId,
@@ -241,6 +236,23 @@ export class EngineService {
         });
     }
     return event;
+  }
+
+  async #touchWorkspaceActivityForRunEvent(runId: string, sessionId: string): Promise<void> {
+    if (!this.#workspaceActivityTracker) {
+      return;
+    }
+
+    const run = await this.#runRepository.getById(runId);
+    if (run) {
+      await this.#workspaceActivityTracker.touchWorkspace(run.workspaceId);
+      return;
+    }
+
+    const session = await this.#sessionRepository.getById(sessionId);
+    if (session) {
+      await this.#workspaceActivityTracker.touchWorkspace(session.workspaceId);
+    }
   }
 
   async #enqueueRunForExecution(_sessionId: string, runId: string): Promise<void> {
