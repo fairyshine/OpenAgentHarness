@@ -224,12 +224,12 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     };
     this.listWorkspaceSessions = async (workspaceId, pageSize, cursor) => {
       const sessions = await kernel.listWorkspaceSessions(workspaceId, pageSize, cursor);
-      await this.#touchWorkspace(workspaceId);
+      this.#touchWorkspaceBestEffort(workspaceId, "list workspace sessions");
       return sessions;
     };
     this.listChildSessions = async (parentSessionId, pageSize, cursor) => {
       const sessions = await kernel.listChildSessions(parentSessionId, pageSize, cursor);
-      await this.#touchSessionWorkspace(parentSessionId);
+      this.#touchSessionWorkspaceBestEffort(parentSessionId, "list child sessions");
       return sessions;
     };
     this.triggerActionRun = async (input) => {
@@ -239,7 +239,7 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     };
     this.getSession = async (sessionId) => {
       const session = await this.#getSessionRecord(sessionId);
-      await this.#touchWorkspace(session.workspaceId);
+      this.#touchWorkspaceBestEffort(session.workspaceId, "get session");
       return session;
     };
     this.updateSession = async (input) => {
@@ -254,27 +254,27 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     };
     this.listSessionMessages = async (sessionId, pageSize, cursor, direction) => {
       const messages = await kernel.listSessionMessages(sessionId, pageSize, cursor, direction);
-      await this.#touchSessionWorkspace(sessionId);
+      this.#touchSessionWorkspaceBestEffort(sessionId, "list session messages");
       return messages;
     };
     this.getSessionMessage = async (sessionId, messageId) => {
       const message = await kernel.getSessionMessage(sessionId, messageId);
-      await this.#touchSessionWorkspace(sessionId);
+      this.#touchSessionWorkspaceBestEffort(sessionId, "get session message");
       return message;
     };
     this.getSessionMessageContext = async (sessionId, messageId, before, after) => {
       const context = await kernel.getSessionMessageContext(sessionId, messageId, before, after);
-      await this.#touchSessionWorkspace(sessionId);
+      this.#touchSessionWorkspaceBestEffort(sessionId, "get session message context");
       return context;
     };
     this.listSessionRuns = async (sessionId, pageSize, cursor) => {
       const runs = await kernel.listSessionRuns(sessionId, pageSize, cursor);
-      await this.#touchSessionWorkspace(sessionId);
+      this.#touchSessionWorkspaceBestEffort(sessionId, "list session runs");
       return runs;
     };
     this.listSessionQueuedRuns = async (sessionId) => {
       const queue = await kernel.listSessionQueuedRuns(sessionId);
-      await this.#touchSessionWorkspace(sessionId);
+      this.#touchSessionWorkspaceBestEffort(sessionId, "list session queued runs");
       return queue;
     };
     this.compactSession = async (input) => {
@@ -289,7 +289,7 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     };
     this.listSessionEvents = async (sessionId, cursor, runId, limit) => {
       const events = await kernel.listSessionEvents(sessionId, cursor, runId, limit);
-      await this.#touchSessionWorkspace(sessionId);
+      this.#touchSessionWorkspaceBestEffort(sessionId, "list session events");
       return events;
     };
     this.subscribeSessionEvents = (sessionId, listener) => {
@@ -299,12 +299,12 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     };
     this.getRun = async (runId) => {
       const run = await this.#getRunRecord(runId);
-      await this.#touchWorkspace(run.workspaceId);
+      this.#touchWorkspaceBestEffort(run.workspaceId, "get run");
       return run;
     };
     this.listRunSteps = async (runId, pageSize, cursor) => {
       const steps = await kernel.listRunSteps(runId, pageSize, cursor);
-      await this.#touchRunWorkspace(runId);
+      this.#touchRunWorkspaceBestEffort(runId, "list run steps");
       return steps;
     };
     this.cancelRun = async (runId) => {
@@ -334,6 +334,30 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
       .catch((error: unknown) => {
         this.#logger?.warn?.("Workspace activity touch failed.", {
           workspaceId,
+          context,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      });
+  }
+
+  #touchSessionWorkspaceBestEffort(sessionId: string, context: string): void {
+    void this.#getSessionRecord(sessionId)
+      .then((session) => this.#workspaceActivityTracker?.touchWorkspace(session.workspaceId))
+      .catch((error: unknown) => {
+        this.#logger?.warn?.("Session workspace activity touch failed.", {
+          sessionId,
+          context,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      });
+  }
+
+  #touchRunWorkspaceBestEffort(runId: string, context: string): void {
+    void this.#getRunRecord(runId)
+      .then((run) => this.#workspaceActivityTracker?.touchWorkspace(run.workspaceId))
+      .catch((error: unknown) => {
+        this.#logger?.warn?.("Run workspace activity touch failed.", {
+          runId,
           context,
           errorMessage: error instanceof Error ? error.message : String(error)
         });

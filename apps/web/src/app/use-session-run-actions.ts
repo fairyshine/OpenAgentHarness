@@ -61,7 +61,7 @@ export function useSessionRunActions(input: {
     }
   });
 
-  const refreshSessionRuns = useEffectEvent(async (quiet = false, options?: { includeSteps?: boolean }) => {
+  const refreshSessionRuns = useEffectEvent(async (quiet = false, options?: { includeSteps?: boolean | "selected" }) => {
     if (!input.sessionId.trim()) {
       return;
     }
@@ -71,12 +71,18 @@ export function useSessionRunActions(input: {
       startTransition(() => {
         input.setSessionRuns(page.items);
       });
-      if (options?.includeSteps) {
-        await refreshSessionRunStepsForRuns(page.items, true);
-      }
-
       const activeSelectedRunId = input.selectedRunId.trim();
       const nextSelectedRun = page.items.find((item) => item.id === activeSelectedRunId) ?? page.items[0];
+      if (options?.includeSteps === true) {
+        await refreshSessionRunStepsForRuns(page.items, true);
+      } else if (options?.includeSteps === "selected" && nextSelectedRun) {
+        await refreshSessionRunStepsForRuns([nextSelectedRun], true);
+      } else if (!nextSelectedRun) {
+        startTransition(() => {
+          input.setRunSteps([]);
+        });
+      }
+
       if (nextSelectedRun && nextSelectedRun.id !== activeSelectedRunId) {
         startTransition(() => {
           input.setSelectedRunId(nextSelectedRun.id);

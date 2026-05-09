@@ -18,7 +18,7 @@ export function useSessionUtilityActions(input: {
   modelDraft: ModelDraft;
   request: <T>(path: string, init?: RequestInit, options?: { auth?: boolean }) => Promise<T>;
   refreshSessionById: (targetId: string, quiet?: boolean) => Promise<unknown>;
-  refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean }) => Promise<void>;
+  refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean | "selected" }) => Promise<void>;
   refreshRun: (targetId?: string, quiet?: boolean) => Promise<void>;
   refreshRunSteps: (targetId?: string, quiet?: boolean) => Promise<void>;
   setActivity: (value: string) => void;
@@ -105,7 +105,7 @@ export function useSessionUtilityActions(input: {
       if (accepted.sessionId && accepted.sessionId !== input.sessionId) {
         await input.refreshSessionById(accepted.sessionId, true);
       } else if (accepted.sessionId) {
-        await input.refreshSessionRuns(true, { includeSteps: true });
+        await input.refreshSessionRuns(true, { includeSteps: "selected" });
       }
 
       startTransition(() => {

@@ -10,7 +10,7 @@ type SessionMutationRef = {
 function useSessionSettingsActions(input: {
   sessionId: string;
   session: Session | null;
-  refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean }) => Promise<void>;
+  refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean | "selected" }) => Promise<void>;
   refreshSessionById: (targetId: string, quiet?: boolean) => Promise<unknown>;
   switchSessionAgentById: (targetId: string, activeAgentName: string) => Promise<Session | null>;
   updateSessionModelById: (targetId: string, modelRef: string | null) => Promise<Session | null>;
@@ -70,7 +70,7 @@ function useSessionSettingsActions(input: {
 
       if (input.sessionId === targetId) {
         void input.refreshSessionById(targetId, true);
-        void input.refreshSessionRuns(true, { includeSteps: true });
+        void input.refreshSessionRuns(true, { includeSteps: "selected" });
       }
 
       return true;

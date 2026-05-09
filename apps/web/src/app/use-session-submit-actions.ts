@@ -26,7 +26,7 @@ export function useSessionSubmitActions(input: {
   newEmptySessionIdRef: RefObject<string | null>;
   request: <T>(path: string, init?: RequestInit, options?: { auth?: boolean }) => Promise<T>;
   refreshMessages: (quiet?: boolean, options?: { reset?: boolean | undefined }) => Promise<void>;
-  refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean }) => Promise<void>;
+  refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean | "selected" }) => Promise<void>;
   refreshRun: (targetId?: string, quiet?: boolean) => Promise<void>;
   refreshRunSteps: (targetId?: string, quiet?: boolean) => Promise<void>;
   refreshSessionQueue: (quiet?: boolean) => Promise<void>;

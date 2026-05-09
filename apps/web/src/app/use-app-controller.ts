@@ -719,7 +719,7 @@ export function useAppController() {
         return;
       }
       void navigationActions.refreshSession(sessionId, true);
-      void refreshSessionRuns(true, { includeSteps: true });
+      void refreshSessionRuns(true, { includeSteps: "selected" });
       return;
     }
 
@@ -797,7 +797,7 @@ export function useAppController() {
     void generateOnce();
   });
   const handleRefreshSessionRuns = useEffectEvent(() => {
-    void refreshSessionRuns(false, { includeSteps: true });
+    void refreshSessionRuns(false, { includeSteps: "selected" });
   });
   const handleRefreshRunById = useEffectEvent((targetId: string) => {
     void refreshRun(targetId, true);
