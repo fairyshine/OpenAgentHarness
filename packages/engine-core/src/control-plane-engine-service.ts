@@ -60,6 +60,7 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
   readonly #logger?: EngineLogger | undefined;
   readonly #getSessionRecord: EngineService["getSession"];
   readonly #getRunRecord: EngineService["getRun"];
+  readonly #workspaceDefinitionRefreshes = new Map<string, Promise<void>>();
 
   readonly createWorkspace: EngineService["createWorkspace"];
   readonly listWorkspaces: EngineService["listWorkspaces"];
@@ -122,16 +123,19 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     this.createWorkspace = kernel.createWorkspace.bind(kernel);
     this.listWorkspaces = kernel.listWorkspaces.bind(kernel);
     this.getWorkspace = async (workspaceId) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
       const workspace = await kernel.getWorkspace(workspaceId);
       await this.#touchWorkspace(workspaceId);
       return workspace;
     };
     this.getWorkspaceRecord = async (workspaceId) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
       const workspace = await kernel.getWorkspaceRecord(workspaceId);
       await this.#touchWorkspace(workspaceId);
       return workspace;
     };
     this.getWorkspaceCatalog = async (workspaceId) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
       const catalog = await kernel.getWorkspaceCatalog(workspaceId);
       await this.#touchWorkspace(workspaceId);
       return catalog;
@@ -218,7 +222,7 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     this.createSession = async (input) => {
       const session = await kernel.createSession(input);
       this.#touchWorkspaceBestEffort(input.workspaceId, "session creation");
-      await this.#refreshWorkspaceDefinition(input.workspaceId, "session creation");
+      this.#scheduleWorkspaceDefinitionRefresh(input.workspaceId);
       this.#scheduleWorkspacePrewarm(input.workspaceId);
       return session;
     };
@@ -364,20 +368,31 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
       });
   }
 
-  async #refreshWorkspaceDefinition(workspaceId: string, context: string): Promise<void> {
+  #scheduleWorkspaceDefinitionRefresh(workspaceId: string): void {
     if (!this.#workspaceDefinitionRefresher) {
       return;
     }
 
-    try {
-      await this.#workspaceDefinitionRefresher.refreshWorkspaceDefinition(workspaceId);
-    } catch (error: unknown) {
-      this.#logger?.warn?.("Workspace definition refresh failed.", {
-        workspaceId,
-        context,
-        errorMessage: error instanceof Error ? error.message : String(error)
+    const previous = this.#workspaceDefinitionRefreshes.get(workspaceId);
+    const startRefresh = () => this.#workspaceDefinitionRefresher?.refreshWorkspaceDefinition(workspaceId);
+    const refresh = (previous ? previous.catch(() => undefined).then(startRefresh) : Promise.resolve(startRefresh()))
+      .catch((error: unknown) => {
+        this.#logger?.warn?.("Workspace definition refresh failed after session creation.", {
+          workspaceId,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      })
+      .finally(() => {
+        if (this.#workspaceDefinitionRefreshes.get(workspaceId) === refresh) {
+          this.#workspaceDefinitionRefreshes.delete(workspaceId);
+        }
       });
-    }
+
+    this.#workspaceDefinitionRefreshes.set(workspaceId, refresh);
+  }
+
+  async #waitForWorkspaceDefinitionRefresh(workspaceId: string): Promise<void> {
+    await this.#workspaceDefinitionRefreshes.get(workspaceId);
   }
 
   #scheduleWorkspacePrewarm(workspaceId: string): void {
