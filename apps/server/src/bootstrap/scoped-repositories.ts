@@ -188,6 +188,15 @@ export class ScopedRunRepository implements RunRepository {
     return runs.filter((run) => this.visibleWorkspaceIds.has(run.workspaceId));
   }
 
+  async hasActiveRunForSession(sessionId: string, excludedRunIds?: ReadonlySet<string>): Promise<boolean> {
+    return (await this.listBySessionId(sessionId)).some(
+      (run) =>
+        (run.status === "queued" || run.status === "running" || run.status === "waiting_tool") &&
+        !excludedRunIds?.has(run.id) &&
+        !run.cancelRequestedAt
+    );
+  }
+
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
     const runs = await this.inner.listRecoverableActiveRuns(staleBefore, limit * 4);
     return runs.filter((run) => this.visibleWorkspaceIds.has(run.workspaceId)).slice(0, limit);

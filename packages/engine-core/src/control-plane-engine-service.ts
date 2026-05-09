@@ -217,7 +217,7 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
     };
     this.createSession = async (input) => {
       const session = await kernel.createSession(input);
-      await this.#touchWorkspace(input.workspaceId);
+      this.#touchWorkspaceBestEffort(input.workspaceId, "session creation");
       this.#scheduleWorkspaceDefinitionRefresh(input.workspaceId);
       this.#scheduleWorkspacePrewarm(input.workspaceId);
       return session;
@@ -326,6 +326,18 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
 
   async #touchWorkspace(workspaceId: string): Promise<void> {
     await this.#workspaceActivityTracker?.touchWorkspace(workspaceId);
+  }
+
+  #touchWorkspaceBestEffort(workspaceId: string, context: string): void {
+    void Promise.resolve()
+      .then(() => this.#workspaceActivityTracker?.touchWorkspace(workspaceId))
+      .catch((error: unknown) => {
+        this.#logger?.warn?.("Workspace activity touch failed.", {
+          workspaceId,
+          context,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      });
   }
 
   #scheduleWorkspaceDefinitionRefresh(workspaceId: string): void {

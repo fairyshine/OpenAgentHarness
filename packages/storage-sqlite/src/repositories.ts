@@ -600,6 +600,23 @@ export class SQLiteRunRepository implements RunRepository {
     return rows.map((row) => parseJson<Run>(row.payload));
   }
 
+  async hasActiveRunForSession(sessionId: string, excludedRunIds: ReadonlySet<string> = new Set()): Promise<boolean> {
+    const handle = await this.#coordinator.getSessionHandle(sessionId);
+    const excluded = Array.from(excludedRunIds);
+    const excludedPredicate = excluded.length > 0 ? `and id not in (${excluded.map(() => "?").join(", ")})` : "";
+    const row = handle.db
+      .prepare(
+        `select id
+           from runs
+          where session_id = ?
+            and status in ('queued', 'running', 'waiting_tool')
+            ${excludedPredicate}
+          limit 1`
+      )
+      .get(sessionId, ...excluded) as IdRow | undefined;
+    return Boolean(row);
+  }
+
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
     const runIds = this.#coordinator.listRecoverableRunIds(staleBefore, Math.max(1, limit * 2));
     const runs = await Promise.all(runIds.map((runId) => this.getById(runId)));

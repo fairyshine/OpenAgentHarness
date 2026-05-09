@@ -63,6 +63,7 @@ interface NavigationActionParams {
     lastCursorRef: MutableRefObject<string | undefined>;
     runPollingTimerRef: MutableRefObject<number | undefined>;
     lastExplicitSessionRefreshRef: MutableRefObject<{ sessionId: string; at: number } | null>;
+    newEmptySessionIdRef: MutableRefObject<string | null>;
   };
 }
 

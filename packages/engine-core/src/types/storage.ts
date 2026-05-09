@@ -292,6 +292,7 @@ export interface RunRepository {
   create(input: Run): Promise<Run>;
   getById(id: string): Promise<Run | null>;
   update(input: Run): Promise<Run>;
+  hasActiveRunForSession(sessionId: string, excludedRunIds?: ReadonlySet<string>): Promise<boolean>;
   listBySessionId(sessionId: string): Promise<Run[]>;
   listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]>;
 }

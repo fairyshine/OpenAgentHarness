@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { pageQuerySchema, jsonObjectSchema, jsonValueSchema, timestampSchema } from "./common.js";
+import { runSchema } from "./runs.js";
 
 export const textMessagePartSchema = z.object({
   type: z.literal("text"),
@@ -268,6 +269,7 @@ export const messageAcceptedSchema = z.object({
   messageId: z.string(),
   runId: z.string(),
   status: z.literal("queued"),
+  run: runSchema.optional(),
   delivery: z.enum(["active_run", "session_queue"]).optional(),
   queuedPosition: z.number().int().min(1).optional(),
   createdAt: timestampSchema.optional()

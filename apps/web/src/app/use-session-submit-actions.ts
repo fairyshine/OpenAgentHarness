@@ -23,6 +23,7 @@ export function useSessionSubmitActions(input: {
   sessionAgentSwitchRef: PendingOperationRef;
   sessionModelUpdateRef: PendingOperationRef;
   shouldAutoFollowConversationRef: AutoFollowRef;
+  newEmptySessionIdRef: RefObject<string | null>;
   request: <T>(path: string, init?: RequestInit, options?: { auth?: boolean }) => Promise<T>;
   refreshMessages: (quiet?: boolean, options?: { reset?: boolean | undefined }) => Promise<void>;
   refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean }) => Promise<void>;
@@ -76,6 +77,9 @@ export function useSessionSubmitActions(input: {
       const runningRunBehavior = options?.runningRunBehavior ?? "queue";
 
       input.shouldAutoFollowConversationRef.current = true;
+      if (input.newEmptySessionIdRef.current === input.sessionId) {
+        input.newEmptySessionIdRef.current = null;
+      }
       const accepted = await input.request<MessageAccepted>(`/api/v1/sessions/${input.sessionId}/messages`, {
         method: "POST",
         headers: {
@@ -110,6 +114,12 @@ export function useSessionSubmitActions(input: {
         }
         if (!shouldDisplayAsQueued) {
           input.setSelectedRunId(accepted.runId);
+          if (accepted.run) {
+            useStreamStore.getState().setSessionRuns((current) => {
+              const next = [accepted.run as Run, ...current.filter((item) => item.id !== accepted.runId)];
+              return next.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+            });
+          }
           input.setLiveMessagesByKey((current) => ({
             ...current,
             [`pending-user:${accepted.messageId}`]: {
@@ -124,15 +134,9 @@ export function useSessionSubmitActions(input: {
         }
       });
       input.setStreamRevision((current) => current + 1);
-      const refreshes: Array<Promise<unknown>> = [input.refreshSessionRuns(true, { includeSteps: true })];
-      if (!shouldDisplayAsQueued) {
-        refreshes.unshift(input.refreshMessages(true));
+      if (shouldDisplayAsQueued) {
+        void input.refreshSessionQueue(true);
       }
-      if (!shouldDisplayAsQueued) {
-        refreshes.push(input.refreshRun(accepted.runId, true), input.refreshRunSteps(accepted.runId, true));
-      }
-
-      void Promise.all(refreshes);
       input.setActivity(
         options?.activityLabel ??
           (shouldDisplayAsQueued ? `消息已加入后续队列，run=${accepted.runId}` : `消息已入队，run=${accepted.runId}`)

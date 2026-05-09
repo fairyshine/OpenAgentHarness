@@ -151,6 +151,7 @@ export interface MessageAcceptedResult {
   messageId: string;
   runId: string;
   status: "queued";
+  run?: Run | undefined;
   delivery?: "active_run" | "session_queue" | undefined;
   queuedPosition?: number | undefined;
   createdAt?: string | undefined;

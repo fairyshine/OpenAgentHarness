@@ -247,6 +247,16 @@ export class InMemoryRunRepository implements RunRepository {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
   }
 
+  async hasActiveRunForSession(sessionId: string, excludedRunIds: ReadonlySet<string> = new Set()): Promise<boolean> {
+    return [...this.#items.values()].some(
+      (run) =>
+        run.sessionId === sessionId &&
+        (run.status === "queued" || run.status === "running" || run.status === "waiting_tool") &&
+        !excludedRunIds.has(run.id) &&
+        !run.cancelRequestedAt
+    );
+  }
+
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
     return [...this.#items.values()]
       .filter((run) => {

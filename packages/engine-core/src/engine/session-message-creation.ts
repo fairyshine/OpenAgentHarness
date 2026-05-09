@@ -142,6 +142,7 @@ export class SessionMessageCreationService {
           messageId: message.id,
           runId: run.id,
           status: "queued",
+          run,
           delivery: "session_queue",
           queuedPosition: queuedEntry.position,
           createdAt: now
@@ -160,6 +161,7 @@ export class SessionMessageCreationService {
         messageId: message.id,
         runId: run.id,
         status: "queued",
+        run,
         delivery: "session_queue",
         queuedPosition: queuedEntry.position,
         createdAt: now
@@ -172,6 +174,7 @@ export class SessionMessageCreationService {
       messageId: message.id,
       runId: run.id,
       status: "queued",
+      run,
       delivery: "active_run",
       createdAt: now
     };
@@ -248,19 +251,11 @@ export class SessionMessageCreationService {
     hasActiveRun: boolean;
     pendingRunIds: Set<string>;
   }> {
-    const [runs, pendingRuns] = await Promise.all([
-      this.#runRepository.listBySessionId(sessionId),
-      this.#sessionPendingRunQueueRepository.listBySessionId(sessionId)
-    ]);
     const excludedRunIds = new Set(options?.excludeRunIds ?? []);
+    const pendingRuns = await this.#sessionPendingRunQueueRepository.listBySessionId(sessionId);
     const pendingRunIds = new Set(pendingRuns.map((entry) => entry.runId));
-    const hasActiveRun = runs.some(
-      (run) =>
-        (run.status === "queued" || run.status === "running" || run.status === "waiting_tool") &&
-        !excludedRunIds.has(run.id) &&
-        !pendingRunIds.has(run.id) &&
-        !run.cancelRequestedAt
-    );
+    const activeRunExclusions = new Set([...excludedRunIds, ...pendingRunIds]);
+    const hasActiveRun = await this.#runRepository.hasActiveRunForSession(sessionId, activeRunExclusions);
 
     return {
       hasActiveRun,

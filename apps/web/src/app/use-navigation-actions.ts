@@ -766,9 +766,10 @@ export function useNavigationActions(params: NavigationActionParams) {
       rememberSession(created);
       touchSavedWorkspace(created.workspaceId);
       expandWorkspaceInSidebar(created.workspaceId);
+      params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: created.id, at: Date.now() };
+      params.runtime.newEmptySessionIdRef.current = created.id;
       params.setActivity(`Session ${created.id} 已创建`);
       params.setErrorMessage("");
-      void refreshSession(created.id, true);
     } catch (error) {
       params.setErrorMessage(toErrorMessage(error));
     }

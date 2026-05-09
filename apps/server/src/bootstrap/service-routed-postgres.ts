@@ -234,6 +234,10 @@ class RoutedRunRepository implements RunRepository {
     return this.router.registry().listRunsBySessionId(sessionId);
   }
 
+  hasActiveRunForSession(sessionId: string, excludedRunIds?: ReadonlySet<string>): Promise<boolean> {
+    return this.router.registry().hasActiveRunForSession(sessionId, excludedRunIds);
+  }
+
   listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
     return this.router.registry().listRecoverableActiveRuns(staleBefore, limit);
   }

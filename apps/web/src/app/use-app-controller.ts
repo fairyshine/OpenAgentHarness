@@ -171,6 +171,7 @@ export function useAppController() {
   const workspaceIndexRefreshTimerRef = useRef<number | undefined>(undefined);
   const runPollingTimerRef = useRef<number | undefined>(undefined);
   const lastExplicitSessionRefreshRef = useRef<{ sessionId: string; at: number } | null>(null);
+  const newEmptySessionIdRef = useRef<string | null>(null);
   const conversationThreadRef = useRef<HTMLDivElement | null>(null);
   const conversationTailRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoFollowConversationRef = useRef(true);
@@ -446,7 +447,8 @@ export function useAppController() {
       streamAbortRef,
       lastCursorRef,
       runPollingTimerRef,
-      lastExplicitSessionRefreshRef
+      lastExplicitSessionRefreshRef,
+      newEmptySessionIdRef
     }
   });
 
@@ -527,6 +529,7 @@ export function useAppController() {
       sessionAgentSwitchRef,
       sessionModelUpdateRef,
       shouldAutoFollowConversationRef,
+      newEmptySessionIdRef,
       request,
       refreshMessages,
       refreshSessionRuns,
@@ -613,7 +616,7 @@ export function useAppController() {
   useSessionEventStream({
     connection,
     sessionId,
-    sessionRecordId: session?.id,
+    sessionRecordId: newEmptySessionIdRef.current === sessionId ? undefined : session?.id,
     streamRevision,
     streamAbortRef,
     lastCursorRef,
@@ -678,6 +681,16 @@ export function useAppController() {
     resetMessagePaging();
 
     if (!sessionId.trim()) {
+      startTransition(() => {
+        setMessages([]);
+        setSessionQueuedRuns([]);
+      });
+      setMessagesLoading(false);
+      newEmptySessionIdRef.current = null;
+      return;
+    }
+
+    if (newEmptySessionIdRef.current === sessionId) {
       startTransition(() => {
         setMessages([]);
         setSessionQueuedRuns([]);

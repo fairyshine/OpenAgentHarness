@@ -30,7 +30,7 @@ import type {
   WorkspaceRepository
 } from "@oah/engine-core";
 import { AppError, createId, nowIso, parseCursor, parseMessagePageCursor } from "@oah/engine-core";
-import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, not, or, sql } from "drizzle-orm";
 import type { OahDatabase } from "./schema.js";
 import {
   agentTaskNotifications,
@@ -451,6 +451,25 @@ export class PostgresRunRepository implements RunRepository {
       .orderBy(desc(runs.createdAt), desc(runs.id))
       .limit(limit);
     return rows.map(toRun);
+  }
+
+  async hasActiveRunForSession(sessionId: string, excludedRunIds: ReadonlySet<string> = new Set()): Promise<boolean> {
+    const predicates = [
+      eq(runs.sessionId, sessionId),
+      inArray(runs.status, ["queued", "running", "waiting_tool"]),
+      isNull(runs.cancelRequestedAt)
+    ];
+    const excluded = Array.from(excludedRunIds);
+    if (excluded.length > 0) {
+      predicates.push(not(inArray(runs.id, excluded)));
+    }
+
+    const [row] = await this.db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(...predicates))
+      .limit(1);
+    return Boolean(row);
   }
 
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {

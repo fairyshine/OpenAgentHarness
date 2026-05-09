@@ -413,6 +413,24 @@ export class PostgresServiceRoutingRegistry {
     return result.rows.map((row) => toRunRegistryEntry(row as RecordRow));
   }
 
+  async hasActiveRunForSession(sessionId: string, excludedRunIds: ReadonlySet<string> = new Set()): Promise<boolean> {
+    const excluded = Array.from(excludedRunIds);
+    const excludedPredicate = excluded.length > 0 ? `and id <> all($2::text[])` : "";
+    const params = excluded.length > 0 ? [sessionId, excluded] : [sessionId];
+    const result = await this.pool.query(
+      `select id
+         from run_registry
+        where session_id = $1
+          and status in ('queued', 'running', 'waiting_tool')
+          and cancel_requested_at is null
+          ${excludedPredicate}
+        limit 1`,
+      params
+    );
+
+    return result.rows.length > 0;
+  }
+
   async listRecoverableActiveRuns(staleBefore: string, limit: number): Promise<Run[]> {
     const result = await this.pool.query(
       `select
