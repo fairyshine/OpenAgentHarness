@@ -8,7 +8,6 @@ import {
   type HealthReport,
   type ReadinessReport
 } from "@oah/api-contracts";
-import type { SessionRunQueuePressure } from "../../../packages/engine-core/src/coordination.js";
 import type { ServerConfig } from "@oah/config";
 import type {
   EngineLogger,
@@ -59,141 +58,52 @@ import {
   resolveWorkspaceMaterializationCacheRoot,
   type WorkspaceLocalArtifactCleanupStatus
 } from "./bootstrap/engine-state-paths.js";
+import {
+  parseBooleanEnv,
+  parseNonNegativeIntEnv,
+  parseOptionalPositiveIntEnv,
+  parsePositiveIntEnv,
+  parsePositiveIntEnvWithMin,
+  resolveObjectStorageMirrorBlockingInit,
+  resolveWorkspaceMaterializationConfig,
+  resolveWorkspacePrewarmConfig,
+  resolveWorkspaceRegistryPollingConfig
+} from "./bootstrap/bootstrap-config.js";
 import { evaluateWorkerDiskReadiness } from "./bootstrap/worker-disk-readiness.js";
+import {
+  loadAdminCapabilitiesModule,
+  loadConfigRuntimesModule,
+  loadConfigServerConfigModule,
+  loadConfigWorkspaceModule,
+  loadConfiguredSandboxHostModule,
+  loadControlPlaneRuntimeModule,
+  loadMetadataRetentionModule,
+  loadModelMetadataDiscoveryModule,
+  loadNativeBridgeModule,
+  loadObjectStorageModule,
+  loadPlatformAgentsModule,
+  loadRedisStorageModule,
+  loadSQLiteStorageModule,
+  loadSandboxBackedWorkspaceInitializerModule,
+  loadSandboxHostModule,
+  loadServiceRoutedPostgresModule,
+  loadStorageAdminModule,
+  loadWorkerRuntimeModule,
+  loadWorkspaceDefinitionHelpersModule,
+  loadWorkspaceMaterializationModule
+} from "./bootstrap/module-loaders.js";
+import {
+  createPlacementAwareSessionRunQueue,
+  selectPlacementPreferredWorkerId
+} from "./bootstrap/placement-aware-session-run-queue.js";
 
 export { cleanupWorkspaceLocalArtifacts } from "./bootstrap/engine-state-paths.js";
 export type { WorkspaceLocalArtifactCleanupStatus } from "./bootstrap/engine-state-paths.js";
-
-let configWorkspaceModulePromise: Promise<typeof import("@oah/config/workspace")> | undefined;
-let configRuntimesModulePromise: Promise<typeof import("@oah/config/runtimes")> | undefined;
-let configServerConfigModulePromise: Promise<{ loadServerConfig: (configPath: string) => Promise<ServerConfig> }> | undefined;
-let workspaceDefinitionHelpersPromise: Promise<typeof import("./bootstrap/workspace-definition-helpers.js")> | undefined;
-let configuredSandboxHostModulePromise: Promise<typeof import("./bootstrap/configured-sandbox-host.js")> | undefined;
-let objectStorageModulePromise: Promise<typeof import("./object-storage.js")> | undefined;
-let sandboxBackedWorkspaceInitializerModulePromise:
-  | Promise<typeof import("./bootstrap/sandbox-backed-workspace-initializer.js")>
-  | undefined;
-let platformAgentsModulePromise: Promise<typeof import("./platform-agents.js")> | undefined;
-let serviceRoutedPostgresModulePromise: Promise<typeof import("./bootstrap/service-routed-postgres.js")> | undefined;
-let adminCapabilitiesModulePromise: Promise<typeof import("./bootstrap/admin-capabilities.js")> | undefined;
-let sqliteStorageModulePromise: Promise<typeof import("@oah/storage-sqlite")> | undefined;
-let redisStorageModulePromise: Promise<typeof import("@oah/storage-redis")> | undefined;
-let controlPlaneRuntimeModulePromise: Promise<typeof import("./bootstrap/control-plane-runtime.js")> | undefined;
-let workerRuntimeModulePromise: Promise<typeof import("./bootstrap/worker-runtime.js")> | undefined;
-let storageAdminModulePromise: Promise<typeof import("./storage-admin.js")> | undefined;
-let modelMetadataDiscoveryModulePromise: Promise<typeof import("./bootstrap/model-metadata-discovery.js")> | undefined;
-let sandboxHostModulePromise: Promise<typeof import("./bootstrap/sandbox-host.js")> | undefined;
-let workspaceMaterializationModulePromise: Promise<typeof import("./bootstrap/workspace-materialization.js")> | undefined;
-let nativeBridgeModulePromise: Promise<typeof import("@oah/native-bridge")> | undefined;
-let metadataRetentionModulePromise: Promise<typeof import("./metadata-retention.js")> | undefined;
-
-function loadConfigWorkspaceModule(): Promise<typeof import("@oah/config/workspace")> {
-  configWorkspaceModulePromise ??= import("@oah/config/workspace").catch(() =>
-    import("../../../packages/config/src/workspace.js")
-  );
-  return configWorkspaceModulePromise;
-}
-
-function loadConfigRuntimesModule(): Promise<typeof import("@oah/config/runtimes")> {
-  configRuntimesModulePromise ??= import("@oah/config/runtimes").catch(() =>
-    import("../../../packages/config/src/runtimes.js")
-  );
-  return configRuntimesModulePromise;
-}
-
-function loadConfigServerConfigModule(): Promise<{ loadServerConfig: (configPath: string) => Promise<ServerConfig> }> {
-  configServerConfigModulePromise ??= import("@oah/config/server-config").catch(() =>
-    import("../../../packages/config/src/server-config.js")
-  );
-  return configServerConfigModulePromise;
-}
-
-function loadWorkspaceDefinitionHelpersModule(): Promise<typeof import("./bootstrap/workspace-definition-helpers.js")> {
-  workspaceDefinitionHelpersPromise ??= import("./bootstrap/workspace-definition-helpers.js");
-  return workspaceDefinitionHelpersPromise;
-}
-
-function loadConfiguredSandboxHostModule(): Promise<typeof import("./bootstrap/configured-sandbox-host.js")> {
-  configuredSandboxHostModulePromise ??= import("./bootstrap/configured-sandbox-host.js");
-  return configuredSandboxHostModulePromise;
-}
-
-function loadObjectStorageModule(): Promise<typeof import("./object-storage.js")> {
-  objectStorageModulePromise ??= import("./object-storage.js");
-  return objectStorageModulePromise;
-}
-
-function loadSandboxBackedWorkspaceInitializerModule(): Promise<
-  typeof import("./bootstrap/sandbox-backed-workspace-initializer.js")
-> {
-  sandboxBackedWorkspaceInitializerModulePromise ??= import("./bootstrap/sandbox-backed-workspace-initializer.js");
-  return sandboxBackedWorkspaceInitializerModulePromise;
-}
-
-function loadPlatformAgentsModule(): Promise<typeof import("./platform-agents.js")> {
-  platformAgentsModulePromise ??= import("./platform-agents.js");
-  return platformAgentsModulePromise;
-}
-
-function loadServiceRoutedPostgresModule(): Promise<typeof import("./bootstrap/service-routed-postgres.js")> {
-  serviceRoutedPostgresModulePromise ??= import("./bootstrap/service-routed-postgres.js");
-  return serviceRoutedPostgresModulePromise;
-}
-
-function loadAdminCapabilitiesModule(): Promise<typeof import("./bootstrap/admin-capabilities.js")> {
-  adminCapabilitiesModulePromise ??= import("./bootstrap/admin-capabilities.js");
-  return adminCapabilitiesModulePromise;
-}
-
-function loadStorageAdminModule(): Promise<typeof import("./storage-admin.js")> {
-  storageAdminModulePromise ??= import("./storage-admin.js");
-  return storageAdminModulePromise;
-}
-
-function loadMetadataRetentionModule(): Promise<typeof import("./metadata-retention.js")> {
-  metadataRetentionModulePromise ??= import("./metadata-retention.js");
-  return metadataRetentionModulePromise;
-}
-
-function loadSQLiteStorageModule(): Promise<typeof import("@oah/storage-sqlite")> {
-  sqliteStorageModulePromise ??= import("@oah/storage-sqlite");
-  return sqliteStorageModulePromise;
-}
-
-function loadRedisStorageModule(): Promise<typeof import("@oah/storage-redis")> {
-  redisStorageModulePromise ??= import("@oah/storage-redis");
-  return redisStorageModulePromise;
-}
-
-function loadControlPlaneRuntimeModule(): Promise<typeof import("./bootstrap/control-plane-runtime.js")> {
-  controlPlaneRuntimeModulePromise ??= import("./bootstrap/control-plane-runtime.js");
-  return controlPlaneRuntimeModulePromise;
-}
-
-function loadWorkerRuntimeModule(): Promise<typeof import("./bootstrap/worker-runtime.js")> {
-  workerRuntimeModulePromise ??= import("./bootstrap/worker-runtime.js");
-  return workerRuntimeModulePromise;
-}
-
-function loadModelMetadataDiscoveryModule(): Promise<typeof import("./bootstrap/model-metadata-discovery.js")> {
-  modelMetadataDiscoveryModulePromise ??= import("./bootstrap/model-metadata-discovery.js");
-  return modelMetadataDiscoveryModulePromise;
-}
-
-function loadSandboxHostModule(): Promise<typeof import("./bootstrap/sandbox-host.js")> {
-  sandboxHostModulePromise ??= import("./bootstrap/sandbox-host.js");
-  return sandboxHostModulePromise;
-}
-
-function loadWorkspaceMaterializationModule(): Promise<typeof import("./bootstrap/workspace-materialization.js")> {
-  workspaceMaterializationModulePromise ??= import("./bootstrap/workspace-materialization.js");
-  return workspaceMaterializationModulePromise;
-}
-
-function loadNativeBridgeModule(): Promise<typeof import("@oah/native-bridge")> {
-  nativeBridgeModulePromise ??= import("@oah/native-bridge");
-  return nativeBridgeModulePromise;
-}
+export {
+  resolveObjectStorageMirrorBlockingInit,
+  resolveWorkspaceMaterializationConfig,
+  resolveWorkspacePrewarmConfig
+} from "./bootstrap/bootstrap-config.js";
 
 function hasRemoteErrorCode(error: unknown, code: string): boolean {
   if (error instanceof AppError) {
@@ -256,149 +166,7 @@ async function clearWorkspaceRootContents(input: {
   }
 }
 
-function selectPlacementPreferredWorkerId(placement: {
-  state?: "unassigned" | "active" | "idle" | "draining" | "evicted" | undefined;
-  ownerId?: string | undefined;
-  ownerWorkerId?: string | undefined;
-  preferredWorkerId?: string | undefined;
-} | null | undefined): string | undefined {
-  if (placement?.state === "evicted" || placement?.state === "unassigned") {
-    return undefined;
-  }
-
-  const preferredWorkerId = placement?.preferredWorkerId?.trim();
-  if (preferredWorkerId) {
-    return preferredWorkerId;
-  }
-
-  const ownerWorkerId = placement?.ownerWorkerId?.trim();
-  if (ownerWorkerId) {
-    return ownerWorkerId;
-  }
-
-  return undefined;
-}
-
-interface PlacementAwareSessionRunQueueLike {
-  enqueue(
-    sessionId: string,
-    runId: string,
-    input?: { priority?: "normal" | "subagent" | undefined; preferredWorkerId?: string | undefined }
-  ): Promise<void>;
-  claimNextSession(
-    timeoutMs?: number | undefined,
-    input?: { workerId?: string | undefined; runtimeInstanceId?: string | undefined }
-  ): Promise<string | undefined>;
-  readyQueueLength(): Promise<number>;
-  inspectReadyQueue(nowMs?: number | undefined): Promise<{
-    length: number;
-    subagentLength: number;
-    oldestReadyAgeMs: number;
-    averageReadyAgeMs: number;
-  }>;
-  tryAcquireSessionLock(sessionId: string, token: string, ttlMs: number): Promise<boolean>;
-  renewSessionLock(sessionId: string, token: string, ttlMs: number): Promise<boolean>;
-  releaseSessionLock(sessionId: string, token: string): Promise<boolean>;
-  peekRun(sessionId: string): Promise<string | undefined>;
-  dequeueRun(sessionId: string): Promise<string | undefined>;
-  requeueSessionIfPending?(sessionId: string, input?: { preferredWorkerId?: string | undefined }): Promise<boolean>;
-  getSchedulingPressure?(): Promise<SessionRunQueuePressure>;
-  getReadySessionCount?(): Promise<number>;
-  ping(): Promise<boolean>;
-  close(): Promise<void>;
-}
-
-export function createPlacementAwareSessionRunQueue<TQueue extends PlacementAwareSessionRunQueueLike>(options: {
-  queue: TQueue;
-  runRepository: {
-    getById(runId: string): Promise<{ workspaceId: string } | null>;
-  };
-  workspacePlacementRegistry?: {
-    getByWorkspaceId?(workspaceId: string): Promise<{
-      state?: "unassigned" | "active" | "idle" | "draining" | "evicted" | undefined;
-      ownerId?: string | undefined;
-      ownerWorkerId?: string | undefined;
-      preferredWorkerId?: string | undefined;
-    } | undefined>;
-  } | undefined;
-}): TQueue {
-  const queue = options.queue;
-  const wrappedQueue: PlacementAwareSessionRunQueueLike = {
-    async enqueue(
-      sessionId: string,
-      runId: string,
-      input?: { priority?: "normal" | "subagent" | undefined; preferredWorkerId?: string | undefined }
-    ) {
-      let preferredWorkerId = input?.preferredWorkerId?.trim();
-
-      if (!preferredWorkerId && options.workspacePlacementRegistry?.getByWorkspaceId) {
-        const run = await options.runRepository.getById(runId);
-        if (run?.workspaceId) {
-          const placement = await options.workspacePlacementRegistry.getByWorkspaceId(run.workspaceId);
-          preferredWorkerId = selectPlacementPreferredWorkerId(placement);
-        }
-      }
-
-      await queue.enqueue(sessionId, runId, {
-        ...input,
-        ...(preferredWorkerId ? { preferredWorkerId } : {})
-      });
-    },
-    claimNextSession(timeoutMs, input) {
-      return queue.claimNextSession(timeoutMs, input);
-    },
-    readyQueueLength() {
-      return queue.readyQueueLength();
-    },
-    inspectReadyQueue(nowMs) {
-      return queue.inspectReadyQueue(nowMs);
-    },
-    tryAcquireSessionLock(sessionId, token, ttlMs) {
-      return queue.tryAcquireSessionLock(sessionId, token, ttlMs);
-    },
-    renewSessionLock(sessionId, token, ttlMs) {
-      return queue.renewSessionLock(sessionId, token, ttlMs);
-    },
-    releaseSessionLock(sessionId, token) {
-      return queue.releaseSessionLock(sessionId, token);
-    },
-    peekRun(sessionId) {
-      return queue.peekRun(sessionId);
-    },
-    dequeueRun(sessionId) {
-      return queue.dequeueRun(sessionId);
-    },
-    ...(queue.requeueSessionIfPending
-      ? {
-          requeueSessionIfPending(sessionId: string, input?: { preferredWorkerId?: string | undefined }) {
-            return queue.requeueSessionIfPending!(sessionId, input);
-          }
-        }
-      : {}),
-    ...(queue.getSchedulingPressure
-      ? {
-          getSchedulingPressure() {
-            return queue.getSchedulingPressure!();
-          }
-        }
-      : {}),
-    ...(queue.getReadySessionCount
-      ? {
-          getReadySessionCount() {
-            return queue.getReadySessionCount!();
-          }
-        }
-      : {}),
-    ping() {
-      return queue.ping();
-    },
-    close() {
-      return queue.close();
-    }
-  };
-
-  return wrappedQueue as TQueue;
-}
+export { createPlacementAwareSessionRunQueue } from "./bootstrap/placement-aware-session-run-queue.js";
 
 function ownerBaseUrlMatches(left: string | undefined, right: string | undefined): boolean {
   const normalizedLeft = left?.trim().replace(/\/+$/u, "");
@@ -430,62 +198,6 @@ export interface BootstrapOptions {
         workspaceMaterializationManager?: WorkspaceMaterializationManager | undefined;
       }) => Promise<SandboxHost | undefined> | SandboxHost | undefined)
     | undefined;
-}
-
-function parsePositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw || raw.trim().length === 0) {
-    return fallback;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function parseOptionalPositiveIntEnv(name: string): number | undefined {
-  const raw = process.env[name];
-  if (!raw || raw.trim().length === 0) {
-    return undefined;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function parsePositiveIntEnvWithMin(name: string, fallback: number, minimum: number): number {
-  return Math.max(minimum, parsePositiveIntEnv(name, fallback));
-}
-
-function parseNonNegativeIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw || raw.trim().length === 0) {
-    return fallback;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-function parseBooleanEnv(name: string, fallback: boolean): boolean {
-  const raw = process.env[name]?.trim().toLowerCase();
-  if (!raw) {
-    return fallback;
-  }
-
-  if (["1", "true", "yes", "on"].includes(raw)) {
-    return true;
-  }
-
-  if (["0", "false", "no", "off"].includes(raw)) {
-    return false;
-  }
-
-  return fallback;
-}
-
-export function resolveObjectStorageMirrorBlockingInit(): boolean {
-  const latencyFirst = parseBooleanEnv("OAH_LATENCY_FIRST_PROFILE", false);
-  return parseBooleanEnv("OAH_OBJECT_STORAGE_MIRROR_BLOCKING_INIT", !latencyFirst);
 }
 
 export function resolveRuntimeUploadCacheDir(paths: Pick<ServerConfig["paths"], "workspace_dir" | "runtime_state_dir">): string {
@@ -586,42 +298,6 @@ async function resolveRuntimeSourceDirForBootstrap(
   }
 
   return paths.runtime_dir;
-}
-
-export function resolveWorkspacePrewarmConfig(): { enabled: boolean; delayMs: number; coalesceWindowMs: number } {
-  const latencyFirst = parseBooleanEnv("OAH_LATENCY_FIRST_PROFILE", false);
-  return {
-    enabled: parseBooleanEnv("OAH_WORKSPACE_PREWARM_ENABLED", true),
-    delayMs: parseNonNegativeIntEnv("OAH_WORKSPACE_PREWARM_DELAY_MS", latencyFirst ? 250 : 0),
-    coalesceWindowMs: parseNonNegativeIntEnv("OAH_WORKSPACE_PREWARM_COALESCE_MS", latencyFirst ? 1_000 : 0)
-  };
-}
-
-export function resolveWorkspaceMaterializationConfig(
-  config: Pick<ServerConfig, "workspace">
-): { idleTtlMs: number; maintenanceIntervalMs: number } {
-  return {
-    idleTtlMs: parsePositiveIntEnv(
-      "OAH_WORKSPACE_MATERIALIZATION_IDLE_TTL_MS",
-      config.workspace?.materialization?.idle_ttl_ms ?? 900_000
-    ),
-    maintenanceIntervalMs: parsePositiveIntEnv(
-      "OAH_WORKSPACE_MATERIALIZATION_MAINTENANCE_INTERVAL_MS",
-      config.workspace?.materialization?.maintenance_interval_ms ?? 5_000
-    )
-  };
-}
-
-export function resolveWorkspaceRegistryPollingConfig(): { enabled: boolean; intervalMs: number } {
-  const latencyFirst = parseBooleanEnv("OAH_LATENCY_FIRST_PROFILE", false);
-  const intervalMs = parseNonNegativeIntEnv(
-    "OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS",
-    latencyFirst ? 2_000 : 15_000
-  );
-  return {
-    enabled: intervalMs > 0,
-    intervalMs
-  };
 }
 
 function parseStaleRunRecoveryStrategyEnv(

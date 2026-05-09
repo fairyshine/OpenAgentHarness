@@ -8,7 +8,6 @@ import {
   healthReportSchema,
   readinessReportSchema,
   systemProfileSchema,
-  type Message,
   type MessageAccepted,
   type MessagePage,
   type ModelGenerateResponse,
@@ -25,28 +24,20 @@ import {
 } from "@oah/api-contracts";
 
 import {
-  SERVICE_SCOPE_ALL,
-  SERVICE_SCOPE_DEFAULT,
   buildRuntimeConsoleEntries,
   buildMessageRecord,
   buildUrl,
   contentToolRefs,
   consumeSse,
-  createHttpRequestError,
   downloadJsonFile,
-  hasActiveRunForSessionTree,
   hasDisplayableRunMessages,
   inferCompletedMessageRole,
   isNotFoundError,
   isRecord,
   isTerminalRunEvent,
   isTerminalRunStatus,
-  normalizeServiceName,
-  normalizeServiceScope,
   normalizeMessageContent,
-  readJsonResponse,
   sanitizeFileSegment,
-  serviceScopeLabel,
   serviceScopeMatches,
   toErrorSummary,
   toErrorMessage,
@@ -65,9 +56,11 @@ import {
   type SseFrame,
   type SystemProfileResponse
 } from "./support";
-import { buildAiSdkLikeRequest, buildAiSdkLikeStoredMessages } from "./primitives";
 import { useNavigationActions } from "./use-navigation-actions";
 import { buildRuntimeViewModel } from "./engine-view-model";
+import { appControllerRequest, listAllSessionMessages } from "./app-controller-request";
+import { buildSessionTraceExportPayload } from "./session-trace-export";
+import { useSidebarDerivedState } from "./use-sidebar-derived-state";
 import { useNavigationState } from "./use-navigation-state";
 import { useStorageController } from "./use-storage-controller";
 import { useWorkspaceFileManager } from "./use-workspace-file-manager";
@@ -324,106 +317,31 @@ export function useAppController() {
   const shouldAutoFollowConversationRef = useRef(true);
   const selectedRunIdValue = selectedRunId.trim();
   const [sidebarSessionRunsById, setSidebarSessionRunsById] = useState<Record<string, Run[]>>({});
-  const normalizedServiceScope = useMemo(() => normalizeServiceScope(serviceScope), [serviceScope]);
-  const serviceFilteredWorkspaces = useMemo(
-    () => orderedSavedWorkspaces.filter((entry) => serviceScopeMatches(normalizedServiceScope, entry.serviceName)),
-    [normalizedServiceScope, orderedSavedWorkspaces]
-  );
-  const knownServiceNames = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          [
-            ...orderedSavedWorkspaces.map((entry) => normalizeServiceName(entry.serviceName)),
-            normalizeServiceName(workspace?.serviceName),
-            normalizeServiceName(normalizedServiceScope)
-          ].filter((entry): entry is string => Boolean(entry))
-        )
-      ).sort((left, right) => left.localeCompare(right)),
-    [normalizedServiceScope, orderedSavedWorkspaces, workspace?.serviceName]
-  );
-  const serviceScopeOptions = useMemo(
-    () => [
-      {
-        value: SERVICE_SCOPE_ALL,
-        label: serviceScopeLabel(SERVICE_SCOPE_ALL)
-      },
-      {
-        value: SERVICE_SCOPE_DEFAULT,
-        label: serviceScopeLabel(SERVICE_SCOPE_DEFAULT)
-      },
-      ...knownServiceNames.map((entry) => ({
-        value: entry,
-        label: serviceScopeLabel(entry)
-      }))
-    ],
-    [knownServiceNames]
-  );
-  const selectedServiceScopeLabel = useMemo(() => serviceScopeLabel(normalizedServiceScope), [normalizedServiceScope]);
-  const workspaceRuntimeFilterValue = workspaceRuntimeFilter.trim();
-  const workspaceRuntimeFilterOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          [
-            ...workspaceRuntimes,
-            ...serviceFilteredWorkspaces.map((entry) => entry.runtime ?? ""),
-            workspaceRuntimeFilterValue
-          ]
-            .map((entry) => entry.trim())
-            .filter((entry) => entry.length > 0)
-        )
-      ).sort((left, right) => left.localeCompare(right)),
-    [serviceFilteredWorkspaces, workspaceRuntimeFilterValue, workspaceRuntimes]
-  );
-  const filteredSavedWorkspaces = useMemo(
-    () =>
-      workspaceRuntimeFilterValue
-        ? serviceFilteredWorkspaces.filter((entry) => (entry.runtime ?? "").trim() === workspaceRuntimeFilterValue)
-        : serviceFilteredWorkspaces,
-    [serviceFilteredWorkspaces, workspaceRuntimeFilterValue]
-  );
-  const filteredSavedSessionsCount = useMemo(
-    () =>
-      filteredSavedWorkspaces.reduce((count, entry) => count + (sessionsByWorkspaceId.get(entry.id)?.length ?? 0), 0),
-    [filteredSavedWorkspaces, sessionsByWorkspaceId]
-  );
-  const visibleSidebarSessionIds = useMemo(() => {
-    const ids: string[] = [];
-    for (const workspaceEntry of filteredSavedWorkspaces) {
-      for (const sessionEntry of sessionsByWorkspaceId.get(workspaceEntry.id) ?? []) {
-        ids.push(sessionEntry.id);
-      }
-    }
-    return ids;
-  }, [filteredSavedWorkspaces, sessionsByWorkspaceId]);
-  const visibleSidebarSessionKey = useMemo(() => visibleSidebarSessionIds.join("\n"), [visibleSidebarSessionIds]);
-  const sidebarSessionRuns = useMemo(() => {
-    const byRunId = new Map<string, Run>();
-
-    for (const sessionRun of Object.values(sidebarSessionRunsById).flat()) {
-      byRunId.set(sessionRun.id, sessionRun);
-    }
-
-    for (const sessionRun of sessionRuns) {
-      byRunId.set(sessionRun.id, sessionRun);
-    }
-
-    return Array.from(byRunId.values());
-  }, [sessionRuns, sidebarSessionRunsById]);
-  const activeWorkspaceSessions = useMemo(() => {
-    const activeSessionId = session?.id?.trim();
-    const activeWorkspaceId = session?.workspaceId?.trim();
-    if (!activeSessionId || !activeWorkspaceId) {
-      return [];
-    }
-
-    return sessionsByWorkspaceId.get(activeWorkspaceId) ?? [];
-  }, [session?.id, session?.workspaceId, sessionsByWorkspaceId]);
-  const hasActiveSessionRun = useMemo(
-    () => hasActiveRunForSessionTree(sessionId, activeWorkspaceSessions, sidebarSessionRuns),
-    [activeWorkspaceSessions, sessionId, sidebarSessionRuns]
-  );
+  const {
+    normalizedServiceScope,
+    serviceScopeOptions,
+    selectedServiceScopeLabel,
+    workspaceRuntimeFilterValue,
+    workspaceRuntimeFilterOptions,
+    filteredSavedWorkspaces,
+    filteredSavedSessionsCount,
+    visibleSidebarSessionIds,
+    visibleSidebarSessionKey,
+    sidebarSessionRuns,
+    activeWorkspaceSessions,
+    hasActiveSessionRun
+  } = useSidebarDerivedState({
+    serviceScope,
+    workspaceRuntimeFilter,
+    orderedSavedWorkspaces,
+    sessionsByWorkspaceId,
+    workspace,
+    workspaceRuntimes,
+    session,
+    sessionId,
+    sessionRuns,
+    sidebarSessionRunsById
+  });
   const queuedMessageIds = useMemo(() => new Set(sessionQueuedRuns.map((item) => item.messageId)), [sessionQueuedRuns]);
   const runtimeViewModel = useMemo(
     () =>
@@ -482,24 +400,7 @@ export function useAppController() {
   }, [activeError, events, isConsoleVisible]);
 
   async function request<T>(path: string, init?: RequestInit, options?: { auth?: boolean }) {
-    const headers = new Headers(init?.headers);
-    const authRequired = options?.auth ?? true;
-    const token = connection.token.trim();
-
-    if (authRequired && token) {
-      headers.set("authorization", `Bearer ${token}`);
-    }
-
-    const response = await fetch(buildUrl(connection.baseUrl, path), {
-      ...init,
-      headers
-    });
-
-    if (!response.ok) {
-      throw await createHttpRequestError(response);
-    }
-
-    return readJsonResponse<T>(response);
+    return appControllerRequest<T>(connection, path, init, options);
   }
 
   const clearActiveError = useEffectEvent(() => {
@@ -652,89 +553,19 @@ export function useAppController() {
     }
   });
 
-  async function listAllSessionMessages(targetSessionId: string): Promise<Message[]> {
-    let cursor: string | undefined;
-    let allMessages: Message[] = [];
-
-    while (true) {
-      const page = await request<MessagePage>(buildMessagePagePath(targetSessionId, { cursor, direction: "forward" }));
-      allMessages = mergeSessionMessages(allMessages, page.items);
-      if (!page.nextCursor) {
-        return allMessages;
-      }
-      cursor = page.nextCursor;
-    }
-  }
-
   async function downloadSessionTrace() {
     const targetSessionId = session?.id?.trim();
-    const exportMessages = targetSessionId ? await listAllSessionMessages(targetSessionId) : messages;
+    const exportMessages = targetSessionId ? await listAllSessionMessages({ request, sessionId: targetSessionId }) : messages;
     const selectedOrLatestRunId = run?.id ?? (selectedRunIdValue || "latest");
-    const latestRequest = buildAiSdkLikeRequest(latestModelCallTrace);
-    const exportPayload = {
-      format: "oah.ai-sdk-session.v2",
-      exportedAt: new Date().toISOString(),
-      basic: {
-        workspace: workspace
-          ? {
-              id: workspace.id,
-              name: workspace.name,
-              kind: workspace.kind,
-              rootPath: workspace.rootPath,
-              readOnly: workspace.readOnly
-            }
-          : null,
-        session: session
-          ? {
-              id: session.id,
-              title: session.title ?? currentSessionName,
-              workspaceId: session.workspaceId,
-              modelRef: session.modelRef,
-              agentName: session.agentName,
-              activeAgentName: session.activeAgentName,
-              status: session.status,
-              createdAt: session.createdAt,
-              updatedAt: session.updatedAt
-            }
-          : null,
-        run: run
-          ? {
-              id: run.id,
-              sessionId: run.sessionId,
-              parentRunId: run.parentRunId,
-              agentName: run.agentName,
-              effectiveAgentName: run.effectiveAgentName,
-              status: run.status,
-              startedAt: run.startedAt,
-              heartbeatAt: run.heartbeatAt,
-              endedAt: run.endedAt
-            }
-          : {
-              id: selectedOrLatestRunId
-            },
-        model: latestRequest
-          ? {
-              model: latestRequest.model,
-              canonicalModelRef: latestRequest.canonicalModelRef,
-              provider: latestRequest.provider,
-              ...(latestRequest.temperature !== undefined ? { temperature: latestRequest.temperature } : {}),
-              ...(latestRequest.maxTokens !== undefined ? { maxTokens: latestRequest.maxTokens } : {})
-            }
-          : null
-      },
-      tools: latestRequest
-        ? {
-            definitions: latestRequest.tools,
-            activeTools: latestRequest.activeTools,
-            toolServers: latestRequest.toolServers
-          }
-        : {
-            definitions: {},
-            activeTools: [],
-            toolServers: []
-          },
-      Messages: buildAiSdkLikeStoredMessages(exportMessages)
-    };
+    const exportPayload = buildSessionTraceExportPayload({
+      messages: exportMessages,
+      workspace,
+      session,
+      run,
+      selectedOrLatestRunId,
+      latestModelCallTrace,
+      currentSessionName
+    });
 
     const sessionSegment = sanitizeFileSegment(session?.title ?? session?.id ?? currentSessionName);
     const runSegment = sanitizeFileSegment(selectedOrLatestRunId);
