@@ -248,10 +248,13 @@ export class SessionRecordService {
 
   async listSessionRuns(sessionId: string, pageSize = 100, cursor?: string): Promise<RunListResult> {
     await this.getSession(sessionId);
-    const runs = await this.#runRepository.listBySessionId(sessionId);
     const startIndex = parseCursor(cursor);
-    const items = runs.slice(startIndex, startIndex + pageSize);
-    const nextCursor = startIndex + pageSize < runs.length ? String(startIndex + pageSize) : undefined;
+    const runs = this.#runRepository.listPageBySessionId
+      ? await this.#runRepository.listPageBySessionId(sessionId, pageSize + 1, cursor)
+      : (await this.#runRepository.listBySessionId(sessionId)).slice(startIndex, startIndex + pageSize + 1);
+    const hasMore = runs.length > pageSize;
+    const items = hasMore ? runs.slice(0, pageSize) : runs;
+    const nextCursor = hasMore ? String(startIndex + pageSize) : undefined;
 
     return nextCursor === undefined ? { items } : { items, nextCursor };
   }

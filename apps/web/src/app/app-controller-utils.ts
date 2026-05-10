@@ -2,7 +2,8 @@ import type { RunStep, Session, SessionEventContract, SessionQueuedRun } from "@
 
 import { compareSavedSessionsByRecency, isRecord, type SavedSessionRecord } from "./support";
 
-const MESSAGE_PAGE_SIZE = 120;
+const MESSAGE_PAGE_SIZE = 48;
+const LIVE_MESSAGE_PAGE_SIZE = 24;
 
 export function buildMessagePagePath(
   sessionId: string,
@@ -21,6 +22,10 @@ export function buildMessagePagePath(
   }
 
   return `/api/v1/sessions/${sessionId}/messages?${query.toString()}`;
+}
+
+export function buildLiveMessagePagePath(sessionId: string) {
+  return buildMessagePagePath(sessionId, { pageSize: LIVE_MESSAGE_PAGE_SIZE });
 }
 
 export function mergeMessageCursor(current: string | null, incoming: string | undefined) {

@@ -453,6 +453,18 @@ export class PostgresRunRepository implements RunRepository {
     return rows.map(toRun);
   }
 
+  async listPageBySessionId(sessionId: string, pageSize: number, cursor?: string): Promise<Run[]> {
+    const startIndex = parseCursor(cursor);
+    const rows = await this.db
+      .select()
+      .from(runs)
+      .where(eq(runs.sessionId, sessionId))
+      .orderBy(desc(runs.createdAt), desc(runs.id))
+      .limit(pageSize)
+      .offset(startIndex);
+    return rows.map(toRun);
+  }
+
   async hasActiveRunForSession(sessionId: string, excludedRunIds: ReadonlySet<string> = new Set()): Promise<boolean> {
     const predicates = [
       eq(runs.sessionId, sessionId),

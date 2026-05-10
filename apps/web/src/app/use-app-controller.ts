@@ -168,6 +168,7 @@ export function useAppController() {
   const lastCursorRef = useRef<string | undefined>(undefined);
   const messageRefreshTimerRef = useRef<number | undefined>(undefined);
   const runRefreshTimerRef = useRef<number | undefined>(undefined);
+  const sessionRunsRefreshTimerRef = useRef<number | undefined>(undefined);
   const workspaceIndexRefreshTimerRef = useRef<number | undefined>(undefined);
   const runPollingTimerRef = useRef<number | undefined>(undefined);
   const lastExplicitSessionRefreshRef = useRef<{ sessionId: string; at: number } | null>(null);
@@ -349,6 +350,7 @@ export function useAppController() {
     lastCursorRef.current = undefined;
     window.clearTimeout(messageRefreshTimerRef.current);
     window.clearTimeout(runRefreshTimerRef.current);
+    window.clearTimeout(sessionRunsRefreshTimerRef.current);
     window.clearTimeout(workspaceIndexRefreshTimerRef.current);
     window.clearTimeout(runPollingTimerRef.current);
 
@@ -476,6 +478,13 @@ export function useAppController() {
     messageRefreshTimerRef.current = window.setTimeout(() => {
       void refreshMessages(true);
     }, 120);
+  }
+
+  function scheduleSessionRunsRefresh() {
+    window.clearTimeout(sessionRunsRefreshTimerRef.current);
+    sessionRunsRefreshTimerRef.current = window.setTimeout(() => {
+      void refreshSessionRuns(true, { includeSteps: "selected" });
+    }, 320);
   }
 
   function scheduleRunRefresh(runId: string) {
@@ -653,6 +662,7 @@ export function useAppController() {
       streamAbortRef.current?.abort();
       window.clearTimeout(messageRefreshTimerRef.current);
       window.clearTimeout(runRefreshTimerRef.current);
+      window.clearTimeout(sessionRunsRefreshTimerRef.current);
       window.clearTimeout(workspaceIndexRefreshTimerRef.current);
       window.clearTimeout(runPollingTimerRef.current);
     };
@@ -719,7 +729,7 @@ export function useAppController() {
         return;
       }
       void navigationActions.refreshSession(sessionId, true);
-      void refreshSessionRuns(true, { includeSteps: "selected" });
+      scheduleSessionRunsRefresh();
       return;
     }
 

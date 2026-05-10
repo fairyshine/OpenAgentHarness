@@ -680,13 +680,30 @@ export function useNavigationActions(params: NavigationActionParams) {
     const switchingSession = nextSessionId !== params.navigation.sessionId;
 
     if (switchingSession) {
+      const cachedSession = params.navigation.savedSessions.find((entry) => entry.id === nextSessionId);
       params.runtime.streamAbortRef.current?.abort();
       params.runtime.lastCursorRef.current = undefined;
       window.clearTimeout(params.runtime.runPollingTimerRef.current);
       startTransition(() => {
         params.runtime.setStreamState("idle");
         params.navigation.setSessionId(nextSessionId);
-        params.navigation.setSession(null);
+        params.navigation.setSession(
+          cachedSession
+            ? {
+                id: cachedSession.id,
+                workspaceId: cachedSession.workspaceId,
+                subjectRef: "",
+                agentName: cachedSession.agentName,
+                activeAgentName: cachedSession.agentName,
+                status: "active",
+                title: cachedSession.title,
+                modelRef: cachedSession.modelRef,
+                createdAt: cachedSession.createdAt,
+                updatedAt: cachedSession.lastRunAt ?? cachedSession.createdAt,
+                ...(cachedSession.parentSessionId ? { parentSessionId: cachedSession.parentSessionId } : {})
+              }
+            : null
+        );
         params.runtime.setMessages([]);
         params.runtime.setEvents([]);
         params.runtime.setSelectedRunId("");
@@ -715,7 +732,9 @@ export function useNavigationActions(params: NavigationActionParams) {
       expandWorkspaceInSidebar(nextWorkspaceId);
       touchSavedWorkspace(nextWorkspaceId);
       rememberSession(sessionResponse);
-      void refreshWorkspace(nextWorkspaceId, true);
+      window.setTimeout(() => {
+        void refreshWorkspace(nextWorkspaceId, true);
+      }, 250);
       params.setActivity(`Session ${nextSessionId} 已加载`);
       if (!quiet) {
         params.setErrorMessage("");

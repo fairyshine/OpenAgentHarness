@@ -247,6 +247,11 @@ export class InMemoryRunRepository implements RunRepository {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
   }
 
+  async listPageBySessionId(sessionId: string, pageSize: number, cursor?: string): Promise<Run[]> {
+    const startIndex = parseCursor(cursor);
+    return (await this.listBySessionId(sessionId)).slice(startIndex, startIndex + pageSize);
+  }
+
   async hasActiveRunForSession(sessionId: string, excludedRunIds: ReadonlySet<string> = new Set()): Promise<boolean> {
     return [...this.#items.values()].some(
       (run) =>

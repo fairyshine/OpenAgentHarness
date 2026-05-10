@@ -9,7 +9,7 @@ import {
   type ConnectionSettings,
   type LiveConversationMessageRecord
 } from "./support";
-import { buildMessagePagePath, mergeRunStepsForRun } from "./app-controller-utils";
+import { buildLiveMessagePagePath, mergeRunStepsForRun } from "./app-controller-utils";
 
 const COMPLETED_RUN_RESULT_POLL_LIMIT = 5;
 
@@ -57,7 +57,7 @@ function useSelectedRunPolling(params: {
         const [nextRun, nextSteps, nextMessages] = await Promise.all([
           params.request<Run>(`/api/v1/runs/${params.selectedRunIdValue}`),
           params.request<{ items: RunStep[] }>(`/api/v1/runs/${params.selectedRunIdValue}/steps?pageSize=200`),
-          params.request<MessagePage>(buildMessagePagePath(params.sessionId))
+          params.request<MessagePage>(buildLiveMessagePagePath(params.sessionId))
         ]);
 
         if (cancelled) {

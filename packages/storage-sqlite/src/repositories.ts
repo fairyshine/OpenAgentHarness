@@ -600,6 +600,17 @@ export class SQLiteRunRepository implements RunRepository {
     return rows.map((row) => parseJson<Run>(row.payload));
   }
 
+  async listPageBySessionId(sessionId: string, pageSize: number, cursor?: string): Promise<Run[]> {
+    const handle = await this.#coordinator.getSessionHandle(sessionId);
+    const startIndex = parseCursor(cursor);
+    const rows = coerceRows<JsonRow>(
+      handle.db
+        .prepare("select payload from runs where session_id = ? order by created_at desc, id desc limit ? offset ?")
+        .all(sessionId, pageSize, startIndex)
+    );
+    return rows.map((row) => parseJson<Run>(row.payload));
+  }
+
   async hasActiveRunForSession(sessionId: string, excludedRunIds: ReadonlySet<string> = new Set()): Promise<boolean> {
     const handle = await this.#coordinator.getSessionHandle(sessionId);
     const excluded = Array.from(excludedRunIds);
