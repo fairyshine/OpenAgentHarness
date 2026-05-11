@@ -162,12 +162,27 @@ function resolveNonLoopbackHost(): string | undefined {
 }
 
 const proxyTarget = resolveProxyTarget();
-const proxyAuthorizationHeader = process.env.OAH_TOKEN?.trim()
-  ? { authorization: `Bearer ${process.env.OAH_TOKEN.trim()}` }
-  : undefined;
+const proxyAuthorizationHeader = resolveProxyAuthorizationHeader();
+
+function resolveProxyAuthorizationHeader(): { authorization: string } | undefined {
+  const token = process.env.OAH_TOKEN?.trim() || readLocalDaemonToken();
+  return token ? { authorization: `Bearer ${token}` } : undefined;
+}
+
+function readLocalDaemonToken(): string | undefined {
+  const oahHome = path.resolve(process.env.OAH_HOME?.trim() || path.join(os.homedir(), ".openagentharness"));
+  try {
+    return fs.readFileSync(path.join(oahHome, "run", "token"), "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    chunkSizeWarningLimit: 600
+  },
   resolve: {
     alias: {
       "@": workspacePath("./src"),

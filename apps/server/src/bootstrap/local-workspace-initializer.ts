@@ -49,6 +49,7 @@ export function createLocalWorkspaceInitializer(input: {
           runtimeDir,
           runtimeName: request.runtime,
           rootPath: workspaceRoot,
+          workspaceName: request.name,
           platformToolDir: input.config.paths.tool_dir,
           platformSkillDir: input.config.paths.skill_dir,
           agentsMd: request.agentsMd,

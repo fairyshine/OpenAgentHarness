@@ -763,9 +763,6 @@ export const ConversationMessageRow = memo(function ConversationMessageRow(props
             onInspectRun={onInspectRun}
             {...(onAnswerAskUserQuestion ? { onAnswerAskUserQuestion } : {})}
           />
-          {isStreaming ? (
-            <span className="mt-1 inline-block h-4 w-0.5 animate-pulse bg-current opacity-60" />
-          ) : null}
         </div>
         <div
           className={`mt-1.5 flex min-h-5 flex-wrap items-center gap-2 text-[10px] font-medium text-muted-foreground/50 max-md:visible max-md:opacity-100 md:invisible md:opacity-0 md:pointer-events-none md:group-hover/message:visible md:group-hover/message:opacity-100 md:group-hover/message:pointer-events-auto md:group-focus-within/message:visible md:group-focus-within/message:opacity-100 md:group-focus-within/message:pointer-events-auto ${isHumanUser ? "justify-end" : ""}`}

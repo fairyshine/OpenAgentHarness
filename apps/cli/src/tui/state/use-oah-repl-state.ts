@@ -179,12 +179,12 @@ export function useOahReplState(
         if (sessionStartupMode === "new") {
           await createSessionForWorkspace(workspace, undefined, { noticePrefix: "Created fresh" });
         } else if (nextSessions[0]) {
-          const session = nextSessions[0];
+          const session = nextSessions.find((item) => !item.parentSessionId) ?? nextSessions[0]!;
           const activity = formatSessionActivity(session, latestRuns[session.id]);
           setCurrentSession(session);
           setNotice({ level: "info", message: `Resumed ${activity.label} session ${shortId(session.id)} (${activity.detail})` });
         } else {
-          await createSessionForWorkspace(workspace, undefined, { noticePrefix: "Created first" });
+          setNotice({ level: "info", message: "No sessions yet. Type a message or use /new-session to create one." });
         }
         setDialog(null);
       } catch (error) {
@@ -352,12 +352,20 @@ export function useOahReplState(
         openWorkspaceCreator();
         return;
       }
-      if (!currentSession) {
-        setNotice({ level: "error", message: "Create or select a session first." });
-        return;
-      }
-
       setComposerValue("");
+      let targetSession = currentSession;
+      if (!targetSession) {
+        if (!currentWorkspace) {
+          setNotice({ level: "error", message: "Select a workspace first." });
+          return;
+        }
+        try {
+          targetSession = await createSessionForWorkspace(currentWorkspace, undefined, { noticePrefix: "Created" });
+        } catch (error) {
+          setError(error);
+          return;
+        }
+      }
       const optimistic: ChatLine = {
         id: `pending:${Date.now()}`,
         role: "user",
@@ -366,15 +374,15 @@ export function useOahReplState(
       };
       setMessages((current) => [...current, optimistic]);
       try {
-        const accepted = await client.sendMessage(currentSession.id, content);
+        const accepted = await client.sendMessage(targetSession.id, content);
         setNotice({ level: "info", message: `Queued run ${shortId(accepted.runId)}` });
-        void refreshSession(currentSession);
+        void refreshSession(targetSession);
       } catch (error) {
         setMessages((current) => current.filter((line) => line.id !== optimistic.id));
         setError(error);
       }
     },
-    [client, currentSession, openWorkspaceCreator, refreshSession, setComposerValue, setError]
+    [client, createSessionForWorkspace, currentSession, currentWorkspace, openWorkspaceCreator, refreshSession, setComposerValue, setError]
   );
 
   useEffect(() => {

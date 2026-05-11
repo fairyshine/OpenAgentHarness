@@ -4,6 +4,7 @@ import type {
   Session,
   SessionPage,
   Workspace,
+  WorkspaceCatalog,
   WorkspaceRuntimeList
 } from "@oah/api-contracts";
 
@@ -21,6 +22,17 @@ import {
 } from "./support";
 import type { NavigationActionParams } from "./navigation-action-types";
 import { createNavigationStateActions } from "./navigation-state-actions";
+
+function scheduleDeferredIdleTask(callback: () => void, delayMs: number, timeoutMs: number) {
+  window.setTimeout(() => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(callback, { timeout: timeoutMs });
+      return;
+    }
+
+    callback();
+  }, delayMs);
+}
 
 export function useNavigationActions(params: NavigationActionParams) {
   const {
@@ -486,9 +498,14 @@ export function useNavigationActions(params: NavigationActionParams) {
           const currentById = new Map(current.map((entry) => [entry.id, entry]));
           return response.items.map((item) => {
             const existing = currentById.get(item.id);
+            const existingName = existing?.name.trim() ?? "";
+            const responseName = item.name.trim();
+            const responseLooksLikeManagedDirectoryName =
+              responseName === pathLeaf(item.rootPath) && /^ws_[a-f0-9]{32}$/i.test(responseName);
+            const name = existingName && responseLooksLikeManagedDirectoryName ? existingName : item.name;
             return {
               id: item.id,
-              name: item.name,
+              name,
               rootPath: item.rootPath,
               status: item.status,
               createdAt: item.createdAt,
@@ -634,6 +651,7 @@ export function useNavigationActions(params: NavigationActionParams) {
       });
 
       startTransition(() => {
+        params.navigation.activeWorkspaceIdRef.current = created.id;
         params.navigation.setWorkspaceId(created.id);
         params.runtime.setSelectedRunId("");
         params.runtime.setRun(null);
@@ -642,7 +660,11 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.navigation.setSessionId("");
         params.runtime.setMessages([]);
         params.runtime.setEvents([]);
+        params.runtime.setLiveMessagesByKey({});
+        params.runtime.setStreamState("idle");
         params.navigation.setWorkspace(created);
+        params.navigation.setCatalog(null);
+        params.navigation.setSavedSessions((current) => current.filter((entry) => entry.workspaceId !== created.id));
         params.navigation.setRecentWorkspaces((current) => addRecentId(current, created.id));
       });
       rememberWorkspace(created, {
@@ -664,8 +686,21 @@ export function useNavigationActions(params: NavigationActionParams) {
           : `Workspace ${created.name} 已创建 · ${created.id}`
       );
       params.setErrorMessage("");
-      void refreshWorkspace(created.id, true);
-      void refreshWorkspaceIndex(true);
+      void params.request<WorkspaceCatalog>(`/api/v1/workspaces/${created.id}/catalog`).then(
+        (catalog) => {
+          if (params.navigation.activeWorkspaceIdRef.current === created.id) {
+            startTransition(() => {
+              params.navigation.setCatalog(catalog);
+            });
+          }
+        },
+        () => {
+          // Catalog hydration is best-effort here; the workspace is already usable.
+        }
+      );
+      scheduleDeferredIdleTask(() => {
+        void refreshWorkspaceIndex(true);
+      }, 1_500, 5_000);
     } catch (error) {
       params.setErrorMessage(toErrorMessage(error));
     }
@@ -681,6 +716,7 @@ export function useNavigationActions(params: NavigationActionParams) {
 
     if (switchingSession) {
       const cachedSession = params.navigation.savedSessions.find((entry) => entry.id === nextSessionId);
+      params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: nextSessionId, at: Date.now() };
       params.runtime.streamAbortRef.current?.abort();
       params.runtime.lastCursorRef.current = undefined;
       window.clearTimeout(params.runtime.runPollingTimerRef.current);
@@ -732,9 +768,11 @@ export function useNavigationActions(params: NavigationActionParams) {
       expandWorkspaceInSidebar(nextWorkspaceId);
       touchSavedWorkspace(nextWorkspaceId);
       rememberSession(sessionResponse);
-      window.setTimeout(() => {
-        void refreshWorkspace(nextWorkspaceId, true);
-      }, 250);
+      if (workspaceChanged) {
+        window.setTimeout(() => {
+          void refreshWorkspace(nextWorkspaceId, true);
+        }, 250);
+      }
       params.setActivity(`Session ${nextSessionId} 已加载`);
       if (!quiet) {
         params.setErrorMessage("");
@@ -757,6 +795,58 @@ export function useNavigationActions(params: NavigationActionParams) {
       return;
     }
 
+    if (params.runtime.newEmptySessionIdRef.current?.startsWith("pending-session:")) {
+      return;
+    }
+
+    const pendingSessionId = `pending-session:${crypto.randomUUID()}`;
+    const pendingCreatedAt = new Date().toISOString();
+    const pendingSession: Session = {
+      id: pendingSessionId,
+      workspaceId: params.navigation.workspaceId,
+      subjectRef: "",
+      agentName: "",
+      activeAgentName: "",
+      status: "active",
+      title: "New session",
+      createdAt: pendingCreatedAt,
+      updatedAt: pendingCreatedAt
+    };
+
+    params.runtime.streamAbortRef.current?.abort();
+    params.runtime.activeSessionIdRef.current = pendingSessionId;
+    params.runtime.lastCursorRef.current = undefined;
+    params.runtime.newEmptySessionIdRef.current = pendingSessionId;
+    window.clearTimeout(params.runtime.runPollingTimerRef.current);
+    startTransition(() => {
+      params.navigation.setSession(pendingSession);
+      params.navigation.setSessionId(pendingSessionId);
+      params.navigation.setSavedSessions((current) =>
+        [
+          {
+            id: pendingSessionId,
+            workspaceId: params.navigation.workspaceId,
+            title: pendingSession.title,
+            agentName: pendingSession.activeAgentName,
+            createdAt: pendingCreatedAt,
+            lastOpenedAt: pendingCreatedAt
+          },
+          ...current.filter((entry) => entry.id !== pendingSessionId)
+        ].sort(compareSavedSessionsByRecency)
+      );
+      params.navigation.setRecentSessions((current) => addRecentId(current, pendingSessionId));
+      params.runtime.setStreamState("idle");
+      params.runtime.setMessages([]);
+      params.runtime.setEvents([]);
+      params.runtime.setSelectedRunId("");
+      params.runtime.setRun(null);
+      params.runtime.setRunSteps([]);
+      params.runtime.setLiveMessagesByKey({});
+    });
+    expandWorkspaceInSidebar(params.navigation.workspaceId);
+    params.setActivity("Session 正在创建…");
+    params.setErrorMessage("");
+
     try {
       const created = await params.request<Session>(`/api/v1/workspaces/${params.navigation.workspaceId}/sessions`, {
         method: "POST",
@@ -766,21 +856,23 @@ export function useNavigationActions(params: NavigationActionParams) {
         body: JSON.stringify({})
       });
 
-      params.runtime.streamAbortRef.current?.abort();
-      params.runtime.lastCursorRef.current = undefined;
-      window.clearTimeout(params.runtime.runPollingTimerRef.current);
+      if (params.runtime.activeSessionIdRef.current !== pendingSessionId) {
+        if (params.runtime.newEmptySessionIdRef.current === pendingSessionId) {
+          params.runtime.newEmptySessionIdRef.current = null;
+        }
+        params.navigation.setSavedSessions((current) => current.filter((entry) => entry.id !== pendingSessionId));
+        params.navigation.setRecentSessions((current) => current.filter((entry) => entry !== pendingSessionId));
+        rememberSession(created);
+        return;
+      }
+
+      params.runtime.activeSessionIdRef.current = created.id;
       startTransition(() => {
         params.navigation.setSession(created);
         params.navigation.setSessionId(created.id);
         params.navigation.setWorkspaceId(created.workspaceId);
-        params.navigation.setRecentSessions((current) => addRecentId(current, created.id));
-        params.runtime.setStreamState("idle");
-        params.runtime.setMessages([]);
-        params.runtime.setEvents([]);
-        params.runtime.setSelectedRunId("");
-        params.runtime.setRun(null);
-        params.runtime.setRunSteps([]);
-        params.runtime.setLiveMessagesByKey({});
+        params.navigation.setSavedSessions((current) => current.filter((entry) => entry.id !== pendingSessionId));
+        params.navigation.setRecentSessions((current) => addRecentId(current.filter((entry) => entry !== pendingSessionId), created.id));
       });
       rememberSession(created);
       touchSavedWorkspace(created.workspaceId);
@@ -790,6 +882,19 @@ export function useNavigationActions(params: NavigationActionParams) {
       params.setActivity(`Session ${created.id} 已创建`);
       params.setErrorMessage("");
     } catch (error) {
+      if (params.runtime.activeSessionIdRef.current === pendingSessionId) {
+        params.runtime.activeSessionIdRef.current = "";
+        params.runtime.newEmptySessionIdRef.current = null;
+        startTransition(() => {
+          params.navigation.setSession(null);
+          params.navigation.setSessionId("");
+          params.navigation.setSavedSessions((current) => current.filter((entry) => entry.id !== pendingSessionId));
+          params.navigation.setRecentSessions((current) => current.filter((entry) => entry !== pendingSessionId));
+          params.runtime.setMessages([]);
+          params.runtime.setEvents([]);
+          params.runtime.setLiveMessagesByKey({});
+        });
+      }
       params.setErrorMessage(toErrorMessage(error));
     }
   }

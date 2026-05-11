@@ -26,6 +26,19 @@ function workspaceDiscoveryKey(workspace: Pick<WorkspaceRecord, "kind" | "rootPa
   return `${workspace.kind}:${path.resolve(workspace.rootPath)}`;
 }
 
+function isManagedDirectoryWorkspaceName(workspace: Pick<WorkspaceRecord, "name" | "rootPath">): boolean {
+  const rootName = path.basename(path.resolve(workspace.rootPath));
+  return workspace.name === rootName && /^ws_[a-f0-9]{32}$/i.test(workspace.name);
+}
+
+function resolveReconciledWorkspaceName(discovered: WorkspaceRecord, persisted: WorkspaceRecord): string {
+  if (isManagedDirectoryWorkspaceName(persisted) && !isManagedDirectoryWorkspaceName(discovered)) {
+    return discovered.name;
+  }
+
+  return persisted.name;
+}
+
 export function isManagedWorkspace(
   workspace: Pick<WorkspaceRecord, "kind" | "rootPath">,
   paths: Pick<ServerConfig["paths"], "workspace_dir">
@@ -92,7 +105,7 @@ export function reconcileDiscoveredWorkspaces(
     return {
       ...workspace,
       id: persisted.id,
-      name: persisted.name,
+      name: resolveReconciledWorkspaceName(workspace, persisted),
       executionPolicy: persisted.executionPolicy,
       status: persisted.status,
       createdAt: persisted.createdAt,

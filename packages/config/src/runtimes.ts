@@ -320,7 +320,7 @@ export async function initializeWorkspaceFromRuntime(input: InitializeWorkspaceF
     await writeWorkspaceSkills(input.rootPath, input.skills);
   }
 
-  await updateWorkspaceRuntimeSetting(input.rootPath, input.runtimeName);
+  await updateWorkspaceRuntimeSetting(input.rootPath, input.runtimeName, input.workspaceName);
 }
 
 export async function applyWorkspaceRuntimeToExistingRoot(input: InitializeWorkspaceFromRuntimeInput): Promise<void> {

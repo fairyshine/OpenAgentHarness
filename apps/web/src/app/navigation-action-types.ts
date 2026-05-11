@@ -29,6 +29,7 @@ interface NavigationActionParams {
     workspaceDraft: WorkspaceDraft;
     setWorkspaceDraft: Dispatch<SetStateAction<WorkspaceDraft>>;
     workspaceId: string;
+    activeWorkspaceIdRef: MutableRefObject<string>;
     setWorkspaceId: Dispatch<SetStateAction<string>>;
     sessionId: string;
     setSessionId: Dispatch<SetStateAction<string>>;
@@ -60,6 +61,7 @@ interface NavigationActionParams {
     setLiveMessagesByKey: Dispatch<SetStateAction<Record<string, LiveConversationMessageRecord>>>;
     setStreamState: Dispatch<SetStateAction<"idle" | "connecting" | "listening" | "open" | "error">>;
     streamAbortRef: MutableRefObject<AbortController | null>;
+    activeSessionIdRef: MutableRefObject<string>;
     lastCursorRef: MutableRefObject<string | undefined>;
     runPollingTimerRef: MutableRefObject<number | undefined>;
     lastExplicitSessionRefreshRef: MutableRefObject<{ sessionId: string; at: number } | null>;

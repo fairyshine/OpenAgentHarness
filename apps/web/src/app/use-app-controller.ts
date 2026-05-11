@@ -165,12 +165,14 @@ export function useAppController() {
   const [sessionQueuedRuns, setSessionQueuedRuns] = useState<SessionQueuedRun[]>([]);
   const streamAbortRef = useRef<AbortController | null>(null);
   const activeSessionIdRef = useRef("");
+  const activeWorkspaceIdRef = useRef("");
   const lastCursorRef = useRef<string | undefined>(undefined);
   const messageRefreshTimerRef = useRef<number | undefined>(undefined);
   const runRefreshTimerRef = useRef<number | undefined>(undefined);
   const sessionRunsRefreshTimerRef = useRef<number | undefined>(undefined);
   const workspaceIndexRefreshTimerRef = useRef<number | undefined>(undefined);
   const runPollingTimerRef = useRef<number | undefined>(undefined);
+  const sessionQueueRefreshTimerRef = useRef<number | undefined>(undefined);
   const lastExplicitSessionRefreshRef = useRef<{ sessionId: string; at: number } | null>(null);
   const newEmptySessionIdRef = useRef<string | null>(null);
   const conversationThreadRef = useRef<HTMLDivElement | null>(null);
@@ -187,7 +189,6 @@ export function useAppController() {
     filteredSavedWorkspaces,
     filteredSavedSessionsCount,
     visibleSidebarSessionIds,
-    visibleSidebarSessionKey,
     sidebarSessionRuns,
     activeWorkspaceSessions,
     hasActiveSessionRun
@@ -203,6 +204,12 @@ export function useAppController() {
     sessionRuns,
     sidebarSessionRunsById
   });
+  const newEmptySessionId = newEmptySessionIdRef.current;
+  const sidebarRunRefreshSessionIds = useMemo(
+    () => (newEmptySessionId ? visibleSidebarSessionIds.filter((entry) => entry !== newEmptySessionId) : visibleSidebarSessionIds),
+    [newEmptySessionId, visibleSidebarSessionIds]
+  );
+  const sidebarRunRefreshSessionKey = useMemo(() => sidebarRunRefreshSessionIds.join("\n"), [sidebarRunRefreshSessionIds]);
   const queuedMessageIds = useMemo(() => new Set(sessionQueuedRuns.map((item) => item.messageId)), [sessionQueuedRuns]);
   const runtimeViewModel = useMemo(
     () =>
@@ -303,9 +310,11 @@ export function useAppController() {
   const { refreshSessionRuns, refreshSidebarSessionRuns, refreshRun, refreshRunSteps, refreshSessionQueue } =
     useSessionRunActions({
       sessionId,
+      newEmptySessionId: newEmptySessionIdRef.current,
       selectedRunId,
       activeSessionIdRef,
-      visibleSidebarSessionIds,
+      visibleSidebarSessionIds: sidebarRunRefreshSessionIds,
+      expandedSessionIds,
       savedSessions,
       sessionsByWorkspaceId,
       sidebarSessionRunsById,
@@ -382,6 +391,7 @@ export function useAppController() {
   }, [activeWorkspaceId, normalizedServiceScope, resetMessagePaging, savedWorkspaces, setCatalog, setSession, setSessionId, setWorkspace, setWorkspaceId, workspace]);
 
   const storageInspectionEnabled = systemProfile?.capabilities.storageInspection ?? true;
+  activeWorkspaceIdRef.current = activeWorkspaceId;
 
   useEffect(() => {
     if (!storageInspectionEnabled && surfaceMode === "storage") {
@@ -416,6 +426,7 @@ export function useAppController() {
       workspaceDraft,
       setWorkspaceDraft,
       workspaceId,
+      activeWorkspaceIdRef,
       setWorkspaceId,
       sessionId,
       setSessionId,
@@ -447,6 +458,7 @@ export function useAppController() {
       setLiveMessagesByKey,
       setStreamState,
       streamAbortRef,
+      activeSessionIdRef,
       lastCursorRef,
       runPollingTimerRef,
       lastExplicitSessionRefreshRef,
@@ -485,6 +497,13 @@ export function useAppController() {
     sessionRunsRefreshTimerRef.current = window.setTimeout(() => {
       void refreshSessionRuns(true, { includeSteps: "selected" });
     }, 320);
+  }
+
+  function scheduleSessionQueueRefresh() {
+    window.clearTimeout(sessionQueueRefreshTimerRef.current);
+    sessionQueueRefreshTimerRef.current = window.setTimeout(() => {
+      void refreshSessionQueue(true);
+    }, 260);
   }
 
   function scheduleRunRefresh(runId: string) {
@@ -625,7 +644,8 @@ export function useAppController() {
   useSessionEventStream({
     connection,
     sessionId,
-    sessionRecordId: newEmptySessionIdRef.current === sessionId ? undefined : session?.id,
+    sessionRecordId: session?.id,
+    enabled: newEmptySessionIdRef.current !== sessionId,
     streamRevision,
     streamAbortRef,
     lastCursorRef,
@@ -690,12 +710,25 @@ export function useAppController() {
     shouldAutoFollowConversationRef.current = true;
     resetMessagePaging();
 
+    if (sessionId.startsWith("pending-session:") && newEmptySessionIdRef.current !== sessionId) {
+      startTransition(() => {
+        setSessionId("");
+        setSession(null);
+        setMessages([]);
+        setSessionQueuedRuns([]);
+      });
+      setMessagesLoading(false);
+      window.clearTimeout(sessionQueueRefreshTimerRef.current);
+      return;
+    }
+
     if (!sessionId.trim()) {
       startTransition(() => {
         setMessages([]);
         setSessionQueuedRuns([]);
       });
       setMessagesLoading(false);
+      window.clearTimeout(sessionQueueRefreshTimerRef.current);
       newEmptySessionIdRef.current = null;
       return;
     }
@@ -706,12 +739,12 @@ export function useAppController() {
         setSessionQueuedRuns([]);
       });
       setMessagesLoading(false);
+      window.clearTimeout(sessionQueueRefreshTimerRef.current);
       return;
     }
 
-    setMessagesLoading(true);
-    void refreshMessages(true, { reset: true });
-    void refreshSessionQueue(true);
+    void refreshMessages(true, { pageSize: 24, reset: true });
+    scheduleSessionQueueRefresh();
   }, [sessionId]);
 
   useEffect(() => {
@@ -724,6 +757,18 @@ export function useAppController() {
 
   useEffect(() => {
     if (sessionId.trim()) {
+      if (sessionId.startsWith("pending-session:") && newEmptySessionIdRef.current !== sessionId) {
+        return;
+      }
+      if (newEmptySessionIdRef.current === sessionId) {
+        startTransition(() => {
+          setSessionRuns([]);
+          setRun(null);
+          setRunSteps([]);
+          setSelectedRunId("");
+        });
+        return;
+      }
       const recentExplicitRefresh = lastExplicitSessionRefreshRef.current;
       if (recentExplicitRefresh?.sessionId === sessionId && Date.now() - recentExplicitRefresh.at < 1_000) {
         return;
@@ -765,7 +810,7 @@ export function useAppController() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [connection.baseUrl, connection.token, visibleSidebarSessionKey]);
+  }, [connection.baseUrl, connection.token, sidebarRunRefreshSessionKey]);
 
   const latestEvent = deferredEvents[0];
   const inspectorSubtitle =

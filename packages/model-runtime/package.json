@@ -21,6 +21,7 @@
     "@ai-sdk/openai-compatible": "1.0.15",
     "@oah/config": "workspace:*",
     "@oah/engine-core": "workspace:*",
-    "ai": "6.0.141"
+    "ai": "6.0.141",
+    "zod": "4.3.6"
   }
 }

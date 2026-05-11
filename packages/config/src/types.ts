@@ -238,6 +238,7 @@ export interface DiscoveredHook {
 }
 
 export interface WorkspaceSettings {
+  name?: string | undefined;
   defaultAgent?: string | undefined;
   runtime?: string | undefined;
   models?: Record<string, WorkspaceModelPreset> | undefined;
@@ -399,6 +400,7 @@ export interface InitializeWorkspaceFromRuntimeInput {
   runtimeDir: string;
   runtimeName: string;
   rootPath: string;
+  workspaceName?: string | undefined;
   platformToolDir?: string | undefined;
   platformSkillDir?: string | undefined;
   agentsMd?: string | undefined;

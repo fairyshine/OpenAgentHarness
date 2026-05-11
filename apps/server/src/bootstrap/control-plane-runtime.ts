@@ -40,6 +40,19 @@ function loadModelMetadataDiscoveryModule(): Promise<typeof import("./model-meta
   return modelMetadataDiscoveryModulePromise;
 }
 
+function isManagedDirectoryWorkspaceName(workspace: Pick<WorkspaceRecord, "name" | "rootPath">): boolean {
+  const rootName = path.basename(path.resolve(workspace.rootPath));
+  return workspace.name === rootName && /^ws_[a-f0-9]{32}$/i.test(workspace.name);
+}
+
+function resolveRefreshedWorkspaceName(workspace: WorkspaceRecord, discovered: WorkspaceRecord): string {
+  if (isManagedDirectoryWorkspaceName(workspace) && !isManagedDirectoryWorkspaceName(discovered)) {
+    return discovered.name;
+  }
+
+  return workspace.name;
+}
+
 function mergeRefreshedWorkspaceRecord(
   workspace: WorkspaceRecord,
   discovered: WorkspaceRecord,
@@ -48,7 +61,7 @@ function mergeRefreshedWorkspaceRecord(
   return {
     ...discovered,
     id: workspace.id,
-    name: workspace.name,
+    name: resolveRefreshedWorkspaceName(workspace, discovered),
     executionPolicy: workspace.executionPolicy,
     status: workspace.status,
     createdAt: workspace.createdAt,

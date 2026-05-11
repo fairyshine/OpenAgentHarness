@@ -52,6 +52,10 @@ export function useSessionSubmitActions(input: {
         input.reportError("请先创建或加载 session。");
         return;
       }
+      if (input.sessionId.startsWith("pending-session:")) {
+        input.reportError("Session 正在创建，请稍等一下。");
+        return;
+      }
 
       const contentPreview = summarizeComposerMessageContent(content).trim();
       if (!contentPreview) {
@@ -75,28 +79,73 @@ export function useSessionSubmitActions(input: {
       }
 
       const runningRunBehavior = options?.runningRunBehavior ?? "queue";
+      const optimisticMessageKey = `optimistic-user:${crypto.randomUUID()}`;
+      const optimisticCreatedAt = new Date().toISOString();
+      const previousDraftMessage = useStreamStore.getState().draftMessage;
+      const previousDraftAttachments = useStreamStore.getState().draftAttachments;
 
       input.shouldAutoFollowConversationRef.current = true;
       if (input.newEmptySessionIdRef.current === input.sessionId) {
         input.newEmptySessionIdRef.current = null;
       }
-      const accepted = await input.request<MessageAccepted>(`/api/v1/sessions/${input.sessionId}/messages`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          content,
-          runningRunBehavior
-        })
-      });
-      const shouldDisplayAsQueued = accepted.delivery === "session_queue";
-
       startTransition(() => {
         if (options?.clearDraft !== false) {
           useStreamStore.getState().setDraftMessage("");
           useStreamStore.getState().setDraftAttachments([]);
         }
+        input.setLiveMessagesByKey((current) => ({
+          ...current,
+          [optimisticMessageKey]: {
+            runId: "",
+            sessionId: input.sessionId,
+            role: "user",
+            content: content as Message["content"],
+            createdAt: optimisticCreatedAt
+          }
+        }));
+      });
+      let accepted: MessageAccepted;
+      try {
+        accepted = await input.request<MessageAccepted>(`/api/v1/sessions/${input.sessionId}/messages`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            content,
+            runningRunBehavior
+          })
+        });
+      } catch (error) {
+        startTransition(() => {
+          input.setLiveMessagesByKey((current) => {
+            const { [optimisticMessageKey]: _removed, ...next } = current;
+            return next;
+          });
+          if (options?.clearDraft !== false) {
+            useStreamStore.getState().setDraftMessage(previousDraftMessage);
+            useStreamStore.getState().setDraftAttachments(previousDraftAttachments);
+          }
+        });
+        throw error;
+      }
+      const shouldDisplayAsQueued = accepted.delivery === "session_queue";
+
+      startTransition(() => {
+        input.setLiveMessagesByKey((current) => {
+          const optimisticEntry = current[optimisticMessageKey];
+          if (!optimisticEntry) {
+            return current;
+          }
+
+          return {
+            ...current,
+            [optimisticMessageKey]: {
+              ...optimisticEntry,
+              persistedMessageId: accepted.messageId
+            }
+          };
+        });
         if (shouldDisplayAsQueued) {
           input.setSessionQueuedRuns((current) => {
             const nextCreatedAt = accepted.createdAt ?? new Date().toISOString();
@@ -120,17 +169,6 @@ export function useSessionSubmitActions(input: {
               return next.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
             });
           }
-          input.setLiveMessagesByKey((current) => ({
-            ...current,
-            [`pending-user:${accepted.messageId}`]: {
-              persistedMessageId: accepted.messageId,
-              runId: "",
-              sessionId: input.sessionId,
-              role: "user",
-              content: content as Message["content"],
-              createdAt: new Date().toISOString()
-            }
-          }));
         }
       });
       input.setStreamRevision((current) => current + 1);

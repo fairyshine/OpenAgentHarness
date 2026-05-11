@@ -12,6 +12,7 @@ function useSessionEventStream(params: {
   connection: ConnectionSettings;
   sessionId: string;
   sessionRecordId?: string;
+  enabled?: boolean;
   streamRevision: number;
   streamAbortRef: MutableRefObject<AbortController | null>;
   lastCursorRef: MutableRefObject<string | undefined>;
@@ -22,7 +23,7 @@ function useSessionEventStream(params: {
   openConsoleForErrors: () => void;
 }) {
   useEffect(() => {
-    if (!params.sessionId.trim() || params.sessionRecordId !== params.sessionId) {
+    if (params.enabled === false || !params.sessionId.trim() || params.sessionRecordId !== params.sessionId) {
       params.streamAbortRef.current?.abort();
       params.setStreamState("idle");
       return;
@@ -87,6 +88,7 @@ function useSessionEventStream(params: {
   }, [
     params.connection.baseUrl,
     params.connection.token,
+    params.enabled,
     params.sessionRecordId,
     params.sessionId,
     params.streamRevision

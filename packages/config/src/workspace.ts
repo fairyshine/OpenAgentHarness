@@ -117,6 +117,7 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
   }
 
   const typedParsedSettings = parsed as {
+    name?: string;
     default_agent?: string;
     runtime?: string;
     models?: Record<
@@ -226,6 +227,7 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
     : undefined;
 
   return {
+    ...(typedParsedSettings.name ? { name: typedParsedSettings.name } : {}),
     ...(typedParsedSettings.default_agent ? { defaultAgent: typedParsedSettings.default_agent } : {}),
     ...(typedParsedSettings.runtime ? { runtime: typedParsedSettings.runtime } : {}),
     ...(normalizedModels ? { models: normalizedModels } : {}),
@@ -279,7 +281,11 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
   };
 }
 
-export async function updateWorkspaceRuntimeSetting(workspaceRoot: string, runtime: string): Promise<void> {
+export async function updateWorkspaceRuntimeSetting(
+  workspaceRoot: string,
+  runtime: string,
+  workspaceName?: string | undefined
+): Promise<void> {
   const settingsPath = path.join(workspaceRoot, ".openharness", "settings.yaml");
   await mkdir(path.dirname(settingsPath), { recursive: true });
 
@@ -292,6 +298,7 @@ export async function updateWorkspaceRuntimeSetting(workspaceRoot: string, runti
     settingsPath,
     YAML.stringify({
       ...(currentRaw as Record<string, unknown>),
+      ...(workspaceName?.trim() ? { name: workspaceName.trim() } : {}),
       runtime
     }),
     "utf8"
@@ -759,7 +766,7 @@ export async function discoverWorkspace(
   });
   const hooks = await loadWorkspaceHooks(rootPath);
   const projectAgentsMd = await loadProjectAgentsMd(rootPath);
-  const name = path.basename(rootPath);
+  const name = settings.name?.trim() || path.basename(rootPath);
   const id = buildWorkspaceId(kind, name, rootPath);
   const models = [...toPlatformModelCatalogItems(input.platformModels), ...toWorkspaceModelCatalogItems(workspaceModels)];
   const timestamp = nowIso();

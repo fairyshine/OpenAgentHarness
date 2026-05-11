@@ -22,12 +22,14 @@ export function useSessionMessages(input: {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const messageRefreshSeqRef = useRef(0);
+  const messageLoadingDelayTimerRef = useRef<number | undefined>(undefined);
   const olderMessagesSeqRef = useRef(0);
 
   const refreshMessages = useEffectEvent(
     async (
       quiet = false,
       options?: {
+        pageSize?: number | undefined;
         reset?: boolean | undefined;
       }
     ) => {
@@ -42,10 +44,17 @@ export function useSessionMessages(input: {
 
       const refreshSeq = messageRefreshSeqRef.current + 1;
       messageRefreshSeqRef.current = refreshSeq;
-      setMessagesLoading(true);
+      window.clearTimeout(messageLoadingDelayTimerRef.current);
+      messageLoadingDelayTimerRef.current = window.setTimeout(() => {
+        if (messageRefreshSeqRef.current === refreshSeq) {
+          setMessagesLoading(true);
+        }
+      }, 120);
 
       try {
-        const messagePage = await input.request<MessagePage>(buildMessagePagePath(targetSessionId));
+        const messagePage = await input.request<MessagePage>(
+          buildMessagePagePath(targetSessionId, { pageSize: options?.pageSize })
+        );
         if (input.activeSessionIdRef.current !== targetSessionId || messageRefreshSeqRef.current !== refreshSeq) {
           return;
         }
@@ -78,6 +87,7 @@ export function useSessionMessages(input: {
         }
       } finally {
         if (messageRefreshSeqRef.current === refreshSeq) {
+          window.clearTimeout(messageLoadingDelayTimerRef.current);
           setMessagesLoading(false);
         }
       }
@@ -116,6 +126,8 @@ export function useSessionMessages(input: {
   });
 
   const resetMessagePaging = useEffectEvent(() => {
+    window.clearTimeout(messageLoadingDelayTimerRef.current);
+    setMessagesLoading(false);
     setMessagesNextCursor(null);
     setLoadingOlderMessages(false);
     olderMessagesSeqRef.current = 0;

@@ -125,6 +125,7 @@ export interface WorkspaceSystemPromptSettings {
 }
 
 export interface WorkspaceSettingsDefinition {
+  name?: string | undefined;
   defaultAgent?: string | undefined;
   runtime?: string | undefined;
   models?:

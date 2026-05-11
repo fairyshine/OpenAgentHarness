@@ -5,6 +5,7 @@ import type { OahConnection } from "../api/oah-api.js";
 import { HelpDialog, SessionDialog, WorkspaceDialog } from "./components/dialogs.js";
 import {
   getChatLinesRowCount,
+  getTranscriptBannerRows,
   getTranscriptItems,
   getTranscriptLineItems,
   Messages,
@@ -60,7 +61,17 @@ function OahRepl({
     columns
   });
   const liveMessageRows = getChatLinesRowCount(splitTranscript.liveLines, columns);
-  const liveViewportRows = Math.min(liveMessageRows, transcriptHeight);
+  const liveHasMessages = state.currentSession !== null && splitTranscript.liveLines.length > 0;
+  const liveBannerHeight = splitTranscript.liveIncludesBanner
+    ? getTranscriptBannerRows({
+        columns,
+        hasMessages: liveHasMessages,
+        height: transcriptHeight,
+        lineRows: liveMessageRows
+      })
+    : 0;
+  const liveBannerRows = liveBannerHeight > 0 ? liveBannerHeight + (liveHasMessages ? 1 : 0) : 0;
+  const liveViewportRows = Math.min(liveBannerRows + liveMessageRows, transcriptHeight);
   const promptCursorY = liveViewportRows + spinnerRows + dialogRows + 1;
   const agentMode =
     state.catalog?.agents.find((agent) => agent.name === state.currentSession?.activeAgentName)?.mode ??
@@ -93,7 +104,7 @@ function OahRepl({
         {(item) => <TranscriptItemView key={item.id} item={item} columns={columns} />}
       </Static>
       <Box flexDirection="column" height={liveViewportRows} overflow="hidden" justifyContent="flex-end">
-        {splitTranscript.liveLines.length > 0 ? (
+        {splitTranscript.liveIncludesBanner || splitTranscript.liveLines.length > 0 ? (
           <Messages
             lines={splitTranscript.liveLines}
             workspace={state.currentWorkspace}
@@ -102,7 +113,7 @@ function OahRepl({
             systemProfile={state.systemProfile}
             height={transcriptHeight}
             columns={columns}
-            showBanner={false}
+            showBanner={splitTranscript.liveIncludesBanner}
           />
         ) : null}
       </Box>
@@ -137,25 +148,41 @@ function splitStaticTranscript(input: {
   systemProfile: ReturnType<typeof useOahReplState>["systemProfile"];
   height: number;
   columns: number;
-}): { staticItems: TranscriptItem[]; liveLines: ReturnType<typeof useOahReplState>["messages"] } {
+}): { staticItems: TranscriptItem[]; liveLines: ReturnType<typeof useOahReplState>["messages"]; liveIncludesBanner: boolean } {
   if (!input.session || input.lines.length === 0) {
     return {
-      staticItems: getTranscriptItems({
-        lines: [],
-        workspace: input.workspace,
-        session: input.session,
-        serviceUrl: input.serviceUrl,
-        systemProfile: input.systemProfile,
-        height: input.height,
-        columns: input.columns,
-        includeBanner: true
-      }),
-      liveLines: []
+      staticItems: [],
+      liveLines: [],
+      liveIncludesBanner: true
+    };
+  }
+
+  const allLineRows = getChatLinesRowCount(input.lines, input.columns);
+  const allBannerRows = getTranscriptBannerRows({
+    columns: input.columns,
+    hasMessages: true,
+    height: input.height,
+    lineRows: allLineRows
+  });
+  const allBannerMargin = allBannerRows > 0 ? 1 : 0;
+  const canKeepBannerLive = allBannerRows + allBannerMargin + allLineRows <= input.height;
+  if (canKeepBannerLive) {
+    return {
+      staticItems: [],
+      liveLines: input.lines,
+      liveIncludesBanner: true
     };
   }
 
   const staticLines = input.lines.slice(0, -1);
   const liveLines = input.lines.slice(-1);
+  const staticLineRows = getChatLinesRowCount(staticLines, input.columns);
+  const staticBannerRows = getTranscriptBannerRows({
+    columns: input.columns,
+    hasMessages: true,
+    height: input.height,
+    lineRows: staticLineRows + getChatLinesRowCount(liveLines, input.columns)
+  });
   return {
     staticItems: [
       ...getTranscriptItems({
@@ -166,11 +193,14 @@ function splitStaticTranscript(input: {
         systemProfile: input.systemProfile,
         height: input.height,
         columns: input.columns,
-        includeBanner: true
+        includeBanner: true,
+        bannerHeight: staticBannerRows,
+        hasMessages: true
       }),
       ...getTranscriptLineItems(staticLines)
     ],
-    liveLines
+    liveLines,
+    liveIncludesBanner: false
   };
 }
 

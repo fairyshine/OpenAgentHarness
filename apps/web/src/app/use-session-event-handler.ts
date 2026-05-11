@@ -40,7 +40,7 @@ export function useSessionEventHandler(input: {
   scheduleWorkspaceIndexRefresh: () => void;
   refreshSessionQueue: (quiet?: boolean) => Promise<void>;
   refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean | "selected" }) => Promise<void>;
-  refreshSidebarSessionRuns: (quiet?: boolean) => Promise<boolean>;
+  refreshSidebarSessionRuns: (quiet?: boolean, options?: { includeChildren?: boolean }) => Promise<boolean>;
   refreshSessionById: (targetId: string, quiet?: boolean) => Promise<unknown>;
   syncCurrentSessionAgent: (agentName: string, updatedAt: string) => void;
 }) {
@@ -394,7 +394,7 @@ export function useSessionEventHandler(input: {
       event.event === "agent.delegate.completed" ||
       event.event === "agent.delegate.failed"
     ) {
-      void input.refreshSidebarSessionRuns(true);
+      void input.refreshSidebarSessionRuns(true, { includeChildren: true });
     }
 
     if (typeof event.runId === "string" && isTerminalRunEvent(event.event)) {

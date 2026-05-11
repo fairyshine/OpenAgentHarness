@@ -41,7 +41,7 @@ export function StartBanner(props: {
 
   const compact = props.compact || props.columns < 70 || props.height < 9;
   return (
-    <Box height={props.height} overflow="hidden" flexDirection="column">
+    <Box height={props.height} overflow="hidden" flexDirection="column" justifyContent="flex-end">
       {compact ? <CompactBanner {...props} /> : <FullBanner {...props} />}
     </Box>
   );

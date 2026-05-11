@@ -21,6 +21,29 @@ function hydrate<T>(key: string, fallback: T): T {
   }
 }
 
+function isLocalDaemonBaseUrl(value: string): boolean {
+  if (!value.trim() || typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+    return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname) && url.port === "8787";
+  } catch {
+    return false;
+  }
+}
+
+function hydrateConnection(): ConnectionSettings {
+  const connection = hydrate<ConnectionSettings>(storageKeys.connection, DEFAULT_CONNECTION);
+  if (isLocalDaemonBaseUrl(connection.baseUrl)) {
+    const next = DEFAULT_CONNECTION;
+    persist(storageKeys.connection, next);
+    return next;
+  }
+  return connection;
+}
+
 function persist<T>(key: string, value: T): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(key, JSON.stringify(value));
@@ -48,7 +71,7 @@ const DEFAULT_MODEL_DRAFT: ModelDraft = {
 };
 
 export const useSettingsStore = create<SettingsState>((set) => ({
-  connection: hydrate<ConnectionSettings>(storageKeys.connection, DEFAULT_CONNECTION),
+  connection: hydrateConnection(),
   workspaceRuntimeFilter: hydrate<string>(storageKeys.workspaceRuntimeFilter, ""),
   serviceScope: hydrate<ServiceScope>(storageKeys.serviceScope, SERVICE_SCOPE_ALL),
   modelDraft: hydrate<ModelDraft>(storageKeys.modelDraft, DEFAULT_MODEL_DRAFT),

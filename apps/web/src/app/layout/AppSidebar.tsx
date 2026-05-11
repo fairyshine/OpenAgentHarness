@@ -122,6 +122,7 @@ function AppSidebarImpl(props: SidebarProps) {
   const [runtimeMutationBusy, setRuntimeMutationBusy] = useState(false);
   const [runtimePendingDelete, setRuntimePendingDelete] = useState("");
   const [runtimeManagerSearch, setRuntimeManagerSearch] = useState("");
+  const [workspaceCreateBusy, setWorkspaceCreateBusy] = useState(false);
 
   const icon = surfaceIcon(surfaceMode);
   const title = surfaceTitle(surfaceMode);
@@ -607,13 +608,21 @@ function AppSidebarImpl(props: SidebarProps) {
               Runtimes
             </Button>
             <Button
-              onClick={() => {
-                props.createWorkspace();
-                props.setShowWorkspaceCreator(false);
+              disabled={workspaceCreateBusy || !props.workspaceDraft.name.trim()}
+              onClick={async () => {
+                if (workspaceCreateBusy) {
+                  return;
+                }
+                setWorkspaceCreateBusy(true);
+                try {
+                  await props.createWorkspace();
+                } finally {
+                  setWorkspaceCreateBusy(false);
+                }
               }}
             >
-              <FolderPlus className="h-4 w-4" />
-              Create
+              {workspaceCreateBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FolderPlus className="h-4 w-4" />}
+              {workspaceCreateBusy ? "Creating" : "Create"}
             </Button>
           </DialogFooter>
         </DialogContent>

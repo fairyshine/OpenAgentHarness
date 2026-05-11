@@ -18,7 +18,9 @@ try {
   const deployRoot = path.join(tempDir, "deploy");
   const packageRoot = path.join(tempDir, "package");
   await run("pnpm", ["build"]);
-  await run("pnpm", ["--filter", "@oah/cli", "deploy", "--prod", "--legacy", deployRoot]);
+  await run("pnpm", ["--filter", "@oah/cli", "deploy", "--prod", "--legacy", deployRoot], {
+    npm_config_loglevel: "error"
+  });
 
   await mkdir(path.join(packageRoot, "bin"), { recursive: true });
   await mkdir(path.join(packageRoot, "lib", "node_modules", "@oah"), { recursive: true });
@@ -178,11 +180,14 @@ async function sha256File(filePath) {
   return hash.digest("hex");
 }
 
-async function run(command, args) {
+async function run(command, args, envOverrides = {}) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
     stdio: "inherit",
-    env: process.env
+    env: {
+      ...process.env,
+      ...envOverrides
+    }
   });
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}`);

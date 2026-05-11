@@ -251,8 +251,17 @@ export class SQLitePersistenceCoordinator {
 
   async listWorkspaceSnapshots(candidates: WorkspaceRecord[]): Promise<WorkspaceRecord[]> {
     const snapshots: WorkspaceRecord[] = [];
+    const registryDb = await this.ensureRegistryDb();
 
     for (const workspace of candidates) {
+      const registryRow = registryDb
+        .prepare("select payload from workspace_registry where kind = ? and root_path = ? limit 1")
+        .get(workspace.kind, workspace.rootPath) as JsonRow | undefined;
+      if (registryRow?.payload) {
+        snapshots.push(JSON.parse(registryRow.payload) as WorkspaceRecord);
+        continue;
+      }
+
       const dbPath = this.dbPathForWorkspace(workspace);
       try {
         const db = new DatabaseSync(dbPath);
@@ -260,7 +269,9 @@ export class SQLitePersistenceCoordinator {
           for (const statement of schemaStatements) {
             db.exec(statement);
           }
-          const row = db.prepare("select payload from workspace_meta where id = ? limit 1").get(workspace.id) as JsonRow | undefined;
+          const row = db
+            .prepare("select payload from workspace_meta where id = ? or root_path = ? order by id = ? desc limit 1")
+            .get(workspace.id, workspace.rootPath, workspace.id) as JsonRow | undefined;
           if (row?.payload) {
             snapshots.push(JSON.parse(row.payload) as WorkspaceRecord);
           }

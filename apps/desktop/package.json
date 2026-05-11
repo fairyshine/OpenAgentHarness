@@ -38,6 +38,6 @@
     "@oah/api-contracts": "workspace:*"
   },
   "devDependencies": {
-    "electron": "^39.0.0"
+    "electron": "^42.0.1"
   }
 }

@@ -91,12 +91,19 @@ export function Messages(props: {
     );
   }
 
+  const bannerHeight = getTranscriptBannerRows({
+    columns: props.columns,
+    hasMessages,
+    height: props.height,
+    lineRows: getChatLinesRowCount(visibleLines, props.columns)
+  });
+
   return (
     <Box flexDirection="column">
-      {showBanner ? (
+      {showBanner && bannerHeight > 0 ? (
         <Box marginBottom={1}>
           <StartBanner
-            height={props.columns >= 70 ? 12 : 7}
+            height={bannerHeight}
             columns={props.columns}
             subtitle={bannerSubtitle}
             serviceUrl={props.serviceUrl}
@@ -104,7 +111,7 @@ export function Messages(props: {
             workspaceName={props.workspace?.name}
             sessionTitle={props.session.title}
             sessionId={props.session.id}
-            compact={props.columns < 70}
+            compact={props.columns < 70 || bannerHeight < 9}
           />
         </Box>
       ) : null}
@@ -126,8 +133,10 @@ export function getTranscriptItems(input: {
   height: number;
   columns: number;
   includeBanner: boolean;
+  bannerHeight?: number | undefined;
+  hasMessages?: boolean | undefined;
 }) {
-  const hasMessages = input.session !== null && input.lines.length > 0;
+  const hasMessages = input.hasMessages ?? (input.session !== null && input.lines.length > 0);
   const bannerSubtitle = !input.session
     ? "Create or switch to a session with ^O"
     : hasMessages
@@ -135,7 +144,16 @@ export function getTranscriptItems(input: {
       : "Start typing or use / for commands";
   const items: TranscriptItem[] = [];
 
-  if (input.includeBanner) {
+  const bannerHeight =
+    input.bannerHeight ??
+    getTranscriptBannerRows({
+      columns: input.columns,
+      hasMessages,
+      height: input.height,
+      lineRows: getChatLinesRowCount(input.lines, input.columns)
+    });
+
+  if (input.includeBanner && bannerHeight > 0) {
     items.push({
       id: `banner:${input.workspace?.id ?? "none"}:${input.session?.id ?? "none"}`,
       kind: "banner",
@@ -145,8 +163,8 @@ export function getTranscriptItems(input: {
       systemProfile: input.systemProfile ?? null,
       columns: input.columns,
       subtitle: bannerSubtitle,
-      height: hasMessages ? (input.columns >= 70 ? 12 : 7) : input.height,
-      compact: hasMessages ? input.columns < 70 : input.height < 9
+      height: bannerHeight,
+      compact: input.columns < 70 || bannerHeight < 9
     });
   }
 
@@ -193,13 +211,42 @@ export function getMessagesRowCount(input: { lines: ChatLine[]; session: Session
     return input.height;
   }
 
-  const bannerRows = input.columns >= 70 ? 12 : 7;
-  const bannerMargin = 1;
-  return bannerRows + bannerMargin + getChatLinesRowCount(input.lines, input.columns);
+  const lineRows = getChatLinesRowCount(input.lines, input.columns);
+  const bannerRows = getTranscriptBannerRows({
+    columns: input.columns,
+    hasMessages,
+    height: input.height,
+    lineRows
+  });
+  const bannerMargin = bannerRows > 0 ? 1 : 0;
+  return bannerRows + bannerMargin + lineRows;
 }
 
 export function getChatLinesRowCount(lines: ChatLine[], columns: number) {
   return lines.reduce((rows, line, index) => rows + lineRowCount(line, columns, index === lines.length - 1), 0);
+}
+
+export function getTranscriptBannerNaturalRows(columns: number) {
+  return columns >= 70 ? 12 : 7;
+}
+
+export function getTranscriptBannerRows(input: {
+  columns: number;
+  hasMessages: boolean;
+  height: number;
+  lineRows: number;
+}) {
+  if (input.height < 7) {
+    return 0;
+  }
+  if (!input.hasMessages) {
+    return input.height;
+  }
+
+  const naturalRows = getTranscriptBannerNaturalRows(input.columns);
+  const bannerMargin = 1;
+  const extraRows = Math.max(0, input.height - naturalRows - bannerMargin - input.lineRows);
+  return Math.min(input.height, naturalRows + extraRows);
 }
 
 function MessageRow(props: { line: VisibleChatLine; columns: number }) {
