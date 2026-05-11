@@ -39,7 +39,7 @@ export function useSessionEventHandler(input: {
   scheduleRunRefresh: (runId: string) => void;
   scheduleWorkspaceIndexRefresh: () => void;
   refreshSessionQueue: (quiet?: boolean) => Promise<void>;
-  refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean | "selected" }) => Promise<void>;
+  scheduleSessionRunsRefresh: () => void;
   refreshSidebarSessionRuns: (quiet?: boolean, options?: { includeChildren?: boolean }) => Promise<boolean>;
   refreshSessionById: (targetId: string, quiet?: boolean) => Promise<unknown>;
   syncCurrentSessionAgent: (agentName: string, updatedAt: string) => void;
@@ -378,7 +378,7 @@ export function useSessionEventHandler(input: {
       ].includes(event.event)
     ) {
       if (SESSION_RUN_LIST_REFRESH_EVENTS.has(event.event)) {
-        void input.refreshSessionRuns(true);
+        input.scheduleSessionRunsRefresh();
       }
       if (RUN_DETAIL_REFRESH_EVENTS.has(event.event)) {
         input.scheduleRunRefresh(event.runId);

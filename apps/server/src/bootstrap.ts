@@ -936,11 +936,12 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       ]);
       await sandboxHost?.close();
       await closePersistence();
-      await objectStorageMirror?.close();
-      await platformModelService.close();
-      if (workspaceMaterializationMaintenanceTimer) {
-        clearInterval(workspaceMaterializationMaintenanceTimer);
-      }
+    await objectStorageMirror?.close();
+    await platformModelService.close();
+    await nativeBridge.shutdownNativeWorkspaceSyncWorkerPool();
+    if (workspaceMaterializationMaintenanceTimer) {
+      clearInterval(workspaceMaterializationMaintenanceTimer);
+    }
       await controlPlaneRuntime?.close();
     }
   };

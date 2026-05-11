@@ -6,6 +6,11 @@ import { registerSandboxRoutes } from "./http/routes/sandboxes-lazy.js";
 import { registerSessionRoutes } from "./http/routes/sessions-lazy.js";
 import type { AppDependencies } from "./http/types.js";
 
+function warmRouteModules(): void {
+  void import("./http/routes/workspaces.js");
+  void import("./http/routes/sessions.js");
+}
+
 export function createApiApp(dependencies: AppDependencies) {
   const app = createBaseApp(dependencies);
   const workspaceMode = dependencies.workspaceMode ?? "multi";
@@ -16,6 +21,9 @@ export function createApiApp(dependencies: AppDependencies) {
   registerSessionRoutes(app, dependencies);
   registerInternalRoutes(app, dependencies);
   registerInternalModelRoutes(app, dependencies);
+  app.addHook("onReady", async () => {
+    warmRouteModules();
+  });
 
   return app;
 }

@@ -302,7 +302,9 @@ interface NativeWorkspaceSyncWorkerFailureResponse extends NativeCommandFailureR
 const nativeWorkspaceSyncStdinStreams = new WeakSet<object>();
 type NativeWorkspaceSyncGlobalState = {
   workerPoolPromise?: Promise<NativeWorkspaceSyncWorkerPool> | undefined;
+  workerPool?: NativeWorkspaceSyncWorkerPool | undefined;
   requestSequence: number;
+  cleanupRegistered: boolean;
 };
 
 function getNativeWorkspaceSyncGlobalState(): NativeWorkspaceSyncGlobalState {
@@ -311,12 +313,36 @@ function getNativeWorkspaceSyncGlobalState(): NativeWorkspaceSyncGlobalState {
   };
   scope.__oahNativeWorkspaceSyncGlobalState ??= {
     workerPoolPromise: undefined,
-    requestSequence: 0
+    workerPool: undefined,
+    requestSequence: 0,
+    cleanupRegistered: false
   };
   return scope.__oahNativeWorkspaceSyncGlobalState;
 }
 
 const nativeWorkspaceSyncGlobalState = getNativeWorkspaceSyncGlobalState();
+
+function closeNativeWorkspaceSyncWorkerPoolSync(): void {
+  const workerPool = nativeWorkspaceSyncGlobalState.workerPool;
+  nativeWorkspaceSyncGlobalState.workerPoolPromise = undefined;
+  nativeWorkspaceSyncGlobalState.workerPool = undefined;
+  workerPool?.kill("SIGTERM");
+}
+
+function registerNativeWorkspaceSyncCleanup(): void {
+  if (nativeWorkspaceSyncGlobalState.cleanupRegistered) {
+    return;
+  }
+
+  nativeWorkspaceSyncGlobalState.cleanupRegistered = true;
+  process.once("exit", closeNativeWorkspaceSyncWorkerPoolSync);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.once(signal, () => {
+      closeNativeWorkspaceSyncWorkerPoolSync();
+      process.kill(process.pid, signal);
+    });
+  }
+}
 
 function resolveNativeWorkspaceSyncWorkerCount(): number {
   const explicit = process.env.OAH_NATIVE_WORKSPACE_SYNC_WORKERS?.trim();
@@ -583,6 +609,18 @@ class NativeWorkspaceSyncWorker {
     this.#closePromise = waitForClose;
     return this.#closePromise;
   }
+
+  kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    if (this.#closed) {
+      return;
+    }
+
+    this.#closed = true;
+    this.#child.kill(signal);
+    this.#failAllPending(
+      new NativeWorkspaceSyncBridgeError("Native workspace sync worker was closed.", "native_worker_closed")
+    );
+  }
 }
 
 class NativeWorkspaceSyncWorkerPool {
@@ -605,6 +643,12 @@ class NativeWorkspaceSyncWorkerPool {
   async close(): Promise<void> {
     await Promise.all(this.workers.map((worker) => worker.close()));
   }
+
+  kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    for (const worker of this.workers) {
+      worker.kill(signal);
+    }
+  }
 }
 
 async function getNativeWorkspaceSyncWorkerPool(): Promise<NativeWorkspaceSyncWorkerPool> {
@@ -617,6 +661,7 @@ async function getNativeWorkspaceSyncWorkerPool(): Promise<NativeWorkspaceSyncWo
   }
 
   nativeWorkspaceSyncGlobalState.workerPoolPromise ??= (async () => {
+    registerNativeWorkspaceSyncCleanup();
     const workers = Array.from({ length: resolveNativeWorkspaceSyncWorkerCount() }, () =>
       new NativeWorkspaceSyncWorker(
         spawn(binary, ["serve"], {
@@ -624,14 +669,18 @@ async function getNativeWorkspaceSyncWorkerPool(): Promise<NativeWorkspaceSyncWo
         }),
         () => {
           nativeWorkspaceSyncGlobalState.workerPoolPromise = undefined;
+          nativeWorkspaceSyncGlobalState.workerPool = undefined;
         }
       )
     );
     try {
       await Promise.all(workers.map((worker) => worker.runCommand<NativeCommandSuccessResponse>("ready")));
-      return new NativeWorkspaceSyncWorkerPool(workers);
+      const workerPool = new NativeWorkspaceSyncWorkerPool(workers);
+      nativeWorkspaceSyncGlobalState.workerPool = workerPool;
+      return workerPool;
     } catch (error) {
       await Promise.all(workers.map((worker) => worker.close().catch(() => undefined)));
+      nativeWorkspaceSyncGlobalState.workerPool = undefined;
       throw error;
     }
   })();
@@ -641,6 +690,7 @@ async function getNativeWorkspaceSyncWorkerPool(): Promise<NativeWorkspaceSyncWo
 export async function shutdownNativeWorkspaceSyncWorkerPool(): Promise<void> {
   const workerPool = await nativeWorkspaceSyncGlobalState.workerPoolPromise?.catch(() => undefined);
   nativeWorkspaceSyncGlobalState.workerPoolPromise = undefined;
+  nativeWorkspaceSyncGlobalState.workerPool = undefined;
   await workerPool?.close();
 }
 

@@ -126,9 +126,51 @@ export class NativeArchiveExportError extends Error {
   }
 }
 
-let nativeArchiveWorkerPoolPromise: Promise<NativeArchiveExportWorkerPool> | undefined;
-let nativeArchiveWorkerRequestSequence = 0;
 const nativeArchiveExportStdinStreams = new WeakSet<object>();
+
+type NativeArchiveExportGlobalState = {
+  workerPoolPromise?: Promise<NativeArchiveExportWorkerPool> | undefined;
+  workerPool?: NativeArchiveExportWorkerPool | undefined;
+  requestSequence: number;
+  cleanupRegistered: boolean;
+};
+
+function getNativeArchiveExportGlobalState(): NativeArchiveExportGlobalState {
+  const scope = globalThis as typeof globalThis & {
+    __oahNativeArchiveExportGlobalState?: NativeArchiveExportGlobalState | undefined;
+  };
+  scope.__oahNativeArchiveExportGlobalState ??= {
+    workerPoolPromise: undefined,
+    workerPool: undefined,
+    requestSequence: 0,
+    cleanupRegistered: false
+  };
+  return scope.__oahNativeArchiveExportGlobalState;
+}
+
+const nativeArchiveExportGlobalState = getNativeArchiveExportGlobalState();
+
+function closeNativeArchiveExportWorkerPoolSync(): void {
+  const workerPool = nativeArchiveExportGlobalState.workerPool;
+  nativeArchiveExportGlobalState.workerPoolPromise = undefined;
+  nativeArchiveExportGlobalState.workerPool = undefined;
+  workerPool?.kill("SIGTERM");
+}
+
+function registerNativeArchiveExportCleanup(): void {
+  if (nativeArchiveExportGlobalState.cleanupRegistered) {
+    return;
+  }
+
+  nativeArchiveExportGlobalState.cleanupRegistered = true;
+  process.once("exit", closeNativeArchiveExportWorkerPoolSync);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.once(signal, () => {
+      closeNativeArchiveExportWorkerPoolSync();
+      process.kill(process.pid, signal);
+    });
+  }
+}
 
 type NativeArchiveExportMode = "off" | "auto" | "force";
 
@@ -413,7 +455,7 @@ class NativeArchiveExportWorker {
         throw new NativeArchiveExportError("Native archive export worker is no longer available.", "native_archive_worker_closed");
       }
 
-      const requestId = `archive-${Date.now()}-${nativeArchiveWorkerRequestSequence += 1}`;
+      const requestId = `archive-${Date.now()}-${nativeArchiveExportGlobalState.requestSequence += 1}`;
       const responsePromise = new Promise<NativeArchiveWorkerSuccessResponse>((resolve, reject) => {
         this.#pendingResponses.set(requestId, { resolve, reject });
       });
@@ -507,6 +549,18 @@ class NativeArchiveExportWorker {
     }
     this.#pendingResponses.clear();
   }
+
+  kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    if (this.#closed) {
+      return;
+    }
+
+    this.#closed = true;
+    this.#child.kill(signal);
+    this.#failAllPending(
+      new NativeArchiveExportError("Native archive export worker was closed.", "native_archive_worker_closed")
+    );
+  }
 }
 
 class NativeArchiveExportWorkerPool {
@@ -521,6 +575,12 @@ class NativeArchiveExportWorkerPool {
       throw new NativeArchiveExportError("Native archive export worker pool is empty.", "native_archive_worker_unavailable");
     }
     return worker.writeBundle(input);
+  }
+
+  kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    for (const worker of this.workers) {
+      worker.kill(signal);
+    }
   }
 }
 
@@ -611,21 +671,32 @@ async function getNativeArchiveExportWorkerPool(): Promise<NativeArchiveExportWo
     );
   }
 
-  nativeArchiveWorkerPoolPromise ??= Promise.resolve(
-    new NativeArchiveExportWorkerPool(
+  nativeArchiveExportGlobalState.workerPoolPromise ??= Promise.resolve().then(() => {
+    registerNativeArchiveExportCleanup();
+    const workerPool = new NativeArchiveExportWorkerPool(
       Array.from({ length: resolveDefaultNativeArchiveExportWorkerCount() }, () =>
         new NativeArchiveExportWorker(
           spawn(binary, ["serve-write-bundle-stream"], {
             stdio: ["pipe", "pipe", "pipe"]
           }),
           () => {
-            nativeArchiveWorkerPoolPromise = undefined;
+            nativeArchiveExportGlobalState.workerPoolPromise = undefined;
+            nativeArchiveExportGlobalState.workerPool = undefined;
           }
         )
       )
-    )
-  );
-  return nativeArchiveWorkerPoolPromise;
+    );
+    nativeArchiveExportGlobalState.workerPool = workerPool;
+    return workerPool;
+  });
+  return nativeArchiveExportGlobalState.workerPoolPromise;
+}
+
+export async function shutdownNativeArchiveExportWorkerPool(): Promise<void> {
+  const workerPool = await nativeArchiveExportGlobalState.workerPoolPromise?.catch(() => undefined);
+  nativeArchiveExportGlobalState.workerPoolPromise = undefined;
+  nativeArchiveExportGlobalState.workerPool = undefined;
+  workerPool?.kill("SIGTERM");
 }
 
 export async function inspectNativeArchiveExportDirectory(input: {

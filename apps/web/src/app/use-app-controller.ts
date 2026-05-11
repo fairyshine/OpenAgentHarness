@@ -630,7 +630,7 @@ export function useAppController() {
     scheduleRunRefresh,
     scheduleWorkspaceIndexRefresh,
     refreshSessionQueue,
-    refreshSessionRuns,
+    scheduleSessionRunsRefresh,
     refreshSidebarSessionRuns,
     refreshSessionById: navigationActions.refreshSession,
     syncCurrentSessionAgent

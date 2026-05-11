@@ -424,6 +424,36 @@ export function useNavigationActions(params: NavigationActionParams) {
       const response = await params.request<{ items: Workspace[]; nextCursor?: string }>("/api/v1/workspaces?pageSize=200");
       const visibleWorkspaceIds = new Set(response.items.map((item) => item.id));
       const existingSessionById = new Map(params.navigation.savedSessions.map((entry) => [entry.id, entry]));
+      startTransition(() => {
+        params.navigation.setSavedWorkspaces((current) => {
+          const currentById = new Map(current.map((entry) => [entry.id, entry]));
+          return response.items.map((item) => {
+            const existing = currentById.get(item.id);
+            const existingName = existing?.name.trim() ?? "";
+            const responseName = item.name.trim();
+            const responseLooksLikeManagedDirectoryName =
+              responseName === pathLeaf(item.rootPath) && /^ws_[a-f0-9]{32}$/i.test(responseName);
+            const name = existingName && responseLooksLikeManagedDirectoryName ? existingName : item.name;
+            return {
+              id: item.id,
+              name,
+              rootPath: item.rootPath,
+              status: item.status,
+              createdAt: item.createdAt,
+              lastOpenedAt: existing?.lastOpenedAt ?? item.updatedAt,
+              ...(item.serviceName ? { serviceName: item.serviceName } : {}),
+              ...(item.runtime
+                ? { runtime: item.runtime }
+                : existing?.runtime
+                  ? { runtime: existing.runtime }
+                  : {})
+            } satisfies SavedWorkspaceRecord;
+          });
+        });
+        params.navigation.setRecentWorkspaces((current) => current.filter((entry) => visibleWorkspaceIds.has(entry)));
+        params.navigation.setExpandedWorkspaceIds((current) => current.filter((entry) => visibleWorkspaceIds.has(entry)));
+      });
+
       const sessionPages = await Promise.all(
         response.items.map(async (workspace) => {
           try {
@@ -494,31 +524,6 @@ export function useNavigationActions(params: NavigationActionParams) {
       }
 
       startTransition(() => {
-        params.navigation.setSavedWorkspaces((current) => {
-          const currentById = new Map(current.map((entry) => [entry.id, entry]));
-          return response.items.map((item) => {
-            const existing = currentById.get(item.id);
-            const existingName = existing?.name.trim() ?? "";
-            const responseName = item.name.trim();
-            const responseLooksLikeManagedDirectoryName =
-              responseName === pathLeaf(item.rootPath) && /^ws_[a-f0-9]{32}$/i.test(responseName);
-            const name = existingName && responseLooksLikeManagedDirectoryName ? existingName : item.name;
-            return {
-              id: item.id,
-              name,
-              rootPath: item.rootPath,
-              status: item.status,
-              createdAt: item.createdAt,
-              lastOpenedAt: existing?.lastOpenedAt ?? item.updatedAt,
-              ...(item.serviceName ? { serviceName: item.serviceName } : {}),
-              ...(item.runtime
-                ? { runtime: item.runtime }
-                : existing?.runtime
-                  ? { runtime: existing.runtime }
-                  : {})
-            } satisfies SavedWorkspaceRecord;
-          });
-        });
         params.navigation.setSavedSessions((current) => {
           const currentById = new Map(current.map((entry) => [entry.id, entry]));
           const next: SavedSessionRecord[] = [];
@@ -541,14 +546,12 @@ export function useNavigationActions(params: NavigationActionParams) {
 
           return next.sort(compareSavedSessionsByRecency);
         });
-        params.navigation.setRecentWorkspaces((current) => current.filter((entry) => visibleWorkspaceIds.has(entry)));
         params.navigation.setRecentSessions((current) =>
           current.filter((entry) => {
             const sessionRecord = syncedSessions.get(entry);
             return Boolean(sessionRecord && visibleWorkspaceIds.has(sessionRecord.workspaceId));
           })
         );
-        params.navigation.setExpandedWorkspaceIds((current) => current.filter((entry) => visibleWorkspaceIds.has(entry)));
       });
 
       const selectedWorkspaceId = params.navigation.workspaceId.trim();
