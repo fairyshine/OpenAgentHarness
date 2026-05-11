@@ -45,6 +45,7 @@ import { useAppControllerStores } from "./use-app-controller-stores";
 import { useAppControllerSurfaceProps } from "./use-app-controller-surface-props";
 import {
   buildMessagePagePath,
+  isPendingSessionId,
   sortRunSteps
 } from "./app-controller-utils";
 
@@ -206,7 +207,10 @@ export function useAppController() {
   });
   const newEmptySessionId = newEmptySessionIdRef.current;
   const sidebarRunRefreshSessionIds = useMemo(
-    () => (newEmptySessionId ? visibleSidebarSessionIds.filter((entry) => entry !== newEmptySessionId) : visibleSidebarSessionIds),
+    () =>
+      visibleSidebarSessionIds.filter(
+        (entry) => !isPendingSessionId(entry) && (!newEmptySessionId || entry !== newEmptySessionId)
+      ),
     [newEmptySessionId, visibleSidebarSessionIds]
   );
   const sidebarRunRefreshSessionKey = useMemo(() => sidebarRunRefreshSessionIds.join("\n"), [sidebarRunRefreshSessionIds]);
@@ -645,7 +649,7 @@ export function useAppController() {
     connection,
     sessionId,
     sessionRecordId: session?.id,
-    enabled: newEmptySessionIdRef.current !== sessionId,
+    enabled: !isPendingSessionId(sessionId) && newEmptySessionIdRef.current !== sessionId,
     streamRevision,
     streamAbortRef,
     lastCursorRef,
@@ -866,11 +870,11 @@ export function useAppController() {
   const handleRefreshMessages = useEffectEvent(() => {
     void refreshMessages();
   });
-  const handleSendMessage = useEffectEvent(() => {
-    void sendMessage();
+  const handleSendMessage = useEffectEvent((draftOverride?: Parameters<typeof sendMessage>[0]) => {
+    void sendMessage(draftOverride);
   });
-  const handleGuideMessage = useEffectEvent(() => {
-    void guideMessage();
+  const handleGuideMessage = useEffectEvent((draftOverride?: Parameters<typeof guideMessage>[0]) => {
+    void guideMessage(draftOverride);
   });
   const handleAnswerAskUserQuestion = useEffectEvent((answer: string) => {
     void answerAskUserQuestion(answer);

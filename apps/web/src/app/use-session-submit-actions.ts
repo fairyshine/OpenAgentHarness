@@ -12,6 +12,7 @@ import type {
 
 import { toErrorSummary, type LiveConversationMessageRecord } from "./support";
 import { buildComposerMessageContent, summarizeComposerMessageContent } from "./chat/composer-content";
+import type { DraftImageAttachment } from "./chat/composer-content";
 import { useStreamStore } from "./stores/stream-store";
 
 type PendingOperationRef = RefObject<{ sessionId: string; promise: Promise<boolean> } | null>;
@@ -81,31 +82,33 @@ export function useSessionSubmitActions(input: {
       const runningRunBehavior = options?.runningRunBehavior ?? "queue";
       const optimisticMessageKey = `optimistic-user:${crypto.randomUUID()}`;
       const optimisticCreatedAt = new Date().toISOString();
+      const shouldClearDraft = options?.clearDraft !== false;
       const previousDraftMessage = useStreamStore.getState().draftMessage;
       const previousDraftAttachments = useStreamStore.getState().draftAttachments;
 
-      input.shouldAutoFollowConversationRef.current = true;
-      if (input.newEmptySessionIdRef.current === input.sessionId) {
-        input.newEmptySessionIdRef.current = null;
+      if (shouldClearDraft) {
+        useStreamStore.getState().setDraftMessage("");
+        useStreamStore.getState().setDraftAttachments([]);
       }
-      startTransition(() => {
-        if (options?.clearDraft !== false) {
-          useStreamStore.getState().setDraftMessage("");
-          useStreamStore.getState().setDraftAttachments([]);
-        }
-        input.setLiveMessagesByKey((current) => ({
-          ...current,
-          [optimisticMessageKey]: {
-            runId: "",
-            sessionId: input.sessionId,
-            role: "user",
-            content: content as Message["content"],
-            createdAt: optimisticCreatedAt
-          }
-        }));
-      });
+
       let accepted: MessageAccepted;
       try {
+        input.shouldAutoFollowConversationRef.current = true;
+        if (input.newEmptySessionIdRef.current === input.sessionId) {
+          input.newEmptySessionIdRef.current = null;
+        }
+        startTransition(() => {
+          input.setLiveMessagesByKey((current) => ({
+            ...current,
+            [optimisticMessageKey]: {
+              runId: "",
+              sessionId: input.sessionId,
+              role: "user",
+              content: content as Message["content"],
+              createdAt: optimisticCreatedAt
+            }
+          }));
+        });
         accepted = await input.request<MessageAccepted>(`/api/v1/sessions/${input.sessionId}/messages`, {
           method: "POST",
           headers: {
@@ -117,15 +120,15 @@ export function useSessionSubmitActions(input: {
           })
         });
       } catch (error) {
+        if (shouldClearDraft) {
+          useStreamStore.getState().setDraftMessage(previousDraftMessage);
+          useStreamStore.getState().setDraftAttachments(previousDraftAttachments);
+        }
         startTransition(() => {
           input.setLiveMessagesByKey((current) => {
             const { [optimisticMessageKey]: _removed, ...next } = current;
             return next;
           });
-          if (options?.clearDraft !== false) {
-            useStreamStore.getState().setDraftMessage(previousDraftMessage);
-            useStreamStore.getState().setDraftAttachments(previousDraftAttachments);
-          }
         });
         throw error;
       }
@@ -183,13 +186,14 @@ export function useSessionSubmitActions(input: {
     }
   );
 
-  const sendMessage = useEffectEvent(async () => {
+  const sendMessage = useEffectEvent(async (draftOverride?: { message: string; attachments: DraftImageAttachment[] }) => {
     if (!input.sessionId.trim()) {
       input.reportError("请先创建或加载 session。");
       return;
     }
 
-    const { draftMessage, draftAttachments } = useStreamStore.getState();
+    const draftMessage = draftOverride?.message ?? useStreamStore.getState().draftMessage;
+    const draftAttachments = draftOverride?.attachments ?? useStreamStore.getState().draftAttachments;
     const content = buildComposerMessageContent(draftMessage, draftAttachments);
     if (!content) {
       return;
@@ -200,18 +204,23 @@ export function useSessionSubmitActions(input: {
         clearDraft: true
       });
     } catch (error) {
+      if (draftOverride) {
+        useStreamStore.getState().setDraftMessage(draftOverride.message);
+        useStreamStore.getState().setDraftAttachments(draftOverride.attachments);
+      }
       input.reportError(error);
       input.openConsoleForErrors();
     }
   });
 
-  const guideMessage = useEffectEvent(async () => {
+  const guideMessage = useEffectEvent(async (draftOverride?: { message: string; attachments: DraftImageAttachment[] }) => {
     if (!input.sessionId.trim()) {
       input.reportError("请先创建或加载 session。");
       return;
     }
 
-    const { draftMessage, draftAttachments } = useStreamStore.getState();
+    const draftMessage = draftOverride?.message ?? useStreamStore.getState().draftMessage;
+    const draftAttachments = draftOverride?.attachments ?? useStreamStore.getState().draftAttachments;
     const content = buildComposerMessageContent(draftMessage, draftAttachments);
     if (!content) {
       return;
@@ -224,6 +233,10 @@ export function useSessionSubmitActions(input: {
         activityLabel: "已引导当前 run，正在切换到新的处理轮次"
       });
     } catch (error) {
+      if (draftOverride) {
+        useStreamStore.getState().setDraftMessage(draftOverride.message);
+        useStreamStore.getState().setDraftAttachments(draftOverride.attachments);
+      }
       input.reportError(error);
       input.openConsoleForErrors();
     }

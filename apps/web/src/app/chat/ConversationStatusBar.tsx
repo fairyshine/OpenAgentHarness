@@ -33,6 +33,7 @@ type ConversationStatusBarProps = {
   hasActiveSession: boolean;
   isRunning: boolean;
   messagesCount: number;
+  storedMessagesCount: number;
   todoProgress: ConversationTodoProgress | null;
   terminalStates: ConversationTerminalState[];
   onOpenTerminal: (terminalId?: string | undefined) => void;
@@ -470,12 +471,14 @@ export const ConversationStatusBar = memo(function ConversationStatusBar(props: 
     selectedSessionModelValue === AUTO_SESSION_MODEL_VALUE
       ? "Auto"
       : (sessionModelOptions.find((model) => model.ref === selectedSessionModelValue)?.name ?? selectedSessionModelValue);
+  const currentSessionRunCount = props.session ? props.sessionRuns.filter((sessionRun) => sessionRun.sessionId === props.session?.id).length : 0;
+  const currentSessionRun = props.session && run?.sessionId === props.session.id ? run : null;
   const sessionModelLocked =
-    props.messagesCount > 0 ||
-    props.sessionRuns.length > 0 ||
-    (run?.sessionId != null && run.sessionId === props.session?.id) ||
+    props.storedMessagesCount > 0 ||
+    currentSessionRunCount > 0 ||
+    currentSessionRun !== null ||
     props.isRunning;
-  const runStatusLabel = props.isRunning ? "运行中" : run?.status ? run.status : "idle";
+  const runStatusLabel = props.isRunning ? "运行中" : currentSessionRun?.status ? currentSessionRun.status : "idle";
   const statusDetail = props.isSwitchingSessionAgent
     ? "正在更新 Agent"
     : props.isSwitchingSessionModel
@@ -681,4 +684,3 @@ export const ConversationStatusBar = memo(function ConversationStatusBar(props: 
     </div>
   );
 });
-

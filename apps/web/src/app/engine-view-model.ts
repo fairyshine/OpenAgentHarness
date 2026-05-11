@@ -358,7 +358,11 @@ export function buildRuntimeViewModel(params: {
   selectedEventId: string;
   sessionId: string;
 }) {
-  const visibleMessages = params.messages.filter((message) => !params.queuedMessageIds.has(message.id));
+  const visibleMessages = params.messages.filter(
+    (message) =>
+      !params.queuedMessageIds.has(message.id) &&
+      (!params.sessionId.trim() || !message.sessionId || message.sessionId === params.sessionId)
+  );
   const modelCallTraces: ModelCallTrace[] = [];
   const modelCallTracesById = new Map<string, ModelCallTrace>();
   const modelCallTracesBySeq = new Map<number, ModelCallTrace>();

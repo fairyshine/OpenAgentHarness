@@ -22,6 +22,9 @@ import {
 } from "./support";
 import type { NavigationActionParams } from "./navigation-action-types";
 import { createNavigationStateActions } from "./navigation-state-actions";
+import { isPendingSessionId } from "./app-controller-utils";
+
+const DEFAULT_NEW_SESSION_TITLE = "New session";
 
 function scheduleDeferredIdleTask(callback: () => void, delayMs: number, timeoutMs: number) {
   window.setTimeout(() => {
@@ -157,6 +160,13 @@ export function useNavigationActions(params: NavigationActionParams) {
   }
 
   async function removeSavedSession(sessionToRemoveId: string) {
+    if (isPendingSessionId(sessionToRemoveId)) {
+      params.navigation.setSavedSessions((current) => current.filter((entry) => entry.id !== sessionToRemoveId));
+      params.navigation.setRecentSessions((current) => current.filter((entry) => entry !== sessionToRemoveId));
+      params.navigation.setExpandedSessionIds((current) => current.filter((entry) => entry !== sessionToRemoveId));
+      return;
+    }
+
     const sessionIdsToRemove = collectSessionTreeIds(sessionToRemoveId, params.navigation.savedSessions);
     const sessionIdsToRemoveSet = new Set(sessionIdsToRemove);
     const previousSavedSessions = params.navigation.savedSessions;
@@ -194,6 +204,10 @@ export function useNavigationActions(params: NavigationActionParams) {
   }
 
   async function renameSession(sessionToRenameId: string, title: string) {
+    if (isPendingSessionId(sessionToRenameId)) {
+      return;
+    }
+
     const nextTitle = title.trim();
     if (!nextTitle) {
       params.setErrorMessage("Session 名称不能为空。");
@@ -229,6 +243,10 @@ export function useNavigationActions(params: NavigationActionParams) {
   }
 
   async function switchSessionAgent(sessionToUpdateId: string, activeAgentName: string): Promise<Session | null> {
+    if (isPendingSessionId(sessionToUpdateId)) {
+      return null;
+    }
+
     const nextAgentName = activeAgentName.trim();
     if (!nextAgentName) {
       params.setErrorMessage("Agent 名称不能为空。");
@@ -266,6 +284,10 @@ export function useNavigationActions(params: NavigationActionParams) {
   }
 
   async function updateSessionModel(sessionToUpdateId: string, modelRef: string | null): Promise<Session | null> {
+    if (isPendingSessionId(sessionToUpdateId)) {
+      return null;
+    }
+
     try {
       const updated = await params.request<Session>(`/api/v1/sessions/${sessionToUpdateId}`, {
         method: "PATCH",
@@ -714,6 +736,9 @@ export function useNavigationActions(params: NavigationActionParams) {
     if (!nextSessionId) {
       return;
     }
+    if (isPendingSessionId(nextSessionId)) {
+      return;
+    }
 
     const switchingSession = nextSessionId !== params.navigation.sessionId;
 
@@ -811,7 +836,7 @@ export function useNavigationActions(params: NavigationActionParams) {
       agentName: "",
       activeAgentName: "",
       status: "active",
-      title: "New session",
+      title: DEFAULT_NEW_SESSION_TITLE,
       createdAt: pendingCreatedAt,
       updatedAt: pendingCreatedAt
     };
@@ -856,7 +881,7 @@ export function useNavigationActions(params: NavigationActionParams) {
         headers: {
           "content-type": "application/json"
         },
-        body: JSON.stringify({})
+        body: JSON.stringify({ title: DEFAULT_NEW_SESSION_TITLE })
       });
 
       if (params.runtime.activeSessionIdRef.current !== pendingSessionId) {
@@ -870,18 +895,34 @@ export function useNavigationActions(params: NavigationActionParams) {
       }
 
       params.runtime.activeSessionIdRef.current = created.id;
+      params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: created.id, at: Date.now() };
+      params.runtime.newEmptySessionIdRef.current = created.id;
       startTransition(() => {
         params.navigation.setSession(created);
         params.navigation.setSessionId(created.id);
         params.navigation.setWorkspaceId(created.workspaceId);
-        params.navigation.setSavedSessions((current) => current.filter((entry) => entry.id !== pendingSessionId));
+        params.navigation.setSavedSessions((current) =>
+          current.map((entry) =>
+            entry.id === pendingSessionId
+              ? {
+                  id: created.id,
+                  workspaceId: created.workspaceId,
+                  ...(created.parentSessionId ? { parentSessionId: created.parentSessionId } : {}),
+                  title: created.title,
+                  modelRef: created.modelRef,
+                  agentName: created.activeAgentName,
+                  lastRunAt: created.lastRunAt,
+                  createdAt: created.createdAt,
+                  lastOpenedAt: entry.lastOpenedAt
+                }
+              : entry
+          )
+        );
         params.navigation.setRecentSessions((current) => addRecentId(current.filter((entry) => entry !== pendingSessionId), created.id));
       });
       rememberSession(created);
       touchSavedWorkspace(created.workspaceId);
       expandWorkspaceInSidebar(created.workspaceId);
-      params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: created.id, at: Date.now() };
-      params.runtime.newEmptySessionIdRef.current = created.id;
       params.setActivity(`Session ${created.id} 已创建`);
       params.setErrorMessage("");
     } catch (error) {

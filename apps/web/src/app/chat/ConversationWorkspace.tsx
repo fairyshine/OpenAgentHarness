@@ -179,6 +179,12 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
         hasActiveSession={props.hasActiveSession}
         isRunning={isRunning}
         messagesCount={props.messageFeed.length}
+        storedMessagesCount={
+          props.storedMessageCounts.system +
+          props.storedMessageCounts.user +
+          props.storedMessageCounts.assistant +
+          props.storedMessageCounts.tool
+        }
         todoProgress={todoProgress}
         terminalStates={terminalStates}
         onOpenTerminal={handleOpenTerminal}

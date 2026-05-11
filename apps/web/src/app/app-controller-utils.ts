@@ -5,6 +5,10 @@ import { compareSavedSessionsByRecency, isRecord, type SavedSessionRecord } from
 const MESSAGE_PAGE_SIZE = 48;
 const LIVE_MESSAGE_PAGE_SIZE = 24;
 
+export function isPendingSessionId(sessionId: string | null | undefined) {
+  return Boolean(sessionId?.trim().startsWith("pending-session:"));
+}
+
 export function buildMessagePagePath(
   sessionId: string,
   options?: {

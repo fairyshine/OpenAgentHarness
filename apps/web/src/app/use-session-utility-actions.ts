@@ -11,6 +11,7 @@ import type {
 } from "@oah/api-contracts";
 
 import type { ModelDraft } from "./support";
+import { isPendingSessionId } from "./app-controller-utils";
 
 export function useSessionUtilityActions(input: {
   sessionId: string;
@@ -35,7 +36,7 @@ export function useSessionUtilityActions(input: {
   ): Promise<SessionTerminalSnapshot | null> {
     const normalizedSessionId = targetSessionId.trim();
     const normalizedTerminalId = terminalId.trim();
-    if (!normalizedSessionId || !normalizedTerminalId) {
+    if (!normalizedSessionId || isPendingSessionId(normalizedSessionId) || !normalizedTerminalId) {
       return null;
     }
 
@@ -52,7 +53,7 @@ export function useSessionUtilityActions(input: {
   }): Promise<SessionTerminalInputAccepted | null> {
     const normalizedSessionId = params.sessionId.trim();
     const normalizedTerminalId = params.terminalId.trim();
-    if (!normalizedSessionId || !normalizedTerminalId) {
+    if (!normalizedSessionId || isPendingSessionId(normalizedSessionId) || !normalizedTerminalId) {
       return null;
     }
 
@@ -84,7 +85,9 @@ export function useSessionUtilityActions(input: {
 
     try {
       const attachedSessionId =
-        input.session?.workspaceId === targetWorkspaceId && input.session.id.trim().length > 0
+        input.session?.workspaceId === targetWorkspaceId &&
+        input.session.id.trim().length > 0 &&
+        !isPendingSessionId(input.session.id)
           ? input.session.id
           : undefined;
       const accepted = await input.request<ActionRunAccepted>(

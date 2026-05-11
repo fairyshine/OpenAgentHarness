@@ -33,6 +33,22 @@ export const ConversationComposer = memo(function ConversationComposer(props: Co
     ? "Updating session agent…"
     : "Message the current session or drop images here";
 
+  const submitDraft = useCallback(() => {
+    const message = draftMessage;
+    const attachments = draftAttachments;
+    if (message.trim().length === 0 && attachments.length === 0) {
+      return;
+    }
+
+    if (textareaRef.current) {
+      textareaRef.current.value = "";
+      textareaRef.current.style.height = "auto";
+    }
+    setDraftMessage("");
+    setDraftAttachments([]);
+    props.sendMessage({ message, attachments });
+  }, [draftAttachments, draftMessage, props.sendMessage, setDraftAttachments, setDraftMessage]);
+
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) {
@@ -48,11 +64,11 @@ export const ConversationComposer = memo(function ConversationComposer(props: Co
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         if (canSend) {
-          props.sendMessage();
+          submitDraft();
         }
       }
     },
-    [canSend, props.sendMessage]
+    [canSend, submitDraft]
   );
 
   const appendAttachments = useCallback(
@@ -227,7 +243,7 @@ export const ConversationComposer = memo(function ConversationComposer(props: Co
 
         {!props.isRunning || canSend ? (
           <Button
-            onClick={props.sendMessage}
+            onClick={submitDraft}
             disabled={!canSend}
             size="icon"
             className="shadow-elegant h-9 w-9 flex-shrink-0"
@@ -260,4 +276,3 @@ export const ConversationComposer = memo(function ConversationComposer(props: Co
     </div>
   );
 });
-

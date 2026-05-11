@@ -3,7 +3,7 @@ import { startTransition, useEffectEvent, useRef, type Dispatch, type SetStateAc
 import type { Run, RunPage, RunStep, Session, SessionPage, SessionQueue, SessionQueuedRun } from "@oah/api-contracts";
 
 import { isNotFoundError, isTerminalRunStatus, type SavedSessionRecord } from "./support";
-import { mergeRunStepsForRun, mergeSavedSessionRecords, savedSessionFromSession, sortRunSteps } from "./app-controller-utils";
+import { isPendingSessionId, mergeRunStepsForRun, mergeSavedSessionRecords, savedSessionFromSession, sortRunSteps } from "./app-controller-utils";
 
 type SessionIdRef = {
   current: string;
@@ -123,6 +123,15 @@ export function useSessionRunActions(input: {
     if (!input.sessionId.trim()) {
       return;
     }
+    if (isPendingSessionId(input.sessionId)) {
+      startTransition(() => {
+        input.setSessionRuns([]);
+        input.setRun(null);
+        input.setRunSteps([]);
+        input.setSelectedRunId("");
+      });
+      return;
+    }
     if (input.newEmptySessionId === input.sessionId) {
       startTransition(() => {
         input.setSessionRuns([]);
@@ -175,7 +184,9 @@ export function useSessionRunActions(input: {
 
   const refreshVisibleSidebarChildSessions = useEffectEvent(
     async (rootSessionIds: string[]): Promise<SavedSessionRecord[]> => {
-      const parentSessionIds = uniqueNonEmptyStrings(rootSessionIds).slice(0, SIDEBAR_CHILD_REFRESH_LIMIT);
+      const parentSessionIds = uniqueNonEmptyStrings(rootSessionIds)
+        .filter((sessionId) => !isPendingSessionId(sessionId))
+        .slice(0, SIDEBAR_CHILD_REFRESH_LIMIT);
       if (parentSessionIds.length === 0) {
         return [];
       }
@@ -211,7 +222,7 @@ export function useSessionRunActions(input: {
   );
 
   const refreshSidebarSessionRuns = useEffectEvent(async (quiet = true, options?: { includeChildren?: boolean }): Promise<boolean> => {
-    const visibleSessionIds = uniqueNonEmptyStrings(input.visibleSidebarSessionIds);
+    const visibleSessionIds = uniqueNonEmptyStrings(input.visibleSidebarSessionIds).filter((sessionId) => !isPendingSessionId(sessionId));
     const visibleSessionIdSet = new Set(visibleSessionIds);
     const knownActiveSessionIds = Object.entries(input.sidebarSessionRunsById)
       .filter(([targetSessionId, runs]) => visibleSessionIdSet.has(targetSessionId) && runs.some((item) => !isTerminalRunStatus(item.status)))
@@ -235,6 +246,7 @@ export function useSessionRunActions(input: {
       ...knownActiveSessionIds,
       ...coldStartSessionIds
     ])
+      .filter((targetSessionId) => !isPendingSessionId(targetSessionId))
       .filter((targetSessionId) => targetSessionId !== input.newEmptySessionId)
       .slice(0, SIDEBAR_CHILD_REFRESH_LIMIT);
     const seq = ++sidebarSessionRunsRefreshSeqRef.current;
@@ -274,7 +286,7 @@ export function useSessionRunActions(input: {
               .map((entry) => entry.id)
           ].slice(0, SIDEBAR_RUN_REFRESH_LIMIT)
         )
-      );
+      ).filter((targetSessionId) => !isPendingSessionId(targetSessionId));
       const results = await Promise.all(
         effectiveSessionIds.map(async (targetSessionId) => {
           try {
@@ -418,6 +430,12 @@ export function useSessionRunActions(input: {
   const refreshSessionQueue = useEffectEvent(async (quiet = false) => {
     const targetSessionId = input.sessionId.trim();
     if (!targetSessionId) {
+      startTransition(() => {
+        input.setSessionQueuedRuns([]);
+      });
+      return;
+    }
+    if (isPendingSessionId(targetSessionId)) {
       startTransition(() => {
         input.setSessionQueuedRuns([]);
       });

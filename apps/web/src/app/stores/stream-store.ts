@@ -36,8 +36,39 @@ type StreamState = {
   setGenerateBusy: Dispatch<SetStateAction<boolean>>;
 };
 
+const DRAFT_MESSAGE_STORAGE_KEY = "oah.web.draftMessage";
+
 function resolve<T>(updater: SetStateAction<T>, current: T): T {
   return typeof updater === "function" ? (updater as (prev: T) => T)(current) : updater;
+}
+
+function readStoredDraftMessage() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  try {
+    return window.sessionStorage.getItem(DRAFT_MESSAGE_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredDraftMessage(value: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (value.length === 0) {
+      window.sessionStorage.removeItem(DRAFT_MESSAGE_STORAGE_KEY);
+      return;
+    }
+
+    window.sessionStorage.setItem(DRAFT_MESSAGE_STORAGE_KEY, value);
+  } catch {
+    // Safari private windows and storage quota errors should not break typing.
+  }
 }
 
 export const useStreamStore = create<StreamState>((set, get) => ({
@@ -47,7 +78,7 @@ export const useStreamStore = create<StreamState>((set, get) => ({
   sessionRuns: [],
   run: null,
   runSteps: [],
-  draftMessage: "",
+  draftMessage: readStoredDraftMessage(),
   draftAttachments: [],
   liveMessagesByKey: {},
   streamState: "idle",
@@ -59,7 +90,11 @@ export const useStreamStore = create<StreamState>((set, get) => ({
   setSessionRuns: (updater) => set({ sessionRuns: resolve(updater, get().sessionRuns) }),
   setRun: (updater) => set({ run: resolve(updater, get().run) }),
   setRunSteps: (updater) => set({ runSteps: resolve(updater, get().runSteps) }),
-  setDraftMessage: (updater) => set({ draftMessage: resolve(updater, get().draftMessage) }),
+  setDraftMessage: (updater) => {
+    const draftMessage = resolve(updater, get().draftMessage);
+    writeStoredDraftMessage(draftMessage);
+    set({ draftMessage });
+  },
   setDraftAttachments: (updater) => set({ draftAttachments: resolve(updater, get().draftAttachments) }),
   setLiveMessagesByKey: (updater) => set({ liveMessagesByKey: resolve(updater, get().liveMessagesByKey) }),
   setStreamState: (updater) => set({ streamState: resolve(updater, get().streamState) }),
