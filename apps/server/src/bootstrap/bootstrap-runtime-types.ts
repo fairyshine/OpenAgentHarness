@@ -7,10 +7,10 @@ import type { ServerConfig } from "@oah/config";
 import type {
   ModelGateway,
   SandboxHostProviderKind
-} from "../../../../packages/engine-core/src/types.js";
-import type { ExecutionRuntimeOperations } from "../../../../packages/engine-core/src/execution-engine-service.js";
-import type { EngineService } from "../../../../packages/engine-core/src/engine-service.js";
-import type { ControlPlaneRuntimeOperations } from "../../../../packages/engine-core/src/control-plane-engine-service.js";
+} from "@oah/engine-core";
+import type { ExecutionRuntimeOperations } from "@oah/engine-core";
+import type { EngineService } from "@oah/engine-core";
+import type { ControlPlaneRuntimeOperations } from "@oah/engine-core";
 import type { EngineAdminCapabilities } from "./admin-capabilities.js";
 import type { EngineProcessDescriptor } from "./engine-process.js";
 import type { PlatformModelSnapshot } from "./platform-model-service.js";

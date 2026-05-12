@@ -1,4 +1,4 @@
-import type { WorkspacePrewarmer, WorkspaceRecord } from "../../../../packages/engine-core/src/types.js";
+import type { WorkspacePrewarmer, WorkspaceRecord } from "@oah/engine-core";
 
 import type { SandboxHost } from "./sandbox-host.js";
 

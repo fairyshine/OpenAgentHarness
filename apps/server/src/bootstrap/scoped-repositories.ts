@@ -1,12 +1,12 @@
 import type { Run, Session } from "@oah/api-contracts";
-import { AppError } from "../../../../packages/engine-core/src/errors.js";
-import { parseCursor } from "../../../../packages/engine-core/src/utils.js";
+import { AppError } from "@oah/engine-core";
+import { parseCursor } from "@oah/engine-core";
 import type {
   RunRepository,
   SessionRepository,
   WorkspaceRecord,
   WorkspaceRepository
-} from "../../../../packages/engine-core/src/types.js";
+} from "@oah/engine-core";
 
 async function listVisibleWorkspaces(
   repository: WorkspaceRepository,

@@ -2,8 +2,8 @@ import type { FSWatcher } from "node:fs";
 import path from "node:path";
 import type { ServerConfig } from "@oah/config";
 
-import { ControlPlaneEngineService, type ControlPlaneRuntimeOperations } from "../../../../packages/engine-core/src/control-plane-engine-service.js";
-import type { EngineService } from "../../../../packages/engine-core/src/engine-service.js";
+import { ControlPlaneEngineService, type ControlPlaneRuntimeOperations } from "@oah/engine-core";
+import type { EngineService } from "@oah/engine-core";
 import type {
   EngineLogger,
   RunRepository,
@@ -11,7 +11,7 @@ import type {
   WorkspacePrewarmer,
   WorkspaceRecord,
   WorkspaceRepository
-} from "../../../../packages/engine-core/src/types.js";
+} from "@oah/engine-core";
 import { cleanupWorkspaceLocalArtifacts } from "./engine-state-paths.js";
 import { ScopedRunRepository, ScopedSessionRepository, ScopedWorkspaceRepository } from "./scoped-repositories.js";
 import type { SandboxHost } from "./sandbox-host.js";

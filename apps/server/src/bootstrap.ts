@@ -4,10 +4,10 @@ import type { ServerConfig } from "@oah/config";
 import type {
   ModelGateway,
   WorkspaceRecord
-} from "../../../packages/engine-core/src/types.js";
-import { ExecutionEngineService } from "../../../packages/engine-core/src/execution-engine-service.js";
-import { EngineService } from "../../../packages/engine-core/src/engine-service.js";
-import type { ControlPlaneRuntimeOperations } from "../../../packages/engine-core/src/control-plane-engine-service.js";
+} from "@oah/engine-core";
+import { ExecutionEngineService } from "@oah/engine-core";
+import { EngineService } from "@oah/engine-core";
+import type { ControlPlaneRuntimeOperations } from "@oah/engine-core";
 import type { WorkspaceMaterializationManager } from "./bootstrap/workspace-materialization.js";
 import type { SandboxHost } from "./bootstrap/sandbox-host.js";
 import { LazyModelRuntime } from "./bootstrap/lazy-model-runtime.js";

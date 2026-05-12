@@ -1,5 +1,5 @@
 import type { ServerConfig } from "@oah/config";
-import type { ExecutionRuntimeOperations } from "../../../../packages/engine-core/src/execution-engine-service.js";
+import type { ExecutionRuntimeOperations } from "@oah/engine-core";
 import type { WorkerRuntimeControl } from "./worker-runtime.js";
 
 type WorkerRuntimeModule = Awaited<ReturnType<typeof import("./module-loaders.js").loadWorkerRuntimeModule>>;

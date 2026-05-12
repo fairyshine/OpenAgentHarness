@@ -24,23 +24,17 @@ let nativeBridgeModulePromise: Promise<typeof import("@oah/native-bridge")> | un
 let metadataRetentionModulePromise: Promise<typeof import("../metadata-retention.js")> | undefined;
 
 export function loadConfigWorkspaceModule(): Promise<typeof import("@oah/config/workspace")> {
-  configWorkspaceModulePromise ??= import("@oah/config/workspace").catch(() =>
-    import("../../../../packages/config/src/workspace.js")
-  );
+  configWorkspaceModulePromise ??= import("@oah/config/workspace");
   return configWorkspaceModulePromise;
 }
 
 export function loadConfigRuntimesModule(): Promise<typeof import("@oah/config/runtimes")> {
-  configRuntimesModulePromise ??= import("@oah/config/runtimes").catch(() =>
-    import("../../../../packages/config/src/runtimes.js")
-  );
+  configRuntimesModulePromise ??= import("@oah/config/runtimes");
   return configRuntimesModulePromise;
 }
 
 export function loadConfigServerConfigModule(): Promise<{ loadServerConfig: (configPath: string) => Promise<ServerConfig> }> {
-  configServerConfigModulePromise ??= import("@oah/config/server-config").catch(() =>
-    import("../../../../packages/config/src/server-config.js")
-  );
+  configServerConfigModulePromise ??= import("@oah/config/server-config");
   return configServerConfigModulePromise;
 }
 

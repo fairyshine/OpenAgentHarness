@@ -1,8 +1,8 @@
 import type { CreateWorkspaceRequest } from "@oah/api-contracts";
 import type { ServerConfig } from "@oah/config";
 
-import type { WorkspaceRecord } from "../../../../packages/engine-core/src/types.js";
-import { createId } from "../../../../packages/engine-core/src/utils.js";
+import type { WorkspaceRecord } from "@oah/engine-core";
+import { createId } from "@oah/engine-core";
 
 import { resolveManagedWorkspaceExternalRef } from "./object-storage-policy.js";
 import { resolveRuntimeSourceDirForBootstrap } from "./runtime-upload-cache.js";

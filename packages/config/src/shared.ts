@@ -51,11 +51,18 @@ function resolveRuntimeAssetFileUrl(relativePath: string): URL {
   const normalizedRelativePath = path.posix.normalize(relativePath.replaceAll("\\", "/")).replace(/^(\.\.\/)+/u, "");
   const configuredRoot = process.env.OAH_DOCS_ROOT?.trim();
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const packagedSchemaPath = normalizedRelativePath.startsWith("docs/schemas/")
+    ? path.join(moduleDir, "schemas", normalizedRelativePath.slice("docs/schemas/".length))
+    : undefined;
   const candidateRoots = [
     configuredRoot,
     process.cwd(),
     path.resolve(moduleDir, "../../..")
   ].filter((candidate): candidate is string => Boolean(candidate));
+
+  if (packagedSchemaPath && existsSync(packagedSchemaPath)) {
+    return pathToFileURL(packagedSchemaPath);
+  }
 
   for (const root of candidateRoots) {
     const candidatePath = path.join(root, normalizedRelativePath);

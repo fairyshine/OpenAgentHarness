@@ -1,4 +1,4 @@
-import type { SessionRunQueuePressure } from "../../../../packages/engine-core/src/coordination.js";
+import type { SessionRunQueuePressure } from "@oah/engine-core";
 
 export function selectPlacementPreferredWorkerId(placement: {
   state?: "unassigned" | "active" | "idle" | "draining" | "evicted" | undefined;

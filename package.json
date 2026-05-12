@@ -10,7 +10,7 @@
   "scripts": {
     "bench:archive-export": "pnpm exec tsx ./scripts/bench-archive-export.ts",
     "bench:runtime-materialize": "pnpm exec tsx ./scripts/bench-runtime-materialize.ts",
-    "build": "tsc -b && pnpm --filter @oah/web build && node ./scripts/copy-webui-to-cli.mjs && node ./scripts/copy-oap-assets-to-cli.mjs",
+    "build": "tsc -b && node ./scripts/copy-config-schemas.mjs && pnpm --filter @oah/web build && node ./scripts/copy-webui-to-cli.mjs && node ./scripts/copy-oap-assets-to-cli.mjs",
     "build:release-bundle": "node ./scripts/build-release-bundle.mjs",
     "build:runtime-bundles": "node ./scripts/build-runtime-bundles.mjs",
     "bench:object-storage-sync": "pnpm exec tsx ./scripts/bench-object-storage-sync.ts",

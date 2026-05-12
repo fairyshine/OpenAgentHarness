@@ -2,9 +2,9 @@ import path from "node:path";
 import { access, realpath, stat } from "node:fs/promises";
 
 import type { ServerConfig } from "@oah/config";
-import type { WorkspaceRecord } from "../../../../packages/engine-core/src/types.js";
+import type { WorkspaceRecord } from "@oah/engine-core";
 import type { WorkspaceRepository } from "@oah/engine-core";
-import { AppError } from "../../../../packages/engine-core/src/errors.js";
+import { AppError } from "@oah/engine-core";
 import type { SandboxHost } from "./sandbox-host.js";
 import type { WorkerRuntimeStatus } from "./worker-runtime.js";
 import { resolveManagedWorkspaceExternalRef } from "./object-storage-policy.js";

@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { ServerConfig } from "@oah/config";
-import { AppError } from "../../../../packages/engine-core/src/errors.js";
+import { AppError } from "@oah/engine-core";
 import {
   prepareRuntimeUploadCacheDir,
   removeRuntimeFromUploadCaches,

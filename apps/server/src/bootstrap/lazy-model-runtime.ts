@@ -6,7 +6,7 @@ import type {
   ModelGateway,
   ModelStreamOptions,
   StreamedModelResponse
-} from "../../../../packages/engine-core/src/types.js";
+} from "@oah/engine-core";
 
 type RuntimeAiSdkModelRuntime = ModelGateway & {
   clearModelCache?(modelNames?: string[]): void;

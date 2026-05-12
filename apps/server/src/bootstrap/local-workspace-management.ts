@@ -2,10 +2,10 @@ import path from "node:path";
 
 import type { ServerConfig } from "@oah/config";
 import type { WorkspaceRepository } from "@oah/engine-core";
-import { AppError } from "../../../../packages/engine-core/src/errors.js";
-import type { WorkspaceRecord } from "../../../../packages/engine-core/src/types.js";
-import { nowIso } from "../../../../packages/engine-core/src/utils.js";
-import type { EngineService } from "../../../../packages/engine-core/src/engine-service.js";
+import { AppError } from "@oah/engine-core";
+import type { WorkspaceRecord } from "@oah/engine-core";
+import { nowIso } from "@oah/engine-core";
+import type { EngineService } from "@oah/engine-core";
 import type { BootstrappedRuntime } from "./bootstrap-runtime-types.js";
 import {
   localWorkspaceExternalRef,

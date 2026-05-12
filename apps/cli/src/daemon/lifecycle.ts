@@ -272,7 +272,7 @@ function assertCommandAvailable(command: string, message: string): void {
 }
 
 function resolveSourceRepoRoot(packageRoot: string): string | undefined {
-  const candidates = [path.resolve(packageRoot, "../.."), process.cwd()];
+  const candidates = [path.resolve(packageRoot, "../..")];
   return candidates.find(
     (candidate) =>
       existsSync(path.join(candidate, "pnpm-workspace.yaml")) &&

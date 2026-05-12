@@ -1,4 +1,4 @@
-import type { EngineService } from "../../../../packages/engine-core/src/engine-service.js";
+import type { EngineService } from "@oah/engine-core";
 import type { SandboxHost } from "./sandbox-host.js";
 import type { WorkspaceMaterializationManager } from "./workspace-materialization.js";
 import type { BootstrappedRuntime } from "./bootstrap-runtime-types.js";

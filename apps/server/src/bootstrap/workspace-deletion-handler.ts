@@ -1,6 +1,6 @@
 import type { ServerConfig } from "@oah/config";
-import { AppError } from "../../../../packages/engine-core/src/errors.js";
-import type { WorkspaceRecord } from "../../../../packages/engine-core/src/types.js";
+import { AppError } from "@oah/engine-core";
+import type { WorkspaceRecord } from "@oah/engine-core";
 import {
   cleanupWorkspaceLocalArtifacts,
   type WorkspaceLocalArtifactCleanupStatus
