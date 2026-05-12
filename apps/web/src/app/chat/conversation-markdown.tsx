@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components as MarkdownComponents } from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 
 import { LONG_MESSAGE_COLLAPSE_CHARS, LONG_MESSAGE_PREVIEW_CHARS } from "./conversation-model";
 
-const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
+const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex];
+const MARKDOWN_CODE_SEGMENT_PATTERN = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/gu;
 
 export function estimateMarkdownBlockHeight(text: string) {
   const lineCount = text.split("\n").length;
@@ -13,6 +17,26 @@ export function estimateMarkdownBlockHeight(text: string) {
 
 export function shouldDeferMarkdownRendering(text: string) {
   return text.length > 1400 || text.includes("```") || text.includes("|");
+}
+
+function normalizeMathDelimiters(text: string) {
+  if (!text.includes("\\(") && !text.includes("\\[")) {
+    return text;
+  }
+
+  return text.split(MARKDOWN_CODE_SEGMENT_PATTERN).map((segment) => {
+    if (
+      segment.startsWith("```") ||
+      segment.startsWith("~~~") ||
+      (segment.startsWith("`") && segment.endsWith("`"))
+    ) {
+      return segment;
+    }
+
+    return segment
+      .replace(/\\\[([\s\S]*?)\\\]/gu, (_match, math: string) => `\n\n$$\n${math.trim()}\n$$\n\n`)
+      .replace(/\\\(([\s\S]*?)\\\)/gu, (_match, math: string) => `$${math.trim()}$`);
+  }).join("");
 }
 
 export function DeferredConversationBlock({
@@ -158,6 +182,7 @@ export function ExpandableMarkdownText({
 
 
 export function MarkdownText({ text, isUser }: { text: string; isUser?: boolean }) {
+  const normalizedText = useMemo(() => normalizeMathDelimiters(text), [text]);
   const markdownComponents = useMemo(
     (): MarkdownComponents => ({
       p: ({ children }) => <p className="mb-2 last:mb-0 text-sm leading-relaxed">{children}</p>,
@@ -212,12 +237,14 @@ export function MarkdownText({ text, isUser }: { text: string; isUser?: boolean 
   );
 
   return (
-    <ReactMarkdown
-      remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-      components={markdownComponents}
-    >
-      {text}
-    </ReactMarkdown>
+    <div className="math-content">
+      <ReactMarkdown
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        components={markdownComponents}
+      >
+        {normalizedText}
+      </ReactMarkdown>
+    </div>
   );
 }
-

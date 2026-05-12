@@ -1006,19 +1006,26 @@ body {
 }
 
 /* Math content */
-.math-content mjx-container {
+.math-content mjx-container,
+.math-content .katex-display {
   margin: 0;
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
 }
 
-.math-content mjx-container[jax='SVG'][display='true'] {
+.math-content mjx-container[jax='SVG'][display='true'],
+.math-content .katex-display {
   margin: 0.75rem 0;
 }
 
-.math-content mjx-container[jax='SVG'] > svg {
+.math-content mjx-container[jax='SVG'] > svg,
+.math-content .katex {
   max-width: 100%;
+}
+
+.math-content .katex-display > .katex {
+  white-space: nowrap;
 }
 
 /* Shiki code block */

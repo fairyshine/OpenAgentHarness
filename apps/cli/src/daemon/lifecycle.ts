@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createReadStream, existsSync, openSync } from "node:fs";
 import { access, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -131,6 +131,9 @@ export async function startDaemon(options: DaemonStartOptions = {}): Promise<str
       OAH_TOKEN: token
     }
   });
+  child.on("error", (error) => {
+    process.stderr.write(`Failed to start OAP daemon process: ${error.message}\n`);
+  });
   child.unref();
   await writeFile(paths.pidPath, `${child.pid}\n`, { mode: 0o644 });
 
@@ -224,20 +227,28 @@ export function followDaemonLogs(options: DaemonLogOptions = {}): void {
 }
 
 async function resolveServerCommand(paths: DaemonPaths): Promise<{ command: string; args: string[] }> {
-  const sourceEntry = path.join(paths.repoRoot, "apps", "server", "src", "index.ts");
-  if (await pathExists(sourceEntry)) {
-    const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-    return {
-      command: pnpmCommand,
-      args: ["exec", "tsx", "--tsconfig", "./apps/server/tsconfig.json", "./apps/server/src/index.ts", "--", "--config", paths.configPath]
-    };
-  }
-
   const distEntry = path.join(paths.repoRoot, "apps", "server", "dist", "index.js");
   if (await pathExists(distEntry)) {
     return {
       command: process.execPath,
       args: [distEntry, "--config", paths.configPath]
+    };
+  }
+
+  const sourceEntry = path.join(paths.repoRoot, "apps", "server", "src", "index.ts");
+  if (await pathExists(sourceEntry)) {
+    const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+    assertCommandAvailable(
+      pnpmCommand,
+      [
+        "Source checkout daemon startup requires pnpm because the server is launched through `pnpm exec tsx`.",
+        "Install it with `corepack enable && corepack prepare pnpm@10.30.2 --activate`, then run `pnpm install`.",
+        "Alternatively run `pnpm build` once so `oah daemon start` can use apps/server/dist/index.js without pnpm."
+      ].join(" ")
+    );
+    return {
+      command: pnpmCommand,
+      args: ["exec", "tsx", "--tsconfig", "./apps/server/tsconfig.json", "./apps/server/src/index.ts", "--", "--config", paths.configPath]
     };
   }
 
@@ -249,6 +260,15 @@ async function resolveServerCommand(paths: DaemonPaths): Promise<{ command: stri
     command: process.execPath,
     args: [packagedEntry, "--config", paths.configPath]
   };
+}
+
+function assertCommandAvailable(command: string, message: string): void {
+  const result = spawnSync(command, ["--version"], {
+    stdio: "ignore"
+  });
+  if (result.error && "code" in result.error && result.error.code === "ENOENT") {
+    throw new Error(message);
+  }
 }
 
 function resolveSourceRepoRoot(packageRoot: string): string | undefined {

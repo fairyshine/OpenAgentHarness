@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 OAH_HOME_DIR="${OAH_HOME:-$HOME/.openagentharness}"
-OUTPUT_DIR="$REPO_ROOT/release"
+OUTPUT_DIR="$REPO_ROOT/tmp/oah-config-share"
 ARCHIVE_NAME=""
 INCLUDE_RUNTIMES=1
 REDACT=1
@@ -17,7 +17,7 @@ Create a shareable OpenAgentHarness configuration archive.
 
 Options:
   --home <path>        OAH_HOME to export. Defaults to $OAH_HOME or ~/.openagentharness.
-  --output-dir <path>  Directory for the generated archive. Defaults to ./release.
+  --output-dir <path>  Directory for the generated archive. Defaults to ./tmp/oah-config-share.
   --name <name>        Archive file name. Defaults to oah-config-share-<timestamp>.tar.gz.
   --no-runtimes        Do not include OAH_HOME/runtimes.
   --no-redact          Do not redact secret-like values from copied text files.

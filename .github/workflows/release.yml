@@ -112,8 +112,8 @@ jobs:
         with:
           name: release-${{ matrix.name }}
           path: |
-            release/*.tar.gz
-            release/*.sha256
+            release/oah-v*.tar.gz
+            release/oah-v*.tar.gz.sha256
           if-no-files-found: error
 
   publish:
@@ -147,8 +147,14 @@ jobs:
           if [ "$prerelease" = "true" ]; then
             release_flags="--prerelease"
           fi
+          shopt -s nullglob
+          release_assets=(release/oah-v*.tar.gz release/oah-v*.tar.gz.sha256)
+          if [ "${#release_assets[@]}" -eq 0 ]; then
+            echo "No release assets found." >&2
+            exit 1
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" release/* --clobber
+            gh release upload "$tag" "${release_assets[@]}" --clobber
           else
-            gh release create "$tag" release/* --verify-tag --title "$tag" --generate-notes $release_flags
+            gh release create "$tag" "${release_assets[@]}" --verify-tag --title "$tag" --generate-notes $release_flags
           fi

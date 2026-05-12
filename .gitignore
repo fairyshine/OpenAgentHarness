@@ -13,3 +13,7 @@ dist
 coverage
 *.tsbuildinfo
 site/
+release/oah-config-share-*.tar.gz
+release/oah-config-share-*.tar.gz.sha256
+release/oah-config-share-current.tar.gz
+release/oah-config-share-current.tar.gz.sha256
