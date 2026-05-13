@@ -23,6 +23,7 @@ import {
 import type { NavigationActionParams } from "./navigation-action-types";
 import { createNavigationStateActions } from "./navigation-state-actions";
 import { isPendingSessionId } from "./app-controller-utils";
+import { createClientId } from "./client-id";
 
 const DEFAULT_NEW_SESSION_TITLE = "New session";
 
@@ -462,6 +463,7 @@ export function useNavigationActions(params: NavigationActionParams) {
               rootPath: item.rootPath,
               status: item.status,
               createdAt: item.createdAt,
+              updatedAt: item.updatedAt,
               lastOpenedAt: existing?.lastOpenedAt ?? item.updatedAt,
               ...(item.serviceName ? { serviceName: item.serviceName } : {}),
               ...(item.runtime
@@ -827,7 +829,7 @@ export function useNavigationActions(params: NavigationActionParams) {
       return;
     }
 
-    const pendingSessionId = `pending-session:${crypto.randomUUID()}`;
+    const pendingSessionId = `pending-session:${createClientId()}`;
     const pendingCreatedAt = new Date().toISOString();
     const pendingSession: Session = {
       id: pendingSessionId,

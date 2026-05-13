@@ -1,6 +1,6 @@
 # Settings
 
-`.openharness/settings.yaml` 现在只负责 workspace 的核心配置：默认 agent、模型别名、engine 行为开关、导入项和额外 skill 目录。
+`.openharness/settings.yaml` 现在只负责 workspace 的核心配置：默认 agent、可选模型别名、engine 行为开关、导入项和额外 skill 目录。
 
 Prompt 相关配置已拆到独立文件 [`prompts.yaml`](./prompts.md)。
 
@@ -44,7 +44,7 @@ engine:
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `default_agent` | 否 | 默认主 agent。运行时必须能解析到当前可见 agent，且不能只是一种纯 `subagent` 形态 |
-| `models` | 否 | agent 可引用的模型别名表 |
+| `models` | 否 | agent 可引用的模型别名表；不配置时 agent 使用平台默认模型 |
 | `skill_dirs` | 否 | 额外 skill 搜索目录列表 |
 | `engine` | 否 | 可选 runtime engine 行为开关。当前内置 `compact`；`session_memory` 与 `workspace_memory` 分别对应两类记忆能力 |
 | `runtime` | 否 | 记录当前 workspace 来源的 runtime 名称 |
@@ -74,7 +74,9 @@ models:
 | `ref` | 具体模型引用，格式必须是 `platform/<name>` 或 `workspace/<name>` |
 | `temperature` / `top_p` / `max_tokens` | 该模型别名对应的默认推理参数 |
 | 解析时机 | workspace 加载阶段解析；运行时内部仍使用具体 `model_ref` |
-| 适用范围 | 仅影响显式声明 `model` 的 agent；未声明模型的 agent 仍走默认模型选择逻辑 |
+| 适用范围 | 仅影响显式声明非默认别名或 canonical model ref 的 agent；未声明模型的 agent 走平台默认模型 |
+
+如果 agent 未声明 `model`，或者声明了 `model: default` 但 `models.default` 不存在，运行时会使用平台默认模型。其他未声明的别名仍会在 workspace 加载阶段报错。
 
 推荐把“要不要换模型”和“这个模型档位的推理参数”都放在这里，把“这个 agent 用哪个模型档位”放在 agent frontmatter。
 

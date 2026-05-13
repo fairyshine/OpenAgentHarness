@@ -24,6 +24,7 @@ function createNavigationStateActions(params: NavigationActionParams) {
         rootPath: workspaceRecord.rootPath,
         status: workspaceRecord.status,
         createdAt: workspaceRecord.createdAt ?? existing?.createdAt,
+        updatedAt: workspaceRecord.updatedAt ?? existing?.updatedAt,
         lastOpenedAt: now,
         ...(workspaceRecord.serviceName ? { serviceName: workspaceRecord.serviceName } : {})
       };

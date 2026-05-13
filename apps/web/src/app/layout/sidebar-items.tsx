@@ -140,6 +140,7 @@ function areWorkspaceNavItemPropsEqual(previous: WorkspaceNavItemProps, next: Wo
     previous.entry.serviceName === next.entry.serviceName &&
     previous.entry.status === next.entry.status &&
     previous.entry.createdAt === next.entry.createdAt &&
+    previous.entry.updatedAt === next.entry.updatedAt &&
     previous.entry.lastOpenedAt === next.entry.lastOpenedAt
   );
 }

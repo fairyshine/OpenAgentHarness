@@ -528,10 +528,14 @@ export async function loadWorkspaceAgents(
     }
 
     const modelReference = modelString ?? modelAlias ?? directModelRef;
+    const shouldUsePlatformDefaultModel =
+      modelReference === "default" && !directModelRef && settings.models?.default === undefined;
     const resolvedModelPreset = modelReference
       ? modelReference === directModelRef
         ? { ref: directModelRef }
-        : resolveWorkspaceModelPreset(modelReference, settings.models, `agent ${name} model`)
+        : shouldUsePlatformDefaultModel
+          ? undefined
+          : resolveWorkspaceModelPreset(modelReference, settings.models, `agent ${name} model`)
       : undefined;
 
     agents[name] = {

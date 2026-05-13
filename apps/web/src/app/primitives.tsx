@@ -31,7 +31,7 @@ function WorkspaceSidebarItem(props: {
   const subtitleParts = [
     props.entry.runtime,
     `${props.sessionCount} sessions`,
-    props.entry.lastOpenedAt ? formatTimestamp(props.entry.lastOpenedAt) : undefined
+    props.entry.updatedAt ? formatTimestamp(props.entry.updatedAt) : undefined
   ].filter(Boolean);
 
   return (

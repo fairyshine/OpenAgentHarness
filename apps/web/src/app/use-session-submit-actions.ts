@@ -13,6 +13,7 @@ import type {
 import { toErrorSummary, type LiveConversationMessageRecord } from "./support";
 import { buildComposerMessageContent, summarizeComposerMessageContent } from "./chat/composer-content";
 import type { DraftImageAttachment } from "./chat/composer-content";
+import { createClientId } from "./client-id";
 import { useStreamStore } from "./stores/stream-store";
 
 type PendingOperationRef = RefObject<{ sessionId: string; promise: Promise<boolean> } | null>;
@@ -80,7 +81,7 @@ export function useSessionSubmitActions(input: {
       }
 
       const runningRunBehavior = options?.runningRunBehavior ?? "queue";
-      const optimisticMessageKey = `optimistic-user:${crypto.randomUUID()}`;
+      const optimisticMessageKey = `optimistic-user:${createClientId()}`;
       const optimisticCreatedAt = new Date().toISOString();
       const shouldClearDraft = options?.clearDraft !== false;
       const previousDraftMessage = useStreamStore.getState().draftMessage;

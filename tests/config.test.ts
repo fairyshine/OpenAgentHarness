@@ -1854,6 +1854,65 @@ Use the workspace model.
     });
   });
 
+  it("allows model: default without workspace model aliases so the platform default is used", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-discovery-agent-platform-default-model-"));
+    tempDirs.push(tempDir);
+
+    await mkdir(path.join(tempDir, ".openharness", "agents"), { recursive: true });
+
+    await writeFile(path.join(tempDir, ".openharness", "settings.yaml"), "default_agent: builder\n", "utf8");
+    await writeFile(
+      path.join(tempDir, ".openharness", "agents", "builder.md"),
+      `---
+model: default
+---
+
+# Builder
+
+Use the platform default model.
+`,
+      "utf8"
+    );
+
+    const workspace = await discoverWorkspace(tempDir, "project", {
+      platformModels: {
+        "openai-default": {
+          provider: "openai",
+          name: "gpt-4o-mini"
+        }
+      }
+    });
+
+    expect(workspace.agents.builder.modelRef).toBeUndefined();
+  });
+
+  it("still rejects unknown agent model aliases when workspace model aliases are omitted", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-discovery-agent-unknown-model-alias-"));
+    tempDirs.push(tempDir);
+
+    await mkdir(path.join(tempDir, ".openharness", "agents"), { recursive: true });
+
+    await writeFile(path.join(tempDir, ".openharness", "settings.yaml"), "default_agent: builder\n", "utf8");
+    await writeFile(
+      path.join(tempDir, ".openharness", "agents", "builder.md"),
+      `---
+model: typo
+---
+
+# Builder
+
+Use an unknown alias.
+`,
+      "utf8"
+    );
+
+    await expect(
+      discoverWorkspace(tempDir, "project", {
+        platformModels: {}
+      })
+    ).rejects.toThrow('Unknown workspace model alias "typo"');
+  });
+
   it("parses extended agent config fields and omits hidden agents from the catalog", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-discovery-agent-fields-"));
     tempDirs.push(tempDir);

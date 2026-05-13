@@ -31,6 +31,7 @@ interface SavedWorkspaceRecord {
   serviceName?: string;
   status: Workspace["status"];
   createdAt?: string;
+  updatedAt?: string;
   lastOpenedAt: string;
 }
 

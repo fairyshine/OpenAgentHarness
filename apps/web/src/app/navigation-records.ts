@@ -35,6 +35,23 @@ function compareSavedNavigationItemsDesc<T extends { id: string; lastOpenedAt?: 
   return right.id.localeCompare(left.id);
 }
 
+function compareSavedWorkspacesByUpdatedAtDesc<T extends { id: string; updatedAt?: string; createdAt?: string }>(
+  left: T,
+  right: T
+) {
+  const updatedAtComparison = compareIsoTimestampDesc(left.updatedAt, right.updatedAt);
+  if (updatedAtComparison !== 0) {
+    return updatedAtComparison;
+  }
+
+  const createdAtComparison = compareIsoTimestampDesc(left.createdAt, right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
+
+  return right.id.localeCompare(left.id);
+}
+
 function compareSavedSessionsByRecency(left: SavedSessionRecord, right: SavedSessionRecord) {
   const activityComparison = compareIsoTimestampDesc(left.lastRunAt ?? left.createdAt, right.lastRunAt ?? right.createdAt);
   if (activityComparison !== 0) {
@@ -99,6 +116,7 @@ function hasActiveRunForSessionTree(rootSessionId: string, sessions: SavedSessio
 export {
   compareIsoTimestampDesc,
   compareSavedNavigationItemsDesc,
+  compareSavedWorkspacesByUpdatedAtDesc,
   compareSavedSessionsByRecency,
   hasActiveRunForSessionTree,
   isTerminalRunEvent,

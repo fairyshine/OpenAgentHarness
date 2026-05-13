@@ -2,7 +2,7 @@ export { buildAuthHeaders, buildUrl, createHttpRequestError, downloadCsvFile, do
 export { formatRelativeTimestamp, formatTimestamp, formatTimestampPrecise } from "./formatting";
 export { buildMessageRecord, contentPreview, contentText, contentToolRefs, hasDisplayableRunMessages, normalizeMessageContent, readMessageAgentSnapshot, readMessageModelCallStepRef, readMessageSystemPromptSnapshot } from "./message-content";
 export { toModelCallTrace } from "./model-call-trace";
-export { compareIsoTimestampDesc, compareSavedNavigationItemsDesc, compareSavedSessionsByRecency, hasActiveRunForSessionTree, isTerminalRunEvent, isTerminalRunStatus, sessionDescendantIds } from "./navigation-records";
+export { compareIsoTimestampDesc, compareSavedNavigationItemsDesc, compareSavedWorkspacesByUpdatedAtDesc, compareSavedSessionsByRecency, hasActiveRunForSessionTree, isTerminalRunEvent, isTerminalRunStatus, sessionDescendantIds } from "./navigation-records";
 export { buildRuntimeConsoleEntries } from "./runtime-console";
 export { SERVICE_SCOPE_ALL, SERVICE_SCOPE_DEFAULT, normalizeServiceName, normalizeServiceScope, serviceScopeLabel, serviceScopeMatches, toStorageServiceNameParam } from "./service-scope";
 export { compareMessagesChronologically, countMessagesByRole, inferCompletedMessageRole, mergeSessionMessages, upsertSessionMessage } from "./session-message-list";

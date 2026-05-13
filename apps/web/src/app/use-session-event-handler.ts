@@ -19,6 +19,7 @@ import {
   SESSION_RUN_LIST_REFRESH_EVENTS,
   readQueuedRunsFromEventData
 } from "./app-controller-utils";
+import { createClientId } from "./client-id";
 
 type CursorRef = {
   current: string | undefined;
@@ -46,7 +47,7 @@ export function useSessionEventHandler(input: {
 }) {
   return useEffectEvent((frame: SseFrame) => {
     const event = {
-      id: frame.cursor ?? crypto.randomUUID(),
+      id: frame.cursor ?? createClientId(),
       cursor: frame.cursor ?? String(Date.now()),
       sessionId: input.sessionId,
       runId: typeof frame.data.runId === "string" ? frame.data.runId : undefined,

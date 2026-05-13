@@ -1,6 +1,6 @@
 # Settings
 
-`.openharness/settings.yaml` now holds only core workspace configuration: the default agent, model aliases, engine behavior toggles, imports, and extra skill directories.
+`.openharness/settings.yaml` now holds only core workspace configuration: the default agent, optional model aliases, engine behavior toggles, imports, and extra skill directories.
 
 Prompt configuration has moved to the dedicated [`prompts.yaml`](./prompts.en.md) file.
 
@@ -44,7 +44,7 @@ engine:
 | Field | Required | Description |
 | --- | --- | --- |
 | `default_agent` | No | Default primary agent. At runtime it must resolve to a visible agent and cannot point to a pure `subagent`-only definition |
-| `models` | No | Model alias map that agents can reference |
+| `models` | No | Model alias map that agents can reference; when omitted, agents use the platform default model |
 | `skill_dirs` | No | Additional skill search directories |
 | `engine` | No | Optional runtime engine behavior toggles. `compact` is built in; `session_memory` and `workspace_memory` represent two different memory layers |
 | `runtime` | No | Records which runtime the workspace was initialized from |
@@ -74,7 +74,9 @@ models:
 | `ref` | Concrete model ref, must be `platform/<name>` or `workspace/<name>` |
 | `temperature` / `top_p` / `max_tokens` | Default inference parameters for that model alias |
 | resolution time | Resolved when the workspace loads; the runtime still operates on concrete `model_ref`s internally |
-| scope | Only affects agents that declare `model`; agents without an explicit model still use normal default-model resolution |
+| scope | Only affects agents that declare a non-default alias or canonical model ref; agents without an explicit model use the platform default model |
+
+If an agent omits `model`, or declares `model: default` while `models.default` is not defined, the runtime uses the platform default model. Other missing aliases still fail during workspace loading.
 
 Use this file to decide both which concrete model each alias points to and which inference defaults it carries; use agent frontmatter only to choose the alias.
 
