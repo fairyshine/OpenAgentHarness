@@ -23,3 +23,4 @@ Core flow: request → queue → context build → LLM loop → tool dispatch �
 
 1. [Execution Backend](./execution-backend.md) — Execution backend abstraction
 2. [Model Runtime](./model-runtime.md) — Internal model runtime
+3. [Rust Hot Paths](./rust-hot-paths.md) — Rust native hot-path boundaries and phase conclusions

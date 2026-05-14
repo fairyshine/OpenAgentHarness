@@ -28,3 +28,4 @@ Agent Engine 将调用方请求转为可追踪、可恢复、可审计的 run �
 
 1. [execution-backend.md](./execution-backend.md) — 执行后端抽象
 2. [model-runtime.md](./model-runtime.md) — 内部模型运行时
+3. [rust-hot-paths.md](./rust-hot-paths.md) — Rust native 热路径优化边界与阶段结论
