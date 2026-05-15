@@ -264,6 +264,7 @@ export class WorkspaceMemoryService implements ContextPreparationModule {
   }): void {
     if (
       !this.isEnabled(input.workspace) ||
+      input.workspace.settings.engine?.workspaceMemory?.writePolicy !== "auto-extract" ||
       input.workspace.readOnly ||
       input.workspace.kind !== "project" ||
       isWorkspaceMemoryExtractionRun(input.run)

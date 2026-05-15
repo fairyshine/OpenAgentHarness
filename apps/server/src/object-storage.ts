@@ -55,6 +55,7 @@ import {
   type DirectoryObjectStore,
   type DirectorySyncOptions,
   type ManagedPathKey,
+  type ObjectStorageDirectoryEntry,
   type ObjectStorageConfig,
   type ObjectStorageEntry
 } from "./object-storage-types.js";
@@ -74,7 +75,13 @@ export { normalizeAwsS3Module } from "./object-storage-s3.js";
 export { computeLocalDirectoryFingerprint } from "./object-storage-native-sync.js";
 export { syncRemotePrefixToLocal } from "./object-storage-remote-to-local.js";
 export { shouldExcludeWorkspaceBackingStoreRelativePath } from "./object-storage-path-filters.js";
-export type { DirectoryObjectStore, ManagedPathKey, ObjectStorageConfig, ObjectStorageEntry } from "./object-storage-types.js";
+export type {
+  DirectoryObjectStore,
+  ManagedPathKey,
+  ObjectStorageConfig,
+  ObjectStorageDirectoryEntry,
+  ObjectStorageEntry
+} from "./object-storage-types.js";
 export type * from "./object-storage-sync-types.js";
 
 interface ManagedPathMapping {

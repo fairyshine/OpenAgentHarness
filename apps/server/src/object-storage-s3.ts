@@ -18,6 +18,7 @@ import {
   OBJECT_MTIME_METADATA_KEY,
   type DirectoryObjectStore,
   type ObjectStorageConfig,
+  type ObjectStorageDirectoryEntry,
   type ObjectStorageEntry
 } from "./object-storage-types.js";
 
@@ -456,6 +457,75 @@ export class S3DirectoryStore implements DirectoryObjectStore {
 
   async listEntries(prefix: string): Promise<ObjectStorageEntry[]> {
     return collectObjectStorageEntries(this, prefix);
+  }
+
+  async listDirectoryEntries(prefix: string, directory: string): Promise<ObjectStorageDirectoryEntry[]> {
+    const { ListObjectsV2Command } = await loadAwsS3Module();
+    const normalizedPrefix = normalizePrefix(prefix);
+    const normalizedDirectory = normalizePrefix(directory);
+    const requestPrefix = [normalizedPrefix, normalizedDirectory].filter((segment) => segment.length > 0).join("/");
+    const prefixWithSlash = requestPrefix ? `${requestPrefix}/` : "";
+    let continuationToken: string | undefined;
+    const entries: ObjectStorageDirectoryEntry[] = [];
+
+    do {
+      const startedAt = performance.now();
+      const { response, retries } = await this.#send<{
+        Contents?: Array<{ Key?: string | undefined; Size?: number | undefined; LastModified?: Date | undefined }>;
+        CommonPrefixes?: Array<{ Prefix?: string | undefined }>;
+        IsTruncated?: boolean | undefined;
+        NextContinuationToken?: string | undefined;
+      }>(
+        new ListObjectsV2Command({
+          Bucket: this.#bucket,
+          Prefix: prefixWithSlash,
+          Delimiter: "/",
+          ...(continuationToken ? { ContinuationToken: continuationToken } : {})
+        }),
+        "list"
+      );
+
+      for (const item of response.Contents ?? []) {
+        if (!item.Key || item.Key === requestPrefix || item.Key === prefixWithSlash) {
+          continue;
+        }
+        const relativeName = item.Key.slice(prefixWithSlash.length).replace(/\/+$/u, "");
+        if (!relativeName || relativeName.includes("/")) {
+          continue;
+        }
+        entries.push({
+          name: relativeName,
+          kind: "file",
+          size: item.Size ?? 0,
+          ...(item.LastModified ? { lastModified: item.LastModified } : {})
+        });
+      }
+
+      for (const item of response.CommonPrefixes ?? []) {
+        if (!item.Prefix || item.Prefix === prefixWithSlash) {
+          continue;
+        }
+        const relativeName = item.Prefix.slice(prefixWithSlash.length).replace(/\/+$/u, "");
+        if (!relativeName || relativeName.includes("/")) {
+          continue;
+        }
+        entries.push({
+          name: relativeName,
+          kind: "directory"
+        });
+      }
+
+      recordObjectStorageOperation({
+        operation: "list",
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        retries,
+        objectsListed: (response.Contents?.length ?? 0) + (response.CommonPrefixes?.length ?? 0)
+      });
+
+      continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+    } while (continuationToken);
+
+    return entries.sort((left, right) => left.name.localeCompare(right.name));
   }
 
   async getObject(key: string): Promise<{ body: Buffer; metadata?: Record<string, string> | undefined }> {

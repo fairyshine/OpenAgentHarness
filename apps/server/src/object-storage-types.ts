@@ -13,6 +13,13 @@ export interface ObjectStorageEntry {
   lastModified?: Date | undefined;
 }
 
+export interface ObjectStorageDirectoryEntry {
+  name: string;
+  kind: "file" | "directory";
+  size?: number | undefined;
+  lastModified?: Date | undefined;
+}
+
 export interface LocalDirectorySnapshot {
   files: Map<string, { absolutePath: string; size: number; mtimeMs: number }>;
   emptyDirectories: Set<string>;
@@ -26,6 +33,7 @@ export interface DirectorySyncOptions {
 export interface DirectoryObjectStore {
   listEntries(prefix: string): Promise<ObjectStorageEntry[]>;
   listEntriesPaged?(prefix: string): AsyncIterable<ObjectStorageEntry[]>;
+  listDirectoryEntries?(prefix: string, directory: string): Promise<ObjectStorageDirectoryEntry[]>;
   getObjectInfo?(
     key: string
   ): Promise<{ size?: number | undefined; lastModified?: Date | undefined; metadata?: Record<string, string> | undefined }>;

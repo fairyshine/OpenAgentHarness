@@ -153,11 +153,17 @@ export interface WorkspaceSettingsDefinition {
 export interface WorkspaceEngineSettings {
   compact?: WorkspaceEngineToggleSettings | undefined;
   sessionMemory?: WorkspaceEngineToggleSettings | undefined;
-  workspaceMemory?: WorkspaceEngineToggleSettings | undefined;
+  workspaceMemory?: WorkspaceMemorySettings | undefined;
 }
 
 export interface WorkspaceEngineToggleSettings {
   enabled?: boolean | undefined;
+}
+
+export type WorkspaceMemoryWritePolicy = "explicit-only" | "confirm-suggested" | "auto-extract";
+
+export interface WorkspaceMemorySettings extends WorkspaceEngineToggleSettings {
+  writePolicy?: WorkspaceMemoryWritePolicy | undefined;
 }
 
 export interface WorkspaceRecord extends Workspace {
@@ -292,6 +298,11 @@ export interface WorkspaceFileSystemEntry {
   updatedAt?: string | undefined;
 }
 
+export interface WorkspaceFileSystemEntryPage {
+  items: WorkspaceFileSystemEntry[];
+  nextCursor?: string | undefined;
+}
+
 export interface WorkspaceFileSystem {
   realpath(targetPath: string): Promise<string>;
   stat(targetPath: string): Promise<WorkspaceFileStat>;
@@ -299,6 +310,17 @@ export interface WorkspaceFileSystem {
   readFileRange?(targetPath: string, maxBytes: number): Promise<Buffer>;
   openReadStream(targetPath: string): Readable;
   readdir(targetPath: string): Promise<WorkspaceFileSystemEntry[]>;
+  readdirPage?(
+    targetPath: string,
+    input: {
+      pageSize: number;
+      cursor?: string | undefined;
+      sortBy?: "name" | "type" | undefined;
+      sortOrder?: "asc" | "desc" | undefined;
+      includeMetadata?: boolean | undefined;
+      includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+    }
+  ): Promise<WorkspaceFileSystemEntryPage>;
   mkdir(targetPath: string, options?: { recursive?: boolean | undefined }): Promise<void>;
   writeFile(targetPath: string, data: Buffer, options?: { mtimeMs?: number | undefined }): Promise<void>;
   rm(targetPath: string, options?: { recursive?: boolean | undefined; force?: boolean | undefined }): Promise<void>;

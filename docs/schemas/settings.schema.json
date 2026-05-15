@@ -102,6 +102,23 @@
         }
       }
     },
+    "workspaceMemory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "write_policy": {
+          "type": "string",
+          "enum": [
+            "explicit-only",
+            "confirm-suggested",
+            "auto-extract"
+          ]
+        }
+      }
+    },
     "engine": {
       "type": "object",
       "additionalProperties": false,
@@ -113,7 +130,7 @@
           "$ref": "#/$defs/engineToggle"
         },
         "workspace_memory": {
-          "$ref": "#/$defs/engineToggle"
+          "$ref": "#/$defs/workspaceMemory"
         }
       }
     },

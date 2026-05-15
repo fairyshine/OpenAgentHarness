@@ -161,6 +161,7 @@ async function createRuntime(
             } | undefined;
             workspaceMemory?: {
               enabled?: boolean | undefined;
+              writePolicy?: "explicit-only" | "confirm-suggested" | "auto-extract" | undefined;
             } | undefined;
           } | undefined;
         }
@@ -4315,7 +4316,8 @@ describe("runtime service", () => {
       workspaceSettings: {
         engine: {
           workspaceMemory: {
-            enabled: true
+            enabled: true,
+            writePolicy: "auto-extract"
           }
         }
       }
@@ -13436,6 +13438,14 @@ describe("runtime service", () => {
       "MultiEdit",
       "Glob",
       "Grep",
+      "MemorySearch",
+      "MemoryRead",
+      "MemoryRemember",
+      "MemoryUpdate",
+      "MemoryForget",
+      "MemoryCaptureSession",
+      "MemoryAppendDaily",
+      "MemoryRecordDream",
       "ViewImage",
       "WebFetch",
       "TodoWrite",

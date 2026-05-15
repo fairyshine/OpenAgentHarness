@@ -3,7 +3,7 @@ import type { Readable } from "node:stream";
 
 import { AppError } from "../errors.js";
 import { createLocalWorkspaceFileSystem } from "./workspace-file-system.js";
-import type { WorkspaceFileStat, WorkspaceFileSystem, WorkspaceRecord } from "../types.js";
+import type { WorkspaceFileStat, WorkspaceFileSystem, WorkspaceFileSystemEntry, WorkspaceRecord } from "../types.js";
 import { parseCursor } from "../utils.js";
 
 export type WorkspaceEntrySortBy = "name" | "updatedAt" | "sizeBytes" | "type";
@@ -75,6 +75,7 @@ type AsyncLimiter = <T>(task: () => Promise<T>) => Promise<T>;
 const DESCENDANT_MTIME_CACHE_TTL_MS = 15_000;
 const DESCENDANT_MTIME_FILE_STAT_CONCURRENCY = 32;
 const DESCENDANT_MTIME_DIRECTORY_READ_CONCURRENCY = 8;
+const SLOW_WORKSPACE_LIST_LOG_THRESHOLD_MS = 250;
 
 function normalizeRelativePath(value: string): string {
   return value.split(path.sep).join("/");
@@ -289,6 +290,34 @@ function maxTimestamp(left: number | undefined, right: number | undefined): numb
   return Math.max(left, right);
 }
 
+function elapsedMs(startedAt: bigint): number {
+  return Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+}
+
+function logSlowWorkspaceList(input: {
+  workspaceId: string;
+  path: string;
+  pageSize: number;
+  cursor?: string | undefined;
+  totalMs: number;
+  resolveMs: number;
+  rootStatMs: number;
+  readMs: number;
+  buildMs: number;
+  entriesSeen: number;
+  itemsReturned: number;
+  paged: boolean;
+  metadata: boolean;
+}): void {
+  if (input.totalMs < SLOW_WORKSPACE_LIST_LOG_THRESHOLD_MS) {
+    return;
+  }
+
+  console.warn(
+    `[oah-workspace-files] Slow list workspace=${input.workspaceId} path=${input.path} totalMs=${input.totalMs.toFixed(1)} resolveMs=${input.resolveMs.toFixed(1)} rootStatMs=${input.rootStatMs.toFixed(1)} readMs=${input.readMs.toFixed(1)} buildMs=${input.buildMs.toFixed(1)} entriesSeen=${input.entriesSeen} itemsReturned=${input.itemsReturned} pageSize=${input.pageSize} cursor=${input.cursor ? "yes" : "no"} paged=${input.paged} metadata=${input.metadata}`
+  );
+}
+
 export class WorkspaceFileService {
   readonly #fileSystem: WorkspaceFileSystem;
   readonly #descendantMtimeCache = new Map<string, { value: number | undefined; expiresAtMs: number }>();
@@ -488,21 +517,83 @@ export class WorkspaceFileService {
       includeEntryMetadata?: boolean | undefined;
     }
   ): Promise<WorkspaceEntryPage> {
+    const startedAt = process.hrtime.bigint();
+    let resolvedPath = input.path ?? ".";
+    let resolveMs = 0;
+    let rootStatMs = 0;
+    let readMs = 0;
+    let buildMs = 0;
+    let entriesSeen = 0;
+    let itemsReturned = 0;
+    let usedPagedFileSystem = false;
+
+    const finish = <T extends WorkspaceEntryPage>(page: T): T => {
+      itemsReturned = page.items.length;
+      logSlowWorkspaceList({
+        workspaceId: workspace.id,
+        path: resolvedPath,
+        pageSize: input.pageSize,
+        cursor: input.cursor,
+        totalMs: elapsedMs(startedAt),
+        resolveMs,
+        rootStatMs,
+        readMs,
+        buildMs,
+        entriesSeen,
+        itemsReturned,
+        paged: usedPagedFileSystem,
+        metadata: input.includeEntryMetadata !== false
+      });
+      return page;
+    };
+
+    const resolveStartedAt = process.hrtime.bigint();
     const resolved = await resolveWorkspaceFsPath(this.#fileSystem, workspace.rootPath, input.path ?? ".", {
       allowRoot: true,
       defaultPath: "."
     });
+    resolveMs = elapsedMs(resolveStartedAt);
+    resolvedPath = resolved.relativePath;
+
+    const rootStatStartedAt = process.hrtime.bigint();
     const directoryEntry = await this.#fileSystem.stat(resolved.absolutePath).catch(() => null);
+    rootStatMs = elapsedMs(rootStatStartedAt);
     if (directoryEntry?.kind !== "directory") {
       throw new AppError(404, "workspace_directory_not_found", `Directory ${resolved.relativePath} was not found.`);
     }
 
-    const entries = await this.#fileSystem.readdir(resolved.absolutePath);
     const startIndex = parseCursor(input.cursor);
-    const entriesForStat = canPageBeforeStat(input)
-      ? [...entries].sort((left, right) => compareListedEntries(left, right, input)).slice(startIndex, startIndex + input.pageSize)
-      : entries;
+    let entries: WorkspaceFileSystemEntry[];
+    let pageNextCursor: string | undefined;
+    let entriesForStat: WorkspaceFileSystemEntry[];
+    const canUsePagedFileSystem = this.#fileSystem.readdirPage !== undefined && canPageBeforeStat(input);
+    if (canUsePagedFileSystem) {
+      usedPagedFileSystem = true;
+      const readStartedAt = process.hrtime.bigint();
+      const page = await this.#fileSystem.readdirPage!(resolved.absolutePath, {
+        pageSize: input.pageSize,
+        ...(input.cursor ? { cursor: input.cursor } : {}),
+        sortBy: input.sortBy === "type" ? "type" : "name",
+        sortOrder: input.sortOrder,
+        includeMetadata: input.includeEntryMetadata !== false,
+        includeDirectoryDescendantUpdatedAt: input.includeDirectoryDescendantUpdatedAt
+      });
+      entries = page.items;
+      entriesForStat = page.items;
+      pageNextCursor = page.nextCursor;
+      readMs = elapsedMs(readStartedAt);
+    } else {
+      const readStartedAt = process.hrtime.bigint();
+      entries = await this.#fileSystem.readdir(resolved.absolutePath);
+      readMs = elapsedMs(readStartedAt);
+      entriesForStat = canPageBeforeStat(input)
+        ? [...entries].sort((left, right) => compareListedEntries(left, right, input)).slice(startIndex, startIndex + input.pageSize)
+        : entries;
+    }
+    entriesSeen = entries.length;
+
     if (input.includeEntryMetadata === false && canPageBeforeStat(input)) {
+      const buildStartedAt = process.hrtime.bigint();
       const items = entriesForStat.map((entry) => {
         const relativePath =
           resolved.relativePath === "."
@@ -516,9 +607,14 @@ export class WorkspaceFileService {
           readOnly: workspace.readOnly
         } satisfies WorkspaceEntry;
       });
-      const nextCursor = startIndex + input.pageSize < entries.length ? String(startIndex + input.pageSize) : undefined;
+      const nextCursor = canUsePagedFileSystem
+        ? pageNextCursor
+        : startIndex + input.pageSize < entries.length
+          ? String(startIndex + input.pageSize)
+          : undefined;
+      buildMs = elapsedMs(buildStartedAt);
 
-      return nextCursor === undefined
+      return finish(nextCursor === undefined
         ? {
             workspaceId: workspace.id,
             path: resolved.relativePath,
@@ -529,11 +625,12 @@ export class WorkspaceFileService {
             path: resolved.relativePath,
             items,
             nextCursor
-          };
+          });
     }
 
     const descendantMtimeScanContext =
       input.includeDirectoryDescendantUpdatedAt === false ? undefined : createDescendantMtimeScanContext();
+    const buildStartedAt = process.hrtime.bigint();
     const items = await Promise.all(
       entriesForStat.map(async (entry) => {
         const relativePath =
@@ -560,6 +657,7 @@ export class WorkspaceFileService {
         );
       })
     );
+    buildMs = elapsedMs(buildStartedAt);
 
     items.sort((left, right) => {
       let comparison = 0;
@@ -592,9 +690,13 @@ export class WorkspaceFileService {
     });
 
     if (canPageBeforeStat(input)) {
-      const nextCursor = startIndex + input.pageSize < entries.length ? String(startIndex + input.pageSize) : undefined;
+      const nextCursor = canUsePagedFileSystem
+        ? pageNextCursor
+        : startIndex + input.pageSize < entries.length
+          ? String(startIndex + input.pageSize)
+          : undefined;
 
-      return nextCursor === undefined
+      return finish(nextCursor === undefined
         ? {
             workspaceId: workspace.id,
             path: resolved.relativePath,
@@ -605,13 +707,13 @@ export class WorkspaceFileService {
             path: resolved.relativePath,
             items,
             nextCursor
-          };
+          });
     }
 
     const pageItems = items.slice(startIndex, startIndex + input.pageSize);
     const nextCursor = startIndex + input.pageSize < items.length ? String(startIndex + input.pageSize) : undefined;
 
-    return nextCursor === undefined
+    return finish(nextCursor === undefined
       ? {
           workspaceId: workspace.id,
           path: resolved.relativePath,
@@ -622,7 +724,7 @@ export class WorkspaceFileService {
           path: resolved.relativePath,
           items: pageItems,
           nextCursor
-        };
+        });
   }
 
   async getFileContent(

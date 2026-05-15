@@ -171,11 +171,11 @@ Memory 写入策略应由 runtime policy 控制，而不是写死在 prompt 或�
 policy 应支持分层覆盖：
 
 1. platform default：产品级默认策略。
-2. workspace policy：项目或团队 workspace 的默认策略。
+2. workspace policy：项目或团队 workspace 的默认策略。当前已支持 `.openharness/settings.yaml` 中的 `engine.workspace_memory.write_policy`。
 3. agent policy：不同 agent 可有不同写入权限。
 4. run/session override：单次任务可临时关闭或提升记忆能力。
 
-最终执行时由 runtime 解析有效 policy，再决定是否允许 `MemoryRemember` / `MemoryUpdate` / `MemoryForget` / `MemoryCaptureSession` 执行、是否需要用户确认、是否只生成 pending proposal。
+最终执行时由 runtime 解析有效 policy，再决定是否允许 `MemoryRemember` / `MemoryUpdate` / `MemoryForget` / `MemoryCaptureSession` 执行、是否需要用户确认、是否只生成 pending proposal。当前已实现 workspace 级 `explicit-only` / `confirm-suggested` / `auto-extract` 解析；后台 extraction 只有在 `write_policy: auto-extract` 时运行，agent policy 和 run/session override 后续补齐。
 
 ### 显式写入
 
@@ -239,7 +239,7 @@ Memory 系统必须和 compaction 协作。
 建议顺序：
 
 1. 当 session 接近 context 上限时，先触发 memory flush。
-2. memory flush 让 agent 保存“压缩后不能丢”的 durable context。
+2. memory flush 让 agent 通过 `MemoryCaptureSession` 保存“压缩后不能丢”的 durable context。
 3. 再执行 compaction，生成 compact summary。
 4. compact summary 只服务当前 session 续接，不覆盖长期 memory。
 
@@ -298,7 +298,7 @@ Web/TUI 中至少能看到：
 - 禁止写 workspace 其它文件。
 - shell 只允许只读命令。
 - 不允许网络请求，除非明确配置。
-- 不允许把 secret、token、private key 写入 memory。
+- 已加入基础 secret scanner，不允许把明显 secret、token、private key 写入 memory。
 - 对 prompt injection、exfiltration、invisible unicode 做基础扫描。
 
 Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要额外加入：
@@ -310,15 +310,17 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 
 ## 实施阶段
 
+当前代码中已有 `WorkspaceMemoryService` 基础能力：可注入 `.openharness/memory/MEMORY.md`，可解析带 frontmatter 的 topic files，可做相关 topic recall，并已有后台 extraction agent 的雏形。后续实现应优先沿着这条现有 runtime 集成路径补齐工具、策略、存储和 UI，而不是另起一套 memory subsystem。
+
 ### Phase 1：Workspace file memory
 
 目标：建立最小可用、可读、可删的 workspace memory。
 
 - 创建 `.openharness/memory/MEMORY.md` 支持。
 - 在 prompt/context assembly 中注入 `MEMORY.md`。
-- 实现 `MemorySearch` / `MemoryRead` 的 lexical 版本。
-- 将 `MemorySearch` / `MemoryRead` 注册为 `safe` native tools。
-- session/run 结束时可生成 `sessions/*.md`。
+- 已实现 `MemorySearch` / `MemoryRead` 的 lexical 版本。
+- 已将 `MemorySearch` / `MemoryRead` 注册为 `safe` native tools。
+- 已实现 `MemoryCaptureSession`，可在 session/run 边界或 compact 前生成 `sessions/*.md`。
 - 基础 CLI/UI 可查看和搜索。
 
 ### Phase 2：Claude Code 式 topic memory
@@ -327,9 +329,10 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 
 - `topics/*.md` + frontmatter。
 - `user/feedback/project/reference` taxonomy。
-- 主 agent 通过 `MemoryRemember` / `MemoryUpdate` / `MemoryForget` 支持 remember/forget/update。
-- 写入类 memory tools 注册为 `manual` 或 policy-gated native tools。
-- `MEMORY.md` 变成短索引。
+- 已通过 `MemoryRemember` / `MemoryUpdate` / `MemoryForget` 支持 remember/forget/update。
+- 已将写入类 memory tools 注册为 `manual` 或 policy-gated native tools。
+- `confirm-suggested` 已返回 pending proposal，不直接落盘。
+- `MEMORY.md` 作为短索引由 `MemoryRemember` 自动补充链接。
 - 防重复、校验、truncation warning。
 
 ### Phase 3：后台抽取与 compaction flush
@@ -337,9 +340,9 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 目标：减少上下文丢失，让记忆自动维护。
 
 - turn-end extraction agent。
-- compaction 前 memory flush。
+- compaction 前 memory flush，可复用 `MemoryCaptureSession` 作为写入入口。
 - session-boundary summary 更稳定。
-- 生成 `daily/*.md`，记录按天组织的低权重工作日志。
+- 已实现 `MemoryAppendDaily`，可生成/追加 `daily/*.md` 低权重工作日志。
 - 自动写入权限隔离。
 
 ### Phase 4：搜索增强与晋升
@@ -350,7 +353,7 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 - 可选 embedding hybrid search。
 - recall tracking。
 - promotion preview/apply。
-- 实现 `dreams/DREAMS.md`，记录整理、晋升、去重和清理建议。
+- 已实现 `MemoryRecordDream`，可记录 `dreams/DREAMS.md` 整理、晋升、去重和清理建议。
 
 ### Phase 5：Global user memory 可选层
 

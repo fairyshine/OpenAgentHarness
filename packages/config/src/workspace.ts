@@ -140,6 +140,7 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
       };
       workspace_memory?: {
         enabled?: boolean;
+        write_policy?: "explicit-only" | "confirm-suggested" | "auto-extract";
       };
     };
     imports?: {
@@ -258,6 +259,9 @@ export async function loadWorkspaceSettings(workspaceRoot: string): Promise<Work
                   workspaceMemory: {
                     ...(typeof typedParsedSettings.engine.workspace_memory.enabled === "boolean"
                       ? { enabled: typedParsedSettings.engine.workspace_memory.enabled }
+                      : {}),
+                    ...(typedParsedSettings.engine.workspace_memory.write_policy
+                      ? { writePolicy: typedParsedSettings.engine.workspace_memory.write_policy }
                       : {})
                   }
                 }

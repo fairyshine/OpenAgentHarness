@@ -1344,6 +1344,7 @@ engine:
     enabled: true
   workspace_memory:
     enabled: true
+    write_policy: confirm-suggested
 `,
       "utf8"
     );
@@ -1357,7 +1358,8 @@ engine:
         enabled: true
       },
       workspaceMemory: {
-        enabled: true
+        enabled: true,
+        writePolicy: "confirm-suggested"
       }
     });
   });

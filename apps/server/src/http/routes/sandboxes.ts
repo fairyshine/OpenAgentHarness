@@ -47,6 +47,7 @@ import { describeSandboxTopology } from "../../sandbox-topology.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
 
 const DEFAULT_BACKGROUND_SESSION_PREFIX = "sandbox";
+const SLOW_FILE_LIST_LOG_THRESHOLD_MS = 250;
 
 function readRegisteredRouteUrl(request: FastifyRequest): string {
   return typeof request.routeOptions.url === "string" ? request.routeOptions.url : request.url.split("?")[0] ?? request.url;
@@ -54,6 +55,14 @@ function readRegisteredRouteUrl(request: FastifyRequest): string {
 
 async function touchWorkspaceActivity(dependencies: AppDependencies, workspaceId: string): Promise<void> {
   await dependencies.touchWorkspaceActivity?.(workspaceId);
+}
+
+function touchWorkspaceActivityLater(dependencies: AppDependencies, workspaceId: string): void {
+  void dependencies.touchWorkspaceActivity?.(workspaceId).catch((error) => {
+    if (dependencies.logger) {
+      console.warn(`[oah-http] Failed to touch workspace activity for ${workspaceId}:`, error);
+    }
+  });
 }
 
 type WorkspaceOwnership = Awaited<ReturnType<NonNullable<AppDependencies["resolveWorkspaceOwnership"]>>>;
@@ -283,6 +292,10 @@ async function guardSandboxOwnership(
   return "blocked";
 }
 
+function elapsedMs(startedAt: bigint): number {
+  return Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+}
+
 function sandboxPathToWorkspacePath(targetPath: string | undefined): string | undefined {
   if (!targetPath) {
     return undefined;
@@ -370,11 +383,21 @@ async function handleListSandboxEntries(
   reply: FastifyReply
 ) {
   const query = workspaceEntriesQuerySchema.parse(request.query);
-  const page = await dependencies.runtimeService.listWorkspaceEntries(sandboxId, {
+  const workspaceQuery = {
     ...query,
     path: sandboxPathToWorkspacePath(query.path)
-  });
-  await touchWorkspaceActivity(dependencies, sandboxId);
+  };
+  const page =
+    (await dependencies.listWorkspaceEntriesFast?.({
+      workspaceId: sandboxId,
+      ...workspaceQuery
+    }).catch((error) => {
+      if (dependencies.logger) {
+        console.warn(`[oah-http] Fast sandbox file list failed for ${sandboxId}; falling back to workspace lease.`, error);
+      }
+      return undefined;
+    })) ?? (await dependencies.runtimeService.listWorkspaceEntries(sandboxId, workspaceQuery));
+  touchWorkspaceActivityLater(dependencies, sandboxId);
   return reply.send(workspaceEntryPageSchema.parse(toSandboxEntryPage(page)));
 }
 
@@ -765,13 +788,26 @@ export async function dispatchRegisteredSandboxRoute(
     case "GET /api/v1/sandboxes/:sandboxId/files/entries":
     case "GET /internal/v1/sandboxes/:sandboxId/files/entries": {
       const params = createParamsSchema("sandboxId").parse(request.params);
+      const startedAt = process.hrtime.bigint();
+      let ownershipMs: number | undefined;
       if (isPublicApi) {
         assertWorkspaceAccess(toCallerContext(request), params.sandboxId);
+        const ownershipStartedAt = process.hrtime.bigint();
         if ((await guardSandboxOwnership(request, reply, dependencies, params.sandboxId)) !== "local") {
           return reply;
         }
+        ownershipMs = elapsedMs(ownershipStartedAt);
       }
-      return handleListSandboxEntries(dependencies, params.sandboxId, request, reply);
+      const listStartedAt = process.hrtime.bigint();
+      const response = await handleListSandboxEntries(dependencies, params.sandboxId, request, reply);
+      const totalMs = elapsedMs(startedAt);
+      if (dependencies.logger && totalMs >= SLOW_FILE_LIST_LOG_THRESHOLD_MS) {
+        const query = request.query as Record<string, unknown>;
+        console.warn(
+          `[oah-http] Slow sandbox file list workspace=${params.sandboxId} path=${String(query.path ?? ".")} totalMs=${totalMs.toFixed(1)} ownershipMs=${ownershipMs?.toFixed(1) ?? "0.0"} listMs=${elapsedMs(listStartedAt).toFixed(1)} pageSize=${String(query.pageSize ?? "")} cursor=${query.cursor ? "yes" : "no"} metadata=${String(query.includeEntryMetadata ?? "default")}`
+        );
+      }
+      return response;
     }
     case "GET /api/v1/sandboxes/:sandboxId/files/stat":
     case "GET /internal/v1/sandboxes/:sandboxId/files/stat": {

@@ -158,6 +158,42 @@ function mergeWorkspaceEntries(pages: WorkspaceEntryPage[]): WorkspaceEntryPage 
   };
 }
 
+async function loadAllEntryPages(input: {
+  workspaceId: string;
+  targetPath: string;
+  sandboxClient: ReturnType<typeof createSandboxHttpClient>;
+  includeEntryMetadata: boolean;
+  includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+  onPage?: ((pages: WorkspaceEntryPage[]) => void) | undefined;
+  isCurrent?: (() => boolean) | undefined;
+}): Promise<WorkspaceEntryPage | null> {
+  const pages: WorkspaceEntryPage[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const page = toWorkspaceEntryPage(
+      await input.sandboxClient.listEntries(input.workspaceId, {
+        path: workspaceRelativePathToSandboxPath(input.targetPath),
+        pageSize: 200,
+        sortBy: "name",
+        sortOrder: "asc",
+        ...(cursor ? { cursor } : {}),
+        includeDirectoryDescendantUpdatedAt: input.includeDirectoryDescendantUpdatedAt,
+        includeEntryMetadata: input.includeEntryMetadata
+      } satisfies WorkspaceEntriesQuery)
+    );
+    if (input.isCurrent && !input.isCurrent()) {
+      return null;
+    }
+
+    pages.push(page);
+    input.onPage?.(pages);
+    cursor = page.nextCursor;
+  } while (cursor);
+
+  return mergeWorkspaceEntries(pages);
+}
+
 export function useWorkspaceFileManager(params: {
   connection: ConnectionSettings;
   request: AppRequest;
@@ -245,66 +281,44 @@ export function useWorkspaceFileManager(params: {
 
     try {
       setEntriesBusy(true);
-      const initialResponse = toWorkspaceEntryPage(
-        await sandboxClient.listEntries(workspaceIdValue, {
-          path: workspaceRelativePathToSandboxPath(targetPath),
-          pageSize: 200,
-          sortBy: "name",
-          sortOrder: "asc",
-          includeDirectoryDescendantUpdatedAt: false,
-          includeEntryMetadata: false
-        } satisfies WorkspaceEntriesQuery)
-      );
+      const initialResponse = await loadAllEntryPages({
+        workspaceId: workspaceIdValue,
+        targetPath,
+        sandboxClient,
+        includeEntryMetadata: false,
+        includeDirectoryDescendantUpdatedAt: false,
+        isCurrent: () => entriesRequestSeqRef.current === requestSeq,
+        onPage: (pages) => {
+          if (pages.length !== 1) {
+            return;
+          }
+
+          const initialPage = pages[0];
+          if (!initialPage || entriesRequestSeqRef.current !== requestSeq) {
+            return;
+          }
+
+          const normalizedInitialPage = {
+            ...initialPage,
+            path: normalizeWorkspaceRelativePath(initialPage.path)
+          };
+          setCurrentPath(normalizedInitialPage.path);
+          setEntryPage(normalizedInitialPage);
+          setEntriesBusy(false);
+          if (!options?.quiet) {
+            const responsePath = normalizeWorkspaceRelativePath(normalizedInitialPage.path);
+            params.setActivity(
+              `已加载 ${responsePath === "." ? "workspace 根目录" : responsePath}（${normalizedInitialPage.items.length}${initialPage.nextCursor ? "+" : ""} 项）`
+            );
+            params.setErrorMessage("");
+          }
+        }
+      });
       if (entriesRequestSeqRef.current !== requestSeq) {
         return null;
       }
 
-      const initialPage = {
-        ...initialResponse,
-        path: normalizeWorkspaceRelativePath(initialResponse.path)
-      };
-      setCurrentPath(initialPage.path);
-      setEntryPage(initialPage);
-      if (!options?.quiet) {
-        const responsePath = normalizeWorkspaceRelativePath(initialPage.path);
-        params.setActivity(
-          `已加载 ${responsePath === "." ? "workspace 根目录" : responsePath}（${initialPage.items.length}${initialResponse.nextCursor ? "+" : ""} 项）`
-        );
-        params.setErrorMessage("");
-      }
-
-      const pages: WorkspaceEntryPage[] = [initialPage];
-      let cursor = initialResponse.nextCursor;
-
-      while (cursor) {
-        const page = toWorkspaceEntryPage(
-          await sandboxClient.listEntries(workspaceIdValue, {
-            path: workspaceRelativePathToSandboxPath(targetPath),
-            pageSize: 200,
-            sortBy: "name",
-            sortOrder: "asc",
-            cursor,
-            includeDirectoryDescendantUpdatedAt: false,
-            includeEntryMetadata: false
-          } satisfies WorkspaceEntriesQuery)
-        );
-        if (entriesRequestSeqRef.current !== requestSeq) {
-          return null;
-        }
-
-        pages.push(page);
-        const mergedPage = mergeWorkspaceEntries(pages);
-        if (mergedPage) {
-          setEntryPage({
-            ...mergedPage,
-            path: normalizeWorkspaceRelativePath(mergedPage.path)
-          });
-        }
-        cursor = page.nextCursor;
-      }
-
-      const response = mergeWorkspaceEntries(pages);
-      if (!response) {
+      if (!initialResponse) {
         setEntryPage(null);
         return null;
       }
@@ -315,8 +329,8 @@ export function useWorkspaceFileManager(params: {
         path: normalizeWorkspaceRelativePath(response.path)
       });
       if (!options?.quiet) {
-        const responsePath = normalizeWorkspaceRelativePath(response.path);
-        params.setActivity(`已加载 ${responsePath === "." ? "workspace 根目录" : responsePath}（${response.items.length} 项）`);
+        const responsePath = normalizeWorkspaceRelativePath(initialResponse.path);
+        params.setActivity(`已加载 ${responsePath === "." ? "workspace 根目录" : responsePath}（${initialResponse.items.length} 项）`);
         params.setErrorMessage("");
       }
       void refreshEntryMetadata({
@@ -324,7 +338,7 @@ export function useWorkspaceFileManager(params: {
         expectedRequestSeq: requestSeq,
         quiet: options?.quiet
       });
-      return response;
+      return initialResponse;
     } catch (error) {
       if (entriesRequestSeqRef.current === requestSeq && !options?.quiet) {
         params.setErrorMessage(toErrorMessage(error));
@@ -349,45 +363,13 @@ export function useWorkspaceFileManager(params: {
     const targetPath = normalizeWorkspaceRelativePath(options.path);
     try {
       setEntriesRefreshingMetadata(true);
-      const initialResponse = toWorkspaceEntryPage(
-        await sandboxClient.listEntries(workspaceIdValue, {
-          path: workspaceRelativePathToSandboxPath(targetPath),
-          pageSize: 200,
-          sortBy: "name",
-          sortOrder: "asc"
-        } satisfies WorkspaceEntriesQuery)
-      );
-      if (entriesRequestSeqRef.current !== options.expectedRequestSeq) {
-        return;
-      }
-
-      const pages: WorkspaceEntryPage[] = [
-        {
-          ...initialResponse,
-          path: normalizeWorkspaceRelativePath(initialResponse.path)
-        }
-      ];
-      let cursor = initialResponse.nextCursor;
-
-      while (cursor) {
-        const page = toWorkspaceEntryPage(
-          await sandboxClient.listEntries(workspaceIdValue, {
-            path: workspaceRelativePathToSandboxPath(targetPath),
-            pageSize: 200,
-            sortBy: "name",
-            sortOrder: "asc",
-            cursor
-          } satisfies WorkspaceEntriesQuery)
-        );
-        if (entriesRequestSeqRef.current !== options.expectedRequestSeq) {
-          return;
-        }
-
-        pages.push(page);
-        cursor = page.nextCursor;
-      }
-
-      const response = mergeWorkspaceEntries(pages);
+      const response = await loadAllEntryPages({
+        workspaceId: workspaceIdValue,
+        targetPath,
+        sandboxClient,
+        includeEntryMetadata: true,
+        isCurrent: () => entriesRequestSeqRef.current === options.expectedRequestSeq
+      });
       if (!response || entriesRequestSeqRef.current !== options.expectedRequestSeq) {
         return;
       }

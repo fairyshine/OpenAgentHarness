@@ -4,7 +4,10 @@ import type {
   CallerContext,
   ControlPlaneRuntimeOperations,
   ModelGateway,
-  SandboxHostProviderKind
+  SandboxHostProviderKind,
+  WorkspaceEntryPage,
+  WorkspaceEntrySortBy,
+  SortOrder
 } from "@oah/engine-core";
 import type {
   DistributedPlatformModelRefreshResult,
@@ -131,6 +134,16 @@ export interface AppDependencies {
   sandboxOwnerFallbackBaseUrl?: string | undefined;
   localOwnerBaseUrl?: string | undefined;
   touchWorkspaceActivity?: ((workspaceId: string) => Promise<void>) | undefined;
+  listWorkspaceEntriesFast?: ((input: {
+    workspaceId: string;
+    path?: string | undefined;
+    pageSize: number;
+    cursor?: string | undefined;
+    sortBy: WorkspaceEntrySortBy;
+    sortOrder: SortOrder;
+    includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+    includeEntryMetadata?: boolean | undefined;
+  }) => Promise<WorkspaceEntryPage | undefined>) | undefined;
 }
 
 export interface AppRouteOptions {

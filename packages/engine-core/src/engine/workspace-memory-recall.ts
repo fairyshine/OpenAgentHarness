@@ -172,7 +172,7 @@ function stemRecallToken(value: string): string {
   return token;
 }
 
-function tokenizeForRecall(value: string): string[] {
+export function tokenizeWorkspaceMemoryRecallText(value: string): string[] {
   const matches = normalizeRecallText(value).match(/[\p{L}\p{N}][\p{L}\p{N}._/-]*/gu) ?? [];
   const tokens = new Set<string>();
 
@@ -219,7 +219,7 @@ function topicLooksLikeReferenceForRecentTool(topic: WorkspaceMemoryTopicFile, r
   });
 }
 
-function scoreWorkspaceMemoryTopic(
+export function scoreWorkspaceMemoryTopic(
   query: string,
   queryTokens: string[],
   recentTools: string[],
@@ -245,10 +245,10 @@ function scoreWorkspaceMemoryTopic(
     score += 8;
   }
 
-  const pathTokens = tokenizeForRecall(pathText);
-  const titleTokens = tokenizeForRecall(titleText);
-  const summaryTokens = tokenizeForRecall(summaryText);
-  const bodyTokens = tokenizeForRecall(bodyText);
+  const pathTokens = tokenizeWorkspaceMemoryRecallText(pathText);
+  const titleTokens = tokenizeWorkspaceMemoryRecallText(titleText);
+  const summaryTokens = tokenizeWorkspaceMemoryRecallText(summaryText);
+  const bodyTokens = tokenizeWorkspaceMemoryRecallText(bodyText);
 
   for (const token of queryTokens) {
     if (pathText.includes(token) || pathTokens.some((candidate) => areRecallTokensRelated(token, candidate))) {
@@ -491,7 +491,7 @@ export async function selectRelevantWorkspaceMemoryTopics(input: {
   const query = buildWorkspaceMemoryRecallQuery(input.messages, {
     hiddenMessagePredicate: input.hiddenMessagePredicate
   });
-  const queryTokens = tokenizeForRecall(query);
+  const queryTokens = tokenizeWorkspaceMemoryRecallText(query);
   if (query.length === 0 || queryTokens.length === 0 || input.topics.length === 0) {
     return [];
   }

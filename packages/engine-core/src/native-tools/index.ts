@@ -8,6 +8,7 @@ import { createEditTool } from "./edit.js";
 import { createGlobTool } from "./glob.js";
 import { createGrepTool } from "./grep.js";
 import { createLsTool } from "./ls.js";
+import { createMemoryTools } from "./memory.js";
 import { createMultiEditTool } from "./multi-edit.js";
 import { createReadTool } from "./read.js";
 import { READ_STATE_DIRECTORY, TODO_STATE_DIRECTORY } from "./constants.js";
@@ -132,6 +133,7 @@ export function createNativeToolSet(
     ...createMultiEditTool(context),
     ...createGlobTool(context),
     ...createGrepTool(context),
+    ...createMemoryTools(context),
     ...createViewImageTool(context),
     ...createWebFetchTool(context),
     ...createTodoWriteTool(context),

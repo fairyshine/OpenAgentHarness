@@ -46,6 +46,14 @@ async function touchWorkspaceActivity(dependencies: AppDependencies, workspaceId
   await dependencies.touchWorkspaceActivity?.(workspaceId);
 }
 
+function touchWorkspaceActivityLater(dependencies: AppDependencies, workspaceId: string): void {
+  void dependencies.touchWorkspaceActivity?.(workspaceId).catch((error) => {
+    if (dependencies.logger) {
+      console.warn(`[oah-http] Failed to touch workspace activity for ${workspaceId}:`, error);
+    }
+  });
+}
+
 async function handleListWorkspaceEntries(
   dependencies: AppDependencies,
   workspaceId: string,
@@ -53,8 +61,17 @@ async function handleListWorkspaceEntries(
   reply: FastifyReply
 ) {
   const query = workspaceEntriesQuerySchema.parse(request.query);
-  const page = await dependencies.runtimeService.listWorkspaceEntries(workspaceId, query);
-  await touchWorkspaceActivity(dependencies, workspaceId);
+  const page =
+    (await dependencies.listWorkspaceEntriesFast?.({
+      workspaceId,
+      ...query
+    }).catch((error) => {
+      if (dependencies.logger) {
+        console.warn(`[oah-http] Fast internal workspace file list failed for ${workspaceId}; falling back to workspace lease.`, error);
+      }
+      return undefined;
+    })) ?? (await dependencies.runtimeService.listWorkspaceEntries(workspaceId, query));
+  touchWorkspaceActivityLater(dependencies, workspaceId);
   return reply.send(workspaceEntryPageSchema.parse(page));
 }
 

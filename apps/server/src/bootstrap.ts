@@ -95,6 +95,7 @@ import {
 import { createRuntimeManagement } from "./bootstrap/runtime-management-service.js";
 import { createWorkspaceLifecycle } from "./bootstrap/workspace-lifecycle-service.js";
 import { createWorkspacePrewarmer } from "./bootstrap/workspace-prewarmer.js";
+import { createObjectStorageWorkspaceEntryLister } from "./object-storage-workspace-list.js";
 import type { BootstrappedRuntime, BootstrapOptions } from "./bootstrap/bootstrap-runtime-types.js";
 import {
   fileExists,
@@ -760,6 +761,26 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         })
       : undefined
     : undefined;
+  const objectStoreWorkspaceListStore =
+    config.object_storage && objectStorageModule ? objectStorageModule.createDirectoryObjectStore(config.object_storage) : undefined;
+  const listWorkspaceEntriesFast = objectStoreWorkspaceListStore
+    ? createObjectStorageWorkspaceEntryLister({
+        store: objectStoreWorkspaceListStore,
+        getWorkspaceRecord: async (workspaceId: string) => (await workspaceRepository.getById(workspaceId)) ?? undefined,
+        shouldUseObjectStoreList: (workspaceId: string) =>
+          !workspaceMaterializationManager
+            ?.snapshot()
+            .some((entry) => entry.workspaceId === workspaceId && entry.sourceKind === "object_store" && entry.materializedAt),
+        prewarmWorkspace: workspacePrewarmer
+          ? (workspaceId: string) => {
+              void workspacePrewarmer.prewarmWorkspace(workspaceId);
+            }
+          : undefined,
+        logger: (message: string) => {
+          console.info(message);
+        }
+      })
+    : undefined;
   const controlPlaneEngineService: ControlPlaneRuntimeOperations = controlPlaneRuntime
     ? controlPlaneRuntime.createControlPlaneEngineService({
         runtimeService,
@@ -905,6 +926,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     ...(sandboxHost ? { sandboxHostProviderKind: sandboxHost.providerKind } : {}),
     ...(ownerBaseUrl ? { localOwnerBaseUrl: ownerBaseUrl } : {}),
     ...(touchWorkspaceActivity ? { touchWorkspaceActivity } : {}),
+    ...(listWorkspaceEntriesFast ? { listWorkspaceEntriesFast } : {}),
     ...(workspaceLifecycle ? { workspaceLifecycle } : {}),
     appendEngineLog(input) {
       return appendEngineLogEvent(primarySessionEventStore, {
@@ -936,12 +958,19 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       ]);
       await sandboxHost?.close();
       await closePersistence();
-    await objectStorageMirror?.close();
-    await platformModelService.close();
-    await nativeBridge.shutdownNativeWorkspaceSyncWorkerPool();
-    if (workspaceMaterializationMaintenanceTimer) {
-      clearInterval(workspaceMaterializationMaintenanceTimer);
-    }
+      if (
+        objectStoreWorkspaceListStore &&
+        "close" in objectStoreWorkspaceListStore &&
+        typeof objectStoreWorkspaceListStore.close === "function"
+      ) {
+        await objectStoreWorkspaceListStore.close();
+      }
+      await objectStorageMirror?.close();
+      await platformModelService.close();
+      await nativeBridge.shutdownNativeWorkspaceSyncWorkerPool();
+      if (workspaceMaterializationMaintenanceTimer) {
+        clearInterval(workspaceMaterializationMaintenanceTimer);
+      }
       await controlPlaneRuntime?.close();
     }
   };

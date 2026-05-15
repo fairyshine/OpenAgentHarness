@@ -300,7 +300,16 @@ async function handleListWorkspaceEntries(
   reply: FastifyReply
 ) {
   const query = workspaceEntriesQuerySchema.parse(request.query);
-  const page = await dependencies.runtimeService.listWorkspaceEntries(workspaceId, query);
+  const page =
+    (await dependencies.listWorkspaceEntriesFast?.({
+      workspaceId,
+      ...query
+    }).catch((error) => {
+      if (dependencies.logger) {
+        console.warn(`[oah-http] Fast workspace file list failed for ${workspaceId}; falling back to workspace lease.`, error);
+      }
+      return undefined;
+    })) ?? (await dependencies.runtimeService.listWorkspaceEntries(workspaceId, query));
   return reply.send(workspaceEntryPageSchema.parse(page));
 }
 

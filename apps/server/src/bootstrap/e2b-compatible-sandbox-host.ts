@@ -78,6 +78,16 @@ export interface E2BCompatibleSandboxService {
   readFile(input: { sandboxId: string; path: string }): Promise<Buffer>;
   openReadStream?(input: { sandboxId: string; path: string }): Readable;
   readdir(input: { sandboxId: string; path: string }): Promise<WorkspaceFileSystemEntry[]>;
+  readdirPage?(input: {
+    sandboxId: string;
+    path: string;
+    pageSize: number;
+    cursor?: string | undefined;
+    sortBy?: "name" | "type" | undefined;
+    sortOrder?: "asc" | "desc" | undefined;
+    includeMetadata?: boolean | undefined;
+    includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+  }): Promise<{ items: WorkspaceFileSystemEntry[]; nextCursor?: string | undefined }>;
   mkdir(input: { sandboxId: string; path: string; recursive?: boolean | undefined }): Promise<void>;
   writeFile(input: { sandboxId: string; path: string; data: Buffer; mtimeMs?: number | undefined }): Promise<void>;
   rm(input: {
@@ -376,6 +386,27 @@ export function createHttpE2BCompatibleSandboxService(
         ...(entry.sizeBytes !== undefined ? { sizeBytes: entry.sizeBytes } : {})
       }));
     },
+    async readdirPage(input) {
+      const page = await clientForSandbox(input.sandboxId).listEntries(input.sandboxId, {
+        path: input.path,
+        pageSize: input.pageSize,
+        ...(input.cursor ? { cursor: input.cursor } : {}),
+        sortBy: input.sortBy ?? "name",
+        sortOrder: input.sortOrder ?? "asc",
+        includeEntryMetadata: input.includeMetadata,
+        includeDirectoryDescendantUpdatedAt: input.includeDirectoryDescendantUpdatedAt
+      });
+
+      return {
+        items: page.items.map((entry) => ({
+          name: path.posix.basename(entry.path),
+          kind: entry.type,
+          ...(entry.updatedAt ? { updatedAt: entry.updatedAt } : {}),
+          ...(entry.sizeBytes !== undefined ? { sizeBytes: entry.sizeBytes } : {})
+        })),
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {})
+      };
+    },
     async mkdir(input) {
       await clientForSandbox(input.sandboxId).createDirectory(input.sandboxId, {
         path: input.path,
@@ -547,6 +578,36 @@ function createE2BCompatibleWorkspaceFileSystem(service: E2BCompatibleSandboxSer
         sandboxId: parsed.sandboxId,
         path: parsed.remotePath
       });
+    },
+    async readdirPage(targetPath, input) {
+      const parsed = parseVirtualSandboxPath(targetPath);
+      if (service.readdirPage) {
+        return service.readdirPage({
+          sandboxId: parsed.sandboxId,
+          path: parsed.remotePath,
+          pageSize: input.pageSize,
+          ...(input.cursor ? { cursor: input.cursor } : {}),
+          sortBy: input.sortBy,
+          sortOrder: input.sortOrder,
+          includeMetadata: input.includeMetadata,
+          includeDirectoryDescendantUpdatedAt: input.includeDirectoryDescendantUpdatedAt
+        });
+      }
+
+      const entries = await service.readdir({
+        sandboxId: parsed.sandboxId,
+        path: parsed.remotePath
+      });
+      const startIndex = Number.parseInt(input.cursor ?? "0", 10);
+      const sortedEntries = [...entries].sort((left, right) => {
+        const typeComparison =
+          input.sortBy === "type" ? (left.kind === "directory" ? 0 : 1) - (right.kind === "directory" ? 0 : 1) : 0;
+        const comparison = typeComparison || left.name.localeCompare(right.name);
+        return input.sortOrder === "desc" ? comparison * -1 : comparison;
+      });
+      const items = sortedEntries.slice(startIndex, startIndex + input.pageSize);
+      const nextCursor = startIndex + input.pageSize < sortedEntries.length ? String(startIndex + input.pageSize) : undefined;
+      return nextCursor ? { items, nextCursor } : { items };
     },
     async mkdir(targetPath, options) {
       const parsed = parseVirtualSandboxPath(targetPath);

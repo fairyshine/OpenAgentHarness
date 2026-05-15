@@ -6,7 +6,10 @@ import type {
 import type { ServerConfig } from "@oah/config";
 import type {
   ModelGateway,
-  SandboxHostProviderKind
+  SandboxHostProviderKind,
+  WorkspaceEntryPage,
+  WorkspaceEntrySortBy,
+  SortOrder
 } from "@oah/engine-core";
 import type { ExecutionRuntimeOperations } from "@oah/engine-core";
 import type { EngineService } from "@oah/engine-core";
@@ -112,6 +115,16 @@ export interface BootstrappedRuntime {
   sandboxHostProviderKind?: SandboxHostProviderKind | undefined;
   localOwnerBaseUrl?: string | undefined;
   touchWorkspaceActivity?: (workspaceId: string) => Promise<void>;
+  listWorkspaceEntriesFast?: (input: {
+    workspaceId: string;
+    path?: string | undefined;
+    pageSize: number;
+    cursor?: string | undefined;
+    sortBy: WorkspaceEntrySortBy;
+    sortOrder: SortOrder;
+    includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+    includeEntryMetadata?: boolean | undefined;
+  }) => Promise<WorkspaceEntryPage | undefined>;
   workspaceLifecycle?: {
     execute(input: {
       workspaceId: string;

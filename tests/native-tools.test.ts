@@ -881,6 +881,397 @@ describe("native tools", () => {
     expect(await readFile(path.join(workspaceRoot, "notes.txt"), "utf8")).toBe("two\n");
   });
 
+  it("searches and reads workspace memory with native tools", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-"));
+    tempDirs.push(workspaceRoot);
+
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "topics"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "sessions"), { recursive: true });
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
+      "- [Database testing](topics/feedback.md)\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "feedback.md"),
+      [
+        "---",
+        "name: Database testing",
+        "description: User prefers real database integration tests in this workspace.",
+        "type: feedback",
+        "---",
+        "",
+        "Do not mock database tests in this repo.",
+        "Why: The user wants coverage through the real storage layer."
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "sessions", "2026-05-15-api-debugging.md"),
+      "Investigated API debugging flow and noted database integration constraints.\n",
+      "utf8"
+    );
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemorySearch", "MemoryRead"], {
+      sessionId: "session-memory-tools"
+    });
+
+    const searchResult = String(
+      await tools.MemorySearch.execute(
+        {
+          query: "database tests",
+          corpus: "topics"
+        },
+        {}
+      )
+    );
+    expect(searchResult).toContain("path=.openharness/memory/topics/feedback.md");
+    expect(searchResult).toContain("type=feedback");
+    expect(searchResult).toContain("Database testing");
+
+    const readResult = String(
+      await tools.MemoryRead.execute(
+        {
+          path: ".openharness/memory/topics/feedback.md",
+          from: 7,
+          lines: 2
+        },
+        {}
+      )
+    );
+    expect(readResult).toContain("path: .openharness/memory/topics/feedback.md");
+    expect(readResult).toContain("7: Do not mock database tests in this repo.");
+    expect(readResult).toContain("8: Why: The user wants coverage through the real storage layer.");
+
+    await expect(
+      tools.MemoryRead.execute(
+        {
+          path: "README.md"
+        },
+        {}
+      )
+    ).rejects.toMatchObject({ code: "native_tool_memory_path_not_allowed" });
+  });
+
+  it("writes, updates, and forgets workspace memory with native tools", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-write-"));
+    tempDirs.push(workspaceRoot);
+
+    const workspace = {
+      id: "ws_memory_write",
+      kind: "project",
+      name: "memory write workspace",
+      rootPath: workspaceRoot,
+      readOnly: false,
+      historyMirrorEnabled: false,
+      settings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "explicit-only"
+          }
+        }
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_memory_write",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      },
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString()
+    } satisfies WorkspaceRecord;
+
+    const tools = createNativeToolSet(
+      workspaceRoot,
+      () => ["MemoryRemember", "MemoryUpdate", "MemoryForget", "MemorySearch", "MemoryRead"],
+      {
+        sessionId: "session-memory-write",
+        workspace
+      }
+    );
+
+    const rememberResult = String(
+      await tools.MemoryRemember.execute(
+        {
+          type: "feedback",
+          title: "Database testing",
+          description: "Use real database integration tests.",
+          content: "Do not mock database tests in this repo."
+        },
+        {}
+      )
+    );
+    expect(rememberResult).toContain("path: .openharness/memory/topics/feedback/database-testing.md");
+    expect(rememberResult).toContain("index_updated: true");
+
+    const topicPath = path.join(workspaceRoot, ".openharness", "memory", "topics", "feedback", "database-testing.md");
+    await expect(readFile(topicPath, "utf8")).resolves.toContain("Do not mock database tests in this repo.");
+    await expect(readFile(path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"), "utf8")).resolves.toContain(
+      ".openharness/memory/topics/feedback/database-testing.md"
+    );
+
+    const updateResult = String(
+      await tools.MemoryUpdate.execute(
+        {
+          path: ".openharness/memory/topics/feedback/database-testing.md",
+          oldText: "Do not mock database tests",
+          newText: "Prefer real database integration tests"
+        },
+        {}
+      )
+    );
+    expect(updateResult).toContain("replacements: 1");
+    await expect(readFile(topicPath, "utf8")).resolves.toContain("Prefer real database integration tests in this repo.");
+
+    const candidateResult = String(
+      await tools.MemoryForget.execute(
+        {
+          query: "database"
+        },
+        {}
+      )
+    );
+    expect(candidateResult).toContain("forgotten: false");
+    expect(candidateResult).toContain("path=.openharness/memory/topics/feedback/database-testing.md");
+
+    const forgetResult = String(
+      await tools.MemoryForget.execute(
+        {
+          path: ".openharness/memory/topics/feedback/database-testing.md"
+        },
+        {}
+      )
+    );
+    expect(forgetResult).toContain("forgotten: true");
+    await expect(readFile(topicPath, "utf8")).rejects.toThrow();
+  });
+
+  it("returns a pending proposal before writing suggested workspace memory", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-policy-"));
+    tempDirs.push(workspaceRoot);
+
+    const workspace = {
+      id: "ws_memory_policy",
+      kind: "project",
+      name: "memory policy workspace",
+      rootPath: workspaceRoot,
+      readOnly: false,
+      historyMirrorEnabled: false,
+      settings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "confirm-suggested"
+          }
+        }
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_memory_policy",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      },
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString()
+    } satisfies WorkspaceRecord;
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryRemember"], {
+      sessionId: "session-memory-policy",
+      workspace
+    });
+
+    const result = String(
+      await tools.MemoryRemember.execute(
+        {
+          type: "project",
+          title: "Project decision",
+          content: "Durable fact."
+        },
+        {}
+      )
+    );
+    expect(result).toContain("pending: true");
+    expect(result).toContain("requires_confirmation: true");
+    expect(result).toContain("tool: MemoryRemember");
+    expect(result).toContain("target_path: .openharness/memory/topics/project/project-decision.md");
+    await expect(
+      readFile(path.join(workspaceRoot, ".openharness", "memory", "topics", "project", "project-decision.md"), "utf8")
+    ).rejects.toThrow();
+  });
+
+  it("captures session summaries under workspace memory sessions", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-session-"));
+    tempDirs.push(workspaceRoot);
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryCaptureSession"], {
+      sessionId: "session-memory-capture"
+    });
+
+    const captureResult = String(
+      await tools.MemoryCaptureSession.execute(
+        {
+          title: "API debugging",
+          summary: "- Goal: debug API flow\n- Finding: storage layer needs real integration coverage",
+          sessionId: "ses_123",
+          runId: "run_456",
+          reason: "Before compaction",
+          path: "api-debugging.md"
+        },
+        {}
+      )
+    );
+    expect(captureResult).toContain("path: .openharness/memory/sessions/api-debugging.md");
+    expect(captureResult).toContain("session_id: ses_123");
+    const capturePath = path.join(workspaceRoot, ".openharness", "memory", "sessions", "api-debugging.md");
+    await expect(readFile(capturePath, "utf8")).resolves.toContain("storage layer needs real integration coverage");
+
+    await expect(
+      tools.MemoryCaptureSession.execute(
+        {
+          title: "Bad capture",
+          summary: "Should not write outside sessions.",
+          path: "../topics/bad.md"
+        },
+        {}
+      )
+    ).rejects.toMatchObject({ code: "native_tool_memory_path_not_allowed" });
+  });
+
+  it("appends low-weight daily workspace memory logs", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-daily-"));
+    tempDirs.push(workspaceRoot);
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryAppendDaily", "MemorySearch"], {
+      sessionId: "session-memory-daily"
+    });
+
+    const firstResult = String(
+      await tools.MemoryAppendDaily.execute(
+        {
+          date: "2026-05-15",
+          title: "Memory implementation",
+          content: "Implemented native memory tools and workspace policy parsing."
+        },
+        {}
+      )
+    );
+    expect(firstResult).toContain("path: .openharness/memory/daily/2026-05-15.md");
+    expect(firstResult).toContain("created: true");
+
+    const secondResult = String(
+      await tools.MemoryAppendDaily.execute(
+        {
+          date: "2026-05-15",
+          content: "Verified daily memory search coverage."
+        },
+        {}
+      )
+    );
+    expect(secondResult).toContain("updated: true");
+
+    const dailyPath = path.join(workspaceRoot, ".openharness", "memory", "daily", "2026-05-15.md");
+    const dailyContent = await readFile(dailyPath, "utf8");
+    expect(dailyContent).toContain("type: daily");
+    expect(dailyContent).toContain("Implemented native memory tools");
+    expect(dailyContent).toContain("Verified daily memory search coverage");
+
+    const searchResult = String(
+      await tools.MemorySearch.execute(
+        {
+          query: "daily memory search",
+          corpus: "daily"
+        },
+        {}
+      )
+    );
+    expect(searchResult).toContain("path=.openharness/memory/daily/2026-05-15.md");
+  });
+
+  it("records memory dreams review notes", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-dreams-"));
+    tempDirs.push(workspaceRoot);
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryRecordDream", "MemorySearch"], {
+      sessionId: "session-memory-dreams"
+    });
+
+    const dreamResult = String(
+      await tools.MemoryRecordDream.execute(
+        {
+          title: "Promote testing preference",
+          recommendation: "Promote repeated database testing preference into topics/feedback.",
+          sourcePaths: [".openharness/memory/sessions/2026-05-15-api-debugging.md"],
+          targetPath: ".openharness/memory/topics/feedback/database-testing.md"
+        },
+        {}
+      )
+    );
+    expect(dreamResult).toContain("path: .openharness/memory/dreams/DREAMS.md");
+    expect(dreamResult).toContain("created: true");
+
+    const dreamsPath = path.join(workspaceRoot, ".openharness", "memory", "dreams", "DREAMS.md");
+    const dreamsContent = await readFile(dreamsPath, "utf8");
+    expect(dreamsContent).toContain("type: dreams");
+    expect(dreamsContent).toContain("Promote repeated database testing preference");
+    expect(dreamsContent).toContain(".openharness/memory/topics/feedback/database-testing.md");
+
+    const searchResult = String(
+      await tools.MemorySearch.execute(
+        {
+          query: "database testing preference",
+          corpus: "dreams"
+        },
+        {}
+      )
+    );
+    expect(searchResult).toContain("path=.openharness/memory/dreams/DREAMS.md");
+  });
+
+  it("refuses to write obvious secrets into workspace memory", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-secret-"));
+    tempDirs.push(workspaceRoot);
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryRemember"], {
+      sessionId: "session-memory-secret"
+    });
+
+    await expect(
+      tools.MemoryRemember.execute(
+        {
+          type: "reference",
+          title: "Bad secret",
+          content: "api_key = \"1234567890abcdef1234567890abcdef\""
+        },
+        {}
+      )
+    ).rejects.toMatchObject({ code: "native_tool_memory_secret_detected" });
+  });
+
   it("accepts todos when no item is marked in progress", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-todo-no-progress-"));
     tempDirs.push(workspaceRoot);
