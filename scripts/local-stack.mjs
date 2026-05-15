@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   copyFileSync,
   cpSync,
@@ -120,6 +120,27 @@ function resolveOahHome() {
 
 function resolveRequestedDeployRoot() {
   return path.resolve(process.env.OAH_DEPLOY_ROOT?.trim() || resolveOahHome());
+}
+
+function ensureLocalApiToken(oahHome) {
+  const configured = process.env.OAH_LOCAL_API_TOKEN?.trim();
+  if (configured) {
+    return configured;
+  }
+
+  const runDir = path.join(oahHome, "run");
+  const tokenPath = path.join(runDir, "token");
+  if (existsSync(tokenPath)) {
+    const existing = readFileSync(tokenPath, "utf8").trim();
+    if (existing) {
+      return existing;
+    }
+  }
+
+  mkdirSync(runDir, { recursive: true });
+  const token = randomBytes(32).toString("base64url");
+  writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
+  return token;
 }
 
 async function waitForComposeServiceHealthy(service, label = service) {
@@ -287,6 +308,7 @@ function ensureLocalRuntimeSources(deployRoot) {
 
 function prepareDockerServerConfigs() {
   const deployRoot = resolveRequestedDeployRoot();
+  const oahHome = resolveOahHome();
   process.env.OAH_DEPLOY_ROOT = deployRoot;
 
   let sourceConfigPath = findDockerServerConfigPath(deployRoot);
@@ -443,6 +465,10 @@ function prepareDockerServerConfigs() {
   process.env.OAH_LOCAL_REPO_ROOT = repoRoot;
   process.env.OAH_LOCAL_DEPLOY_ROOT = deployRoot;
   process.env.OAH_LOCAL_COMPOSE_SCALER_AUTH_TOKEN = composeScalerAuthToken;
+  if (process.env.OAH_LOCAL_API_TOKEN?.trim() || readBoolEnv("OAH_LOCAL_API_AUTH", false)) {
+    process.env.OAH_LOCAL_API_TOKEN = ensureLocalApiToken(oahHome);
+    console.log(`Local API auth enabled. Token file: ${path.join(oahHome, "run", "token")}`);
+  }
   process.env.COMPOSE_PROJECT_NAME = composeProjectName;
 }
 

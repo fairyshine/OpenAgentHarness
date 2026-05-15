@@ -79,7 +79,7 @@ Desktop   ┘          └── OAP local daemon
 - `config/` 是本地与集群 profile 配置。
 - `config/server.docker.yaml` 是 Docker Compose / `OAH_DEPLOY_ROOT` 入口；旧的根目录 `server.docker.yaml` 仍兼容。
 - `state/` 只放本地 runtime 私有状态，例如 SQLite shadow、archive、materialization cache。
-- `logs/`、`run/` 只属于 local daemon；`run/token` 是 OAP local daemon 的 bearer token，非 public API 路由会校验它。
+- `logs/`、`run/` 只属于 local daemon；启用 `OAH_LOCAL_API_AUTH=1` 时，`run/token` 会作为可选的本地 API bearer token，非 public API 路由会校验它。
 - `.oah-local/` 只放 compose 生成配置和 fingerprint。
 
 ### `OAH_DEPLOY_ROOT`

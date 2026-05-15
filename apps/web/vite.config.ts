@@ -165,7 +165,7 @@ const proxyTarget = resolveProxyTarget();
 const proxyAuthorizationHeader = resolveProxyAuthorizationHeader();
 
 function resolveProxyAuthorizationHeader(): { authorization: string } | undefined {
-  const token = process.env.OAH_TOKEN?.trim() || readLocalDaemonToken();
+  const token = process.env.OAH_TOKEN?.trim() || process.env.OAH_LOCAL_API_TOKEN?.trim() || readLocalDaemonToken();
   return token ? { authorization: `Bearer ${token}` } : undefined;
 }
 

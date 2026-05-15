@@ -73,7 +73,7 @@ type RollbackOptions = {
 export function resolveConnection(options: GlobalOptions) {
   return {
     baseUrl: options.baseUrl ?? process.env.OAH_BASE_URL ?? "http://127.0.0.1:8787",
-    token: options.token ?? process.env.OAH_TOKEN ?? ""
+    token: options.token ?? process.env.OAH_TOKEN ?? process.env.OAH_LOCAL_API_TOKEN ?? ""
   };
 }
 
@@ -166,8 +166,9 @@ export function createProgram(): Command {
   daemon
     .command("start")
     .description("Start the local OAP daemon")
+    .option("--auth", "Require the local API bearer token for non-public routes")
     .option("--timeout-ms <ms>", "Startup health check timeout", parseIntegerOption)
-    .action(async (options: { timeoutMs?: number }, command: Command) => {
+    .action(async (options: { auth?: boolean; timeoutMs?: number }, command: Command) => {
       const { startDaemon } = await import("../daemon/lifecycle.js");
       console.log(await startDaemon({ ...resolveGroupedHomeOptions(command, daemon, program), ...options }));
     });
@@ -722,7 +723,7 @@ async function resolveClientConnection(
     return {
       connection: {
         baseUrl: explicitBaseUrl,
-        token: globalOptions.token ?? process.env.OAH_TOKEN ?? ""
+        token: globalOptions.token ?? process.env.OAH_TOKEN ?? process.env.OAH_LOCAL_API_TOKEN ?? ""
       },
       source: "explicit" as const
     };
@@ -740,7 +741,7 @@ async function resolveClientConnection(
   return {
     connection: {
       baseUrl: daemonConnection.baseUrl,
-      token: globalOptions.token ?? process.env.OAH_TOKEN ?? daemonConnection.token
+      token: globalOptions.token ?? process.env.OAH_TOKEN ?? process.env.OAH_LOCAL_API_TOKEN ?? daemonConnection.token ?? ""
     },
     source: "local-daemon" as const
   };

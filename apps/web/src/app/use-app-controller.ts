@@ -711,6 +711,7 @@ export function useAppController() {
   }, [sessionId]);
 
   useEffect(() => {
+    activeSessionIdRef.current = sessionId.trim();
     shouldAutoFollowConversationRef.current = true;
     resetMessagePaging();
 
@@ -745,6 +746,21 @@ export function useAppController() {
       setMessagesLoading(false);
       window.clearTimeout(sessionQueueRefreshTimerRef.current);
       return;
+    }
+
+    if (!session && workspaceId.trim()) {
+      const now = new Date().toISOString();
+      startTransition(() => {
+        setSession({
+          id: sessionId,
+          workspaceId: workspaceId.trim(),
+          subjectRef: "",
+          activeAgentName: "",
+          status: "active",
+          createdAt: now,
+          updatedAt: now
+        });
+      });
     }
 
     void refreshMessages(true, { pageSize: 24, reset: true });

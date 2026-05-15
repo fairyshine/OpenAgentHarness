@@ -11,6 +11,7 @@ export type DaemonCommandOptions = {
 };
 
 export type DaemonStartOptions = DaemonCommandOptions & {
+  auth?: boolean | undefined;
   timeoutMs?: number | undefined;
 };
 
@@ -21,7 +22,7 @@ export type DaemonLogOptions = DaemonCommandOptions & {
 
 export type DaemonApiConnection = {
   baseUrl: string;
-  token: string;
+  token?: string | undefined;
 };
 
 type DaemonPaths = {
@@ -46,6 +47,27 @@ type ServerEndpoint = {
 const DEFAULT_DAEMON_HOST = "127.0.0.1";
 const DEFAULT_DAEMON_PORT = 8787;
 const HOME_VERSION = "1";
+
+function readBoolEnv(name: string, fallback = false): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) {
+    return fallback;
+  }
+
+  if (["1", "true", "yes", "on"].includes(raw)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "off"].includes(raw)) {
+    return false;
+  }
+
+  return fallback;
+}
+
+function shouldEnableLocalApiAuth(auth?: boolean | undefined): boolean {
+  return auth ?? readBoolEnv("OAH_LOCAL_API_AUTH", false);
+}
 
 export function resolveOahHome(input?: string | undefined): string {
   return path.resolve(input ?? process.env.OAH_HOME ?? process.env.OAH_INSTALL_ROOT ?? path.join(homedir(), ".openagentharness"));
@@ -89,10 +111,10 @@ export async function initDaemonHome(options: DaemonCommandOptions = {}): Promis
 export async function resolveDaemonApiConnection(options: DaemonCommandOptions = {}): Promise<DaemonApiConnection> {
   const paths = await initDaemonHome(options);
   const endpoint = await readDaemonEndpoint(paths.configPath);
-  const token = await ensureDaemonToken(paths);
+  const token = process.env.OAH_LOCAL_API_TOKEN?.trim() || (await ensureDaemonToken(paths));
   return {
     baseUrl: endpoint.baseUrl,
-    token
+    ...(token ? { token } : {})
   };
 }
 
@@ -116,7 +138,7 @@ export async function startDaemon(options: DaemonStartOptions = {}): Promise<str
     );
   }
 
-  const token = await ensureDaemonToken(paths);
+  const token = process.env.OAH_LOCAL_API_TOKEN?.trim() || (shouldEnableLocalApiAuth(options.auth) ? await ensureDaemonToken(paths) : undefined);
   const command = await resolveServerCommand(paths);
   const logFd = openSync(paths.logPath, "a", 0o644);
   const child = spawn(command.command, command.args, {
@@ -127,8 +149,7 @@ export async function startDaemon(options: DaemonStartOptions = {}): Promise<str
       ...process.env,
       OAH_HOME: paths.home,
       OAH_DEPLOY_ROOT: process.env.OAH_DEPLOY_ROOT ?? paths.home,
-      OAH_LOCAL_API_TOKEN: token,
-      OAH_TOKEN: token
+      ...(token ? { OAH_LOCAL_API_TOKEN: token } : {})
     }
   });
   child.on("error", (error) => {

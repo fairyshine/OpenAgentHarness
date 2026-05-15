@@ -26,6 +26,7 @@ import { isPendingSessionId } from "./app-controller-utils";
 import { createClientId } from "./client-id";
 
 const DEFAULT_NEW_SESSION_TITLE = "New session";
+const WORKSPACE_SESSION_SYNC_CONCURRENCY = 4;
 
 function scheduleDeferredIdleTask(callback: () => void, delayMs: number, timeoutMs: number) {
   window.setTimeout(() => {
@@ -36,6 +37,22 @@ function scheduleDeferredIdleTask(callback: () => void, delayMs: number, timeout
 
     callback();
   }, delayMs);
+}
+
+async function runLimited<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+  let index = 0;
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (index < items.length) {
+        const item = items[index];
+        index += 1;
+        if (item !== undefined) {
+          await worker(item);
+        }
+      }
+    })
+  );
 }
 
 export function useNavigationActions(params: NavigationActionParams) {
@@ -478,105 +495,9 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.navigation.setExpandedWorkspaceIds((current) => current.filter((entry) => visibleWorkspaceIds.has(entry)));
       });
 
-      const sessionPages = await Promise.all(
-        response.items.map(async (workspace) => {
-          try {
-            const sessions: Session[] = [];
-            let cursor: string | undefined;
-
-            do {
-              const query = new URLSearchParams({
-                pageSize: "200"
-              });
-              if (cursor) {
-                query.set("cursor", cursor);
-              }
-              const page = await params.request<SessionPage>(`/api/v1/workspaces/${workspace.id}/sessions?${query.toString()}`);
-              sessions.push(...page.items);
-              cursor = page.nextCursor;
-            } while (cursor);
-
-            return {
-              workspaceId: workspace.id,
-              items: sessions,
-              ok: true as const
-            };
-          } catch (error) {
-            return {
-              workspaceId: workspace.id,
-              error,
-              ok: false as const
-            };
-          }
-        })
-      );
-      const syncedSessions = new Map<string, SavedSessionRecord>();
-      const failedWorkspaceIds = new Set<string>();
-
-      for (const result of sessionPages) {
-        if (result.ok) {
-          for (const session of result.items) {
-            const existing = existingSessionById.get(session.id);
-            syncedSessions.set(session.id, {
-              id: session.id,
-              workspaceId: session.workspaceId,
-              ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
-              title: session.title,
-              modelRef: session.modelRef,
-              agentName: session.activeAgentName,
-              lastRunAt: session.lastRunAt,
-              createdAt: session.createdAt,
-              lastOpenedAt: existing?.lastOpenedAt ?? session.createdAt
-            });
-          }
-        } else {
-          failedWorkspaceIds.add(result.workspaceId);
-        }
-      }
-
-      for (const entry of params.navigation.savedSessions) {
-        if (!visibleWorkspaceIds.has(entry.workspaceId)) {
-          continue;
-        }
-        if (syncedSessions.has(entry.id)) {
-          continue;
-        }
-        if (!failedWorkspaceIds.has(entry.workspaceId)) {
-          continue;
-        }
-        syncedSessions.set(entry.id, entry);
-      }
-
-      startTransition(() => {
-        params.navigation.setSavedSessions((current) => {
-          const currentById = new Map(current.map((entry) => [entry.id, entry]));
-          const next: SavedSessionRecord[] = [];
-
-          for (const entry of current) {
-            const synced = syncedSessions.get(entry.id);
-            if (synced) {
-              next.push({
-                ...entry,
-                ...synced
-              });
-            }
-          }
-
-          for (const entry of syncedSessions.values()) {
-            if (!currentById.has(entry.id)) {
-              next.push(entry);
-            }
-          }
-
-          return next.sort(compareSavedSessionsByRecency);
-        });
-        params.navigation.setRecentSessions((current) =>
-          current.filter((entry) => {
-            const sessionRecord = syncedSessions.get(entry);
-            return Boolean(sessionRecord && visibleWorkspaceIds.has(sessionRecord.workspaceId));
-          })
-        );
-      });
+      scheduleDeferredIdleTask(() => {
+        void syncWorkspaceSessions(response.items, visibleWorkspaceIds, existingSessionById);
+      }, 150, 1_000);
 
       const selectedWorkspaceId = params.navigation.workspaceId.trim();
       const selectedWorkspaceExists =
@@ -608,6 +529,96 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.setErrorMessage(toErrorMessage(error));
       }
     }
+  }
+
+  async function syncWorkspaceSessions(
+    workspaces: Workspace[],
+    visibleWorkspaceIds: Set<string>,
+    existingSessionById: Map<string, SavedSessionRecord>
+  ) {
+    const failedWorkspaceIds = new Set<string>();
+    const syncedSessions = new Map<string, SavedSessionRecord>();
+
+    await runLimited(workspaces, WORKSPACE_SESSION_SYNC_CONCURRENCY, async (workspace) => {
+      const sessions: Session[] = [];
+      try {
+        let cursor: string | undefined;
+
+        do {
+          const query = new URLSearchParams({
+            pageSize: "200"
+          });
+          if (cursor) {
+            query.set("cursor", cursor);
+          }
+          const page = await params.request<SessionPage>(`/api/v1/workspaces/${workspace.id}/sessions?${query.toString()}`);
+          sessions.push(...page.items);
+          cursor = page.nextCursor;
+        } while (cursor);
+      } catch {
+        failedWorkspaceIds.add(workspace.id);
+        return;
+      }
+
+      for (const session of sessions) {
+        const existing = existingSessionById.get(session.id);
+        syncedSessions.set(session.id, {
+          id: session.id,
+          workspaceId: session.workspaceId,
+          ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
+          title: session.title,
+          modelRef: session.modelRef,
+          agentName: session.activeAgentName,
+          lastRunAt: session.lastRunAt,
+          createdAt: session.createdAt,
+          lastOpenedAt: existing?.lastOpenedAt ?? session.createdAt
+        });
+      }
+    });
+
+    for (const entry of params.navigation.savedSessions) {
+      if (!visibleWorkspaceIds.has(entry.workspaceId)) {
+        continue;
+      }
+      if (syncedSessions.has(entry.id)) {
+        continue;
+      }
+      if (!failedWorkspaceIds.has(entry.workspaceId)) {
+        continue;
+      }
+      syncedSessions.set(entry.id, entry);
+    }
+
+    startTransition(() => {
+      params.navigation.setSavedSessions((current) => {
+        const currentById = new Map(current.map((entry) => [entry.id, entry]));
+        const next: SavedSessionRecord[] = [];
+
+        for (const entry of current) {
+          const synced = syncedSessions.get(entry.id);
+          if (synced) {
+            next.push({
+              ...entry,
+              ...synced
+            });
+          }
+        }
+
+        for (const entry of syncedSessions.values()) {
+          if (!currentById.has(entry.id)) {
+            next.push(entry);
+          }
+        }
+
+        return next.sort(compareSavedSessionsByRecency);
+      });
+      params.navigation.setRecentSessions((current) =>
+        current.filter((entry) => {
+          const sessionRecord = syncedSessions.get(entry);
+          return Boolean(sessionRecord && visibleWorkspaceIds.has(sessionRecord.workspaceId));
+        })
+      );
+    });
   }
 
   async function refreshWorkspace(targetId = params.navigation.workspaceId, quiet = false) {
@@ -748,6 +759,7 @@ export function useNavigationActions(params: NavigationActionParams) {
       const cachedSession = params.navigation.savedSessions.find((entry) => entry.id === nextSessionId);
       params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: nextSessionId, at: Date.now() };
       params.runtime.streamAbortRef.current?.abort();
+      params.runtime.activeSessionIdRef.current = nextSessionId;
       params.runtime.lastCursorRef.current = undefined;
       window.clearTimeout(params.runtime.runPollingTimerRef.current);
       startTransition(() => {

@@ -49,6 +49,20 @@ TUI 连接同一个本地 API：`http://127.0.0.1:8787`
 > 首次运行前先执行 `pnpm install` 安装依赖。
 
 > **info**
+> 本地 API token 是可选保护项，OAP daemon 和 Docker split stack 使用同一套规则：默认不要求 token；设置 `OAH_LOCAL_API_TOKEN`，或设置 `OAH_LOCAL_API_AUTH=1` 让启动器生成/复用 `${OAH_HOME:-$HOME/.openagentharness}/run/token` 后，非 public API 请求需要 `Authorization: Bearer <token>`。示例：
+>
+> ```bash
+> export OAH_LOCAL_API_AUTH=1
+> pnpm local:up
+>
+> TOKEN="$(cat "${OAH_HOME:-$HOME/.openagentharness}/run/token")"
+> curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/workspaces
+> pnpm dev:cli -- --base-url http://127.0.0.1:8787 --token "$TOKEN" tui
+> ```
+>
+> `/healthz`、`/readyz`、`/metrics`、`/api/v1/system/profile` 保持公开，方便健康检查和客户端识别服务形态。
+
+> **info**
 > 本地 split stack 默认让 active workspace copy 落在 `oah-sandbox`，并通过对象存储 backing store flush 回 OSS/MinIO。`oah-api` 只负责 API 入口和路由，不再挂载持久 workspace volume。
 
 ---

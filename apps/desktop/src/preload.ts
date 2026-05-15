@@ -8,7 +8,10 @@ type DesktopInjectedConnection = {
 const connection = readInjectedConnection();
 if (connection) {
   const current = readStoredConnection();
-  const shouldReplace = process.env.OAH_DESKTOP_FORCE_CONNECTION === "1" || !current?.baseUrl?.trim();
+  const shouldReplace =
+    process.env.OAH_DESKTOP_FORCE_CONNECTION === "1" ||
+    !current?.baseUrl?.trim() ||
+    shouldRefreshStoredConnection(current, connection);
   if (shouldReplace) {
     window.localStorage.setItem("oah.web.connection", JSON.stringify(connection));
   }
@@ -50,4 +53,11 @@ function readStoredConnection(): DesktopInjectedConnection | null {
   } catch {
     return null;
   }
+}
+
+function shouldRefreshStoredConnection(
+  current: DesktopInjectedConnection,
+  injected: DesktopInjectedConnection
+): boolean {
+  return current.baseUrl === injected.baseUrl && current.token !== injected.token;
 }

@@ -58,7 +58,7 @@ export async function resolveDesktopConnection(options: {
 } = {}): Promise<DesktopConnection> {
   const explicitBaseUrl = options.apiBaseUrl ?? process.env.OAH_DESKTOP_API_BASE_URL ?? process.env.OAH_BASE_URL;
   if (explicitBaseUrl?.trim()) {
-    const token = options.token ?? process.env.OAH_DESKTOP_TOKEN ?? process.env.OAH_TOKEN;
+    const token = options.token ?? process.env.OAH_DESKTOP_TOKEN ?? process.env.OAH_TOKEN ?? process.env.OAH_LOCAL_API_TOKEN;
     return {
       baseUrl: explicitBaseUrl.trim().replace(/\/+$/u, ""),
       ...(token?.trim() ? { token: token.trim() } : {}),
@@ -68,7 +68,12 @@ export async function resolveDesktopConnection(options: {
 
   const home = resolveOahHome(options.home);
   const endpoint = await readDaemonEndpoint(path.join(home, "config", "daemon.yaml"));
-  const token = options.token ?? process.env.OAH_DESKTOP_TOKEN ?? process.env.OAH_TOKEN ?? (await readToken(path.join(home, "run", "token")));
+  const token =
+    options.token ??
+    process.env.OAH_DESKTOP_TOKEN ??
+    process.env.OAH_TOKEN ??
+    process.env.OAH_LOCAL_API_TOKEN ??
+    (await readToken(path.join(home, "run", "token")));
   return {
     baseUrl: endpoint,
     ...(token?.trim() ? { token: token.trim() } : {}),

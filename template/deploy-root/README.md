@@ -49,6 +49,6 @@ If this deploy root is copied outside the repository, `./scripts/sync_to_minio.p
     kubernetes.server.yaml # K8S/Helm server.yaml profile source
 ```
 
-Runtime state such as SQLite data, daemon logs, PID/token files, and generated compose configs should live beside this layout in `state/`, `logs/`, `run/`, and `.oah-local/`; those directories are not publishable source. For the OAP local daemon, `run/token` is also the bearer token used to protect non-public API routes.
+Runtime state such as SQLite data, daemon logs, PID/token files, and generated compose configs should live beside this layout in `state/`, `logs/`, `run/`, and `.oah-local/`; those directories are not publishable source. When local API auth is enabled with `OAH_LOCAL_API_AUTH=1`, `run/token` is the bearer token used to protect non-public API routes.
 
 Legacy deploy roots with assets under `source/` and `server.docker.yaml` at the root are still accepted by the local scripts.
