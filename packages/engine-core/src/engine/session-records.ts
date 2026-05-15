@@ -261,10 +261,13 @@ export class SessionRecordService {
 
   async listRunSteps(runId: string, pageSize = 100, cursor?: string): Promise<RunStepListResult> {
     await this.getRun(runId);
-    const steps = await this.#runStepRepository.listByRunId(runId);
     const startIndex = parseCursor(cursor);
-    const items = steps.slice(startIndex, startIndex + pageSize);
-    const nextCursor = startIndex + pageSize < steps.length ? String(startIndex + pageSize) : undefined;
+    const steps = this.#runStepRepository.listPageByRunId
+      ? await this.#runStepRepository.listPageByRunId(runId, pageSize + 1, cursor)
+      : (await this.#runStepRepository.listByRunId(runId)).slice(startIndex, startIndex + pageSize + 1);
+    const hasMore = steps.length > pageSize;
+    const items = hasMore ? steps.slice(0, pageSize) : steps;
+    const nextCursor = hasMore ? String(startIndex + pageSize) : undefined;
 
     return nextCursor === undefined ? { items } : { items, nextCursor };
   }

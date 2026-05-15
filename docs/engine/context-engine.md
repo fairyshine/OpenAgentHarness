@@ -19,7 +19,7 @@
 - 模型参数与 model entry 解析结果
 - Tool 列表、运行策略、hook 管道
 
-详细消息分层见 [message-projections.md](./message-projections.md)。
+详细消息分层见 [message-projections/README.md](./message-projections/README.md)。
 
 运行时不再区分额外的只读对话 workspace 形态；actions/skills/tools/hooks 是否生效由 workspace 自身声明决定。
 

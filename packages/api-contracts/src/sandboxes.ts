@@ -210,7 +210,13 @@ export function createSandboxHttpClient(transport: SandboxHttpTransport): Sandbo
             ...(input.pageSize !== undefined ? { pageSize: input.pageSize } : {}),
             ...(input.cursor ? { cursor: input.cursor } : {}),
             ...(input.sortBy ? { sortBy: input.sortBy } : {}),
-            ...(input.sortOrder ? { sortOrder: input.sortOrder } : {})
+            ...(input.sortOrder ? { sortOrder: input.sortOrder } : {}),
+            ...(input.includeDirectoryDescendantUpdatedAt !== undefined
+              ? { includeDirectoryDescendantUpdatedAt: input.includeDirectoryDescendantUpdatedAt }
+              : {}),
+            ...(input.includeEntryMetadata !== undefined
+              ? { includeEntryMetadata: input.includeEntryMetadata }
+              : {})
           })}`
         )
       );

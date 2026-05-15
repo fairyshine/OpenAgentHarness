@@ -9,10 +9,10 @@ import type { WorkspaceRecord, WorkspaceRepository } from "@oah/engine-core";
 export type PlatformAgentRegistry = Record<string, import("@oah/config").DiscoveredAgent>;
 type DiscoveredWorkspace = import("@oah/config").DiscoveredWorkspace;
 
-let workspaceConfigModulePromise: Promise<typeof import("@oah/config/workspace")> | undefined;
+let workspaceConfigModulePromise: Promise<typeof import("@oah/config")> | undefined;
 
-function loadWorkspaceConfigModule(): Promise<typeof import("@oah/config/workspace")> {
-  workspaceConfigModulePromise ??= import("@oah/config/workspace");
+function loadWorkspaceConfigModule(): Promise<typeof import("@oah/config")> {
+  workspaceConfigModulePromise ??= import("@oah/config");
   return workspaceConfigModulePromise;
 }
 

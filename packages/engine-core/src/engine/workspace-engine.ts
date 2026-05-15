@@ -185,6 +185,8 @@ export class WorkspaceEngineService {
       cursor?: string | undefined;
       sortBy: WorkspaceEntrySortBy;
       sortOrder: SortOrder;
+      includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+      includeEntryMetadata?: boolean | undefined;
     }
   ): Promise<WorkspaceEntryPage> {
     return this.#withWorkspaceFileLease(workspaceId, "read", input.path, (workspace) =>

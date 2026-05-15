@@ -296,6 +296,7 @@ export interface WorkspaceFileSystem {
   realpath(targetPath: string): Promise<string>;
   stat(targetPath: string): Promise<WorkspaceFileStat>;
   readFile(targetPath: string): Promise<Buffer>;
+  readFileRange?(targetPath: string, maxBytes: number): Promise<Buffer>;
   openReadStream(targetPath: string): Readable;
   readdir(targetPath: string): Promise<WorkspaceFileSystemEntry[]>;
   mkdir(targetPath: string, options?: { recursive?: boolean | undefined }): Promise<void>;

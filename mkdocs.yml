@@ -151,7 +151,11 @@ nav:
       - 导航: engine/README.md
       - 生命周期: engine/lifecycle.md
       - 上下文引擎: engine/context-engine.md
-      - 消息投影: engine/message-projections.md
+      - 消息投影:
+          - 总览: engine/message-projections/README.md
+          - Message 与 EngineMessage: engine/message-projections/message-and-engine-message.md
+          - Projection 实现细节: engine/message-projections/projection-implementations.md
+          - 模型输入与 UI 展示: engine/message-projections/model-and-ui-mapping.md
       - 模型运行时: engine/model-runtime.md
       - Projection 与 Executors: engine/projection-and-executors.md
       - 执行后端: engine/execution-backend.md

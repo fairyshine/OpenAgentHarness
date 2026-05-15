@@ -10,7 +10,7 @@ Core flow: request → queue → context build → LLM loop → tool dispatch �
 
 1. [Lifecycle](./lifecycle.md) — Run lifecycle and state transitions
 2. [Context Engine](./context-engine.md) — Context assembly
-3. [Message Projections](./message-projections.md) — Message layering and projections
+3. [Message Projections](./message-projections/README.md) — Message layering and projections
 4. [Projection and Executors](./projection-and-executors.md) — Capability registry and executors
 
 ### Reliability and governance

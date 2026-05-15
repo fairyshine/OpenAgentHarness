@@ -697,6 +697,17 @@ export class SQLiteRunStepRepository implements RunStepRepository {
     const rows = coerceRows<JsonRow>(handle.db.prepare("select payload from run_steps where run_id = ? order by seq asc, id asc").all(runId));
     return rows.map((row) => parseJson<RunStep>(row.payload));
   }
+
+  async listPageByRunId(runId: string, pageSize: number, cursor?: string): Promise<RunStep[]> {
+    const handle = await this.#coordinator.getRunHandle(runId);
+    const startIndex = parseCursor(cursor);
+    const rows = coerceRows<JsonRow>(
+      handle.db
+        .prepare("select payload from run_steps where run_id = ? order by seq asc, id asc limit ? offset ?")
+        .all(runId, pageSize, startIndex)
+    );
+    return rows.map((row) => parseJson<RunStep>(row.payload));
+  }
 }
 
 export class SQLiteSessionEventStore implements SessionEventStore {

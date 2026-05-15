@@ -544,6 +544,18 @@ export class PostgresRunStepRepository implements RunStepRepository {
     const rows = await this.db.select().from(runSteps).where(eq(runSteps.runId, runId)).orderBy(asc(runSteps.seq));
     return rows.map(toRunStep);
   }
+
+  async listPageByRunId(runId: string, pageSize: number, cursor?: string): Promise<RunStep[]> {
+    const startIndex = parseCursor(cursor);
+    const rows = await this.db
+      .select()
+      .from(runSteps)
+      .where(eq(runSteps.runId, runId))
+      .orderBy(asc(runSteps.seq), asc(runSteps.id))
+      .limit(pageSize)
+      .offset(startIndex);
+    return rows.map(toRunStep);
+  }
 }
 
 export class PostgresSessionPendingRunQueueRepository implements SessionPendingRunQueueRepository {

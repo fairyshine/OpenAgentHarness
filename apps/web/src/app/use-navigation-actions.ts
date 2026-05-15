@@ -1,4 +1,4 @@
-import { startTransition } from "react";
+import { startTransition, useRef } from "react";
 
 import type {
   Session,
@@ -21,12 +21,17 @@ import {
   type SavedWorkspaceRecord
 } from "./support";
 import type { NavigationActionParams } from "./navigation-action-types";
+import type { SessionSnapshotResponse } from "./navigation-action-types";
 import { createNavigationStateActions } from "./navigation-state-actions";
 import { isPendingSessionId } from "./app-controller-utils";
 import { createClientId } from "./client-id";
 
 const DEFAULT_NEW_SESSION_TITLE = "New session";
-const WORKSPACE_SESSION_SYNC_CONCURRENCY = 4;
+const WORKSPACE_SESSION_PRIORITY_SYNC_CONCURRENCY = 3;
+const WORKSPACE_SESSION_BACKGROUND_SYNC_CONCURRENCY = 1;
+const WORKSPACE_SESSION_PRIORITY_LIMIT = 12;
+const WORKSPACE_SESSION_PRIORITY_PAGE_SIZE = 80;
+const WORKSPACE_SESSION_BACKGROUND_PAGE_SIZE = 120;
 
 function scheduleDeferredIdleTask(callback: () => void, delayMs: number, timeoutMs: number) {
   window.setTimeout(() => {
@@ -56,6 +61,7 @@ async function runLimited<T>(items: T[], limit: number, worker: (item: T) => Pro
 }
 
 export function useNavigationActions(params: NavigationActionParams) {
+  const workspaceSessionSyncSeqRef = useRef(0);
   const {
     clearSessionSelection,
     clearWorkspaceSelection,
@@ -464,6 +470,8 @@ export function useNavigationActions(params: NavigationActionParams) {
       const response = await params.request<{ items: Workspace[]; nextCursor?: string }>("/api/v1/workspaces?pageSize=200");
       const visibleWorkspaceIds = new Set(response.items.map((item) => item.id));
       const existingSessionById = new Map(params.navigation.savedSessions.map((entry) => [entry.id, entry]));
+      const syncSeq = workspaceSessionSyncSeqRef.current + 1;
+      workspaceSessionSyncSeqRef.current = syncSeq;
       startTransition(() => {
         params.navigation.setSavedWorkspaces((current) => {
           const currentById = new Map(current.map((entry) => [entry.id, entry]));
@@ -495,9 +503,39 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.navigation.setExpandedWorkspaceIds((current) => current.filter((entry) => visibleWorkspaceIds.has(entry)));
       });
 
+      const priorityWorkspaceIds = new Set(
+        [
+          params.navigation.session?.workspaceId,
+          params.navigation.workspaceId,
+          ...params.navigation.expandedWorkspaceIds,
+          ...params.navigation.recentWorkspaces
+        ]
+          .map((entry) => entry?.trim() ?? "")
+          .filter(Boolean)
+      );
+      const priorityWorkspaces = [
+        ...response.items.filter((item) => priorityWorkspaceIds.has(item.id)),
+        ...response.items.filter((item) => !priorityWorkspaceIds.has(item.id)).slice(0, WORKSPACE_SESSION_PRIORITY_LIMIT)
+      ].slice(0, WORKSPACE_SESSION_PRIORITY_LIMIT);
+
       scheduleDeferredIdleTask(() => {
-        void syncWorkspaceSessions(response.items, visibleWorkspaceIds, existingSessionById);
-      }, 150, 1_000);
+        void syncWorkspaceSessions(priorityWorkspaces, visibleWorkspaceIds, existingSessionById, {
+          concurrency: WORKSPACE_SESSION_PRIORITY_SYNC_CONCURRENCY,
+          maxPagesPerWorkspace: 1,
+          pageSize: WORKSPACE_SESSION_PRIORITY_PAGE_SIZE,
+          pruneMissingSessions: false,
+          seq: syncSeq
+        });
+      }, 80, 800);
+
+      scheduleDeferredIdleTask(() => {
+        void syncWorkspaceSessions(response.items, visibleWorkspaceIds, existingSessionById, {
+          concurrency: WORKSPACE_SESSION_BACKGROUND_SYNC_CONCURRENCY,
+          pageSize: WORKSPACE_SESSION_BACKGROUND_PAGE_SIZE,
+          pruneMissingSessions: true,
+          seq: syncSeq
+        });
+      }, 4_000, 10_000);
 
       const selectedWorkspaceId = params.navigation.workspaceId.trim();
       const selectedWorkspaceExists =
@@ -534,19 +572,39 @@ export function useNavigationActions(params: NavigationActionParams) {
   async function syncWorkspaceSessions(
     workspaces: Workspace[],
     visibleWorkspaceIds: Set<string>,
-    existingSessionById: Map<string, SavedSessionRecord>
+    existingSessionById: Map<string, SavedSessionRecord>,
+    options?: {
+      concurrency?: number | undefined;
+      maxPagesPerWorkspace?: number | undefined;
+      pageSize?: number | undefined;
+      pruneMissingSessions?: boolean | undefined;
+      seq?: number | undefined;
+    }
   ) {
-    const failedWorkspaceIds = new Set<string>();
-    const syncedSessions = new Map<string, SavedSessionRecord>();
+    if (options?.seq !== undefined && options.seq !== workspaceSessionSyncSeqRef.current) {
+      return;
+    }
 
-    await runLimited(workspaces, WORKSPACE_SESSION_SYNC_CONCURRENCY, async (workspace) => {
+    const failedWorkspaceIds = new Set<string>();
+    const targetWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+    const syncedWorkspaceIds = new Set<string>();
+    const syncedSessions = new Map<string, SavedSessionRecord>();
+    const pageSize = String(options?.pageSize ?? WORKSPACE_SESSION_BACKGROUND_PAGE_SIZE);
+    const maxPagesPerWorkspace = options?.maxPagesPerWorkspace ?? Number.POSITIVE_INFINITY;
+
+    await runLimited(workspaces, options?.concurrency ?? WORKSPACE_SESSION_BACKGROUND_SYNC_CONCURRENCY, async (workspace) => {
+      if (options?.seq !== undefined && options.seq !== workspaceSessionSyncSeqRef.current) {
+        return;
+      }
+
       const sessions: Session[] = [];
       try {
         let cursor: string | undefined;
+        let pageCount = 0;
 
         do {
           const query = new URLSearchParams({
-            pageSize: "200"
+            pageSize
           });
           if (cursor) {
             query.set("cursor", cursor);
@@ -554,7 +612,9 @@ export function useNavigationActions(params: NavigationActionParams) {
           const page = await params.request<SessionPage>(`/api/v1/workspaces/${workspace.id}/sessions?${query.toString()}`);
           sessions.push(...page.items);
           cursor = page.nextCursor;
-        } while (cursor);
+          pageCount += 1;
+        } while (cursor && pageCount < maxPagesPerWorkspace);
+        syncedWorkspaceIds.add(workspace.id);
       } catch {
         failedWorkspaceIds.add(workspace.id);
         return;
@@ -576,17 +636,8 @@ export function useNavigationActions(params: NavigationActionParams) {
       }
     });
 
-    for (const entry of params.navigation.savedSessions) {
-      if (!visibleWorkspaceIds.has(entry.workspaceId)) {
-        continue;
-      }
-      if (syncedSessions.has(entry.id)) {
-        continue;
-      }
-      if (!failedWorkspaceIds.has(entry.workspaceId)) {
-        continue;
-      }
-      syncedSessions.set(entry.id, entry);
+    if (options?.seq !== undefined && options.seq !== workspaceSessionSyncSeqRef.current) {
+      return;
     }
 
     startTransition(() => {
@@ -595,12 +646,37 @@ export function useNavigationActions(params: NavigationActionParams) {
         const next: SavedSessionRecord[] = [];
 
         for (const entry of current) {
+          if (!targetWorkspaceIds.has(entry.workspaceId)) {
+            if (visibleWorkspaceIds.has(entry.workspaceId) || !options?.pruneMissingSessions) {
+              next.push(entry);
+            }
+            continue;
+          }
+
+          if (!visibleWorkspaceIds.has(entry.workspaceId)) {
+            if (!options?.pruneMissingSessions) {
+              next.push(entry);
+            }
+            continue;
+          }
+
           const synced = syncedSessions.get(entry.id);
           if (synced) {
             next.push({
               ...entry,
-              ...synced
+              ...synced,
+              lastOpenedAt: entry.lastOpenedAt
             });
+            continue;
+          }
+
+          if (failedWorkspaceIds.has(entry.workspaceId) || !syncedWorkspaceIds.has(entry.workspaceId)) {
+            next.push(entry);
+            continue;
+          }
+
+          if (!options?.pruneMissingSessions) {
+            next.push(entry);
           }
         }
 
@@ -612,12 +688,6 @@ export function useNavigationActions(params: NavigationActionParams) {
 
         return next.sort(compareSavedSessionsByRecency);
       });
-      params.navigation.setRecentSessions((current) =>
-        current.filter((entry) => {
-          const sessionRecord = syncedSessions.get(entry);
-          return Boolean(sessionRecord && visibleWorkspaceIds.has(sessionRecord.workspaceId));
-        })
-      );
     });
   }
 
@@ -643,6 +713,14 @@ export function useNavigationActions(params: NavigationActionParams) {
       });
       expandWorkspaceInSidebar(targetId);
       rememberWorkspace(workspaceResponse);
+      scheduleDeferredIdleTask(() => {
+        void syncWorkspaceSessions([workspaceResponse], new Set([targetId]), new Map(params.navigation.savedSessions.map((entry) => [entry.id, entry])), {
+          concurrency: 1,
+          maxPagesPerWorkspace: 1,
+          pageSize: WORKSPACE_SESSION_PRIORITY_PAGE_SIZE,
+          pruneMissingSessions: false
+        });
+      }, 60, 600);
       params.setActivity(`Workspace ${targetId} 已加载`);
       if (!quiet && refreshWarnings.length > 0) {
         params.setErrorMessage(refreshWarnings.join(" | "));
@@ -745,7 +823,7 @@ export function useNavigationActions(params: NavigationActionParams) {
   }
 
   async function refreshSession(targetId = params.navigation.sessionId, quiet = false) {
-      const nextSessionId = targetId.trim();
+    const nextSessionId = targetId.trim();
     if (!nextSessionId) {
       return;
     }
@@ -758,6 +836,7 @@ export function useNavigationActions(params: NavigationActionParams) {
     if (switchingSession) {
       const cachedSession = params.navigation.savedSessions.find((entry) => entry.id === nextSessionId);
       params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: nextSessionId, at: Date.now() };
+      params.runtime.sessionSnapshotHydrationRef.current = { sessionId: nextSessionId, at: Date.now() };
       params.runtime.streamAbortRef.current?.abort();
       params.runtime.activeSessionIdRef.current = nextSessionId;
       params.runtime.lastCursorRef.current = undefined;
@@ -771,8 +850,8 @@ export function useNavigationActions(params: NavigationActionParams) {
                 id: cachedSession.id,
                 workspaceId: cachedSession.workspaceId,
                 subjectRef: "",
-                agentName: cachedSession.agentName,
-                activeAgentName: cachedSession.agentName,
+                agentName: cachedSession.agentName ?? "",
+                activeAgentName: cachedSession.agentName ?? "",
                 status: "active",
                 title: cachedSession.title,
                 modelRef: cachedSession.modelRef,
@@ -792,15 +871,32 @@ export function useNavigationActions(params: NavigationActionParams) {
     }
 
     try {
-      const sessionResponse = await params.request<Session>(`/api/v1/sessions/${nextSessionId}`);
+      const snapshotResponse = await params.request<SessionSnapshotResponse>(`/api/v1/sessions/${nextSessionId}/snapshot`);
+      if (params.runtime.activeSessionIdRef.current !== nextSessionId) {
+        return;
+      }
+
+      const sessionResponse = snapshotResponse.session;
       params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: nextSessionId, at: Date.now() };
+      params.runtime.sessionSnapshotHydrationRef.current = { sessionId: nextSessionId, at: Date.now() };
       const nextWorkspaceId = sessionResponse.workspaceId;
       const workspaceChanged = params.navigation.workspace?.id !== nextWorkspaceId;
+      const selectedSnapshotRun =
+        (snapshotResponse.selectedRunId
+          ? snapshotResponse.runs.items.find((item) => item.id === snapshotResponse.selectedRunId)
+          : undefined) ?? snapshotResponse.runs.items[0] ?? null;
 
       startTransition(() => {
         params.navigation.setSession(sessionResponse);
         params.navigation.setSessionId(nextSessionId);
         params.navigation.setWorkspaceId(nextWorkspaceId);
+        params.runtime.setMessages(snapshotResponse.messages.items);
+        params.runtime.mergeMessagePageCursor(snapshotResponse.messages.nextCursor);
+        params.runtime.setSessionQueuedRuns(snapshotResponse.queue.items);
+        params.runtime.setSessionRuns(snapshotResponse.runs.items);
+        params.runtime.setSelectedRunId(selectedSnapshotRun?.id ?? "");
+        params.runtime.setRun(selectedSnapshotRun);
+        params.runtime.setRunSteps(snapshotResponse.selectedRunSteps?.items ?? []);
         params.navigation.setRecentSessions((current) => addRecentId(current, nextSessionId));
         if (workspaceChanged) {
           params.navigation.setWorkspace(null);
@@ -820,11 +916,56 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.setErrorMessage("");
       }
     } catch (error) {
+      if (isNotFoundError(error)) {
+        params.runtime.sessionSnapshotHydrationRef.current = null;
+        try {
+          const sessionResponse = await params.request<Session>(`/api/v1/sessions/${nextSessionId}`);
+          params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: nextSessionId, at: Date.now() };
+          const nextWorkspaceId = sessionResponse.workspaceId;
+          const workspaceChanged = params.navigation.workspace?.id !== nextWorkspaceId;
+
+          startTransition(() => {
+            params.navigation.setSession(sessionResponse);
+            params.navigation.setSessionId(nextSessionId);
+            params.navigation.setWorkspaceId(nextWorkspaceId);
+            params.navigation.setRecentSessions((current) => addRecentId(current, nextSessionId));
+            if (workspaceChanged) {
+              params.navigation.setWorkspace(null);
+              params.navigation.setCatalog(null);
+            }
+          });
+          expandWorkspaceInSidebar(nextWorkspaceId);
+          touchSavedWorkspace(nextWorkspaceId);
+          rememberSession(sessionResponse);
+          if (workspaceChanged) {
+            window.setTimeout(() => {
+              void refreshWorkspace(nextWorkspaceId, true);
+            }, 250);
+          }
+          params.setActivity(`Session ${nextSessionId} 已加载`);
+          if (!quiet) {
+            params.setErrorMessage("");
+          }
+          void params.runtime.refreshMessages(true, { pageSize: 24, reset: true });
+          void params.runtime.refreshSessionQueue(true);
+          void params.runtime.refreshSessionRuns(true, { includeSteps: "selected" });
+          return;
+        } catch (fallbackError) {
+          params.navigation.setSession(null);
+          params.runtime.setMessages([]);
+          if (isNotFoundError(fallbackError)) {
+            clearSessionSelection(nextSessionId, { forgetSession: true });
+          }
+          if (!quiet) {
+            params.setErrorMessage(toErrorMessage(fallbackError));
+          }
+          return;
+        }
+      }
+
+      params.runtime.sessionSnapshotHydrationRef.current = null;
       params.navigation.setSession(null);
       params.runtime.setMessages([]);
-      if (isNotFoundError(error)) {
-        clearSessionSelection(nextSessionId, { forgetSession: true });
-      }
       if (!quiet) {
         params.setErrorMessage(toErrorMessage(error));
       }

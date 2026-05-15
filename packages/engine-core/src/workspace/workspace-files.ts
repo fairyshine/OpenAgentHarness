@@ -65,8 +65,60 @@ interface ResolvedWorkspacePath {
   relativePath: string;
 }
 
+interface DescendantMtimeScanContext {
+  fileStatLimiter: AsyncLimiter;
+  directoryReadLimiter: AsyncLimiter;
+}
+
+type AsyncLimiter = <T>(task: () => Promise<T>) => Promise<T>;
+
+const DESCENDANT_MTIME_CACHE_TTL_MS = 15_000;
+const DESCENDANT_MTIME_FILE_STAT_CONCURRENCY = 32;
+const DESCENDANT_MTIME_DIRECTORY_READ_CONCURRENCY = 8;
+
 function normalizeRelativePath(value: string): string {
   return value.split(path.sep).join("/");
+}
+
+function createAsyncLimiter(maxConcurrency: number): AsyncLimiter {
+  let activeCount = 0;
+  const queue: Array<() => void> = [];
+
+  function runNext(): void {
+    const next = queue.shift();
+    if (!next || activeCount >= maxConcurrency) {
+      return;
+    }
+
+    activeCount += 1;
+    next();
+  }
+
+  return async function limit<T>(task: () => Promise<T>): Promise<T> {
+    await new Promise<void>((resolve) => {
+      queue.push(resolve);
+      runNext();
+    });
+
+    try {
+      return await task();
+    } finally {
+      activeCount -= 1;
+      runNext();
+    }
+  };
+}
+
+function createDescendantMtimeScanContext(): DescendantMtimeScanContext {
+  return {
+    fileStatLimiter: createAsyncLimiter(DESCENDANT_MTIME_FILE_STAT_CONCURRENCY),
+    directoryReadLimiter: createAsyncLimiter(DESCENDANT_MTIME_DIRECTORY_READ_CONCURRENCY)
+  };
+}
+
+function isSamePathOrAncestor(ancestorPath: string, targetPath: string): boolean {
+  const relativePath = path.relative(ancestorPath, targetPath);
+  return relativePath.length === 0 || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
 async function resolveWorkspaceFsPath(
@@ -198,6 +250,25 @@ function compareNumbers(left: number | undefined, right: number | undefined): nu
   return left - right;
 }
 
+function compareListedEntries(
+  left: { name: string; kind: string },
+  right: { name: string; kind: string },
+  input: { sortBy: WorkspaceEntrySortBy; sortOrder: SortOrder }
+): number {
+  let comparison =
+    input.sortBy === "type" ? (left.kind === "directory" ? 0 : 1) - (right.kind === "directory" ? 0 : 1) : 0;
+
+  if (comparison === 0) {
+    comparison = left.name.localeCompare(right.name);
+  }
+
+  return input.sortOrder === "desc" ? comparison * -1 : comparison;
+}
+
+function canPageBeforeStat(input: { sortBy: WorkspaceEntrySortBy }): boolean {
+  return input.sortBy === "name" || input.sortBy === "type";
+}
+
 function toOptionalIsoTimestamp(epochMs: number | undefined): string | undefined {
   if (typeof epochMs !== "number" || !Number.isFinite(epochMs) || epochMs <= 0) {
     return undefined;
@@ -220,52 +291,102 @@ function maxTimestamp(left: number | undefined, right: number | undefined): numb
 
 export class WorkspaceFileService {
   readonly #fileSystem: WorkspaceFileSystem;
+  readonly #descendantMtimeCache = new Map<string, { value: number | undefined; expiresAtMs: number }>();
 
   constructor(fileSystem: WorkspaceFileSystem = createLocalWorkspaceFileSystem()) {
     this.#fileSystem = fileSystem;
   }
 
-  async getLatestDescendantFileMtimeMs(directoryPath: string): Promise<number | undefined> {
-    const entries = await this.#fileSystem.readdir(directoryPath);
-    let latest: number | undefined;
-
-    for (const entry of entries) {
-      const entryPath = path.join(directoryPath, entry.name);
-      if (entry.kind === "file") {
-        const fileStat = await this.#fileSystem.stat(entryPath);
-        if (fileStat.kind !== "file") {
-          continue;
-        }
-
-        latest = maxTimestamp(latest, fileStat.mtimeMs);
-        continue;
+  #clearDescendantMtimeCacheForPath(absolutePath: string): void {
+    for (const cachedPath of this.#descendantMtimeCache.keys()) {
+      if (isSamePathOrAncestor(cachedPath, absolutePath) || isSamePathOrAncestor(absolutePath, cachedPath)) {
+        this.#descendantMtimeCache.delete(cachedPath);
       }
+    }
+  }
 
-      if (entry.kind !== "directory") {
-        continue;
-      }
+  #setCachedDescendantMtime(directoryPath: string, value: number | undefined): void {
+    this.#descendantMtimeCache.set(directoryPath, {
+      value,
+      expiresAtMs: Date.now() + DESCENDANT_MTIME_CACHE_TTL_MS
+    });
+  }
 
-      const nestedLatest = await this.getLatestDescendantFileMtimeMs(entryPath);
-      latest = maxTimestamp(latest, nestedLatest);
+  #getCachedDescendantMtime(directoryPath: string): number | undefined | null {
+    const cached = this.#descendantMtimeCache.get(directoryPath);
+    if (!cached) {
+      return null;
     }
 
+    if (cached.expiresAtMs <= Date.now()) {
+      this.#descendantMtimeCache.delete(directoryPath);
+      return null;
+    }
+
+    return cached.value;
+  }
+
+  async getLatestDescendantFileMtimeMs(
+    directoryPath: string,
+    context: DescendantMtimeScanContext = createDescendantMtimeScanContext()
+  ): Promise<number | undefined> {
+    const cached = this.#getCachedDescendantMtime(directoryPath);
+    if (cached !== null) {
+      return cached;
+    }
+
+    const entries = await context.directoryReadLimiter(() => this.#fileSystem.readdir(directoryPath));
+    let latest: number | undefined;
+
+    const timestamps = await Promise.all(
+      entries.map(async (entry) => {
+        const entryPath = path.join(directoryPath, entry.name);
+        if (entry.kind === "file") {
+          const fileStat = await context.fileStatLimiter(() => this.#fileSystem.stat(entryPath));
+          if (fileStat.kind !== "file") {
+            return undefined;
+          }
+
+          return fileStat.mtimeMs;
+        }
+
+        if (entry.kind !== "directory") {
+          return undefined;
+        }
+
+        return this.getLatestDescendantFileMtimeMs(entryPath, context);
+      })
+    );
+
+    for (const timestamp of timestamps) {
+      latest = maxTimestamp(latest, timestamp);
+    }
+
+    this.#setCachedDescendantMtime(directoryPath, latest);
     return latest;
   }
 
   async resolveWorkspaceEntryUpdatedAt(
     entry: WorkspaceFileStat,
     resolved: ResolvedWorkspacePath,
-    listedEntry?: { updatedAt?: string | undefined }
+    listedEntry?: { updatedAt?: string | undefined },
+    options?: {
+      includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+      descendantMtimeScanContext?: DescendantMtimeScanContext | undefined;
+    }
   ): Promise<string | undefined> {
     if (typeof listedEntry?.updatedAt === "string" && listedEntry.updatedAt.trim().length > 0) {
       return listedEntry.updatedAt;
     }
 
-    if (entry.kind !== "directory") {
+    if (entry.kind !== "directory" || options?.includeDirectoryDescendantUpdatedAt === false) {
       return toOptionalIsoTimestamp(entry.mtimeMs);
     }
 
-    const latestDescendantFileMtimeMs = await this.getLatestDescendantFileMtimeMs(resolved.absolutePath);
+    const latestDescendantFileMtimeMs = await this.getLatestDescendantFileMtimeMs(
+      resolved.absolutePath,
+      options?.descendantMtimeScanContext
+    );
     return toOptionalIsoTimestamp(latestDescendantFileMtimeMs ?? entry.mtimeMs);
   }
 
@@ -278,14 +399,18 @@ export class WorkspaceFileService {
   async buildWorkspaceEntry(
     workspace: WorkspaceRecord,
     resolved: ResolvedWorkspacePath,
-    listedEntry?: { sizeBytes?: number | undefined; updatedAt?: string | undefined }
+    listedEntry?: { sizeBytes?: number | undefined; updatedAt?: string | undefined },
+    options?: {
+      includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+      descendantMtimeScanContext?: DescendantMtimeScanContext | undefined;
+    }
   ): Promise<WorkspaceEntry> {
     const entry = await this.#fileSystem.stat(resolved.absolutePath).catch(() => null);
     if (!entry) {
       throw new AppError(404, "workspace_entry_not_found", `Path ${resolved.relativePath} was not found.`);
     }
 
-    const updatedAt = await this.resolveWorkspaceEntryUpdatedAt(entry, resolved, listedEntry);
+    const updatedAt = await this.resolveWorkspaceEntryUpdatedAt(entry, resolved, listedEntry, options);
     return {
       path: resolved.relativePath,
       name: resolved.relativePath === "." ? path.basename(workspace.rootPath) : path.basename(resolved.absolutePath),
@@ -347,6 +472,7 @@ export class WorkspaceFileService {
     await this.#fileSystem.writeFile(resolved.absolutePath, input.bytes, {
       ...(typeof input.mtimeMs === "number" ? { mtimeMs: input.mtimeMs } : {})
     });
+    this.#clearDescendantMtimeCacheForPath(resolved.absolutePath);
     return this.buildWorkspaceEntry(workspace, resolved);
   }
 
@@ -358,6 +484,8 @@ export class WorkspaceFileService {
       cursor?: string | undefined;
       sortBy: WorkspaceEntrySortBy;
       sortOrder: SortOrder;
+      includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+      includeEntryMetadata?: boolean | undefined;
     }
   ): Promise<WorkspaceEntryPage> {
     const resolved = await resolveWorkspaceFsPath(this.#fileSystem, workspace.rootPath, input.path ?? ".", {
@@ -370,8 +498,44 @@ export class WorkspaceFileService {
     }
 
     const entries = await this.#fileSystem.readdir(resolved.absolutePath);
+    const startIndex = parseCursor(input.cursor);
+    const entriesForStat = canPageBeforeStat(input)
+      ? [...entries].sort((left, right) => compareListedEntries(left, right, input)).slice(startIndex, startIndex + input.pageSize)
+      : entries;
+    if (input.includeEntryMetadata === false && canPageBeforeStat(input)) {
+      const items = entriesForStat.map((entry) => {
+        const relativePath =
+          resolved.relativePath === "."
+            ? normalizeRelativePath(entry.name)
+            : normalizeRelativePath(path.posix.join(resolved.relativePath, entry.name));
+
+        return {
+          path: relativePath,
+          name: entry.name,
+          type: entry.kind === "directory" ? "directory" : "file",
+          readOnly: workspace.readOnly
+        } satisfies WorkspaceEntry;
+      });
+      const nextCursor = startIndex + input.pageSize < entries.length ? String(startIndex + input.pageSize) : undefined;
+
+      return nextCursor === undefined
+        ? {
+            workspaceId: workspace.id,
+            path: resolved.relativePath,
+            items
+          }
+        : {
+            workspaceId: workspace.id,
+            path: resolved.relativePath,
+            items,
+            nextCursor
+          };
+    }
+
+    const descendantMtimeScanContext =
+      input.includeDirectoryDescendantUpdatedAt === false ? undefined : createDescendantMtimeScanContext();
     const items = await Promise.all(
-      entries.map(async (entry) => {
+      entriesForStat.map(async (entry) => {
         const relativePath =
           resolved.relativePath === "."
             ? normalizeRelativePath(entry.name)
@@ -388,6 +552,10 @@ export class WorkspaceFileService {
             ...(typeof entry.updatedAt === "string" && entry.updatedAt.trim().length > 0
               ? { updatedAt: entry.updatedAt }
               : {})
+          },
+          {
+            includeDirectoryDescendantUpdatedAt: input.includeDirectoryDescendantUpdatedAt,
+            descendantMtimeScanContext
           }
         );
       })
@@ -423,7 +591,23 @@ export class WorkspaceFileService {
       return input.sortOrder === "desc" ? comparison * -1 : comparison;
     });
 
-    const startIndex = parseCursor(input.cursor);
+    if (canPageBeforeStat(input)) {
+      const nextCursor = startIndex + input.pageSize < entries.length ? String(startIndex + input.pageSize) : undefined;
+
+      return nextCursor === undefined
+        ? {
+            workspaceId: workspace.id,
+            path: resolved.relativePath,
+            items
+          }
+        : {
+            workspaceId: workspace.id,
+            path: resolved.relativePath,
+            items,
+            nextCursor
+          };
+    }
+
     const pageItems = items.slice(startIndex, startIndex + input.pageSize);
     const nextCursor = startIndex + input.pageSize < items.length ? String(startIndex + input.pageSize) : undefined;
 
@@ -451,16 +635,19 @@ export class WorkspaceFileService {
       throw new AppError(404, "workspace_file_not_found", `File ${resolved.relativePath} was not found.`);
     }
 
-    const raw = await this.#fileSystem.readFile(resolved.absolutePath);
-    const truncated = input.maxBytes !== undefined && raw.length > input.maxBytes;
-    const contentBytes = truncated ? raw.subarray(0, input.maxBytes) : raw;
+    const truncated = input.maxBytes !== undefined && entry.size > input.maxBytes;
+    const contentBytes =
+      input.maxBytes !== undefined && truncated
+        ? await (this.#fileSystem.readFileRange?.(resolved.absolutePath, input.maxBytes) ??
+            this.#fileSystem.readFile(resolved.absolutePath).then((raw) => raw.subarray(0, input.maxBytes)))
+        : await this.#fileSystem.readFile(resolved.absolutePath);
     return {
       workspaceId: workspace.id,
       path: resolved.relativePath,
       encoding: input.encoding,
       content: input.encoding === "base64" ? contentBytes.toString("base64") : contentBytes.toString("utf8"),
       truncated,
-      sizeBytes: raw.length,
+      sizeBytes: entry.size,
       mimeType: guessMimeType(resolved.absolutePath),
       etag: createStatEtag(entry),
       ...(toOptionalIsoTimestamp(entry.mtimeMs) ? { updatedAt: toOptionalIsoTimestamp(entry.mtimeMs) } : {}),
@@ -512,6 +699,7 @@ export class WorkspaceFileService {
     }
 
     await this.#fileSystem.mkdir(resolved.absolutePath, { recursive: input.createParents });
+    this.#clearDescendantMtimeCacheForPath(resolved.absolutePath);
     return this.buildWorkspaceEntry(workspace, resolved);
   }
 
@@ -542,6 +730,7 @@ export class WorkspaceFileService {
       recursive: input.recursive,
       force: false
     });
+    this.#clearDescendantMtimeCacheForPath(resolved.absolutePath);
 
     return {
       workspaceId: workspace.id,
@@ -582,6 +771,8 @@ export class WorkspaceFileService {
 
     await this.#fileSystem.mkdir(path.dirname(target.absolutePath), { recursive: true });
     await this.#fileSystem.rename(source.absolutePath, target.absolutePath);
+    this.#clearDescendantMtimeCacheForPath(source.absolutePath);
+    this.#clearDescendantMtimeCacheForPath(target.absolutePath);
     return this.buildWorkspaceEntry(workspace, target);
   }
 

@@ -430,6 +430,8 @@ export class EngineService {
       cursor?: string | undefined;
       sortBy: WorkspaceEntrySortBy;
       sortOrder: SortOrder;
+      includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+      includeEntryMetadata?: boolean | undefined;
     }
   ): Promise<WorkspaceEntryPage> {
     return this.#workspaceRuntime.listWorkspaceEntries(workspaceId, input);

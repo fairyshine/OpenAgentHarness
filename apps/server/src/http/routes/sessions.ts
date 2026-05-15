@@ -31,6 +31,9 @@ import { assertWorkspaceAccess, createParamsSchema, toCallerContext, writeSseEve
 import type { AppDependencies } from "../types.js";
 
 const SESSION_EVENT_BACKLOG_PAGE_SIZE = 500;
+const SESSION_SNAPSHOT_MESSAGE_PAGE_SIZE = 24;
+const SESSION_SNAPSHOT_RUN_PAGE_SIZE = 80;
+const SESSION_SNAPSHOT_RUN_STEP_PAGE_SIZE = 100;
 
 function parseEventCursor(value: string | undefined): number {
   if (!value) {
@@ -57,6 +60,40 @@ export async function dispatchRegisteredSessionRoute(
       const params = createParamsSchema("sessionId").parse(request.params);
       const session = await dependencies.runtimeService.getSession(params.sessionId);
       return reply.send(session);
+    }
+    case "GET /api/v1/sessions/:sessionId/snapshot": {
+      const params = createParamsSchema("sessionId").parse(request.params);
+      const rawQuery =
+        request.query && typeof request.query === "object" ? (request.query as Record<string, unknown>) : {};
+      const requestedRunId = typeof rawQuery.selectedRunId === "string" ? rawQuery.selectedRunId.trim() : "";
+      const session = await dependencies.runtimeService.getSession(params.sessionId);
+      const [messages, runs, queue] = await Promise.all([
+        dependencies.runtimeService.listSessionMessages(
+          params.sessionId,
+          SESSION_SNAPSHOT_MESSAGE_PAGE_SIZE,
+          undefined,
+          "backward"
+        ),
+        dependencies.runtimeService.listSessionRuns(params.sessionId, SESSION_SNAPSHOT_RUN_PAGE_SIZE),
+        dependencies.runtimeService.listSessionQueuedRuns(params.sessionId)
+      ]);
+      const selectedRun = requestedRunId
+        ? runs.items.find((run) => run.id === requestedRunId)
+        : runs.items[0];
+      const selectedRunSteps = selectedRun
+        ? await dependencies.runtimeService.listRunSteps(selectedRun.id, SESSION_SNAPSHOT_RUN_STEP_PAGE_SIZE)
+        : undefined;
+
+      return reply.send(
+        {
+          session,
+          messages: messagePageSchema.parse(messages),
+          runs: runPageSchema.parse(runs),
+          ...(selectedRun ? { selectedRunId: selectedRun.id } : {}),
+          ...(selectedRunSteps ? { selectedRunSteps: runStepPageSchema.parse(selectedRunSteps) } : {}),
+          queue: sessionQueueSchema.parse(queue)
+        }
+      );
     }
     case "PATCH /api/v1/sessions/:sessionId": {
       const params = createParamsSchema("sessionId").parse(request.params);
@@ -328,6 +365,9 @@ export async function dispatchRegisteredSessionRoute(
 
 export function registerSessionRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   app.get("/api/v1/sessions/:sessionId", async (request, reply) =>
+    dispatchRegisteredSessionRoute(request, reply, dependencies)
+  );
+  app.get("/api/v1/sessions/:sessionId/snapshot", async (request, reply) =>
     dispatchRegisteredSessionRoute(request, reply, dependencies)
   );
   app.patch("/api/v1/sessions/:sessionId", async (request, reply) =>

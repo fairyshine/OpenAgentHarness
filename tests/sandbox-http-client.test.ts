@@ -39,7 +39,9 @@ describe("sandbox http client", () => {
       path: "/workspace",
       pageSize: 100,
       sortBy: "name",
-      sortOrder: "asc"
+      sortOrder: "asc",
+      includeEntryMetadata: false,
+      includeDirectoryDescendantUpdatedAt: false
     });
 
     expect(sandbox.id).toBe("ws_test");
@@ -53,7 +55,7 @@ describe("sandbox http client", () => {
     );
     expect(requestJson).toHaveBeenNthCalledWith(
       2,
-      "/api/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=100&sortBy=name&sortOrder=asc"
+      "/api/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=100&sortBy=name&sortOrder=asc&includeDirectoryDescendantUpdatedAt=false&includeEntryMetadata=false"
     );
     expect(requestBytes).not.toHaveBeenCalled();
   });

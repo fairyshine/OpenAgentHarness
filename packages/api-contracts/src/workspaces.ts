@@ -26,6 +26,20 @@ export const workspaceEntryTypeSchema = z.enum(["file", "directory"]);
 export const workspaceFileEncodingSchema = z.enum(["utf8", "base64"]);
 export const workspaceEntrySortBySchema = z.enum(["name", "updatedAt", "sizeBytes", "type"]);
 export const sortOrderSchema = z.enum(["asc", "desc"]);
+const booleanQuerySchema = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0") {
+    return false;
+  }
+  return value;
+}, z.boolean());
 
 export const workspaceEntrySchema = z.object({
   path: z.string(),
@@ -136,7 +150,9 @@ export const workspaceEntriesQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().optional(),
   sortBy: workspaceEntrySortBySchema.default("name"),
-  sortOrder: sortOrderSchema.default("asc")
+  sortOrder: sortOrderSchema.default("asc"),
+  includeDirectoryDescendantUpdatedAt: booleanQuerySchema.optional(),
+  includeEntryMetadata: booleanQuerySchema.optional()
 });
 
 export const workspaceEntryPathQuerySchema = z.object({
@@ -145,7 +161,7 @@ export const workspaceEntryPathQuerySchema = z.object({
 
 export const workspaceDeleteEntryQuerySchema = z.object({
   path: z.string().min(1),
-  recursive: z.coerce.boolean().default(false)
+  recursive: booleanQuerySchema.default(false)
 });
 
 export const workspaceFileContentQuerySchema = z.object({
@@ -156,7 +172,7 @@ export const workspaceFileContentQuerySchema = z.object({
 
 export const workspaceFileUploadQuerySchema = z.object({
   path: z.string().min(1),
-  overwrite: z.coerce.boolean().default(true),
+  overwrite: booleanQuerySchema.default(true),
   ifMatch: z.string().optional(),
   mtimeMs: z.coerce.number().min(0).optional()
 });

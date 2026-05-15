@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { timestampSchema } from "./common.js";
+import { messagePageSchema } from "./messages.js";
+import { runPageSchema, runStepPageSchema } from "./runs.js";
 
 export const sessionSchema = z.object({
   id: z.string(),
@@ -31,6 +33,15 @@ export const sessionQueuedRunSchema = z.object({
 
 export const sessionQueueSchema = z.object({
   items: z.array(sessionQueuedRunSchema)
+});
+
+export const sessionSnapshotSchema = z.object({
+  session: sessionSchema,
+  messages: messagePageSchema,
+  runs: runPageSchema,
+  selectedRunId: z.string().optional(),
+  selectedRunSteps: runStepPageSchema.optional(),
+  queue: sessionQueueSchema
 });
 
 export const sessionCompactResultSchema = z.object({
@@ -69,6 +80,7 @@ export type Session = z.infer<typeof sessionSchema>;
 export type SessionPage = z.infer<typeof sessionPageSchema>;
 export type SessionQueuedRun = z.infer<typeof sessionQueuedRunSchema>;
 export type SessionQueue = z.infer<typeof sessionQueueSchema>;
+export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 export type SessionCompactResult = z.infer<typeof sessionCompactResultSchema>;
 export type CompactSessionRequest = z.infer<typeof compactSessionRequestSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;

@@ -302,6 +302,7 @@ export interface RunStepRepository {
   create(input: RunStep): Promise<RunStep>;
   update(input: RunStep): Promise<RunStep>;
   listByRunId(runId: string): Promise<RunStep[]>;
+  listPageByRunId?(runId: string, pageSize: number, cursor?: string): Promise<RunStep[]>;
 }
 
 export interface SessionEventStore {

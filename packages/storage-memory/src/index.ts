@@ -340,6 +340,11 @@ export class InMemoryRunStepRepository implements RunStepRepository {
       .filter((value): value is RunStep => value !== undefined);
   }
 
+  async listPageByRunId(runId: string, pageSize: number, cursor?: string): Promise<RunStep[]> {
+    const startIndex = parseCursor(cursor);
+    return (await this.listByRunId(runId)).slice(startIndex, startIndex + pageSize);
+  }
+
   deleteByRunIds(runIds: string[]): void {
     for (const runId of runIds) {
       const stepIds = this.#runStepIds.get(runId) ?? [];

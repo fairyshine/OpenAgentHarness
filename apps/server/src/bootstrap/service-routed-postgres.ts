@@ -1,4 +1,4 @@
-import { AppError } from "@oah/engine-core";
+import { AppError, parseCursor } from "@oah/engine-core";
 import type {
   AgentTaskNotificationRecord,
   AgentTaskNotificationRepository,
@@ -297,6 +297,16 @@ class RoutedRunStepRepository implements RunStepRepository {
 
   async listByRunId(runId: string): Promise<RunStep[]> {
     return (await this.router.getBackendForRunId(runId)).runStepRepository.listByRunId(runId);
+  }
+
+  async listPageByRunId(runId: string, pageSize: number, cursor?: string): Promise<RunStep[]> {
+    const repository = (await this.router.getBackendForRunId(runId)).runStepRepository;
+    const pagedRepository = repository as RunStepRepository & {
+      listPageByRunId?: (targetRunId: string, targetPageSize: number, targetCursor?: string) => Promise<RunStep[]>;
+    };
+    return pagedRepository.listPageByRunId
+      ? pagedRepository.listPageByRunId(runId, pageSize, cursor)
+      : (await pagedRepository.listByRunId(runId)).slice(parseCursor(cursor), parseCursor(cursor) + pageSize);
   }
 }
 

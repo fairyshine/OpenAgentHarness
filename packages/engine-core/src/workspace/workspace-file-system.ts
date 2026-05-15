@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, readdir, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 
 import type { WorkspaceFileStat, WorkspaceFileSystem, WorkspaceFileSystemEntry } from "../types.js";
 
@@ -23,6 +23,16 @@ export function createLocalWorkspaceFileSystem(): WorkspaceFileSystem {
     },
     async readFile(targetPath) {
       return readFile(targetPath);
+    },
+    async readFileRange(targetPath, maxBytes) {
+      const file = await open(targetPath, "r");
+      try {
+        const buffer = Buffer.alloc(maxBytes);
+        const result = await file.read(buffer, 0, maxBytes, 0);
+        return buffer.subarray(0, result.bytesRead);
+      } finally {
+        await file.close();
+      }
     },
     openReadStream(targetPath) {
       return createReadStream(targetPath);

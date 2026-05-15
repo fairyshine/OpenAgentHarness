@@ -3,15 +3,22 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkspaceArchiveRecord, WorkspaceArchiveRepository } from "@oah/engine-core";
 
 import { WorkspaceArchiveExporter } from "../apps/server/src/workspace-archive-export.ts";
 
 const tempDirs: string[] = [];
+const fixedNow = new Date("2026-05-12T12:00:00.000Z");
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(fixedNow);
+});
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(
     tempDirs.splice(0).map((dir) =>
       rm(dir, {

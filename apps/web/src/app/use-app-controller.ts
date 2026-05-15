@@ -175,6 +175,7 @@ export function useAppController() {
   const runPollingTimerRef = useRef<number | undefined>(undefined);
   const sessionQueueRefreshTimerRef = useRef<number | undefined>(undefined);
   const lastExplicitSessionRefreshRef = useRef<{ sessionId: string; at: number } | null>(null);
+  const sessionSnapshotHydrationRef = useRef<{ sessionId: string; at: number } | null>(null);
   const newEmptySessionIdRef = useRef<string | null>(null);
   const conversationThreadRef = useRef<HTMLDivElement | null>(null);
   const conversationTailRef = useRef<HTMLDivElement | null>(null);
@@ -440,9 +441,11 @@ export function useAppController() {
       setSavedSessions,
       recentWorkspaces,
       setRecentWorkspaces,
+      recentSessions,
       setRecentSessions,
       expandedWorkspaceIds,
       setExpandedWorkspaceIds,
+      expandedSessionIds,
       setExpandedSessionIds,
       workspace,
       setWorkspace,
@@ -457,8 +460,10 @@ export function useAppController() {
       setMessages,
       setEvents,
       setSelectedRunId,
+      setSessionRuns,
       setRun,
       setRunSteps,
+      setSessionQueuedRuns,
       setLiveMessagesByKey,
       setStreamState,
       streamAbortRef,
@@ -466,7 +471,12 @@ export function useAppController() {
       lastCursorRef,
       runPollingTimerRef,
       lastExplicitSessionRefreshRef,
-      newEmptySessionIdRef
+      sessionSnapshotHydrationRef,
+      mergeMessagePageCursor,
+      newEmptySessionIdRef,
+      refreshMessages,
+      refreshSessionQueue,
+      refreshSessionRuns
     }
   });
 
@@ -648,7 +658,7 @@ export function useAppController() {
   useSessionEventStream({
     connection,
     sessionId,
-    sessionRecordId: session?.id,
+    ...(session?.id ? { sessionRecordId: session.id } : {}),
     enabled: !isPendingSessionId(sessionId) && newEmptySessionIdRef.current !== sessionId,
     streamRevision,
     streamAbortRef,
@@ -763,6 +773,11 @@ export function useAppController() {
       });
     }
 
+    const snapshotHydration = sessionSnapshotHydrationRef.current;
+    if (snapshotHydration?.sessionId === sessionId && Date.now() - snapshotHydration.at < 1_500) {
+      return;
+    }
+
     void refreshMessages(true, { pageSize: 24, reset: true });
     scheduleSessionQueueRefresh();
   }, [sessionId]);
@@ -791,6 +806,10 @@ export function useAppController() {
       }
       const recentExplicitRefresh = lastExplicitSessionRefreshRef.current;
       if (recentExplicitRefresh?.sessionId === sessionId && Date.now() - recentExplicitRefresh.at < 1_000) {
+        const snapshotHydration = sessionSnapshotHydrationRef.current;
+        if (!snapshotHydration || snapshotHydration.sessionId !== sessionId || Date.now() - snapshotHydration.at >= 1_500) {
+          scheduleSessionRunsRefresh();
+        }
         return;
       }
       void navigationActions.refreshSession(sessionId, true);

@@ -542,7 +542,9 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Directory</p>
                     <p className="mt-1 text-xs text-muted-foreground">{displayPath}</p>
                   </div>
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+                  {busy || fileManager.entriesRefreshingMetadata ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  ) : null}
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
                   <div className="space-y-1.5">

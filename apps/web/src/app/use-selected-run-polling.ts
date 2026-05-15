@@ -12,6 +12,9 @@ import {
 import { buildLiveMessagePagePath, mergeRunStepsForRun } from "./app-controller-utils";
 
 const COMPLETED_RUN_RESULT_POLL_LIMIT = 5;
+const RUN_STEP_PAGE_SIZE = 100;
+const STREAM_CONNECTED_POLL_INTERVAL_MS = 5_000;
+const STREAM_DISCONNECTED_POLL_INTERVAL_MS = 1_200;
 
 function useSelectedRunPolling(params: {
   connection: ConnectionSettings;
@@ -51,12 +54,14 @@ function useSelectedRunPolling(params: {
     }
 
     let cancelled = false;
+    const streamConnected = params.streamState === "open" || params.streamState === "listening";
+    const fallbackPollInterval = streamConnected ? STREAM_CONNECTED_POLL_INTERVAL_MS : STREAM_DISCONNECTED_POLL_INTERVAL_MS;
 
     const pollRunSnapshot = async () => {
       try {
         const [nextRun, nextSteps, nextMessages] = await Promise.all([
           params.request<Run>(`/api/v1/runs/${params.selectedRunIdValue}`),
-          params.request<{ items: RunStep[] }>(`/api/v1/runs/${params.selectedRunIdValue}/steps?pageSize=200`),
+          params.request<{ items: RunStep[] }>(`/api/v1/runs/${params.selectedRunIdValue}/steps?pageSize=${RUN_STEP_PAGE_SIZE}`),
           params.request<MessagePage>(buildLiveMessagePagePath(params.sessionId))
         ]);
 
@@ -91,7 +96,7 @@ function useSelectedRunPolling(params: {
         if (!isTerminalRunStatus(nextRun.status) || shouldKeepPollingForCompletedMessage) {
           params.runPollingTimerRef.current = window.setTimeout(() => {
             void pollRunSnapshot();
-          }, shouldKeepPollingForCompletedMessage ? 400 : 1000);
+          }, shouldKeepPollingForCompletedMessage ? 400 : fallbackPollInterval);
           return;
         }
 
@@ -107,7 +112,7 @@ function useSelectedRunPolling(params: {
 
         params.runPollingTimerRef.current = window.setTimeout(() => {
           void pollRunSnapshot();
-        }, 1500);
+        }, streamConnected ? STREAM_CONNECTED_POLL_INTERVAL_MS : 1_500);
 
         if (params.streamState === "error") {
           params.reportError(error);
@@ -117,7 +122,7 @@ function useSelectedRunPolling(params: {
 
     params.runPollingTimerRef.current = window.setTimeout(() => {
       void pollRunSnapshot();
-    }, 600);
+    }, streamConnected ? 1_500 : 600);
 
     return () => {
       cancelled = true;

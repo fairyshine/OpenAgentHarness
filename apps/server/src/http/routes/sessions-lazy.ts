@@ -27,6 +27,9 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: AppDep
   app.get("/api/v1/sessions/:sessionId", async (request, reply) =>
     dispatchSessionRoute(request, reply, dependencies)
   );
+  app.get("/api/v1/sessions/:sessionId/snapshot", async (request, reply) =>
+    dispatchSessionRoute(request, reply, dependencies)
+  );
   app.patch("/api/v1/sessions/:sessionId", async (request, reply) =>
     dispatchSessionRoute(request, reply, dependencies)
   );

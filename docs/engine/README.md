@@ -12,7 +12,7 @@ Agent Engine 将调用方请求转为可追踪、可恢复、可审计的 run �
 
 1. [lifecycle.md](./lifecycle.md) — run 生命周期与状态流转
 2. [context-engine.md](./context-engine.md) — 上下文装配
-3. [message-projections.md](./message-projections.md) — `Message / EngineMessage / ChatMessage` 分层、projection、compact 语义
+3. [message-projections/README.md](./message-projections/README.md) — `Message / EngineMessage / ChatMessage` 分层、projection、compact 语义
 4. [projection-and-executors.md](./projection-and-executors.md) — 能力注册与执行器
 5. [subagent-orchestration.md](./subagent-orchestration.md) — subagent / task notification / TaskOutput 的 Claude Code 对齐路线
 

@@ -10,9 +10,11 @@ type SessionIdRef = {
 };
 
 const SIDEBAR_CHILD_REFRESH_LIMIT = 24;
-const SIDEBAR_RUN_REFRESH_LIMIT = 48;
-const SIDEBAR_COLD_START_REFRESH_LIMIT = 8;
-const SIDEBAR_EXPANDED_REFRESH_LIMIT = 8;
+const SIDEBAR_RUN_REFRESH_LIMIT = 24;
+const SIDEBAR_COLD_START_REFRESH_LIMIT = 3;
+const SIDEBAR_EXPANDED_REFRESH_LIMIT = 6;
+const SESSION_RUN_PAGE_SIZE = 80;
+const RUN_STEP_PAGE_SIZE = 100;
 
 function uniqueNonEmptyStrings(values: string[]) {
   return Array.from(new Set(values.map((entry) => entry.trim()).filter(Boolean)));
@@ -70,6 +72,7 @@ export function useSessionRunActions(input: {
   const sessionQueueRefreshSeqRef = useRef(0);
   const sidebarSessionRunsRefreshSeqRef = useRef(0);
   const sidebarColdStartKeyRef = useRef("");
+  const sidebarRunsInFlightRef = useRef(false);
 
   const pruneMissingSidebarSessions = useEffectEvent((sessionIds: string[]) => {
     const missingRootIds = new Set(uniqueNonEmptyStrings(sessionIds));
@@ -100,7 +103,7 @@ export function useSessionRunActions(input: {
     try {
       const pages = await Promise.all(
         runs.map(async (sessionRun) => {
-          const page = await input.request<{ items: RunStep[] }>(`/api/v1/runs/${sessionRun.id}/steps?pageSize=200`);
+          const page = await input.request<{ items: RunStep[] }>(`/api/v1/runs/${sessionRun.id}/steps?pageSize=${RUN_STEP_PAGE_SIZE}`);
           return page.items;
         })
       );
@@ -143,7 +146,7 @@ export function useSessionRunActions(input: {
     }
 
     try {
-      const page = await input.request<RunPage>(`/api/v1/sessions/${input.sessionId}/runs?pageSize=200`);
+      const page = await input.request<RunPage>(`/api/v1/sessions/${input.sessionId}/runs?pageSize=${SESSION_RUN_PAGE_SIZE}`);
       startTransition(() => {
         input.setSessionRuns(page.items);
       });
@@ -222,6 +225,12 @@ export function useSessionRunActions(input: {
   );
 
   const refreshSidebarSessionRuns = useEffectEvent(async (quiet = true, options?: { includeChildren?: boolean }): Promise<boolean> => {
+    if (sidebarRunsInFlightRef.current) {
+      return Object.values(input.sidebarSessionRunsById)
+        .flat()
+        .some((item) => !isTerminalRunStatus(item.status));
+    }
+
     const visibleSessionIds = uniqueNonEmptyStrings(input.visibleSidebarSessionIds).filter((sessionId) => !isPendingSessionId(sessionId));
     const visibleSessionIdSet = new Set(visibleSessionIds);
     const knownActiveSessionIds = Object.entries(input.sidebarSessionRunsById)
@@ -252,12 +261,10 @@ export function useSessionRunActions(input: {
     const seq = ++sidebarSessionRunsRefreshSeqRef.current;
 
     if (sessionIds.length === 0) {
-      startTransition(() => {
-        input.setSidebarSessionRunsById({});
-      });
       return false;
     }
 
+    sidebarRunsInFlightRef.current = true;
     try {
       const refreshedChildSessions = options?.includeChildren ? await refreshVisibleSidebarChildSessions(sessionIds) : [];
       const workspaceSessionsById = new Map<string, SavedSessionRecord[]>();
@@ -383,6 +390,10 @@ export function useSessionRunActions(input: {
       return Object.values(input.sidebarSessionRunsById)
         .flat()
         .some((item) => !isTerminalRunStatus(item.status));
+    } finally {
+      if (seq === sidebarSessionRunsRefreshSeqRef.current) {
+        sidebarRunsInFlightRef.current = false;
+      }
     }
   });
 
@@ -413,7 +424,7 @@ export function useSessionRunActions(input: {
     }
 
     try {
-      const page = await input.request<{ items: RunStep[] }>(`/api/v1/runs/${targetId}/steps?pageSize=200`);
+      const page = await input.request<{ items: RunStep[] }>(`/api/v1/runs/${targetId}/steps?pageSize=${RUN_STEP_PAGE_SIZE}`);
       startTransition(() => {
         input.setRunSteps((current) => mergeRunStepsForRun(current, targetId, page.items));
       });
