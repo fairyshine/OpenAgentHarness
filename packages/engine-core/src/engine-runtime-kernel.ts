@@ -157,6 +157,21 @@ export function createEngineRuntimeKernel(
   let engineLifecycle!: EngineLifecycleService;
   let runProcessor!: RunProcessorService;
 
+  const workspaceMemory = new WorkspaceMemoryService({
+    logger: dependencies.logger,
+    modelGateway: dependencies.modelGateway,
+    messageRepository: dependencies.messageRepository,
+    sessionRepository: dependencies.sessionRepository,
+    runRepository: dependencies.runRepository,
+    runStepRepository: dependencies.runStepRepository,
+    enqueueRun: (sessionId, runId, options) => engineLifecycle.enqueueRun(sessionId, runId, options),
+    workspaceFileSystem: dependencies.workspaceFileSystem,
+    workspaceFileAccessProvider: dependencies.workspaceFileAccessProvider,
+    resolveModelForRun: (workspace, modelRef) => modelInputs.resolveModelForRun(workspace, modelRef),
+    recordSystemStep: (run, name, output) => dependencies.runSteps.recordSystemStep(run, name, output),
+    createId: dependencies.createId,
+    nowIso: dependencies.nowIso
+  });
   const contextCompaction = new ContextCompactionService({
     logger: dependencies.logger,
     messageRepository: dependencies.messageRepository,
@@ -172,6 +187,7 @@ export function createEngineRuntimeKernel(
       modelInputs.buildModelContextMessages(workspace, session, run, engineMessages, activeAgentName, false, options),
     applyCompactionHooks: (workspace, session, run, eventName, context) =>
       dependencies.applyCompactionHooks(workspace, session, run, eventName, context),
+    captureWorkspaceMemoryBeforeCompaction: (input) => workspaceMemory.captureBeforeCompaction(input),
     buildEngineMessagesForSession: (sessionId, persistedMessages) =>
       engineMessageSync.buildEngineMessagesForSession(sessionId, persistedMessages)
   });
@@ -182,21 +198,6 @@ export function createEngineRuntimeKernel(
     scheduleEngineMessageSync: (sessionId) => engineMessageSync.scheduleEngineMessageSync(sessionId),
     resolveRunModel: (workspace, session, run, activeAgentName) =>
       modelInputs.resolveRunModel(workspace, session, run, activeAgentName),
-    recordSystemStep: (run, name, output) => dependencies.runSteps.recordSystemStep(run, name, output),
-    createId: dependencies.createId,
-    nowIso: dependencies.nowIso
-  });
-  const workspaceMemory = new WorkspaceMemoryService({
-    logger: dependencies.logger,
-    modelGateway: dependencies.modelGateway,
-    messageRepository: dependencies.messageRepository,
-    sessionRepository: dependencies.sessionRepository,
-    runRepository: dependencies.runRepository,
-    runStepRepository: dependencies.runStepRepository,
-    enqueueRun: (sessionId, runId, options) => engineLifecycle.enqueueRun(sessionId, runId, options),
-    workspaceFileSystem: dependencies.workspaceFileSystem,
-    workspaceFileAccessProvider: dependencies.workspaceFileAccessProvider,
-    resolveModelForRun: (workspace, modelRef) => modelInputs.resolveModelForRun(workspace, modelRef),
     recordSystemStep: (run, name, output) => dependencies.runSteps.recordSystemStep(run, name, output),
     createId: dependencies.createId,
     nowIso: dependencies.nowIso

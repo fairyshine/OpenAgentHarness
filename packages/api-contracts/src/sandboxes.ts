@@ -171,9 +171,9 @@ export type SandboxFileStatQuery = z.infer<typeof sandboxFileStatQuerySchema>;
 export interface SandboxHttpClient {
   ensureSandboxForWorkspace(input: EnsureSandboxForWorkspaceRequest): Promise<Sandbox>;
   getSandbox(sandboxId: string): Promise<Sandbox>;
-  listEntries(sandboxId: string, input: WorkspaceEntriesQuery): Promise<WorkspaceEntryPage>;
+  listEntries(sandboxId: string, input: WorkspaceEntriesQuery, init?: RequestInit): Promise<WorkspaceEntryPage>;
   getFileStat(sandboxId: string, input: SandboxFileStatQuery): Promise<SandboxFileStat>;
-  getFileContent(sandboxId: string, input: WorkspaceFileContentQuery): Promise<WorkspaceFileContent>;
+  getFileContent(sandboxId: string, input: WorkspaceFileContentQuery, init?: RequestInit): Promise<WorkspaceFileContent>;
   putFileContent(sandboxId: string, input: PutWorkspaceFileRequest): Promise<WorkspaceEntry>;
   createDirectory(sandboxId: string, input: CreateWorkspaceDirectoryRequest): Promise<WorkspaceEntry>;
   uploadFile(
@@ -202,7 +202,7 @@ export function createSandboxHttpClient(transport: SandboxHttpTransport): Sandbo
     async getSandbox(sandboxId: string): Promise<Sandbox> {
       return sandboxSchema.parse(await transport.requestJson<unknown>(buildSandboxApiPath(sandboxId)));
     },
-    async listEntries(sandboxId: string, input: WorkspaceEntriesQuery): Promise<WorkspaceEntryPage> {
+    async listEntries(sandboxId: string, input: WorkspaceEntriesQuery, init?: RequestInit): Promise<WorkspaceEntryPage> {
       return workspaceEntryPageSchema.parse(
         await transport.requestJson<unknown>(
           `${buildSandboxApiPath(sandboxId, "/files/entries")}${buildSandboxQueryString({
@@ -217,7 +217,8 @@ export function createSandboxHttpClient(transport: SandboxHttpTransport): Sandbo
             ...(input.includeEntryMetadata !== undefined
               ? { includeEntryMetadata: input.includeEntryMetadata }
               : {})
-          })}`
+          })}`,
+          init
         )
       );
     },
@@ -228,14 +229,15 @@ export function createSandboxHttpClient(transport: SandboxHttpTransport): Sandbo
         )
       );
     },
-    async getFileContent(sandboxId: string, input: WorkspaceFileContentQuery): Promise<WorkspaceFileContent> {
+    async getFileContent(sandboxId: string, input: WorkspaceFileContentQuery, init?: RequestInit): Promise<WorkspaceFileContent> {
       return workspaceFileContentSchema.parse(
         await transport.requestJson<unknown>(
           `${buildSandboxApiPath(sandboxId, "/files/content")}${buildSandboxQueryString({
             path: input.path,
             ...(input.encoding ? { encoding: input.encoding } : {}),
             ...(input.maxBytes !== undefined ? { maxBytes: input.maxBytes } : {})
-          })}`
+          })}`,
+          init
         )
       );
     },

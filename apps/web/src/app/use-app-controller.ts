@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import {
   readinessReportSchema,
@@ -30,7 +30,8 @@ import { buildSessionTraceExportPayload } from "./session-trace-export";
 import { useSidebarDerivedState } from "./use-sidebar-derived-state";
 import { useNavigationState } from "./use-navigation-state";
 import { useStorageController } from "./use-storage-controller";
-import { useWorkspaceFileManager } from "./use-workspace-file-manager";
+import type { WorkspaceFileManagerParams } from "./use-workspace-file-manager";
+import { useWorkspaceMemory, type WorkspaceMemoryParams } from "./use-workspace-memory";
 import { useSessionEventHandler } from "./use-session-event-handler";
 import { useSessionMessages } from "./use-session-messages";
 import { useSessionRunActions } from "./use-session-run-actions";
@@ -272,9 +273,9 @@ export function useAppController() {
     return buildRuntimeConsoleEntries(events, activeError);
   }, [activeError, events, isConsoleVisible]);
 
-  async function request<T>(path: string, init?: RequestInit, options?: { auth?: boolean }) {
+  const request = useCallback(async function request<T>(path: string, init?: RequestInit, options?: { auth?: boolean }) {
     return appControllerRequest<T>(connection, path, init, options);
-  }
+  }, [connection]);
 
   const clearActiveError = useEffectEvent(() => {
     setErrorMessage("");
@@ -413,15 +414,31 @@ export function useAppController() {
     setActivity,
     setErrorMessage
   });
-  const workspaceFileManager = useWorkspaceFileManager({
-    connection,
-    request,
-    workspaceId: activeWorkspaceId,
-    workspace: workspace,
-    enabled: surfaceMode === "engine" && mainViewMode === "conversation",
-    setActivity,
-    setErrorMessage
-  });
+  const workspaceFileManager = useMemo(
+    (): WorkspaceFileManagerParams => ({
+      connection,
+      request,
+      workspaceId: activeWorkspaceId,
+      workspace: workspace,
+      enabled: surfaceMode === "engine" && mainViewMode === "conversation",
+      setActivity,
+      setErrorMessage
+    }),
+    [activeWorkspaceId, connection, mainViewMode, request, setActivity, setErrorMessage, surfaceMode, workspace]
+  );
+  const workspaceMemoryParams = useMemo(
+    (): WorkspaceMemoryParams => ({
+      connection,
+      request,
+      workspaceId: activeWorkspaceId,
+      workspace,
+      enabled: surfaceMode === "engine" && mainViewMode === "inspector",
+      setActivity,
+      setErrorMessage
+    }),
+    [activeWorkspaceId, connection, mainViewMode, request, setActivity, setErrorMessage, surfaceMode, workspace]
+  );
+  const workspaceMemory = useWorkspaceMemory(workspaceMemoryParams);
   const navigationActions = useNavigationActions({
     request,
     connection,
@@ -1039,6 +1056,7 @@ export function useAppController() {
     workspace,
     workspaceDraft,
     workspaceFileManager,
+    workspaceMemory,
     workspaceId,
     workspaceManagementEnabled,
     workspaceRuntimeFilterOptions,

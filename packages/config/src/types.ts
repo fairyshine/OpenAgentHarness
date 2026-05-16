@@ -256,11 +256,17 @@ export interface WorkspaceSettings {
 export interface WorkspaceEngineSettings {
   compact?: WorkspaceEngineToggleSettings | undefined;
   sessionMemory?: WorkspaceEngineToggleSettings | undefined;
-  workspaceMemory?: WorkspaceEngineToggleSettings | undefined;
+  workspaceMemory?: WorkspaceMemorySettings | undefined;
 }
 
 export interface WorkspaceEngineToggleSettings {
   enabled?: boolean | undefined;
+}
+
+export type WorkspaceMemoryWritePolicy = "explicit-only" | "confirm-suggested" | "auto-extract";
+
+export interface WorkspaceMemorySettings extends WorkspaceEngineToggleSettings {
+  writePolicy?: WorkspaceMemoryWritePolicy | undefined;
 }
 
 export interface WorkspaceModelPreset {
@@ -340,6 +346,9 @@ export interface DiscoveredAgent {
     toolTimeoutSeconds?: number | undefined;
     parallelToolCalls?: boolean | undefined;
     maxConcurrentSubagents?: number | undefined;
+    workspaceMemory?: {
+      writePolicy?: WorkspaceMemoryWritePolicy | undefined;
+    } | undefined;
   } | undefined;
 }
 

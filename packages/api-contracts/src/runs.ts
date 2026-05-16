@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { jsonObjectSchema, jsonValueSchema, timestampSchema } from "./common.js";
+import { jsonObjectSchema, jsonValueSchema, timestampSchema, workspaceMemoryOverrideSchema } from "./common.js";
 
 export const runSchema = z.object({
   id: z.string(),
@@ -91,6 +91,7 @@ export const createActionRunRequestSchema = z.object({
   sessionId: z.string().optional(),
   agentName: z.string().optional(),
   input: jsonValueSchema.optional(),
+  workspaceMemory: workspaceMemoryOverrideSchema.optional(),
   triggerSource: z.enum(["api", "user"]).optional()
 });
 

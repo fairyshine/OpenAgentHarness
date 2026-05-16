@@ -30,11 +30,15 @@ import {
   WORKSPACE_MEMORY_SAVE_GUIDANCE_LINES,
   WORKSPACE_MEMORY_TYPE_GUIDANCE_LINES
 } from "./workspace-memory-taxonomy.js";
+import { resolveEffectiveWorkspaceMemoryWritePolicy } from "./workspace-memory-policy.js";
 
 const WORKSPACE_MEMORY_DIRECTORY = ".openharness/memory";
 const WORKSPACE_MEMORY_PATH = `${WORKSPACE_MEMORY_DIRECTORY}/MEMORY.md`;
+const WORKSPACE_MEMORY_TOPICS_DIRECTORY = `${WORKSPACE_MEMORY_DIRECTORY}/topics`;
+const WORKSPACE_MEMORY_SESSIONS_DIRECTORY = `${WORKSPACE_MEMORY_DIRECTORY}/sessions`;
 const WORKSPACE_MEMORY_CONTEXT_MAX_CHARS = 6_000;
 const WORKSPACE_MEMORY_TRANSCRIPT_MAX_CHARS = 12_000;
+const WORKSPACE_MEMORY_FLUSH_MAX_CHARS = 12_000;
 const WORKSPACE_MEMORY_TAG = "workspace-memory";
 const WORKSPACE_MEMORY_TOPIC_TAG = "workspace-memory-topic";
 const WORKSPACE_MEMORY_RECALL_STEP_NAME = "workspace_memory_recall";
@@ -98,6 +102,53 @@ function buildExtractionTaskPrompt(existingMemories: string, transcript: string)
     "<conversation_delta>",
     transcript,
     "</conversation_delta>"
+  ].join("\n");
+}
+
+function slugifyWorkspaceMemoryTitle(title: string): string {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 72);
+  return slug || "memory";
+}
+
+function escapeWorkspaceMemoryFrontmatterValue(value: string): string {
+  return JSON.stringify(value.replace(/\r?\n/gu, " ").trim());
+}
+
+function buildCompactionFlushContent(input: {
+  session: Session;
+  run: Run;
+  capturedAt: string;
+  summarizedMessageCount: number;
+  compactThroughMessageId?: string | undefined;
+  transcript: string;
+}): string {
+  const title = `Compaction flush ${input.capturedAt.slice(0, 10)}`;
+  return [
+    "---",
+    `name: ${escapeWorkspaceMemoryFrontmatterValue(title)}`,
+    "description: \"Session context preserved before compaction.\"",
+    "type: session",
+    `session_id: ${escapeWorkspaceMemoryFrontmatterValue(input.session.id)}`,
+    `run_id: ${escapeWorkspaceMemoryFrontmatterValue(input.run.id)}`,
+    `captured_at: ${escapeWorkspaceMemoryFrontmatterValue(input.capturedAt)}`,
+    `reason: "before_compaction"`,
+    `summarized_message_count: ${input.summarizedMessageCount}`,
+    ...(input.compactThroughMessageId ? [`compact_through_message_id: ${escapeWorkspaceMemoryFrontmatterValue(input.compactThroughMessageId)}`] : []),
+    "---",
+    "",
+    `# ${title}`,
+    "",
+    "Preserved before context compaction. This is low-weight session memory for search and later consolidation.",
+    "",
+    "## Transcript",
+    "",
+    input.transcript.trim(),
+    ""
   ].join("\n");
 }
 
@@ -264,7 +315,12 @@ export class WorkspaceMemoryService implements ContextPreparationModule {
   }): void {
     if (
       !this.isEnabled(input.workspace) ||
-      input.workspace.settings.engine?.workspaceMemory?.writePolicy !== "auto-extract" ||
+      resolveEffectiveWorkspaceMemoryWritePolicy({
+        workspace: input.workspace,
+        agentName: input.run.effectiveAgentName,
+        session: input.session,
+        run: input.run
+      }) !== "auto-extract" ||
       input.workspace.readOnly ||
       input.workspace.kind !== "project" ||
       isWorkspaceMemoryExtractionRun(input.run)
@@ -292,6 +348,63 @@ export class WorkspaceMemoryService implements ContextPreparationModule {
       });
 
     this.#updateChains.set(updateKey, next);
+  }
+
+  async captureBeforeCompaction(input: {
+    workspace: WorkspaceRecord;
+    session: Session;
+    run: Run;
+    messages: Message[];
+    summarizedMessageCount: number;
+    compactThroughMessageId?: string | undefined;
+  }): Promise<{ captured: boolean; path?: string | undefined; reason?: string | undefined }> {
+    if (!this.isEnabled(input.workspace) || input.workspace.readOnly || input.workspace.kind !== "project") {
+      return {
+        captured: false,
+        reason: "disabled"
+      };
+    }
+
+    const transcript = truncateText(renderMessagesForMemory(input.messages), WORKSPACE_MEMORY_FLUSH_MAX_CHARS).trim();
+    if (!transcript) {
+      return {
+        captured: false,
+        reason: "empty"
+      };
+    }
+
+    const capturedAt = this.#nowIso();
+    const fileName = `${capturedAt.slice(0, 10)}-compact-${slugifyWorkspaceMemoryTitle(input.session.title || input.session.id)}-${input.run.id}.md`;
+    const relativePath = `${WORKSPACE_MEMORY_SESSIONS_DIRECTORY}/${fileName}`;
+    await this.#withWorkspaceFileAccess(input.workspace, "write", relativePath, async (leasedWorkspace) => {
+      const absolutePath = path.join(leasedWorkspace.rootPath, relativePath);
+      await this.#workspaceFileSystem.mkdir(path.dirname(absolutePath), { recursive: true });
+      await this.#workspaceFileSystem.writeFile(
+        absolutePath,
+        Buffer.from(
+          buildCompactionFlushContent({
+            session: input.session,
+            run: input.run,
+            capturedAt,
+            summarizedMessageCount: input.summarizedMessageCount,
+            compactThroughMessageId: input.compactThroughMessageId,
+            transcript
+          }),
+          "utf8"
+        )
+      );
+    });
+
+    await this.#recordSystemStep(input.run, "workspace_memory_compaction_flush", {
+      path: relativePath,
+      summarizedMessageCount: input.summarizedMessageCount,
+      ...(input.compactThroughMessageId ? { compactThroughMessageId: input.compactThroughMessageId } : {})
+    });
+
+    return {
+      captured: true,
+      path: relativePath
+    };
   }
 
   async #updateWorkspaceMemory(input: {
@@ -571,8 +684,8 @@ export class WorkspaceMemoryService implements ContextPreparationModule {
   }
 
   async #readMemoryTopicFiles(workspace: WorkspaceRecord): Promise<WorkspaceMemoryTopicFile[]> {
-    return this.#withWorkspaceFileAccess(workspace, "read", WORKSPACE_MEMORY_DIRECTORY, async (leasedWorkspace) => {
-      const root = path.join(leasedWorkspace.rootPath, WORKSPACE_MEMORY_DIRECTORY);
+    return this.#withWorkspaceFileAccess(workspace, "read", WORKSPACE_MEMORY_TOPICS_DIRECTORY, async (leasedWorkspace) => {
+      const root = path.join(leasedWorkspace.rootPath, WORKSPACE_MEMORY_TOPICS_DIRECTORY);
       const discovered: WorkspaceMemoryTopicFile[] = [];
 
       const walk = async (absoluteDirectory: string, relativeDirectory: string): Promise<void> => {
@@ -618,7 +731,7 @@ export class WorkspaceMemoryService implements ContextPreparationModule {
 
           discovered.push(
             parseWorkspaceMemoryTopicFile({
-              filePath: `${WORKSPACE_MEMORY_DIRECTORY}/${relativeEntryPath}`,
+              filePath: `${WORKSPACE_MEMORY_TOPICS_DIRECTORY}/${relativeEntryPath}`,
               rawContent: raw,
               mtimeMs: stat.mtimeMs
             })

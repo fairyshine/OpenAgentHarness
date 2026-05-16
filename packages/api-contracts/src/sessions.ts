@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { timestampSchema } from "./common.js";
+import { timestampSchema, workspaceMemoryOverrideSchema } from "./common.js";
 import { messagePageSchema } from "./messages.js";
 import { runPageSchema, runStepPageSchema } from "./runs.js";
 
@@ -11,6 +11,7 @@ export const sessionSchema = z.object({
   modelRef: z.string().optional(),
   agentName: z.string().optional(),
   activeAgentName: z.string(),
+  workspaceMemory: workspaceMemoryOverrideSchema.optional(),
   title: z.string().optional(),
   status: z.enum(["active", "archived", "closed"]),
   lastRunAt: timestampSchema.optional(),
@@ -63,18 +64,27 @@ export const compactSessionRequestSchema = z.object({
 export const createSessionRequestSchema = z.object({
   title: z.string().optional(),
   agentName: z.string().optional(),
-  modelRef: z.string().trim().min(1).optional()
+  modelRef: z.string().trim().min(1).optional(),
+  workspaceMemory: workspaceMemoryOverrideSchema.optional()
 });
 
 export const updateSessionRequestSchema = z
   .object({
     title: z.string().trim().min(1).max(120).optional(),
     activeAgentName: z.string().trim().min(1).optional(),
-    modelRef: z.string().trim().min(1).nullable().optional()
+    modelRef: z.string().trim().min(1).nullable().optional(),
+    workspaceMemory: workspaceMemoryOverrideSchema.nullable().optional()
   })
-  .refine((value) => value.title !== undefined || value.activeAgentName !== undefined || value.modelRef !== undefined, {
-    message: "At least one session field must be provided."
-  });
+  .refine(
+    (value) =>
+      value.title !== undefined ||
+      value.activeAgentName !== undefined ||
+      value.modelRef !== undefined ||
+      value.workspaceMemory !== undefined,
+    {
+      message: "At least one session field must be provided."
+    }
+  );
 
 export type Session = z.infer<typeof sessionSchema>;
 export type SessionPage = z.infer<typeof sessionPageSchema>;

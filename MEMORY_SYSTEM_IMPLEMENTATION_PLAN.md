@@ -51,6 +51,7 @@ workspace/
       topics/
       sessions/
       daily/
+      proposals/
 ```
 
 这样用户可以检查、编辑、迁移、删除，也能和 workspace lifecycle、archive、export、storage sync 保持一致。
@@ -76,6 +77,8 @@ workspace/
       2026-05-15.md
     dreams/
       DREAMS.md
+    proposals/
+      20260515123000-memoryremember-project-decision.md
 ```
 
 各层职责：
@@ -87,6 +90,7 @@ workspace/
 | `sessions/*.md` | session/run 边界摘要，保存较详细工作上下文 |
 | `daily/*.md` | 工作日志，适合长时间 workspace 协作和按天回顾 |
 | `dreams/DREAMS.md` | consolidation/promotion 的审阅记录 |
+| `proposals/*.md` | `confirm-suggested` 策略下的待确认写入建议，不作为已确认 memory 参与默认召回 |
 
 这五个部分都属于目标架构。实施上可以分阶段落地，但不再把 `daily/` 和 `dreams/` 视为可选组件。`daily/` 应作为低权重时间日志参与检索，而不是启动注入内容；`dreams/` 应作为整理、晋升、清理的审阅区，而不是直接回答时的高权重 memory。
 
@@ -121,6 +125,8 @@ workspace/
 4. 在系统提示中要求：
    - 涉及过去决策、用户偏好、项目背景时先查 memory。
    - memory 是历史 claim，涉及当前代码状态时必须验证。
+
+当前自动召回只读取 `topics/` 下的已确认长期 topic 文件；`sessions/`、`daily/`、`dreams/` 和 `proposals/` 不会自动注入主上下文，只能通过 `MemorySearch` / `MemoryRead` 或 CLI 显式查看。这样可以让低权重历史材料保持可检索，同时避免待确认 proposal 或 session 日志污染高权重长期记忆。
 
 不建议第一版就上 vector DB。先把文件布局、权限、读写规则和 UI/CLI 可见性做稳。
 
@@ -172,10 +178,11 @@ policy 应支持分层覆盖：
 
 1. platform default：产品级默认策略。
 2. workspace policy：项目或团队 workspace 的默认策略。当前已支持 `.openharness/settings.yaml` 中的 `engine.workspace_memory.write_policy`。
-3. agent policy：不同 agent 可有不同写入权限。
-4. run/session override：单次任务可临时关闭或提升记忆能力。
+3. agent policy：不同 agent 可有不同写入权限。当前已支持 agent frontmatter 中的 `policy.workspace_memory.write_policy`。
+4. session override：单个 session 可临时设置 `workspaceMemory.writePolicy`，例如长期会话提升到 `auto-extract` 或临时降到 `explicit-only`。
+5. run override：单次 message/action run 可通过 `workspaceMemory.writePolicy` 覆盖 session/agent/workspace 策略。
 
-最终执行时由 runtime 解析有效 policy，再决定是否允许 `MemoryRemember` / `MemoryUpdate` / `MemoryForget` / `MemoryCaptureSession` 执行、是否需要用户确认、是否只生成 pending proposal。当前已实现 workspace 级 `explicit-only` / `confirm-suggested` / `auto-extract` 解析；后台 extraction 只有在 `write_policy: auto-extract` 时运行，agent policy 和 run/session override 后续补齐。
+最终执行时由 runtime 解析有效 policy，再决定是否允许 `MemoryRemember` / `MemoryUpdate` / `MemoryForget` / `MemoryCaptureSession` 执行、是否需要用户确认、是否只生成 pending proposal。当前已实现 workspace、agent、session、run 四层 `explicit-only` / `confirm-suggested` / `auto-extract` 解析，优先级为 `run > session > agent > workspace > explicit-only`；`confirm-suggested` 会把写入建议保存到 `.openharness/memory/proposals/*.md`，不直接修改目标 memory 文件；用户确认后可通过 `MemoryApplyProposal` 应用，拒绝时通过 `MemoryRejectProposal` 标记为 rejected；后台 extraction 只有在有效 `write_policy: auto-extract` 时运行。
 
 ### 显式写入
 
@@ -245,6 +252,8 @@ Memory 系统必须和 compaction 协作。
 
 这避免重要信息只存在于即将被压缩的 transcript 里。
 
+当前已实现 compaction 前 workspace memory flush：当手动或自动 compaction 确认会压缩早期消息时，runtime 会先把即将被压缩掉的消息片段写入 `.openharness/memory/sessions/*.md`，并在 run step 中记录 `workspace_memory_compaction_flush`。这个 flush 属于低权重 session memory，不会替代 compact summary，也不会自动晋升为 topic。
+
 ## 工具与 API 草案
 
 ### Agent tools
@@ -267,6 +276,8 @@ MemoryRemember(type, title, content, scope?)
 MemoryUpdate(path, oldText, newText)
 MemoryForget(query | path)
 MemoryCaptureSession(sessionId?, reason?)
+MemoryApplyProposal(path)
+MemoryRejectProposal(path, reason?)
 ```
 
 这些工具仍然需要比只读工具更严格的执行策略：`MemorySearch` / `MemoryRead` 可以是 `safe`，写入、更新、删除和 session capture 默认应是 `manual` 或带 workspace policy 的受控执行。runtime 需要按 workspace 策略、人类确认、agent 权限、写入目录约束和审计日志决定是否批准。
@@ -276,10 +287,13 @@ MemoryCaptureSession(sessionId?, reason?)
 建议最少提供：
 
 ```bash
-oah memory status
-oah memory search "query"
-oah memory get <path>
-oah memory index
+oah memory status   # 已实现，本地 workspace 文件模式
+oah memory search "query"  # 已实现
+oah memory get <path>  # 已实现
+oah memory index  # 已实现
+oah memory proposals  # 已实现，列出 confirm-suggested 待确认写入
+oah memory apply-proposal <path>  # 已实现，应用待确认写入
+oah memory reject-proposal <path>  # 已实现，拒绝待确认写入
 ```
 
 Web/TUI 中至少能看到：
@@ -289,6 +303,29 @@ Web/TUI 中至少能看到：
 - 最近 session summaries。
 - 搜索命中和来源文件。
 - 哪些 memory 是自动写入的。
+
+当前已补齐 workspace memory inspection/review 的 HTTP API：
+
+```text
+GET  /api/v1/workspaces/:workspaceId/memory/status
+GET  /api/v1/workspaces/:workspaceId/memory
+GET  /api/v1/workspaces/:workspaceId/memory/search
+GET  /api/v1/workspaces/:workspaceId/memory/read
+GET  /api/v1/workspaces/:workspaceId/memory/proposals
+POST /api/v1/workspaces/:workspaceId/memory/proposals/apply
+POST /api/v1/workspaces/:workspaceId/memory/proposals/reject
+```
+
+这些接口返回结构化 DTO，而不是解析 native tool 文本输出；底层仍走 workspace file lease，因此可以复用本地/远端 workspace 的 materialization、flush 和 owner routing。
+
+当前 Web Inspector 的 Workspace 工作台已接入这层 API，并新增 `Memory` 子面板：
+
+- 展示 workspace memory enable/write policy/root/index/files/bytes/topics/sessions/daily/dreams/proposals 状态。
+- 支持按 corpus 搜索 memory，并展示命中来源文件、snippet、更新时间和大小。
+- 支持读取 memory markdown 内容。
+- 支持查看 pending proposals，并通过 structured API apply/reject。
+
+后续 TUI 面板也应接这层 API，而不是直接读取 `.openharness/memory` 文件。
 
 ## 权限与安全
 
@@ -320,8 +357,9 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 - 在 prompt/context assembly 中注入 `MEMORY.md`。
 - 已实现 `MemorySearch` / `MemoryRead` 的 lexical 版本。
 - 已将 `MemorySearch` / `MemoryRead` 注册为 `safe` native tools。
+- 已将自动 topic recall 收窄为只读取 `.openharness/memory/topics/**/*.md`，避免 sessions/daily/dreams/proposals 自动进入主上下文。
 - 已实现 `MemoryCaptureSession`，可在 session/run 边界或 compact 前生成 `sessions/*.md`。
-- 基础 CLI/UI 可查看和搜索。
+- 基础 CLI 可查看、搜索、读取和列出 pending proposals；HTTP memory inspection/review API 已补齐；Web Inspector 已接入 `Memory` 子面板；TUI 面板后续接入同一层 API。
 
 ### Phase 2：Claude Code 式 topic memory
 
@@ -331,7 +369,8 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 - `user/feedback/project/reference` taxonomy。
 - 已通过 `MemoryRemember` / `MemoryUpdate` / `MemoryForget` 支持 remember/forget/update。
 - 已将写入类 memory tools 注册为 `manual` 或 policy-gated native tools。
-- `confirm-suggested` 已返回 pending proposal，不直接落盘。
+- `confirm-suggested` 已持久化 pending proposal 到 `.openharness/memory/proposals/*.md`，并从普通 search/index 中排除，避免待确认建议被误当成已确认记忆。
+- 已实现 `MemoryApplyProposal` / `MemoryRejectProposal`，支持确认后应用或拒绝 pending proposal，并回写 proposal 状态。
 - `MEMORY.md` 作为短索引由 `MemoryRemember` 自动补充链接。
 - 防重复、校验、truncation warning。
 
@@ -340,7 +379,7 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 目标：减少上下文丢失，让记忆自动维护。
 
 - turn-end extraction agent。
-- compaction 前 memory flush，可复用 `MemoryCaptureSession` 作为写入入口。
+- 已实现 compaction 前 memory flush，会把即将被压缩的早期消息保存到 `sessions/*.md`。
 - session-boundary summary 更稳定。
 - 已实现 `MemoryAppendDaily`，可生成/追加 `daily/*.md` 低权重工作日志。
 - 自动写入权限隔离。

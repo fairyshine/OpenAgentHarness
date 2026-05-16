@@ -12,9 +12,18 @@ import {
   repairLocalWorkspaceRequestSchema,
   registerLocalWorkspaceRequestSchema,
   sessionPageSchema,
+  workspaceMemoryApplyProposalRequestSchema,
+  workspaceMemoryIndexSchema,
+  workspaceMemoryProposalActionResultSchema,
+  workspaceMemoryProposalPageSchema,
+  workspaceMemoryReadQuerySchema,
+  workspaceMemoryReadResponseSchema,
+  workspaceMemoryRejectProposalRequestSchema,
+  workspaceMemorySearchQuerySchema,
+  workspaceMemorySearchResponseSchema,
+  workspaceMemoryStatusSchema,
   workspaceDeleteEntryQuerySchema,
   workspaceDeleteResultSchema,
-  workspaceEntriesQuerySchema,
   workspaceEntryPageSchema,
   workspaceEntryPathQuerySchema,
   workspaceEntrySchema,
@@ -35,6 +44,7 @@ import {
   sendProxyResponse
 } from "../proxy-utils.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
+import { listWorkspaceEntriesWithFastPath, parseWorkspaceEntriesQuery } from "../workspace-entry-listing.js";
 
 type WorkspaceOwnership = Awaited<ReturnType<NonNullable<AppDependencies["resolveWorkspaceOwnership"]>>>;
 const workspaceLifecycleOperations = new Set(["hydrate", "flush", "evict", "delete", "repair_placement"] as const);
@@ -299,17 +309,12 @@ async function handleListWorkspaceEntries(
   request: FastifyRequest,
   reply: FastifyReply
 ) {
-  const query = workspaceEntriesQuerySchema.parse(request.query);
-  const page =
-    (await dependencies.listWorkspaceEntriesFast?.({
-      workspaceId,
-      ...query
-    }).catch((error) => {
-      if (dependencies.logger) {
-        console.warn(`[oah-http] Fast workspace file list failed for ${workspaceId}; falling back to workspace lease.`, error);
-      }
-      return undefined;
-    })) ?? (await dependencies.runtimeService.listWorkspaceEntries(workspaceId, query));
+  const query = parseWorkspaceEntriesQuery(request);
+  const page = await listWorkspaceEntriesWithFastPath(dependencies, {
+    workspaceId,
+    query,
+    logLabel: "workspace"
+  });
   return reply.send(workspaceEntryPageSchema.parse(page));
 }
 
@@ -682,6 +687,73 @@ export async function dispatchRegisteredWorkspaceRoute(
       const catalog = await dependencies.runtimeService.getWorkspaceCatalog(params.workspaceId);
       return reply.send(catalog);
     }
+    case "GET /api/v1/workspaces/:workspaceId/memory/status": {
+      const params = createParamsSchema("workspaceId").parse(request.params);
+      assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
+      if ((await guardWorkspaceOwnership(request, reply, dependencies, params.workspaceId)) !== "local") {
+        return reply;
+      }
+      const status = await dependencies.runtimeService.getWorkspaceMemoryStatus(params.workspaceId);
+      return reply.send(workspaceMemoryStatusSchema.parse(status));
+    }
+    case "GET /api/v1/workspaces/:workspaceId/memory": {
+      const params = createParamsSchema("workspaceId").parse(request.params);
+      assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
+      if ((await guardWorkspaceOwnership(request, reply, dependencies, params.workspaceId)) !== "local") {
+        return reply;
+      }
+      const index = await dependencies.runtimeService.listWorkspaceMemory(params.workspaceId);
+      return reply.send(workspaceMemoryIndexSchema.parse(index));
+    }
+    case "GET /api/v1/workspaces/:workspaceId/memory/search": {
+      const params = createParamsSchema("workspaceId").parse(request.params);
+      assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
+      if ((await guardWorkspaceOwnership(request, reply, dependencies, params.workspaceId)) !== "local") {
+        return reply;
+      }
+      const query = workspaceMemorySearchQuerySchema.parse(request.query);
+      const result = await dependencies.runtimeService.searchWorkspaceMemory(params.workspaceId, query);
+      return reply.send(workspaceMemorySearchResponseSchema.parse(result));
+    }
+    case "GET /api/v1/workspaces/:workspaceId/memory/read": {
+      const params = createParamsSchema("workspaceId").parse(request.params);
+      assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
+      if ((await guardWorkspaceOwnership(request, reply, dependencies, params.workspaceId)) !== "local") {
+        return reply;
+      }
+      const query = workspaceMemoryReadQuerySchema.parse(request.query);
+      const result = await dependencies.runtimeService.readWorkspaceMemory(params.workspaceId, query);
+      return reply.send(workspaceMemoryReadResponseSchema.parse(result));
+    }
+    case "GET /api/v1/workspaces/:workspaceId/memory/proposals": {
+      const params = createParamsSchema("workspaceId").parse(request.params);
+      assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
+      if ((await guardWorkspaceOwnership(request, reply, dependencies, params.workspaceId)) !== "local") {
+        return reply;
+      }
+      const result = await dependencies.runtimeService.listWorkspaceMemoryProposals(params.workspaceId);
+      return reply.send(workspaceMemoryProposalPageSchema.parse(result));
+    }
+    case "POST /api/v1/workspaces/:workspaceId/memory/proposals/apply": {
+      const params = createParamsSchema("workspaceId").parse(request.params);
+      assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
+      if ((await guardWorkspaceOwnership(request, reply, dependencies, params.workspaceId)) !== "local") {
+        return reply;
+      }
+      const input = workspaceMemoryApplyProposalRequestSchema.parse(request.body);
+      const result = await dependencies.runtimeService.applyWorkspaceMemoryProposal(params.workspaceId, input);
+      return reply.send(workspaceMemoryProposalActionResultSchema.parse(result));
+    }
+    case "POST /api/v1/workspaces/:workspaceId/memory/proposals/reject": {
+      const params = createParamsSchema("workspaceId").parse(request.params);
+      assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
+      if ((await guardWorkspaceOwnership(request, reply, dependencies, params.workspaceId)) !== "local") {
+        return reply;
+      }
+      const input = workspaceMemoryRejectProposalRequestSchema.parse(request.body);
+      const result = await dependencies.runtimeService.rejectWorkspaceMemoryProposal(params.workspaceId, input);
+      return reply.send(workspaceMemoryProposalActionResultSchema.parse(result));
+    }
     case "GET /api/v1/workspaces/:workspaceId/entries": {
       const params = createParamsSchema("workspaceId").parse(request.params);
       assertWorkspaceAccess(toCallerContext(request), params.workspaceId);
@@ -774,6 +846,7 @@ export async function dispatchRegisteredWorkspaceRoute(
         sessionId?: string;
         agentName?: string;
         input?: unknown;
+        workspaceMemory?: { writePolicy?: "explicit-only" | "confirm-suggested" | "auto-extract" };
         triggerSource?: "api" | "user";
       };
       const accepted = await dependencies.runtimeService.triggerActionRun({
@@ -783,6 +856,7 @@ export async function dispatchRegisteredWorkspaceRoute(
         sessionId: input.sessionId,
         agentName: input.agentName,
         input: input.input,
+        workspaceMemory: input.workspaceMemory,
         triggerSource: input.triggerSource
       });
       return reply.status(202).send(accepted);
@@ -849,6 +923,27 @@ export function registerWorkspaceRoutes(
     dispatchRegisteredWorkspaceRoute(request, reply, dependencies, options)
   );
   app.get("/api/v1/workspaces/:workspaceId/catalog", async (request, reply) =>
+    dispatchRegisteredWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.get("/api/v1/workspaces/:workspaceId/memory/status", async (request, reply) =>
+    dispatchRegisteredWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.get("/api/v1/workspaces/:workspaceId/memory", async (request, reply) =>
+    dispatchRegisteredWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.get("/api/v1/workspaces/:workspaceId/memory/search", async (request, reply) =>
+    dispatchRegisteredWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.get("/api/v1/workspaces/:workspaceId/memory/read", async (request, reply) =>
+    dispatchRegisteredWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.get("/api/v1/workspaces/:workspaceId/memory/proposals", async (request, reply) =>
+    dispatchRegisteredWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.post("/api/v1/workspaces/:workspaceId/memory/proposals/apply", async (request, reply) =>
+    dispatchRegisteredWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.post("/api/v1/workspaces/:workspaceId/memory/proposals/reject", async (request, reply) =>
     dispatchRegisteredWorkspaceRoute(request, reply, dependencies, options)
   );
   app.get("/api/v1/workspaces/:workspaceId/entries", async (request, reply) =>

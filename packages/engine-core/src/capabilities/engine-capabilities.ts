@@ -433,6 +433,9 @@ export function buildEngineTools(input: BuildEngineToolsInput): EngineToolSet {
           webFetchModel: defaultModel,
           ...(input.injectModelContextMessage ? { injectModelContextMessage: input.injectModelContextMessage } : {}),
           workspace,
+          getActiveAgentName: getCurrentAgentName,
+          session,
+          run,
           readVirtualFile: async ({ filePath, abortSignal }) => {
             const taskId = taskIdFromAgentTaskOutputTarget(filePath, session.id);
             if (!taskId) {

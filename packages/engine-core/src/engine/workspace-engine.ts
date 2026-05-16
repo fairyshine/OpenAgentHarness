@@ -1,6 +1,18 @@
 import path from "node:path";
 
 import type { Workspace, WorkspaceCatalog } from "@oah/api-contracts";
+import type {
+  WorkspaceMemoryApplyProposalRequest,
+  WorkspaceMemoryIndex,
+  WorkspaceMemoryProposalActionResult,
+  WorkspaceMemoryProposalPage,
+  WorkspaceMemoryReadQuery,
+  WorkspaceMemoryReadResponse,
+  WorkspaceMemoryRejectProposalRequest,
+  WorkspaceMemorySearchQuery,
+  WorkspaceMemorySearchResponse,
+  WorkspaceMemoryStatus
+} from "@oah/api-contracts";
 
 import { AppError } from "../errors.js";
 import { PUBLIC_NATIVE_TOOL_NAMES } from "../native-tools.js";
@@ -29,6 +41,15 @@ import {
   type WorkspaceFileService
 } from "../workspace/workspace-files.js";
 import { normalizeWorkspaceRecord, type WorkspaceBackgroundTaskState, toPublicWorkspace } from "../types.js";
+import {
+  applyWorkspaceMemoryProposal,
+  buildWorkspaceMemoryIndex,
+  buildWorkspaceMemoryStatus,
+  listWorkspaceMemoryProposals,
+  readWorkspaceMemory,
+  rejectWorkspaceMemoryProposal,
+  searchWorkspaceMemory
+} from "./workspace-memory-api.js";
 
 export interface WorkspaceEngineServiceDependencies {
   workspaceRepository: EngineServiceOptions["workspaceRepository"];
@@ -175,6 +196,80 @@ export class WorkspaceEngineService {
   async getWorkspaceCatalog(workspaceId: string): Promise<WorkspaceCatalog> {
     const workspace = await this.getWorkspaceRecord(workspaceId);
     return this.#publicWorkspaceCatalog(workspace);
+  }
+
+  async getWorkspaceMemoryStatus(workspaceId: string): Promise<WorkspaceMemoryStatus> {
+    return this.#withWorkspaceFileLease(workspaceId, "read", ".openharness/memory", (workspace) =>
+      buildWorkspaceMemoryStatus({
+        workspace,
+        fileSystem: this.#workspaceFileSystem
+      })
+    );
+  }
+
+  async listWorkspaceMemory(workspaceId: string): Promise<WorkspaceMemoryIndex> {
+    return this.#withWorkspaceFileLease(workspaceId, "read", ".openharness/memory", (workspace) =>
+      buildWorkspaceMemoryIndex({
+        workspace,
+        fileSystem: this.#workspaceFileSystem
+      })
+    );
+  }
+
+  async searchWorkspaceMemory(workspaceId: string, query: WorkspaceMemorySearchQuery): Promise<WorkspaceMemorySearchResponse> {
+    return this.#withWorkspaceFileLease(workspaceId, "read", ".openharness/memory", (workspace) =>
+      searchWorkspaceMemory({
+        workspace,
+        fileSystem: this.#workspaceFileSystem,
+        query
+      })
+    );
+  }
+
+  async readWorkspaceMemory(workspaceId: string, query: WorkspaceMemoryReadQuery): Promise<WorkspaceMemoryReadResponse> {
+    return this.#withWorkspaceFileLease(workspaceId, "read", query.path, (workspace) =>
+      readWorkspaceMemory({
+        workspace,
+        fileSystem: this.#workspaceFileSystem,
+        query
+      })
+    );
+  }
+
+  async listWorkspaceMemoryProposals(workspaceId: string): Promise<WorkspaceMemoryProposalPage> {
+    return this.#withWorkspaceFileLease(workspaceId, "read", ".openharness/memory/proposals", (workspace) =>
+      listWorkspaceMemoryProposals({
+        workspace,
+        fileSystem: this.#workspaceFileSystem
+      })
+    );
+  }
+
+  async applyWorkspaceMemoryProposal(
+    workspaceId: string,
+    input: WorkspaceMemoryApplyProposalRequest
+  ): Promise<WorkspaceMemoryProposalActionResult> {
+    return this.#withWorkspaceFileLease(workspaceId, "write", input.path, (workspace) =>
+      applyWorkspaceMemoryProposal({
+        workspace,
+        fileSystem: this.#workspaceFileSystem,
+        path: input.path
+      })
+    );
+  }
+
+  async rejectWorkspaceMemoryProposal(
+    workspaceId: string,
+    input: WorkspaceMemoryRejectProposalRequest
+  ): Promise<WorkspaceMemoryProposalActionResult> {
+    return this.#withWorkspaceFileLease(workspaceId, "write", input.path, (workspace) =>
+      rejectWorkspaceMemoryProposal({
+        workspace,
+        fileSystem: this.#workspaceFileSystem,
+        path: input.path,
+        reason: input.reason
+      })
+    );
   }
 
   async listWorkspaceEntries(

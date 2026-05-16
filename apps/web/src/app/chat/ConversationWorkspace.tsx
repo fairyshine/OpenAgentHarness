@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 
-import { WorkspaceFileManagerPanel } from "./WorkspaceFileManagerPanel";
+import { WorkspaceFileManagerContainer } from "./WorkspaceFileManagerPanel";
 import { ConversationComposer } from "./ConversationComposer";
 import { ConversationFeed } from "./ConversationFeed";
 import { QueuedRunsPanel } from "./QueuedRunsPanel";
@@ -266,7 +266,7 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
         </div>
       ) : null}
 
-      <WorkspaceFileManagerPanel fileManager={props.fileManager} />
+      <WorkspaceFileManagerContainer fileManager={props.fileManager} />
     </div>
   );
 }

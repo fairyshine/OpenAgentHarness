@@ -59,6 +59,7 @@ export function buildSessionRecord(input: {
     ...(modelRef ? { modelRef } : {}),
     agentName: sessionInput.agentName,
     activeAgentName,
+    ...(sessionInput.workspaceMemory ? { workspaceMemory: sessionInput.workspaceMemory } : {}),
     title: sessionInput.title,
     status: "active",
     createdAt: now,

@@ -6,6 +6,7 @@ export * from "./catalog.js";
 export * from "./sessions.js";
 export * from "./messages.js";
 export * from "./runs.js";
+export * from "./memory.js";
 export * from "./terminals.js";
 export * from "./runtimes.js";
 export * from "./models.js";

@@ -55,7 +55,8 @@ describe("sandbox http client", () => {
     );
     expect(requestJson).toHaveBeenNthCalledWith(
       2,
-      "/api/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=100&sortBy=name&sortOrder=asc&includeDirectoryDescendantUpdatedAt=false&includeEntryMetadata=false"
+      "/api/v1/sandboxes/ws_test/files/entries?path=%2Fworkspace&pageSize=100&sortBy=name&sortOrder=asc&includeDirectoryDescendantUpdatedAt=false&includeEntryMetadata=false",
+      undefined
     );
     expect(requestBytes).not.toHaveBeenCalled();
   });
@@ -93,6 +94,38 @@ describe("sandbox http client", () => {
       })
     );
     expect(requestBytes).toHaveBeenCalledWith("/api/v1/sandboxes/ws_test/files/download?path=%2Fworkspace%2Fhello.bin");
+  });
+
+  it("passes abort signals through file content requests", async () => {
+    const requestJson = vi.fn<SandboxHttpTransport["requestJson"]>().mockResolvedValue({
+      workspaceId: "ws_test",
+      path: "/workspace/hello.txt",
+      encoding: "utf8",
+      content: "hello",
+      truncated: false,
+      readOnly: false
+    });
+    const requestBytes = vi.fn<SandboxHttpTransport["requestBytes"]>().mockResolvedValue(new Uint8Array());
+    const client = createSandboxHttpClient({
+      requestJson,
+      requestBytes
+    });
+    const controller = new AbortController();
+
+    await client.getFileContent(
+      "ws_test",
+      {
+        path: "/workspace/hello.txt",
+        encoding: "utf8",
+        maxBytes: 1024
+      },
+      { signal: controller.signal }
+    );
+
+    expect(requestJson).toHaveBeenCalledWith(
+      "/api/v1/sandboxes/ws_test/files/content?path=%2Fworkspace%2Fhello.txt&encoding=utf8&maxBytes=1024",
+      { signal: controller.signal }
+    );
   });
 
   it("serializes command execution through the shared transport", async () => {

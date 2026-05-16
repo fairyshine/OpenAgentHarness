@@ -1,6 +1,8 @@
 import type {
   ActionRetryPolicy,
   ModelGateway,
+  Run,
+  Session,
   WorkspaceCommandExecutor,
   WorkspaceFileAccessProvider,
   WorkspaceFileSystem,
@@ -27,6 +29,8 @@ export const PUBLIC_NATIVE_TOOL_NAMES = [
   "MemoryCaptureSession",
   "MemoryAppendDaily",
   "MemoryRecordDream",
+  "MemoryApplyProposal",
+  "MemoryRejectProposal",
   "ViewImage",
   "WebFetch",
   "TodoWrite",
@@ -57,6 +61,8 @@ const NATIVE_TOOL_RETRY_POLICY: Record<NativeToolName, ActionRetryPolicy> = {
   MemoryCaptureSession: "manual",
   MemoryAppendDaily: "manual",
   MemoryRecordDream: "manual",
+  MemoryApplyProposal: "manual",
+  MemoryRejectProposal: "manual",
   ViewImage: "safe",
   WebFetch: "safe",
   TodoWrite: "manual",
@@ -73,6 +79,9 @@ export interface NativeToolSetOptions {
   commandExecutor?: WorkspaceCommandExecutor | undefined;
   fileSystem?: WorkspaceFileSystem | undefined;
   workspace?: WorkspaceRecord | undefined;
+  getActiveAgentName?: (() => string) | undefined;
+  session?: Session | undefined;
+  run?: Run | undefined;
   workspaceFileAccessProvider?: WorkspaceFileAccessProvider | undefined;
   readVirtualFile?: ((input: { filePath: string; abortSignal?: AbortSignal | undefined }) => Promise<{
     filePath: string;

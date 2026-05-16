@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pageQuerySchema, jsonObjectSchema, jsonValueSchema, timestampSchema } from "./common.js";
+import { pageQuerySchema, jsonObjectSchema, jsonValueSchema, timestampSchema, workspaceMemoryOverrideSchema } from "./common.js";
 import { runSchema } from "./runs.js";
 
 export const textMessagePartSchema = z.object({
@@ -262,6 +262,7 @@ export const createMessageContentSchema = z.union([
 export const createMessageRequestSchema = z.object({
   content: createMessageContentSchema,
   metadata: jsonObjectSchema.optional(),
+  workspaceMemory: workspaceMemoryOverrideSchema.optional(),
   runningRunBehavior: z.enum(["queue", "interrupt"]).optional()
 });
 

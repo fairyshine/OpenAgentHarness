@@ -300,6 +300,14 @@ export interface ContextCompactionServiceDependencies {
       messages?: ChatMessage[] | undefined;
     }
   >;
+  captureWorkspaceMemoryBeforeCompaction?: ((input: {
+    workspace: WorkspaceRecord;
+    session: Session;
+    run: Run;
+    messages: Message[];
+    summarizedMessageCount: number;
+    compactThroughMessageId?: string | undefined;
+  }) => Promise<{ captured: boolean; path?: string | undefined; reason?: string | undefined }>) | undefined;
   buildEngineMessagesForSession: (sessionId: string, persistedMessages?: Message[]) => Promise<EngineMessage[]>;
 }
 
@@ -325,6 +333,7 @@ export class ContextCompactionService implements ContextPreparationModule {
   readonly #resolveRunModel: ContextCompactionServiceDependencies["resolveRunModel"];
   readonly #buildModelContextMessages: ContextCompactionServiceDependencies["buildModelContextMessages"];
   readonly #applyCompactionHooks: ContextCompactionServiceDependencies["applyCompactionHooks"];
+  readonly #captureWorkspaceMemoryBeforeCompaction: ContextCompactionServiceDependencies["captureWorkspaceMemoryBeforeCompaction"];
   readonly #buildEngineMessagesForSession: ContextCompactionServiceDependencies["buildEngineMessagesForSession"];
   readonly #projector = new EngineMessageProjector();
 
@@ -340,6 +349,7 @@ export class ContextCompactionService implements ContextPreparationModule {
     this.#resolveRunModel = dependencies.resolveRunModel;
     this.#buildModelContextMessages = dependencies.buildModelContextMessages;
     this.#applyCompactionHooks = dependencies.applyCompactionHooks;
+    this.#captureWorkspaceMemoryBeforeCompaction = dependencies.captureWorkspaceMemoryBeforeCompaction;
     this.#buildEngineMessagesForSession = dependencies.buildEngineMessagesForSession;
   }
 
@@ -479,6 +489,18 @@ export class ContextCompactionService implements ContextPreparationModule {
 
     const summarySourceMessages = messagesToSummarize.map(compactMessageToChatMessage);
     const compactThroughMessageId = messagesToSummarize.at(-1)?.sourceMessageIds[0];
+    const messagesToFlush = messagesToSummarize
+      .flatMap((message) => message.sourceMessageIds)
+      .map((messageId) => engineMessagesById.get(messageId))
+      .filter((message): message is EngineMessage => Boolean(message));
+    const memoryFlush = await this.#captureWorkspaceMemoryBeforeCompaction?.({
+      workspace: input.workspace,
+      session: input.session,
+      run: input.run,
+      messages: messagesToFlush,
+      summarizedMessageCount: messagesToSummarize.length,
+      ...(compactThroughMessageId ? { compactThroughMessageId } : {})
+    });
     const beforeHookContext = await this.#applyCompactionHooks(
       input.workspace,
       input.session,
@@ -493,6 +515,7 @@ export class ContextCompactionService implements ContextPreparationModule {
         estimatedInputTokens,
         estimatedPostCompactTokens,
         summarizedMessageCount: messagesToSummarize.length,
+        ...(memoryFlush?.captured ? { workspaceMemoryFlushPath: memoryFlush.path } : {}),
         configuredRecentGroupCount,
         keepRecentGroupCount,
         ...(compactThroughMessageId ? { compactThroughMessageId } : {})
@@ -544,6 +567,7 @@ export class ContextCompactionService implements ContextPreparationModule {
             estimatedInputTokens,
             estimatedPostCompactTokens,
             summarizedMessageCount: messagesToSummarize.length,
+            ...(memoryFlush?.captured ? { workspaceMemoryFlushPath: memoryFlush.path } : {}),
             configuredRecentGroupCount,
             keepRecentGroupCount,
             ...(compactThroughMessageId ? { compactThroughMessageId } : {})
@@ -570,6 +594,7 @@ export class ContextCompactionService implements ContextPreparationModule {
             estimatedInputTokens,
             estimatedPostCompactTokens,
             summarizedMessageCount: messagesToSummarize.length,
+            ...(memoryFlush?.captured ? { workspaceMemoryFlushPath: memoryFlush.path } : {}),
             configuredRecentGroupCount,
             keepRecentGroupCount,
             ...(compactThroughMessageId ? { compactThroughMessageId } : {})
@@ -599,6 +624,7 @@ export class ContextCompactionService implements ContextPreparationModule {
           estimatedInputTokens,
           estimatedPostCompactTokens,
           summarizedMessageCount: messagesToSummarize.length,
+          ...(memoryFlush?.captured ? { workspaceMemoryFlushPath: memoryFlush.path } : {}),
           configuredRecentGroupCount,
           keepRecentGroupCount,
           ...(compactThroughMessageId ? { compactThroughMessageId } : {})
@@ -683,6 +709,7 @@ export class ContextCompactionService implements ContextPreparationModule {
         estimatedInputTokens,
         estimatedPostCompactTokens,
         summarizedMessageCount: messagesToSummarize.length,
+        ...(memoryFlush?.captured ? { workspaceMemoryFlushPath: memoryFlush.path } : {}),
         configuredRecentGroupCount,
         keepRecentGroupCount,
         ...(compactThroughMessageId ? { compactThroughMessageId } : {}),

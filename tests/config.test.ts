@@ -1550,6 +1550,8 @@ policy:
   tool_timeout_seconds: 30
   parallel_tool_calls: false
   max_concurrent_subagents: 2
+  workspace_memory:
+    write_policy: confirm-suggested
 system_reminder: Stay in build mode.
 ---
 
@@ -1718,7 +1720,10 @@ capabilities:
         runTimeoutSeconds: 120,
         toolTimeoutSeconds: 30,
         parallelToolCalls: false,
-        maxConcurrentSubagents: 2
+        maxConcurrentSubagents: 2,
+        workspaceMemory: {
+          writePolicy: "confirm-suggested"
+        }
       }
     });
     expect(project?.agents.assistant).toBeUndefined();

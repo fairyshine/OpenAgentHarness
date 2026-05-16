@@ -101,6 +101,13 @@ export class SessionMessageCreationService {
       effectiveAgentName: session.activeAgentName,
       switchCount: 0,
       status: "queued",
+      ...(input.workspaceMemory
+        ? {
+            metadata: {
+              workspaceMemory: input.workspaceMemory
+            }
+          }
+        : {}),
       createdAt: now
     };
 

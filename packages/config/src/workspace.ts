@@ -490,6 +490,16 @@ export async function loadWorkspaceAgents(
         ? (disallowed.tools as Record<string, unknown>)
         : undefined;
     const policy = data.policy && typeof data.policy === "object" ? (data.policy as Record<string, unknown>) : undefined;
+    const policyWorkspaceMemory =
+      policy?.workspace_memory && typeof policy.workspace_memory === "object"
+        ? (policy.workspace_memory as Record<string, unknown>)
+        : undefined;
+    const policyWorkspaceMemoryWritePolicy =
+      policyWorkspaceMemory?.write_policy === "explicit-only" ||
+      policyWorkspaceMemory?.write_policy === "confirm-suggested" ||
+      policyWorkspaceMemory?.write_policy === "auto-extract"
+        ? policyWorkspaceMemory.write_policy
+        : undefined;
 
     const nativeTools = Array.isArray(tools?.native)
       ? tools.native.filter((item): item is string => typeof item === "string")
@@ -619,6 +629,13 @@ export async function loadWorkspaceAgents(
                 : {}),
               ...(typeof policy.max_concurrent_subagents === "number"
                 ? { maxConcurrentSubagents: policy.max_concurrent_subagents }
+                : {}),
+              ...(policyWorkspaceMemoryWritePolicy
+                ? {
+                    workspaceMemory: {
+                      writePolicy: policyWorkspaceMemoryWritePolicy
+                    }
+                  }
                 : {})
             }
           }

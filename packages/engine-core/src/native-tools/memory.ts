@@ -9,6 +9,7 @@ import {
   tokenizeWorkspaceMemoryRecallText,
   type WorkspaceMemoryTopicFile
 } from "../engine/workspace-memory-recall.js";
+import { resolveEffectiveWorkspaceMemoryWritePolicy as resolveWorkspaceMemoryWritePolicyForRun } from "../engine/workspace-memory-policy.js";
 import { WORKSPACE_MEMORY_TYPES } from "../engine/workspace-memory-taxonomy.js";
 import { AppError } from "../errors.js";
 import type { EngineToolSet, WorkspaceFileSystem, WorkspaceMemoryWritePolicy, WorkspaceRecord } from "../types.js";
@@ -19,6 +20,7 @@ import { getNativeToolRetryPolicy, type NativeToolFactoryContext } from "./types
 
 const WORKSPACE_MEMORY_DIRECTORY = ".openharness/memory";
 const WORKSPACE_MEMORY_INDEX_PATH = `${WORKSPACE_MEMORY_DIRECTORY}/MEMORY.md`;
+const WORKSPACE_MEMORY_PROPOSALS_DIRECTORY = `${WORKSPACE_MEMORY_DIRECTORY}/proposals`;
 const MEMORY_SEARCH_DEFAULT_MAX_RESULTS = 8;
 const MEMORY_SEARCH_MAX_RESULTS = 20;
 const MEMORY_SEARCH_SNIPPET_MAX_CHARS = 220;
@@ -89,6 +91,19 @@ Usage:
 - Use for proposed promotions, duplicate cleanup, conflicts, or stale memory review notes
 - This records review material only; it does not directly modify topics/*.md
 - Keep recommendations concise and auditable`;
+
+const MEMORY_APPLY_PROPOSAL_DESCRIPTION = `Apply a pending memory proposal created under .openharness/memory/proposals.
+
+Usage:
+- Use only after the user explicitly confirms a pending memory proposal
+- Reads proposal_json from the proposal file, applies the original memory write, and marks the proposal as applied
+- Does not re-enter confirm-suggested proposal mode`;
+
+const MEMORY_REJECT_PROPOSAL_DESCRIPTION = `Reject a pending memory proposal created under .openharness/memory/proposals.
+
+Usage:
+- Use when the user declines or cancels a suggested memory write
+- Marks the proposal as rejected without modifying target memory files`;
 
 const MemorySearchInputSchema = z
   .object({
@@ -165,11 +180,32 @@ const MemoryRecordDreamInputSchema = z
   })
   .strict();
 
+const MemoryApplyProposalInputSchema = z
+  .object({
+    path: z.string().min(1).describe("Pending proposal path under .openharness/memory/proposals")
+  })
+  .strict();
+
+const MemoryRejectProposalInputSchema = z
+  .object({
+    path: z.string().min(1).describe("Pending proposal path under .openharness/memory/proposals"),
+    reason: z.string().min(1).max(MEMORY_DESCRIPTION_MAX_CHARS).optional().describe("Optional rejection reason")
+  })
+  .strict();
+
 interface MemoryFile {
   path: string;
   rawContent: string;
   mtimeMs: number;
   topic?: WorkspaceMemoryTopicFile | undefined;
+}
+
+interface MemoryProposalFile {
+  absolutePath: string;
+  relativePath: string;
+  rawContent: string;
+  frontmatter: Record<string, string>;
+  proposalJson: unknown;
 }
 
 function getErrorCode(error: unknown): string | undefined {
@@ -189,24 +225,139 @@ function resolveWorkspaceMemoryWritePolicy(workspace?: WorkspaceRecord | undefin
   return workspace?.settings.engine?.workspaceMemory?.writePolicy ?? "explicit-only";
 }
 
-function memoryWriteRequiresConfirmation(workspace?: WorkspaceRecord | undefined): boolean {
-  const policy = resolveWorkspaceMemoryWritePolicy(workspace);
-  return policy === "confirm-suggested";
+function resolveEffectiveWorkspaceMemoryWritePolicy(context: NativeToolFactoryContext): WorkspaceMemoryWritePolicy {
+  return resolveWorkspaceMemoryWritePolicyForRun({
+    workspace: context.options?.workspace,
+    agentName: context.options?.getActiveAgentName?.(),
+    session: context.options?.session,
+    run: context.options?.run
+  });
 }
 
-function formatMemoryProposal(input: {
+function memoryWriteRequiresConfirmationForContext(context: NativeToolFactoryContext): boolean {
+  return resolveEffectiveWorkspaceMemoryWritePolicy(context) === "confirm-suggested";
+}
+
+function memoryProposalId(tool: string, targetPath?: string | undefined): string {
+  const timestamp = new Date().toISOString().replace(/[-:.TZ]/gu, "").slice(0, 14);
+  const targetSlug = slugifyMemoryTitle(targetPath ?? tool);
+  return `${timestamp}-${slugifyMemoryTitle(tool)}-${targetSlug}`;
+}
+
+function buildMemoryProposalContent(input: {
+  id: string;
+  tool: string;
+  targetPath?: string | undefined;
+  proposal: unknown;
+  createdAt: string;
+  workspace?: WorkspaceRecord | undefined;
+  writePolicy?: WorkspaceMemoryWritePolicy | undefined;
+}): string {
+  return [
+    "---",
+    `id: ${escapeFrontmatterValue(input.id)}`,
+    `status: "pending"`,
+    `tool: ${escapeFrontmatterValue(input.tool)}`,
+    ...(input.targetPath ? [`target_path: ${escapeFrontmatterValue(input.targetPath)}`] : []),
+    `write_policy: ${escapeFrontmatterValue(input.writePolicy ?? resolveWorkspaceMemoryWritePolicy(input.workspace))}`,
+    `created_at: ${escapeFrontmatterValue(input.createdAt)}`,
+    "---",
+    "",
+    `# Memory Proposal ${input.id}`,
+    "",
+    "```json",
+    JSON.stringify(input.proposal, null, 2),
+    "```",
+    ""
+  ].join("\n");
+}
+
+async function reserveMemoryProposalPath(input: {
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  proposalId: string;
+  toolName: string;
+}): Promise<{ proposalId: string; proposalPath: string; absolutePath: string }> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const proposalId = attempt === 0 ? input.proposalId : `${input.proposalId}-${attempt + 1}`;
+    const proposalPath = `${WORKSPACE_MEMORY_PROPOSALS_DIRECTORY}/${proposalId}.md`;
+    const resolved = await resolveWorkspacePath(input.fileSystem, input.workspaceRoot, proposalPath);
+    assertMarkdownMemoryFile(resolved.relativePath, input.toolName);
+    if (!resolved.relativePath.startsWith(`${WORKSPACE_MEMORY_PROPOSALS_DIRECTORY}/`)) {
+      throw new AppError(403, "native_tool_memory_path_not_allowed", `${input.toolName} can only write memory proposals under .openharness/memory/proposals.`);
+    }
+
+    const existing = await input.fileSystem.stat(resolved.absolutePath).catch(() => null);
+    if (!existing) {
+      return {
+        proposalId,
+        proposalPath: resolved.relativePath,
+        absolutePath: resolved.absolutePath
+      };
+    }
+  }
+
+  throw new AppError(409, "native_tool_memory_proposal_conflict", `${input.toolName} could not reserve a unique memory proposal path.`);
+}
+
+async function writeMemoryProposal(input: {
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
   tool: string;
   targetPath?: string | undefined;
   proposal: unknown;
   workspace?: WorkspaceRecord | undefined;
-}): string {
+  writePolicy?: WorkspaceMemoryWritePolicy | undefined;
+}): Promise<{ proposalId: string; proposalPath: string }> {
+  const reserved = await reserveMemoryProposalPath({
+    fileSystem: input.fileSystem,
+    workspaceRoot: input.workspaceRoot,
+    proposalId: memoryProposalId(input.tool, input.targetPath),
+    toolName: input.tool
+  });
+
+  await ensureParentDirectory(input.fileSystem, reserved.absolutePath);
+  await input.fileSystem.writeFile(
+    reserved.absolutePath,
+    Buffer.from(
+      buildMemoryProposalContent({
+        id: reserved.proposalId,
+        tool: input.tool,
+        targetPath: input.targetPath,
+        proposal: input.proposal,
+        createdAt: new Date().toISOString(),
+        workspace: input.workspace,
+        writePolicy: input.writePolicy
+      }),
+      "utf8"
+    )
+  );
+
+  return {
+    proposalId: reserved.proposalId,
+    proposalPath: reserved.proposalPath
+  };
+}
+
+async function formatMemoryProposal(input: {
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  tool: string;
+  targetPath?: string | undefined;
+  proposal: unknown;
+  workspace?: WorkspaceRecord | undefined;
+  writePolicy?: WorkspaceMemoryWritePolicy | undefined;
+}): Promise<string> {
+  const { proposalId, proposalPath } = await writeMemoryProposal(input);
   return formatToolOutput(
     [
       ["pending", true],
       ["requires_confirmation", true],
       ["tool", input.tool],
       ["target_path", input.targetPath],
-      ["write_policy", resolveWorkspaceMemoryWritePolicy(input.workspace)]
+      ["proposal_id", proposalId],
+      ["proposal_path", proposalPath],
+      ["write_policy", input.writePolicy ?? resolveWorkspaceMemoryWritePolicy(input.workspace)]
     ],
     [
       {
@@ -215,6 +366,31 @@ function formatMemoryProposal(input: {
       }
     ]
   );
+}
+
+async function createPendingMemoryProposal(
+  context: NativeToolFactoryContext,
+  input: {
+    tool: string;
+    targetPath?: string | undefined;
+    proposal: unknown;
+  }
+): Promise<string> {
+  return context.withFileSystem("write", WORKSPACE_MEMORY_PROPOSALS_DIRECTORY, async ({ workspaceRoot, fileSystem, workspace }) => {
+    if (workspace?.readOnly) {
+      throw new AppError(403, "native_tool_memory_read_only", `${input.tool} cannot write in a read-only workspace.`);
+    }
+
+    return formatMemoryProposal({
+      fileSystem,
+      workspaceRoot,
+      tool: input.tool,
+      targetPath: input.targetPath,
+      proposal: input.proposal,
+      workspace,
+      writePolicy: resolveEffectiveWorkspaceMemoryWritePolicy(context)
+    });
+  });
 }
 
 function slugifyMemoryTitle(title: string): string {
@@ -273,6 +449,100 @@ function buildMemoryTopicContent(input: z.infer<typeof MemoryRememberInputSchema
     input.content.trim(),
     ""
   ].join("\n");
+}
+
+function parseMemoryFrontmatter(content: string): { attributes: Record<string, string>; body: string } {
+  const lines = content.split(/\r?\n/u);
+  if (lines[0]?.trim() !== "---") {
+    return {
+      attributes: {},
+      body: content
+    };
+  }
+
+  const endIndex = lines.slice(1).findIndex((line) => line.trim() === "---");
+  if (endIndex < 0) {
+    return {
+      attributes: {},
+      body: content
+    };
+  }
+
+  const attributes: Record<string, string> = {};
+  for (const line of lines.slice(1, endIndex + 1)) {
+    const match = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.+)$/u);
+    if (!match?.[1] || !match[2]) {
+      continue;
+    }
+
+    const value = match[2].trim().replace(/^["']|["']$/gu, "");
+    if (value.length > 0) {
+      attributes[match[1].toLowerCase()] = value;
+    }
+  }
+
+  return {
+    attributes,
+    body: lines.slice(endIndex + 2).join("\n")
+  };
+}
+
+function extractJsonFence(content: string): unknown {
+  const match = content.match(/```json\s*([\s\S]*?)\s*```/u);
+  if (!match?.[1]) {
+    throw new AppError(400, "native_tool_memory_proposal_invalid", "Memory proposal does not contain proposal_json.");
+  }
+
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    throw new AppError(400, "native_tool_memory_proposal_invalid", "Memory proposal contains invalid proposal_json.");
+  }
+}
+
+function updateMemoryProposalStatus(content: string, input: { status: "applied" | "rejected"; timestamp: string; reason?: string | undefined }): string {
+  const lines = content.replaceAll("\r\n", "\n").split("\n");
+  if (lines[0]?.trim() !== "---") {
+    throw new AppError(400, "native_tool_memory_proposal_invalid", "Memory proposal frontmatter is missing.");
+  }
+
+  const endIndex = lines.slice(1).findIndex((line) => line.trim() === "---");
+  if (endIndex < 0) {
+    throw new AppError(400, "native_tool_memory_proposal_invalid", "Memory proposal frontmatter is not closed.");
+  }
+
+  const frontmatterEndIndex = endIndex + 1;
+  const frontmatterLines = lines.slice(1, frontmatterEndIndex);
+  const bodyLines = lines.slice(frontmatterEndIndex);
+  const nextFrontmatter: string[] = [];
+  const replaced = new Set<string>();
+
+  for (const line of frontmatterLines) {
+    const key = line.match(/^([A-Za-z0-9_-]+)\s*:/u)?.[1]?.toLowerCase();
+    if (key === "status") {
+      nextFrontmatter.push(`status: ${escapeFrontmatterValue(input.status)}`);
+      replaced.add("status");
+      continue;
+    }
+    if (key === "applied_at" || key === "rejected_at" || key === "rejection_reason") {
+      continue;
+    }
+    nextFrontmatter.push(line);
+  }
+
+  if (!replaced.has("status")) {
+    nextFrontmatter.push(`status: ${escapeFrontmatterValue(input.status)}`);
+  }
+  if (input.status === "applied") {
+    nextFrontmatter.push(`applied_at: ${escapeFrontmatterValue(input.timestamp)}`);
+  } else {
+    nextFrontmatter.push(`rejected_at: ${escapeFrontmatterValue(input.timestamp)}`);
+    if (input.reason) {
+      nextFrontmatter.push(`rejection_reason: ${escapeFrontmatterValue(input.reason)}`);
+    }
+  }
+
+  return ["---", ...nextFrontmatter, ...bodyLines].join("\n");
 }
 
 function buildSessionCaptureContent(input: z.infer<typeof MemoryCaptureSessionInputSchema>, capturedAt: string): string {
@@ -461,6 +731,9 @@ async function readMemoryFiles(fileSystem: WorkspaceFileSystem, workspaceRoot: s
       const absoluteEntryPath = path.join(absoluteDirectory, entry.name);
       const relativeEntryPath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
       if (entry.kind === "directory") {
+        if (relativeEntryPath === "proposals" || relativeEntryPath.startsWith("proposals/")) {
+          continue;
+        }
         await walk(absoluteEntryPath, relativeEntryPath);
         continue;
       }
@@ -502,6 +775,353 @@ async function readMemoryFiles(fileSystem: WorkspaceFileSystem, workspaceRoot: s
 
   await walk(memoryRoot, "");
   return files.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function normalizeMemoryProposalPath(inputPath: string): string {
+  const normalized = normalizeMemoryPath(inputPath);
+  if (normalized.startsWith(`${WORKSPACE_MEMORY_PROPOSALS_DIRECTORY}/`)) {
+    return normalized;
+  }
+
+  return normalizePathForMatch(path.join(WORKSPACE_MEMORY_PROPOSALS_DIRECTORY, normalized));
+}
+
+async function resolveMemoryProposalFile(input: {
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  requestedPath: string;
+  toolName: string;
+}): Promise<MemoryProposalFile> {
+  const normalizedPath = normalizeMemoryProposalPath(input.requestedPath);
+  assertMarkdownMemoryFile(normalizedPath, input.toolName);
+  if (!normalizedPath.startsWith(`${WORKSPACE_MEMORY_PROPOSALS_DIRECTORY}/`)) {
+    throw new AppError(403, "native_tool_memory_path_not_allowed", `${input.toolName} can only access memory proposals under .openharness/memory/proposals.`);
+  }
+
+  const resolved = await resolveWorkspacePath(input.fileSystem, input.workspaceRoot, normalizedPath);
+  assertMarkdownMemoryFile(resolved.relativePath, input.toolName);
+  if (!resolved.relativePath.startsWith(`${WORKSPACE_MEMORY_PROPOSALS_DIRECTORY}/`)) {
+    throw new AppError(403, "native_tool_memory_path_not_allowed", `${input.toolName} can only access memory proposals under .openharness/memory/proposals.`);
+  }
+
+  const entry = await input.fileSystem.stat(resolved.absolutePath).catch(() => null);
+  if (entry?.kind !== "file") {
+    throw new AppError(404, "native_tool_memory_proposal_not_found", `Memory proposal ${input.requestedPath} was not found.`);
+  }
+
+  const rawContent = (await input.fileSystem.readFile(resolved.absolutePath)).toString("utf8");
+  const parsed = parseMemoryFrontmatter(rawContent);
+  return {
+    absolutePath: resolved.absolutePath,
+    relativePath: resolved.relativePath,
+    rawContent,
+    frontmatter: parsed.attributes,
+    proposalJson: extractJsonFence(parsed.body)
+  };
+}
+
+function assertPendingMemoryProposal(proposal: MemoryProposalFile, toolName: string): void {
+  const status = proposal.frontmatter["status"] ?? "pending";
+  if (status !== "pending") {
+    throw new AppError(409, "native_tool_memory_proposal_not_pending", `${toolName} can only operate on pending memory proposals.`);
+  }
+}
+
+async function markMemoryProposalStatus(input: {
+  fileSystem: WorkspaceFileSystem;
+  proposal: MemoryProposalFile;
+  status: "applied" | "rejected";
+  reason?: string | undefined;
+}): Promise<void> {
+  await input.fileSystem.writeFile(
+    input.proposal.absolutePath,
+    Buffer.from(
+      updateMemoryProposalStatus(input.proposal.rawContent, {
+        status: input.status,
+        timestamp: new Date().toISOString(),
+        reason: input.reason
+      }),
+      "utf8"
+    )
+  );
+}
+
+async function applyMemoryRemember(input: {
+  context: NativeToolFactoryContext;
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  proposal: unknown;
+}): Promise<string> {
+  const proposalInput = MemoryRememberInputSchema.parse(input.proposal);
+  assertNoMemorySecretsInJson(proposalInput, "MemoryApplyProposal");
+  const requestedPath = proposalInput.path
+    ? normalizeMemoryWritePath(proposalInput.path, { defaultDirectory: `${WORKSPACE_MEMORY_DIRECTORY}/topics/${proposalInput.type}` })
+    : defaultMemoryTopicPath(proposalInput);
+  assertMarkdownMemoryFile(requestedPath, "MemoryApplyProposal");
+
+  const resolved = await resolveWorkspacePath(input.fileSystem, input.workspaceRoot, requestedPath);
+  assertMarkdownMemoryFile(resolved.relativePath, "MemoryApplyProposal");
+  if (!resolved.relativePath.startsWith(`${WORKSPACE_MEMORY_DIRECTORY}/topics/`)) {
+    throw new AppError(403, "native_tool_memory_path_not_allowed", "MemoryApplyProposal can only apply MemoryRemember proposals under .openharness/memory/topics.");
+  }
+
+  const existing = await input.fileSystem.stat(resolved.absolutePath).catch(() => null);
+  if (existing && existing.kind !== "file") {
+    throw new AppError(400, "native_tool_memory_file_invalid", `Memory path ${resolved.relativePath} is not a file.`);
+  }
+
+  const content = buildMemoryTopicContent(proposalInput);
+  await ensureParentDirectory(input.fileSystem, resolved.absolutePath);
+  await input.fileSystem.writeFile(resolved.absolutePath, Buffer.from(content, "utf8"));
+  await input.context.rememberRead(resolved.relativePath, input.workspaceRoot, input.fileSystem);
+  const indexUpdated = await updateMemoryIndex({
+    fileSystem: input.fileSystem,
+    workspaceRoot: input.workspaceRoot,
+    memoryPath: resolved.relativePath,
+    line: buildMemoryIndexLine(proposalInput, resolved.relativePath)
+  });
+
+  return formatToolOutput([
+    ["path", resolved.relativePath],
+    ["type", proposalInput.type],
+    ["title", proposalInput.title],
+    ["created", !existing],
+    ["updated", Boolean(existing)],
+    ["index_updated", indexUpdated]
+  ]);
+}
+
+async function applyMemoryUpdate(input: {
+  context: NativeToolFactoryContext;
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  proposal: unknown;
+}): Promise<string> {
+  const proposalInput = MemoryUpdateInputSchema.parse(input.proposal);
+  assertNoMemorySecretsInJson(proposalInput, "MemoryApplyProposal");
+  const target = await resolveExistingMemoryTarget({
+    fileSystem: input.fileSystem,
+    workspaceRoot: input.workspaceRoot,
+    requestedPath: proposalInput.path,
+    toolName: "MemoryApplyProposal"
+  });
+  if (!target.content.includes(proposalInput.oldText)) {
+    throw new AppError(400, "native_tool_memory_text_not_found", "MemoryApplyProposal oldText was not found in the target memory file.");
+  }
+
+  await input.fileSystem.writeFile(target.absolutePath, Buffer.from(target.content.replace(proposalInput.oldText, proposalInput.newText), "utf8"));
+  await input.context.rememberRead(target.relativePath, input.workspaceRoot, input.fileSystem);
+  return formatToolOutput([
+    ["path", target.relativePath],
+    ["replacements", 1]
+  ]);
+}
+
+async function applyMemoryForget(input: {
+  context: NativeToolFactoryContext;
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  proposal: unknown;
+}): Promise<string> {
+  const proposalInput = MemoryForgetInputSchema.parse(input.proposal);
+  assertNoMemorySecretsInJson(proposalInput, "MemoryApplyProposal");
+  if (!proposalInput.path) {
+    throw new AppError(400, "native_tool_memory_path_required", "MemoryApplyProposal requires MemoryForget proposals to include an exact path.");
+  }
+
+  const target = await resolveExistingMemoryTarget({
+    fileSystem: input.fileSystem,
+    workspaceRoot: input.workspaceRoot,
+    requestedPath: proposalInput.path,
+    toolName: "MemoryApplyProposal"
+  });
+  if (proposalInput.text) {
+    if (!target.content.includes(proposalInput.text)) {
+      throw new AppError(400, "native_tool_memory_text_not_found", "MemoryApplyProposal text was not found in the target memory file.");
+    }
+
+    await input.fileSystem.writeFile(target.absolutePath, Buffer.from(target.content.replace(proposalInput.text, ""), "utf8"));
+    await input.context.rememberRead(target.relativePath, input.workspaceRoot, input.fileSystem);
+    return formatToolOutput([
+      ["path", target.relativePath],
+      ["forgotten", true],
+      ["mode", "text"]
+    ]);
+  }
+
+  await input.fileSystem.rm(target.absolutePath, { force: true });
+  return formatToolOutput([
+    ["path", target.relativePath],
+    ["forgotten", true],
+    ["mode", "file"]
+  ]);
+}
+
+async function applyMemoryCaptureSession(input: {
+  context: NativeToolFactoryContext;
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  proposal: unknown;
+}): Promise<string> {
+  const proposalInput = MemoryCaptureSessionInputSchema.parse(input.proposal);
+  assertNoMemorySecretsInJson(proposalInput, "MemoryApplyProposal");
+  const requestedPath = proposalInput.path
+    ? normalizeMemoryWritePath(proposalInput.path, { defaultDirectory: `${WORKSPACE_MEMORY_DIRECTORY}/sessions` })
+    : defaultSessionCapturePath(proposalInput);
+  assertMarkdownMemoryFile(requestedPath, "MemoryApplyProposal");
+  if (!requestedPath.startsWith(`${WORKSPACE_MEMORY_DIRECTORY}/sessions/`)) {
+    throw new AppError(403, "native_tool_memory_path_not_allowed", "MemoryApplyProposal can only apply MemoryCaptureSession proposals under .openharness/memory/sessions.");
+  }
+
+  const resolved = await resolveWorkspacePath(input.fileSystem, input.workspaceRoot, requestedPath);
+  assertMarkdownMemoryFile(resolved.relativePath, "MemoryApplyProposal");
+  if (!resolved.relativePath.startsWith(`${WORKSPACE_MEMORY_DIRECTORY}/sessions/`)) {
+    throw new AppError(403, "native_tool_memory_path_not_allowed", "MemoryApplyProposal can only apply MemoryCaptureSession proposals under .openharness/memory/sessions.");
+  }
+
+  const existing = await input.fileSystem.stat(resolved.absolutePath).catch(() => null);
+  if (existing && existing.kind !== "file") {
+    throw new AppError(400, "native_tool_memory_file_invalid", `Memory path ${resolved.relativePath} is not a file.`);
+  }
+
+  await ensureParentDirectory(input.fileSystem, resolved.absolutePath);
+  await input.fileSystem.writeFile(resolved.absolutePath, Buffer.from(buildSessionCaptureContent(proposalInput, new Date().toISOString()), "utf8"));
+  await input.context.rememberRead(resolved.relativePath, input.workspaceRoot, input.fileSystem);
+  return formatToolOutput([
+    ["path", resolved.relativePath],
+    ["created", !existing],
+    ["updated", Boolean(existing)],
+    ["session_id", proposalInput.sessionId],
+    ["run_id", proposalInput.runId]
+  ]);
+}
+
+async function applyMemoryAppendDaily(input: {
+  context: NativeToolFactoryContext;
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  proposal: unknown;
+}): Promise<string> {
+  const proposalInput = MemoryAppendDailyInputSchema.parse(input.proposal);
+  assertNoMemorySecretsInJson(proposalInput, "MemoryApplyProposal");
+  const requestedPath = dailyMemoryPath(proposalInput.date);
+  const resolved = await resolveWorkspacePath(input.fileSystem, input.workspaceRoot, requestedPath);
+  assertMarkdownMemoryFile(resolved.relativePath, "MemoryApplyProposal");
+  if (!resolved.relativePath.startsWith(`${WORKSPACE_MEMORY_DIRECTORY}/daily/`)) {
+    throw new AppError(403, "native_tool_memory_path_not_allowed", "MemoryApplyProposal can only apply MemoryAppendDaily proposals under .openharness/memory/daily.");
+  }
+
+  let current = "";
+  let existing = false;
+  try {
+    current = (await input.fileSystem.readFile(resolved.absolutePath)).toString("utf8");
+    existing = true;
+  } catch (error) {
+    if (getErrorCode(error) !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const timestamp = new Date().toISOString();
+  const header = existing
+    ? ""
+    : [
+        "---",
+        `name: ${escapeFrontmatterValue(`Daily ${proposalInput.date ?? timestamp.slice(0, 10)}`)}`,
+        "description: \"Low-weight workspace daily log.\"",
+        "type: daily",
+        `date: ${escapeFrontmatterValue(proposalInput.date ?? timestamp.slice(0, 10))}`,
+        "---",
+        "",
+        `# Daily ${proposalInput.date ?? timestamp.slice(0, 10)}`,
+        ""
+      ].join("\n");
+  const nextContent = `${current.trimEnd()}${current.trim().length > 0 ? "\n\n" : ""}${header}${buildDailyEntry(proposalInput, timestamp)}`;
+  await ensureParentDirectory(input.fileSystem, resolved.absolutePath);
+  await input.fileSystem.writeFile(resolved.absolutePath, Buffer.from(nextContent, "utf8"));
+  await input.context.rememberRead(resolved.relativePath, input.workspaceRoot, input.fileSystem);
+  return formatToolOutput([
+    ["path", resolved.relativePath],
+    ["created", !existing],
+    ["updated", existing],
+    ["date", proposalInput.date ?? timestamp.slice(0, 10)]
+  ]);
+}
+
+async function applyMemoryRecordDream(input: {
+  context: NativeToolFactoryContext;
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  proposal: unknown;
+}): Promise<string> {
+  const proposalInput = MemoryRecordDreamInputSchema.parse(input.proposal);
+  assertNoMemorySecretsInJson(proposalInput, "MemoryApplyProposal");
+  const requestedPath = `${WORKSPACE_MEMORY_DIRECTORY}/dreams/DREAMS.md`;
+  const resolved = await resolveWorkspacePath(input.fileSystem, input.workspaceRoot, requestedPath);
+  assertMarkdownMemoryFile(resolved.relativePath, "MemoryApplyProposal");
+  if (resolved.relativePath !== requestedPath) {
+    throw new AppError(403, "native_tool_memory_path_not_allowed", "MemoryApplyProposal can only apply MemoryRecordDream proposals to .openharness/memory/dreams/DREAMS.md.");
+  }
+
+  let current = "";
+  let existing = false;
+  try {
+    current = (await input.fileSystem.readFile(resolved.absolutePath)).toString("utf8");
+    existing = true;
+  } catch (error) {
+    if (getErrorCode(error) !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const timestamp = new Date().toISOString();
+  const header = existing
+    ? ""
+    : [
+        "---",
+        "name: \"Memory Dreams\"",
+        "description: \"Memory consolidation and promotion review log.\"",
+        "type: dreams",
+        "---",
+        "",
+        "# Memory Dreams",
+        ""
+      ].join("\n");
+  const nextContent = `${current.trimEnd()}${current.trim().length > 0 ? "\n\n" : ""}${header}${buildDreamEntry(proposalInput, timestamp)}`;
+  await ensureParentDirectory(input.fileSystem, resolved.absolutePath);
+  await input.fileSystem.writeFile(resolved.absolutePath, Buffer.from(nextContent, "utf8"));
+  await input.context.rememberRead(resolved.relativePath, input.workspaceRoot, input.fileSystem);
+  return formatToolOutput([
+    ["path", resolved.relativePath],
+    ["created", !existing],
+    ["updated", existing],
+    ["target_path", proposalInput.targetPath]
+  ]);
+}
+
+async function applyMemoryProposalPayload(input: {
+  context: NativeToolFactoryContext;
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  toolName: string;
+  proposal: unknown;
+}): Promise<string> {
+  switch (input.toolName) {
+    case "MemoryRemember":
+      return applyMemoryRemember(input);
+    case "MemoryUpdate":
+      return applyMemoryUpdate(input);
+    case "MemoryForget":
+      return applyMemoryForget(input);
+    case "MemoryCaptureSession":
+      return applyMemoryCaptureSession(input);
+    case "MemoryAppendDaily":
+      return applyMemoryAppendDaily(input);
+    case "MemoryRecordDream":
+      return applyMemoryRecordDream(input);
+    default:
+      throw new AppError(400, "native_tool_memory_proposal_invalid", `Unsupported memory proposal tool: ${input.toolName}`);
+  }
 }
 
 export function createMemoryTools(context: NativeToolFactoryContext): EngineToolSet {
@@ -632,12 +1252,11 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
           ? normalizeMemoryWritePath(input.path, { defaultDirectory: `${WORKSPACE_MEMORY_DIRECTORY}/topics/${input.type}` })
           : defaultMemoryTopicPath(input);
         assertMarkdownMemoryFile(requestedPath, "MemoryRemember");
-        if (memoryWriteRequiresConfirmation(context.options?.workspace)) {
-          return formatMemoryProposal({
+        if (memoryWriteRequiresConfirmationForContext(context)) {
+          return createPendingMemoryProposal(context, {
             tool: "MemoryRemember",
             targetPath: requestedPath,
-            proposal: input,
-            workspace: context.options?.workspace
+            proposal: input
           });
         }
 
@@ -671,7 +1290,7 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
             ["created", !existing],
             ["updated", Boolean(existing)],
             ["index_updated", indexUpdated],
-            ["write_policy", resolveWorkspaceMemoryWritePolicy(context.options?.workspace)]
+            ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
           ]);
         });
       }
@@ -684,12 +1303,11 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
         context.assertVisible("MemoryUpdate");
         const input = MemoryUpdateInputSchema.parse(rawInput);
         assertNoMemorySecretsInJson(input, "MemoryUpdate");
-        if (memoryWriteRequiresConfirmation(context.options?.workspace)) {
-          return formatMemoryProposal({
+        if (memoryWriteRequiresConfirmationForContext(context)) {
+          return createPendingMemoryProposal(context, {
             tool: "MemoryUpdate",
             targetPath: normalizeMemoryWritePath(input.path),
-            proposal: input,
-            workspace: context.options?.workspace
+            proposal: input
           });
         }
 
@@ -715,7 +1333,7 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
           return formatToolOutput([
             ["path", target.relativePath],
             ["replacements", 1],
-            ["write_policy", resolveWorkspaceMemoryWritePolicy(context.options?.workspace)]
+            ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
           ]);
         });
       }
@@ -728,12 +1346,11 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
         context.assertVisible("MemoryForget");
         const input = MemoryForgetInputSchema.parse(rawInput);
         assertNoMemorySecretsInJson(input, "MemoryForget");
-        if (memoryWriteRequiresConfirmation(context.options?.workspace)) {
-          return formatMemoryProposal({
+        if (memoryWriteRequiresConfirmationForContext(context)) {
+          return createPendingMemoryProposal(context, {
             tool: "MemoryForget",
             targetPath: input.path ? normalizeMemoryWritePath(input.path) : undefined,
-            proposal: input,
-            workspace: context.options?.workspace
+            proposal: input
           });
         }
 
@@ -806,7 +1423,7 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
               ["path", target.relativePath],
               ["forgotten", true],
               ["mode", "text"],
-              ["write_policy", resolveWorkspaceMemoryWritePolicy(context.options?.workspace)]
+              ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
             ]);
           }
 
@@ -815,7 +1432,7 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
             ["path", target.relativePath],
             ["forgotten", true],
             ["mode", "file"],
-            ["write_policy", resolveWorkspaceMemoryWritePolicy(context.options?.workspace)]
+            ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
           ]);
         });
       }
@@ -836,12 +1453,11 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
         if (!requestedPath.startsWith(`${WORKSPACE_MEMORY_DIRECTORY}/sessions/`)) {
           throw new AppError(403, "native_tool_memory_path_not_allowed", "MemoryCaptureSession can only write under .openharness/memory/sessions.");
         }
-        if (memoryWriteRequiresConfirmation(context.options?.workspace)) {
-          return formatMemoryProposal({
+        if (memoryWriteRequiresConfirmationForContext(context)) {
+          return createPendingMemoryProposal(context, {
             tool: "MemoryCaptureSession",
             targetPath: requestedPath,
-            proposal: input,
-            workspace: context.options?.workspace
+            proposal: input
           });
         }
 
@@ -873,7 +1489,7 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
             ["updated", Boolean(existing)],
             ["session_id", input.sessionId],
             ["run_id", input.runId],
-            ["write_policy", resolveWorkspaceMemoryWritePolicy(context.options?.workspace)]
+            ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
           ]);
         });
       }
@@ -888,12 +1504,11 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
         assertNoMemorySecretsInJson(input, "MemoryAppendDaily");
 
         const requestedPath = dailyMemoryPath(input.date);
-        if (memoryWriteRequiresConfirmation(context.options?.workspace)) {
-          return formatMemoryProposal({
+        if (memoryWriteRequiresConfirmationForContext(context)) {
+          return createPendingMemoryProposal(context, {
             tool: "MemoryAppendDaily",
             targetPath: requestedPath,
-            proposal: input,
-            workspace: context.options?.workspace
+            proposal: input
           });
         }
         return context.withFileSystem("write", requestedPath, async ({ workspaceRoot, fileSystem, workspace }) => {
@@ -942,7 +1557,7 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
             ["created", !existing],
             ["updated", existing],
             ["date", input.date ?? timestamp.slice(0, 10)],
-            ["write_policy", resolveWorkspaceMemoryWritePolicy(context.options?.workspace)]
+            ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
           ]);
         });
       }
@@ -957,12 +1572,11 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
         assertNoMemorySecretsInJson(input, "MemoryRecordDream");
 
         const requestedPath = `${WORKSPACE_MEMORY_DIRECTORY}/dreams/DREAMS.md`;
-        if (memoryWriteRequiresConfirmation(context.options?.workspace)) {
-          return formatMemoryProposal({
+        if (memoryWriteRequiresConfirmationForContext(context)) {
+          return createPendingMemoryProposal(context, {
             tool: "MemoryRecordDream",
             targetPath: requestedPath,
-            proposal: input,
-            workspace: context.options?.workspace
+            proposal: input
           });
         }
         return context.withFileSystem("write", requestedPath, async ({ workspaceRoot, fileSystem, workspace }) => {
@@ -1010,7 +1624,99 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
             ["created", !existing],
             ["updated", existing],
             ["target_path", input.targetPath],
-            ["write_policy", resolveWorkspaceMemoryWritePolicy(context.options?.workspace)]
+            ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
+          ]);
+        });
+      }
+    },
+    MemoryApplyProposal: {
+      description: MEMORY_APPLY_PROPOSAL_DESCRIPTION,
+      retryPolicy: getNativeToolRetryPolicy("MemoryApplyProposal"),
+      inputSchema: MemoryApplyProposalInputSchema,
+      async execute(rawInput) {
+        context.assertVisible("MemoryApplyProposal");
+        const input = MemoryApplyProposalInputSchema.parse(rawInput);
+        const proposalPath = normalizeMemoryProposalPath(input.path);
+
+        return context.withFileSystem("write", WORKSPACE_MEMORY_DIRECTORY, async ({ workspaceRoot, fileSystem, workspace }) => {
+          if (workspace?.readOnly) {
+            throw new AppError(403, "native_tool_memory_read_only", "MemoryApplyProposal cannot write in a read-only workspace.");
+          }
+
+          const proposal = await resolveMemoryProposalFile({
+            fileSystem,
+            workspaceRoot,
+            requestedPath: proposalPath,
+            toolName: "MemoryApplyProposal"
+          });
+          assertPendingMemoryProposal(proposal, "MemoryApplyProposal");
+          const proposalTool = proposal.frontmatter["tool"];
+          if (!proposalTool) {
+            throw new AppError(400, "native_tool_memory_proposal_invalid", "Memory proposal is missing tool.");
+          }
+
+          const appliedOutput = await applyMemoryProposalPayload({
+            context,
+            fileSystem,
+            workspaceRoot,
+            toolName: proposalTool,
+            proposal: proposal.proposalJson
+          });
+          await markMemoryProposalStatus({
+            fileSystem,
+            proposal,
+            status: "applied"
+          });
+
+          return formatToolOutput(
+            [
+              ["proposal_path", proposal.relativePath],
+              ["proposal_status", "applied"],
+              ["tool", proposalTool]
+            ],
+            [
+              {
+                title: "applied_result",
+                lines: String(appliedOutput).split("\n")
+              }
+            ]
+          );
+        });
+      }
+    },
+    MemoryRejectProposal: {
+      description: MEMORY_REJECT_PROPOSAL_DESCRIPTION,
+      retryPolicy: getNativeToolRetryPolicy("MemoryRejectProposal"),
+      inputSchema: MemoryRejectProposalInputSchema,
+      async execute(rawInput) {
+        context.assertVisible("MemoryRejectProposal");
+        const input = MemoryRejectProposalInputSchema.parse(rawInput);
+        const proposalPath = normalizeMemoryProposalPath(input.path);
+
+        return context.withFileSystem("write", proposalPath, async ({ workspaceRoot, fileSystem, workspace }) => {
+          if (workspace?.readOnly) {
+            throw new AppError(403, "native_tool_memory_read_only", "MemoryRejectProposal cannot write in a read-only workspace.");
+          }
+
+          const proposal = await resolveMemoryProposalFile({
+            fileSystem,
+            workspaceRoot,
+            requestedPath: proposalPath,
+            toolName: "MemoryRejectProposal"
+          });
+          assertPendingMemoryProposal(proposal, "MemoryRejectProposal");
+          await markMemoryProposalStatus({
+            fileSystem,
+            proposal,
+            status: "rejected",
+            reason: input.reason
+          });
+
+          return formatToolOutput([
+            ["proposal_path", proposal.relativePath],
+            ["proposal_status", "rejected"],
+            ["tool", proposal.frontmatter["tool"]],
+            ["reason", input.reason]
           ]);
         });
       }

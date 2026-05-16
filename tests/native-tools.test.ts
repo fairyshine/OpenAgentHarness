@@ -1100,7 +1100,7 @@ describe("native tools", () => {
       updatedAt: new Date(0).toISOString()
     } satisfies WorkspaceRecord;
 
-    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryRemember"], {
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryRemember", "MemorySearch", "MemoryApplyProposal"], {
       sessionId: "session-memory-policy",
       workspace
     });
@@ -1119,9 +1119,362 @@ describe("native tools", () => {
     expect(result).toContain("requires_confirmation: true");
     expect(result).toContain("tool: MemoryRemember");
     expect(result).toContain("target_path: .openharness/memory/topics/project/project-decision.md");
+    expect(result).toContain("proposal_id:");
+    expect(result).toContain("proposal_path: .openharness/memory/proposals/");
+    const proposalPath = result.match(/proposal_path: (.+)/)?.[1]?.trim();
+    expect(proposalPath).toBeTruthy();
+
+    const proposalContent = await readFile(path.join(workspaceRoot, proposalPath ?? ""), "utf8");
+    expect(proposalContent).toContain('status: "pending"');
+    expect(proposalContent).toContain('tool: "MemoryRemember"');
+    expect(proposalContent).toContain('target_path: ".openharness/memory/topics/project/project-decision.md"');
+    expect(proposalContent).toContain('"title": "Project decision"');
+    expect(proposalContent).toContain('"content": "Durable fact."');
+
     await expect(
       readFile(path.join(workspaceRoot, ".openharness", "memory", "topics", "project", "project-decision.md"), "utf8")
     ).rejects.toThrow();
+
+    const searchResult = String(
+      await tools.MemorySearch.execute(
+        {
+          query: "Durable fact"
+        },
+        {}
+      )
+    );
+    expect(searchResult).toContain("matches: 0");
+    expect(searchResult).not.toContain(".openharness/memory/proposals/");
+
+    const applyResult = String(
+      await tools.MemoryApplyProposal.execute(
+        {
+          path: proposalPath
+        },
+        {}
+      )
+    );
+    expect(applyResult).toContain("proposal_status: applied");
+    expect(applyResult).toContain("tool: MemoryRemember");
+    expect(applyResult).toContain("path: .openharness/memory/topics/project/project-decision.md");
+    await expect(
+      readFile(path.join(workspaceRoot, ".openharness", "memory", "topics", "project", "project-decision.md"), "utf8")
+    ).resolves.toContain("Durable fact.");
+
+    const appliedProposalContent = await readFile(path.join(workspaceRoot, proposalPath ?? ""), "utf8");
+    expect(appliedProposalContent).toContain('status: "applied"');
+    expect(appliedProposalContent).toContain("applied_at:");
+
+    await expect(
+      tools.MemoryApplyProposal.execute(
+        {
+          path: proposalPath
+        },
+        {}
+      )
+    ).rejects.toMatchObject({ code: "native_tool_memory_proposal_not_pending" });
+  });
+
+  it("rejects pending workspace memory proposals without applying them", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-reject-policy-"));
+    tempDirs.push(workspaceRoot);
+
+    const workspace = {
+      id: "ws_memory_reject_policy",
+      kind: "project",
+      name: "memory reject policy workspace",
+      rootPath: workspaceRoot,
+      readOnly: false,
+      historyMirrorEnabled: false,
+      settings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "confirm-suggested"
+          }
+        }
+      },
+      workspaceModels: {},
+      agents: {},
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_memory_reject_policy",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      },
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString()
+    } satisfies WorkspaceRecord;
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryRemember", "MemoryRejectProposal"], {
+      sessionId: "session-memory-reject-policy",
+      workspace
+    });
+
+    const result = String(
+      await tools.MemoryRemember.execute(
+        {
+          type: "project",
+          title: "Rejected decision",
+          content: "Do not save this."
+        },
+        {}
+      )
+    );
+    const proposalPath = result.match(/proposal_path: (.+)/)?.[1]?.trim();
+    expect(proposalPath).toBeTruthy();
+
+    const rejectResult = String(
+      await tools.MemoryRejectProposal.execute(
+        {
+          path: proposalPath,
+          reason: "User declined."
+        },
+        {}
+      )
+    );
+    expect(rejectResult).toContain("proposal_status: rejected");
+    expect(rejectResult).toContain("reason: User declined.");
+    await expect(
+      readFile(path.join(workspaceRoot, ".openharness", "memory", "topics", "project", "rejected-decision.md"), "utf8")
+    ).rejects.toThrow();
+
+    const rejectedProposalContent = await readFile(path.join(workspaceRoot, proposalPath ?? ""), "utf8");
+    expect(rejectedProposalContent).toContain('status: "rejected"');
+    expect(rejectedProposalContent).toContain("rejected_at:");
+    expect(rejectedProposalContent).toContain('rejection_reason: "User declined."');
+  });
+
+  it("uses agent-level workspace memory write policy overrides", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-agent-policy-"));
+    tempDirs.push(workspaceRoot);
+
+    const workspace = {
+      id: "ws_memory_agent_policy",
+      kind: "project",
+      name: "memory agent policy workspace",
+      rootPath: workspaceRoot,
+      readOnly: false,
+      historyMirrorEnabled: false,
+      settings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "explicit-only"
+          }
+        }
+      },
+      workspaceModels: {},
+      agents: {
+        careful: {
+          name: "careful",
+          mode: "primary",
+          prompt: "Careful memory writer.",
+          tools: {
+            native: ["MemoryRemember"],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: [],
+          policy: {
+            workspaceMemory: {
+              writePolicy: "confirm-suggested"
+            }
+          }
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_memory_agent_policy",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      },
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString()
+    } satisfies WorkspaceRecord;
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryRemember"], {
+      sessionId: "session-memory-agent-policy",
+      workspace,
+      getActiveAgentName: () => "careful"
+    });
+
+    const result = String(
+      await tools.MemoryRemember.execute(
+        {
+          type: "project",
+          title: "Agent policy",
+          content: "Agent override should require confirmation."
+        },
+        {}
+      )
+    );
+    expect(result).toContain("pending: true");
+    expect(result).toContain("write_policy: confirm-suggested");
+    await expect(
+      readFile(path.join(workspaceRoot, ".openharness", "memory", "topics", "project", "agent-policy.md"), "utf8")
+    ).rejects.toThrow();
+  });
+
+  it("uses session and run workspace memory write policy overrides before agent policy", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-run-policy-"));
+    tempDirs.push(workspaceRoot);
+
+    const workspace = {
+      id: "ws_memory_run_policy",
+      kind: "project",
+      name: "memory run policy workspace",
+      rootPath: workspaceRoot,
+      readOnly: false,
+      historyMirrorEnabled: false,
+      settings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "explicit-only"
+          }
+        }
+      },
+      workspaceModels: {},
+      agents: {
+        careful: {
+          name: "careful",
+          mode: "primary",
+          prompt: "Careful memory writer.",
+          tools: {
+            native: ["MemoryRemember"],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: [],
+          policy: {
+            workspaceMemory: {
+              writePolicy: "auto-extract"
+            }
+          }
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "ws_memory_run_policy",
+        agents: [],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      },
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString()
+    } satisfies WorkspaceRecord;
+
+    const session = {
+      id: "session-memory-run-policy",
+      workspaceId: workspace.id,
+      subjectRef: "dev:test",
+      activeAgentName: "careful",
+      workspaceMemory: {
+        writePolicy: "confirm-suggested"
+      },
+      status: "active",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString()
+    } satisfies import("@oah/api-contracts").Session;
+    const run = {
+      id: "run-memory-run-policy",
+      workspaceId: workspace.id,
+      sessionId: session.id,
+      triggerType: "message",
+      effectiveAgentName: "careful",
+      status: "queued",
+      switchCount: 0,
+      createdAt: new Date(0).toISOString(),
+      metadata: {
+        workspaceMemory: {
+          writePolicy: "explicit-only"
+        }
+      }
+    } satisfies import("@oah/api-contracts").Run;
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryRemember"], {
+      sessionId: session.id,
+      workspace,
+      session,
+      run,
+      getActiveAgentName: () => "careful"
+    });
+
+    const result = String(
+      await tools.MemoryRemember.execute(
+        {
+          type: "project",
+          title: "Run policy",
+          content: "Run override should write directly."
+        },
+        {}
+      )
+    );
+    expect(result).toContain("write_policy: explicit-only");
+    expect(result).not.toContain("pending: true");
+    await expect(
+      readFile(path.join(workspaceRoot, ".openharness", "memory", "topics", "project", "run-policy.md"), "utf8")
+    ).resolves.toContain("Run override should write directly.");
+
+    const sessionOnlyRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-session-policy-"));
+    tempDirs.push(sessionOnlyRoot);
+    const sessionOnlyWorkspace = {
+      ...workspace,
+      rootPath: sessionOnlyRoot
+    } satisfies WorkspaceRecord;
+    const sessionOnlyTools = createNativeToolSet(sessionOnlyRoot, () => ["MemoryRemember"], {
+      sessionId: session.id,
+      workspace: sessionOnlyWorkspace,
+      session,
+      getActiveAgentName: () => "careful"
+    });
+
+    const sessionOnlyResult = String(
+      await sessionOnlyTools.MemoryRemember.execute(
+        {
+          type: "project",
+          title: "Session policy",
+          content: "Session override should require confirmation."
+        },
+        {}
+      )
+    );
+    expect(sessionOnlyResult).toContain("pending: true");
+    expect(sessionOnlyResult).toContain("write_policy: confirm-suggested");
   });
 
   it("captures session summaries under workspace memory sessions", async () => {

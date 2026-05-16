@@ -8,6 +8,13 @@ type ControlPlaneRuntimeKernel = Pick<
   | "getWorkspace"
   | "getWorkspaceRecord"
   | "getWorkspaceCatalog"
+  | "getWorkspaceMemoryStatus"
+  | "listWorkspaceMemory"
+  | "searchWorkspaceMemory"
+  | "readWorkspaceMemory"
+  | "listWorkspaceMemoryProposals"
+  | "applyWorkspaceMemoryProposal"
+  | "rejectWorkspaceMemoryProposal"
   | "listWorkspaceEntries"
   | "getWorkspaceFileContent"
   | "putWorkspaceFileContent"
@@ -67,6 +74,13 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
   readonly getWorkspace: EngineService["getWorkspace"];
   readonly getWorkspaceRecord: EngineService["getWorkspaceRecord"];
   readonly getWorkspaceCatalog: EngineService["getWorkspaceCatalog"];
+  readonly getWorkspaceMemoryStatus: EngineService["getWorkspaceMemoryStatus"];
+  readonly listWorkspaceMemory: EngineService["listWorkspaceMemory"];
+  readonly searchWorkspaceMemory: EngineService["searchWorkspaceMemory"];
+  readonly readWorkspaceMemory: EngineService["readWorkspaceMemory"];
+  readonly listWorkspaceMemoryProposals: EngineService["listWorkspaceMemoryProposals"];
+  readonly applyWorkspaceMemoryProposal: EngineService["applyWorkspaceMemoryProposal"];
+  readonly rejectWorkspaceMemoryProposal: EngineService["rejectWorkspaceMemoryProposal"];
   readonly listWorkspaceEntries: EngineService["listWorkspaceEntries"];
   readonly getWorkspaceFileContent: EngineService["getWorkspaceFileContent"];
   readonly putWorkspaceFileContent: EngineService["putWorkspaceFileContent"];
@@ -139,6 +153,48 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
       const catalog = await kernel.getWorkspaceCatalog(workspaceId);
       await this.#touchWorkspace(workspaceId);
       return catalog;
+    };
+    this.getWorkspaceMemoryStatus = async (workspaceId) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
+      const status = await kernel.getWorkspaceMemoryStatus(workspaceId);
+      await this.#touchWorkspace(workspaceId);
+      return status;
+    };
+    this.listWorkspaceMemory = async (workspaceId) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
+      const index = await kernel.listWorkspaceMemory(workspaceId);
+      await this.#touchWorkspace(workspaceId);
+      return index;
+    };
+    this.searchWorkspaceMemory = async (workspaceId, query) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
+      const result = await kernel.searchWorkspaceMemory(workspaceId, query);
+      await this.#touchWorkspace(workspaceId);
+      return result;
+    };
+    this.readWorkspaceMemory = async (workspaceId, query) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
+      const result = await kernel.readWorkspaceMemory(workspaceId, query);
+      await this.#touchWorkspace(workspaceId);
+      return result;
+    };
+    this.listWorkspaceMemoryProposals = async (workspaceId) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
+      const result = await kernel.listWorkspaceMemoryProposals(workspaceId);
+      await this.#touchWorkspace(workspaceId);
+      return result;
+    };
+    this.applyWorkspaceMemoryProposal = async (workspaceId, input) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
+      const result = await kernel.applyWorkspaceMemoryProposal(workspaceId, input);
+      await this.#touchWorkspace(workspaceId);
+      return result;
+    };
+    this.rejectWorkspaceMemoryProposal = async (workspaceId, input) => {
+      await this.#waitForWorkspaceDefinitionRefresh(workspaceId);
+      const result = await kernel.rejectWorkspaceMemoryProposal(workspaceId, input);
+      await this.#touchWorkspace(workspaceId);
+      return result;
     };
     this.listWorkspaceEntries = async (workspaceId, input) => {
       const page = await kernel.listWorkspaceEntries(workspaceId, input);

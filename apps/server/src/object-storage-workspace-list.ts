@@ -234,18 +234,22 @@ export function createObjectStorageWorkspaceEntryLister(input: {
     }
 
     const directoryPath = normalizeWorkspacePath(query.path);
-    const entries = input.store.listDirectoryEntries
-      ? undefined
-      : await input.store.listEntries(source.remotePrefix);
+    const includeMetadata = query.includeEntryMetadata !== false;
+    const includeDirectoryDescendantUpdatedAt = query.includeDirectoryDescendantUpdatedAt !== false;
+    const needsDescendantDirectoryTimes = includeMetadata && includeDirectoryDescendantUpdatedAt;
+    const useFlatListing = !input.store.listDirectoryEntries || needsDescendantDirectoryTimes;
+    const entries = useFlatListing ? await input.store.listEntries(source.remotePrefix) : undefined;
     const children = (
-      input.store.listDirectoryEntries
-        ? collectListedDirectoryChildren(await input.store.listDirectoryEntries(source.remotePrefix, directoryPath === "." ? "" : directoryPath))
-        : collectObjectStoreDirectoryChildren({
+      useFlatListing
+        ? collectObjectStoreDirectoryChildren({
             remotePrefix: source.remotePrefix,
             entries: entries ?? [],
             directoryPath,
-            includeDirectoryDescendantUpdatedAt: query.includeDirectoryDescendantUpdatedAt !== false
+            includeDirectoryDescendantUpdatedAt
           })
+        : input.store.listDirectoryEntries
+        ? collectListedDirectoryChildren(await input.store.listDirectoryEntries(source.remotePrefix, directoryPath === "." ? "" : directoryPath))
+        : []
     ).sort((left, right) => compareEntries(left, right, query));
 
     if (children.length === 0 && directoryPath !== "." && entries) {
@@ -261,7 +265,6 @@ export function createObjectStorageWorkspaceEntryLister(input: {
     const startIndex = parseCursor(query.cursor);
     const pagedChildren = children.slice(startIndex, startIndex + query.pageSize);
     const nextIndex = startIndex + query.pageSize;
-    const includeMetadata = query.includeEntryMetadata !== false;
     const items = pagedChildren.map((entry): WorkspaceEntry => {
       const entryPath = joinWorkspacePath(directoryPath, entry.name);
       return {

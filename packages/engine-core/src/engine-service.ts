@@ -6,6 +6,18 @@ import type {
   Session,
   WorkspaceCatalog
 } from "@oah/api-contracts";
+import type {
+  WorkspaceMemoryApplyProposalRequest,
+  WorkspaceMemoryIndex,
+  WorkspaceMemoryProposalActionResult,
+  WorkspaceMemoryProposalPage,
+  WorkspaceMemoryReadQuery,
+  WorkspaceMemoryReadResponse,
+  WorkspaceMemoryRejectProposalRequest,
+  WorkspaceMemorySearchQuery,
+  WorkspaceMemorySearchResponse,
+  WorkspaceMemoryStatus
+} from "@oah/api-contracts";
 
 import { AppError } from "./errors.js";
 import type { ModelExecutionInput } from "./engine/model-input.js";
@@ -420,6 +432,40 @@ export class EngineService {
 
   async getWorkspaceCatalog(workspaceId: string): Promise<WorkspaceCatalog> {
     return this.#workspaceRuntime.getWorkspaceCatalog(workspaceId);
+  }
+
+  async getWorkspaceMemoryStatus(workspaceId: string): Promise<WorkspaceMemoryStatus> {
+    return this.#workspaceRuntime.getWorkspaceMemoryStatus(workspaceId);
+  }
+
+  async listWorkspaceMemory(workspaceId: string): Promise<WorkspaceMemoryIndex> {
+    return this.#workspaceRuntime.listWorkspaceMemory(workspaceId);
+  }
+
+  async searchWorkspaceMemory(workspaceId: string, query: WorkspaceMemorySearchQuery): Promise<WorkspaceMemorySearchResponse> {
+    return this.#workspaceRuntime.searchWorkspaceMemory(workspaceId, query);
+  }
+
+  async readWorkspaceMemory(workspaceId: string, query: WorkspaceMemoryReadQuery): Promise<WorkspaceMemoryReadResponse> {
+    return this.#workspaceRuntime.readWorkspaceMemory(workspaceId, query);
+  }
+
+  async listWorkspaceMemoryProposals(workspaceId: string): Promise<WorkspaceMemoryProposalPage> {
+    return this.#workspaceRuntime.listWorkspaceMemoryProposals(workspaceId);
+  }
+
+  async applyWorkspaceMemoryProposal(
+    workspaceId: string,
+    input: WorkspaceMemoryApplyProposalRequest
+  ): Promise<WorkspaceMemoryProposalActionResult> {
+    return this.#workspaceRuntime.applyWorkspaceMemoryProposal(workspaceId, input);
+  }
+
+  async rejectWorkspaceMemoryProposal(
+    workspaceId: string,
+    input: WorkspaceMemoryRejectProposalRequest
+  ): Promise<WorkspaceMemoryProposalActionResult> {
+    return this.#workspaceRuntime.rejectWorkspaceMemoryProposal(workspaceId, input);
   }
 
   async listWorkspaceEntries(
@@ -887,6 +933,7 @@ export class EngineService {
     sessionId,
     agentName,
     input,
+    workspaceMemory,
     triggerSource
   }: TriggerActionRunParams): Promise<ActionRunAcceptedResult> {
     return (await this.#ensureRuntimeKernel()).sessionRuntime.triggerActionRun({
@@ -896,6 +943,7 @@ export class EngineService {
       sessionId,
       agentName,
       input,
+      workspaceMemory,
       triggerSource
     });
   }

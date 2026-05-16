@@ -19,6 +19,7 @@
   "dependencies": {
     "@oah/api-contracts": "workspace:*",
     "@oah/config": "workspace:*",
+    "@oah/engine-core": "workspace:*",
     "@oah/server": "workspace:*",
     "commander": "^14.0.3",
     "ink": "^7.0.1",

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { discoverWorkspace } from "@oah/config";
 import type { SystemProfile } from "@oah/api-contracts";
-import type { CallerContext, WorkspaceRecord } from "@oah/engine-core";
+import type { CallerContext, SortOrder, WorkspaceEntryPage, WorkspaceEntrySortBy, WorkspaceRecord } from "@oah/engine-core";
 import { EngineService } from "@oah/engine-core";
 import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
@@ -269,6 +269,16 @@ async function createStartedAppWithEngineService(
     }) => Promise<void>;
     clearWorkspaceCoordination?: (workspaceId: string) => Promise<void>;
     touchWorkspaceActivity?: (workspaceId: string) => Promise<void>;
+    listWorkspaceEntriesFast?: (input: {
+      workspaceId: string;
+      path?: string | undefined;
+      pageSize: number;
+      cursor?: string | undefined;
+      sortBy: WorkspaceEntrySortBy;
+      sortOrder: SortOrder;
+      includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+      includeEntryMetadata?: boolean | undefined;
+    }) => Promise<WorkspaceEntryPage | undefined>;
     uploadWorkspaceRuntime?: (input: {
       runtimeName: string;
       zipBuffer: Buffer;
@@ -308,6 +318,7 @@ async function createStartedAppWithEngineService(
     ...(options?.releaseWorkspacePlacement ? { releaseWorkspacePlacement: options.releaseWorkspacePlacement } : {}),
     ...(options?.clearWorkspaceCoordination ? { clearWorkspaceCoordination: options.clearWorkspaceCoordination } : {}),
     ...(options?.touchWorkspaceActivity ? { touchWorkspaceActivity: options.touchWorkspaceActivity } : {}),
+    ...(options?.listWorkspaceEntriesFast ? { listWorkspaceEntriesFast: options.listWorkspaceEntriesFast } : {}),
     ...(options?.sandboxHostProviderKind ? { sandboxHostProviderKind: options.sandboxHostProviderKind } : {}),
     ...(options?.sandboxOwnerFallbackBaseUrl ? { sandboxOwnerFallbackBaseUrl: options.sandboxOwnerFallbackBaseUrl } : {}),
     ...(options?.localOwnerBaseUrl ? { localOwnerBaseUrl: options.localOwnerBaseUrl } : {}),
@@ -2657,6 +2668,195 @@ describe("http api", () => {
     expect(touchWorkspaceActivity).toHaveBeenNthCalledWith(1, workspace.id);
     expect(touchWorkspaceActivity).toHaveBeenNthCalledWith(2, workspace.id);
     expect(touchWorkspaceActivity).toHaveBeenNthCalledWith(3, workspace.id);
+  });
+
+  it("serves workspace memory inspection and proposal review over HTTP", async () => {
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const workspace = await createWorkspaceRecord({
+      settings: {
+        defaultAgent: "assistant",
+        skillDirs: [],
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "confirm-suggested"
+          }
+        }
+      }
+    });
+    await mkdir(path.join(workspace.rootPath, ".openharness", "memory", "topics", "project"), { recursive: true });
+    await mkdir(path.join(workspace.rootPath, ".openharness", "memory", "proposals"), { recursive: true });
+    await writeFile(
+      path.join(workspace.rootPath, ".openharness", "memory", "MEMORY.md"),
+      "- [HTTP](.openharness/memory/topics/project/http.md) - HTTP memory API\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspace.rootPath, ".openharness", "memory", "topics", "project", "http.md"),
+      [
+        "---",
+        "name: \"HTTP memory\"",
+        "description: \"HTTP memory API\"",
+        "type: project",
+        "---",
+        "",
+        "Expose structured memory review endpoints."
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspace.rootPath, ".openharness", "memory", "proposals", "pending-http.md"),
+      [
+        "---",
+        "id: \"pending-http\"",
+        "status: \"pending\"",
+        "tool: \"MemoryRemember\"",
+        "target_path: \".openharness/memory/topics/project/http-applied.md\"",
+        "created_at: \"2026-05-15T00:00:00.000Z\"",
+        "---",
+        "",
+        "```json",
+        JSON.stringify(
+          {
+            type: "project",
+            title: "HTTP applied",
+            content: "HTTP proposal application works."
+          },
+          null,
+          2
+        ),
+        "```"
+      ].join("\n"),
+      "utf8"
+    );
+    await persistence.workspaceRepository.upsert(workspace);
+    activeApp = await createStartedAppWithEngineService(
+      new EngineService({
+        defaultModel: "openai-default",
+        modelGateway: gateway,
+        ...persistence
+      }),
+      gateway
+    );
+
+    const statusResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/memory/status`);
+    expect(statusResponse.status).toBe(200);
+    await expect(statusResponse.json()).resolves.toMatchObject({
+      workspaceId: workspace.id,
+      enabled: true,
+      writePolicy: "confirm-suggested",
+      topics: 1,
+      pendingProposals: 1
+    });
+
+    const searchResponse = await fetch(
+      `${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/memory/search?query=${encodeURIComponent("structured review")}`
+    );
+    expect(searchResponse.status).toBe(200);
+    await expect(searchResponse.json()).resolves.toMatchObject({
+      workspaceId: workspace.id,
+      items: [
+        expect.objectContaining({
+          path: ".openharness/memory/topics/project/http.md",
+          title: "HTTP memory"
+        })
+      ]
+    });
+
+    const proposalsResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/memory/proposals`);
+    expect(proposalsResponse.status).toBe(200);
+    await expect(proposalsResponse.json()).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({
+          path: ".openharness/memory/proposals/pending-http.md",
+          status: "pending",
+          tool: "MemoryRemember"
+        })
+      ]
+    });
+
+    const applyResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}/memory/proposals/apply`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        path: ".openharness/memory/proposals/pending-http.md"
+      })
+    });
+    expect(applyResponse.status).toBe(200);
+    await expect(applyResponse.json()).resolves.toMatchObject({
+      workspaceId: workspace.id,
+      path: ".openharness/memory/proposals/pending-http.md",
+      status: "applied"
+    });
+    await expect(
+      readFile(path.join(workspace.rootPath, ".openharness", "memory", "topics", "project", "http-applied.md"), "utf8")
+    ).resolves.toContain("HTTP proposal application works.");
+  });
+
+  it("serves sandbox file entries from the fast path when available", async () => {
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const workspace = await createWorkspaceRecord();
+    await persistence.workspaceRepository.upsert(workspace);
+    const listWorkspaceEntriesFast = vi.fn(async (input: {
+      workspaceId: string;
+      path?: string | undefined;
+      pageSize: number;
+      cursor?: string | undefined;
+      sortBy: WorkspaceEntrySortBy;
+      sortOrder: SortOrder;
+      includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+      includeEntryMetadata?: boolean | undefined;
+    }): Promise<WorkspaceEntryPage | undefined> => ({
+      workspaceId: input.workspaceId,
+      path: input.path ?? ".",
+      items: [
+        {
+          path: "src",
+          name: "src",
+          type: "directory",
+          readOnly: true
+        }
+      ]
+    }));
+    activeApp = await createStartedAppWithEngineService(
+      new EngineService({
+        defaultModel: "openai-default",
+        modelGateway: gateway,
+        ...persistence
+      }),
+      gateway,
+      { listWorkspaceEntriesFast }
+    );
+
+    const listResponse = await fetch(
+      `${activeApp.baseUrl}/api/v1/sandboxes/${workspace.id}/files/entries?path=${encodeURIComponent("/workspace")}&includeEntryMetadata=false&includeDirectoryDescendantUpdatedAt=false`
+    );
+
+    expect(listResponse.status).toBe(200);
+    await expect(listResponse.json()).resolves.toMatchObject({
+      workspaceId: workspace.id,
+      path: "/workspace",
+      items: [
+        {
+          path: "/workspace/src",
+          name: "src",
+          type: "directory",
+          readOnly: true
+        }
+      ]
+    });
+    expect(listWorkspaceEntriesFast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: workspace.id,
+        path: ".",
+        includeEntryMetadata: false,
+        includeDirectoryDescendantUpdatedAt: false
+      })
+    );
   });
 
   it("uploads and downloads sandbox files over HTTP", async () => {

@@ -7,5 +7,5 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "references": [{ "path": "../../packages/api-contracts" }, { "path": "../../packages/config" }]
+  "references": [{ "path": "../../packages/api-contracts" }, { "path": "../../packages/config" }, { "path": "../../packages/engine-core" }]
 }

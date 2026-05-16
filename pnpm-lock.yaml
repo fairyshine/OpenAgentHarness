@@ -35,6 +35,9 @@ importers:
       '@oah/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@oah/engine-core':
+        specifier: workspace:*
+        version: link:../../packages/engine-core
       '@oah/server':
         specifier: workspace:*
         version: link:../server

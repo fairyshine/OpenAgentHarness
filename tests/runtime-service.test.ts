@@ -1003,6 +1003,124 @@ describe("runtime service", () => {
     }
   });
 
+  it("exposes workspace memory status, search, read, and proposal review APIs", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-api-"));
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "topics", "project"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "proposals"), { recursive: true });
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
+      "- [Decision](.openharness/memory/topics/project/decision.md) - durable project decision\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "project", "decision.md"),
+      [
+        "---",
+        "name: \"Decision\"",
+        "description: \"Durable project decision\"",
+        "type: project",
+        "---",
+        "",
+        "Keep the memory API structured for UI review."
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "proposals", "pending.md"),
+      [
+        "---",
+        "id: \"pending\"",
+        "status: \"pending\"",
+        "tool: \"MemoryRemember\"",
+        "target_path: \".openharness/memory/topics/project/api-proposal.md\"",
+        "created_at: \"2026-05-15T00:00:00.000Z\"",
+        "---",
+        "",
+        "# Memory Proposal pending",
+        "",
+        "```json",
+        JSON.stringify(
+          {
+            type: "project",
+            title: "API proposal",
+            content: "Review proposals through the memory API."
+          },
+          null,
+          2
+        ),
+        "```"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const { runtimeService, workspace } = await createRuntime(0, {
+      rootPath: workspaceRoot,
+      workspaceSettings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "confirm-suggested"
+          }
+        }
+      }
+    });
+
+    const status = await runtimeService.getWorkspaceMemoryStatus(workspace.id);
+    expect(status).toMatchObject({
+      workspaceId: workspace.id,
+      enabled: true,
+      writePolicy: "confirm-suggested",
+      indexExists: true,
+      topics: 1,
+      pendingProposals: 1
+    });
+
+    const index = await runtimeService.listWorkspaceMemory(workspace.id);
+    expect(index.items.map((item) => item.path)).toEqual([
+      ".openharness/memory/MEMORY.md",
+      ".openharness/memory/topics/project/decision.md"
+    ]);
+
+    const search = await runtimeService.searchWorkspaceMemory(workspace.id, {
+      query: "structured UI",
+      corpus: "all",
+      maxResults: 5
+    });
+    expect(search.items[0]).toMatchObject({
+      path: ".openharness/memory/topics/project/decision.md",
+      corpus: "topics",
+      title: "Decision"
+    });
+
+    const read = await runtimeService.readWorkspaceMemory(workspace.id, {
+      path: ".openharness/memory/topics/project/decision.md",
+      from: 7,
+      lines: 1
+    });
+    expect(read.content).toBe("7: Keep the memory API structured for UI review.");
+
+    const proposals = await runtimeService.listWorkspaceMemoryProposals(workspace.id);
+    expect(proposals.items).toEqual([
+      expect.objectContaining({
+        path: ".openharness/memory/proposals/pending.md",
+        status: "pending",
+        tool: "MemoryRemember",
+        targetPath: ".openharness/memory/topics/project/api-proposal.md"
+      })
+    ]);
+
+    const applied = await runtimeService.applyWorkspaceMemoryProposal(workspace.id, {
+      path: ".openharness/memory/proposals/pending.md"
+    });
+    expect(applied).toMatchObject({
+      status: "applied",
+      path: ".openharness/memory/proposals/pending.md"
+    });
+    await expect(
+      readFile(path.join(workspaceRoot, ".openharness", "memory", "topics", "project", "api-proposal.md"), "utf8")
+    ).resolves.toContain("Review proposals through the memory API.");
+  });
+
   it("routes workspace file operations through the injected workspace file system", async () => {
     const sourceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-filesystem-"));
     const localFileSystem = createLocalWorkspaceFileSystem();
@@ -2685,6 +2803,97 @@ describe("runtime service", () => {
     )).toBe(true);
   });
 
+  it("captures workspace memory before manual compaction", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-compact-flush-"));
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      rootPath: workspaceRoot,
+      workspaceSettings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true
+          }
+        }
+      }
+    });
+    gateway.generateResponseFactory = (input) => {
+      const systemPrompt = input.messages?.find((message) => message.role === "system");
+      if (
+        typeof systemPrompt?.content === "string" &&
+        systemPrompt.content.includes("Summarize the earlier conversation context")
+      ) {
+        return {
+          model: input.model ?? "openai-default",
+          text: "Manual compact summary after memory flush.",
+          finishReason: "stop",
+          usage: {
+            inputTokens: 8,
+            outputTokens: 4,
+            totalTokens: 12
+          }
+        };
+      }
+
+      return undefined;
+    };
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "first durable context before compact" }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(firstAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "second durable context before compact" }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(secondAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const compacted = await runtimeService.compactSession({
+      sessionId: session.id,
+      caller,
+      input: {}
+    });
+    expect(compacted.compacted).toBe(true);
+
+    const runSteps = await runtimeService.listRunSteps(compacted.runId);
+    const flushStep = runSteps.items.find((step) => step.name === "workspace_memory_compaction_flush");
+    expect(flushStep?.output).toMatchObject({
+      summarizedMessageCount: expect.any(Number),
+      path: expect.stringContaining(".openharness/memory/sessions/")
+    });
+    const flushPath = (flushStep?.output as { path?: string } | undefined)?.path;
+    expect(flushPath).toBeTruthy();
+    const flushContent = await readFile(path.join(workspaceRoot, flushPath ?? ""), "utf8");
+    expect(flushContent).toContain("reason: \"before_compaction\"");
+    expect(flushContent).toContain("first durable context before compact");
+    expect(flushContent).not.toContain("second durable context before compact");
+
+    const compactStep = runSteps.items.find((step) => step.name === "context_compact");
+    expect(compactStep?.output).toMatchObject({
+      workspaceMemoryFlushPath: flushPath
+    });
+  });
+
   it("rejects manual compaction while the session has active work", async () => {
     const { runtimeService, workspace } = await createRuntime(100);
     const caller = {
@@ -3481,7 +3690,7 @@ describe("runtime service", () => {
 
   it("injects workspace memory from .openharness/memory/MEMORY.md into model input", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-inject-"));
-    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "topics"), { recursive: true });
     await writeFile(
       path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
       "Repository convention: run pnpm test before finishing.\n",
@@ -3507,7 +3716,7 @@ describe("runtime service", () => {
         return {
           model: input.model ?? "openai-default",
           text: JSON.stringify({
-            paths: [".openharness/memory/testing.md"]
+            paths: [".openharness/memory/topics/testing.md"]
           }),
           finishReason: "stop",
           usage: {
@@ -3558,17 +3767,19 @@ describe("runtime service", () => {
 
   it("recalls relevant workspace memory topic files for the current query without flooding unrelated notes", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-recall-"));
-    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "topics"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "sessions"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "proposals"), { recursive: true });
     await writeFile(
       path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
       [
-        "- [testing](.openharness/memory/testing.md) - finish checklist and validation commands",
-        "- [style](.openharness/memory/style.md) - answer formatting preferences"
+        "- [testing](.openharness/memory/topics/testing.md) - finish checklist and validation commands",
+        "- [style](.openharness/memory/topics/style.md) - answer formatting preferences"
       ].join("\n"),
       "utf8"
     );
     await writeFile(
-      path.join(workspaceRoot, ".openharness", "memory", "testing.md"),
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "testing.md"),
       [
         "---",
         "name: Testing",
@@ -3582,7 +3793,7 @@ describe("runtime service", () => {
       "utf8"
     );
     await writeFile(
-      path.join(workspaceRoot, ".openharness", "memory", "style.md"),
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "style.md"),
       [
         "---",
         "name: Style",
@@ -3592,6 +3803,24 @@ describe("runtime service", () => {
         "# Style",
         "",
         "- Prefer terse section headings when writing docs."
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "sessions", "2026-05-15-testing.md"),
+      "Session note: Always run `pnpm test` before finishing repo work.",
+      "utf8"
+    );
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "proposals", "pending.md"),
+      [
+        "---",
+        "status: \"pending\"",
+        "tool: \"MemoryRemember\"",
+        "target_path: \".openharness/memory/topics/pending.md\"",
+        "---",
+        "",
+        "Pending proposal: Always run integration smoke tests before finishing."
       ].join("\n"),
       "utf8"
     );
@@ -3627,7 +3856,7 @@ describe("runtime service", () => {
         return {
           model: input.model ?? "openai-default",
           text: JSON.stringify({
-            paths: [".openharness/memory/testing.md"]
+            paths: [".openharness/memory/topics/testing.md"]
           }),
           finishReason: "stop",
           usage: {
@@ -3649,7 +3878,7 @@ describe("runtime service", () => {
             {
               toolName: "Glob",
               input: {
-                pattern: ".openharness/memory/*.md"
+                pattern: ".openharness/memory/topics/*.md"
               },
               toolCallId: "call_workspace_memory_glob"
             }
@@ -3715,24 +3944,27 @@ describe("runtime service", () => {
 
     expect(selectorInvocation).toBeTruthy();
     expect(selectorInvocationText).toContain("Recently used tools: Glob");
-    expect(invocationText).toContain('<workspace_memory_file path=".openharness/memory/testing.md">');
+    expect(selectorInvocationText).not.toContain(".openharness/memory/sessions/2026-05-15-testing.md");
+    expect(selectorInvocationText).not.toContain(".openharness/memory/proposals/pending.md");
+    expect(invocationText).toContain('<workspace_memory_file path=".openharness/memory/topics/testing.md">');
     expect(invocationText).toContain("Always run `pnpm test` before finishing repo work.");
+    expect(invocationText).not.toContain("Pending proposal");
     expect(invocationText).not.toContain("Prefer terse section headings when writing docs.");
   });
 
   it("deduplicates recently surfaced workspace memory topics across adjacent runs when fresh alternatives exist", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-recall-dedupe-"));
-    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "topics"), { recursive: true });
     await writeFile(
       path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
       [
-        "- [testing](.openharness/memory/testing.md) - finish checklist and validation commands",
-        "- [style](.openharness/memory/style.md) - final response formatting preferences"
+        "- [testing](.openharness/memory/topics/testing.md) - finish checklist and validation commands",
+        "- [style](.openharness/memory/topics/style.md) - final response formatting preferences"
       ].join("\n"),
       "utf8"
     );
     await writeFile(
-      path.join(workspaceRoot, ".openharness", "memory", "testing.md"),
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "testing.md"),
       [
         "---",
         "name: Testing",
@@ -3747,7 +3979,7 @@ describe("runtime service", () => {
       "utf8"
     );
     await writeFile(
-      path.join(workspaceRoot, ".openharness", "memory", "style.md"),
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "style.md"),
       [
         "---",
         "name: Style",
@@ -3783,7 +4015,7 @@ describe("runtime service", () => {
         return {
           model: input.model ?? "openai-default",
           text: JSON.stringify({
-            paths: [".openharness/memory/testing.md"]
+            paths: [".openharness/memory/topics/testing.md"]
           }),
           finishReason: "stop",
           usage: {
@@ -3822,7 +4054,7 @@ describe("runtime service", () => {
     const firstRunSteps = await runtimeService.listRunSteps(firstAccepted.runId);
     const firstRecallStep = firstRunSteps.items.find((step) => step.name === "workspace_memory_recall");
     expect(firstRecallStep?.output).toMatchObject({
-      recalledPaths: [".openharness/memory/testing.md"]
+      recalledPaths: [".openharness/memory/topics/testing.md"]
     });
 
     const secondAccepted = await runtimeService.createSessionMessage({
@@ -3857,25 +4089,25 @@ describe("runtime service", () => {
       .join("\n\n");
 
     expect(selectorCallCount).toBeGreaterThanOrEqual(2);
-    expect(secondSelectorManifest).not.toContain(".openharness/memory/testing.md");
-    expect(secondSelectorManifest).toContain(".openharness/memory/style.md");
-    expect(secondInvocationText).toContain('<workspace_memory_file path=".openharness/memory/style.md">');
-    expect(secondInvocationText).not.toContain('<workspace_memory_file path=".openharness/memory/testing.md">');
+    expect(secondSelectorManifest).not.toContain(".openharness/memory/topics/testing.md");
+    expect(secondSelectorManifest).toContain(".openharness/memory/topics/style.md");
+    expect(secondInvocationText).toContain('<workspace_memory_file path=".openharness/memory/topics/style.md">');
+    expect(secondInvocationText).not.toContain('<workspace_memory_file path=".openharness/memory/topics/testing.md">');
   });
 
   it("deduplicates recently surfaced workspace memory topics across queued runs", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-recall-queued-dedupe-"));
-    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "topics"), { recursive: true });
     await writeFile(
       path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
       [
-        "- [testing](.openharness/memory/testing.md) - finish checklist and validation commands",
-        "- [style](.openharness/memory/style.md) - final response formatting preferences"
+        "- [testing](.openharness/memory/topics/testing.md) - finish checklist and validation commands",
+        "- [style](.openharness/memory/topics/style.md) - final response formatting preferences"
       ].join("\n"),
       "utf8"
     );
     await writeFile(
-      path.join(workspaceRoot, ".openharness", "memory", "testing.md"),
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "testing.md"),
       [
         "---",
         "name: Testing",
@@ -3890,7 +4122,7 @@ describe("runtime service", () => {
       "utf8"
     );
     await writeFile(
-      path.join(workspaceRoot, ".openharness", "memory", "style.md"),
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "style.md"),
       [
         "---",
         "name: Style",
@@ -3926,7 +4158,7 @@ describe("runtime service", () => {
         return {
           model: input.model ?? "openai-default",
           text: JSON.stringify({
-            paths: [".openharness/memory/testing.md"]
+            paths: [".openharness/memory/topics/testing.md"]
           }),
           finishReason: "stop",
           usage: {
@@ -3993,26 +4225,26 @@ describe("runtime service", () => {
 
     expect(selectorCallCount).toBeGreaterThanOrEqual(2);
     expect(firstRecallStep?.output).toMatchObject({
-      recalledPaths: [".openharness/memory/testing.md"]
+      recalledPaths: [".openharness/memory/topics/testing.md"]
     });
-    expect(secondSelectorManifest).not.toContain(".openharness/memory/testing.md");
-    expect(secondSelectorManifest).toContain(".openharness/memory/style.md");
-    expect(secondInvocationText).toContain('<workspace_memory_file path=".openharness/memory/style.md">');
-    expect(secondInvocationText).not.toContain('<workspace_memory_file path=".openharness/memory/testing.md">');
+    expect(secondSelectorManifest).not.toContain(".openharness/memory/topics/testing.md");
+    expect(secondSelectorManifest).toContain(".openharness/memory/topics/style.md");
+    expect(secondInvocationText).toContain('<workspace_memory_file path=".openharness/memory/topics/style.md">');
+    expect(secondInvocationText).not.toContain('<workspace_memory_file path=".openharness/memory/topics/testing.md">');
   });
 
   it("uses the default platform model for workspace memory recall selection even when the main run uses a workspace model", async () => {
     const gateway = new FakeModelGateway();
     const persistence = createMemoryRuntimePersistence();
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-selector-model-"));
-    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "topics"), { recursive: true });
     await writeFile(
       path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
-      "- [testing](.openharness/memory/testing.md) - finish checklist and validation commands\n",
+      "- [testing](.openharness/memory/topics/testing.md) - finish checklist and validation commands\n",
       "utf8"
     );
     await writeFile(
-      path.join(workspaceRoot, ".openharness", "memory", "testing.md"),
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "testing.md"),
       [
         "---",
         "name: Testing",
@@ -4035,7 +4267,7 @@ describe("runtime service", () => {
         return {
           model: input.model ?? "openai-default",
           text: JSON.stringify({
-            paths: [".openharness/memory/testing.md"]
+            paths: [".openharness/memory/topics/testing.md"]
           }),
           finishReason: "stop",
           usage: {
@@ -4172,7 +4404,7 @@ describe("runtime service", () => {
 
   it("accounts for injected memory context when deciding to compact without summarizing the memory note itself", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-compact-budget-"));
-    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "topics"), { recursive: true });
     await writeFile(
       path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
       "Repository memory: " + "run pnpm test before finishing. ".repeat(80),
@@ -4300,7 +4532,7 @@ describe("runtime service", () => {
 
   it("runs workspace memory extraction in a background child run and writes MEMORY.md after completion", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-writeback-"));
-    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "topics"), { recursive: true });
     await writeFile(
       path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"),
       "- [conventions](.openharness/memory/conventions.md) - concise memory habits\n",
@@ -4459,6 +4691,209 @@ describe("runtime service", () => {
     expect(topicContent).toContain("Constraint: keep responses concise and actionable.");
     expect(topicContent).toContain("Existing note: keep memory concise.");
   }, 15_000);
+
+  it("uses agent-level workspace memory policy for background extraction", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-agent-extract-"));
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    const { runtimeService, workspace } = await createRuntime(0, {
+      rootPath: workspaceRoot,
+      workspaceSettings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "explicit-only"
+          }
+        }
+      },
+      agents: {
+        default: {
+          name: "default",
+          mode: "primary",
+          prompt: "Use agent-level memory policy.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: [],
+          policy: {
+            workspaceMemory: {
+              writePolicy: "auto-extract"
+            }
+          }
+        }
+      }
+    });
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Rememberable preference: keep future answers crisp." }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    await waitFor(async () => {
+      const parentRunSteps = await runtimeService.listRunSteps(accepted.runId);
+      return parentRunSteps.items.some((step) => step.name === "workspace_memory_extract_queued");
+    });
+  });
+
+  it("uses session-level workspace memory policy for background extraction", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-session-extract-"));
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    const { runtimeService, workspace } = await createRuntime(0, {
+      rootPath: workspaceRoot,
+      workspaceSettings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "explicit-only"
+          }
+        }
+      },
+      agents: {
+        default: {
+          name: "default",
+          mode: "primary",
+          prompt: "Use session-level memory policy.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      }
+    });
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {
+        workspaceMemory: {
+          writePolicy: "auto-extract"
+        }
+      }
+    });
+    expect(session.workspaceMemory).toEqual({ writePolicy: "auto-extract" });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Rememberable preference: keep session answers crisp." }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    await waitFor(async () => {
+      const parentRunSteps = await runtimeService.listRunSteps(accepted.runId);
+      return parentRunSteps.items.some((step) => step.name === "workspace_memory_extract_queued");
+    });
+
+    const updated = await runtimeService.updateSession({
+      sessionId: session.id,
+      input: {
+        workspaceMemory: null
+      }
+    });
+    expect(updated.workspaceMemory).toBeUndefined();
+  });
+
+  it("uses run-level workspace memory policy before session policy", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-run-extract-"));
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    const { runtimeService, workspace } = await createRuntime(0, {
+      rootPath: workspaceRoot,
+      workspaceSettings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "explicit-only"
+          }
+        }
+      },
+      agents: {
+        default: {
+          name: "default",
+          mode: "primary",
+          prompt: "Use run-level memory policy.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      }
+    });
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {
+        workspaceMemory: {
+          writePolicy: "auto-extract"
+        }
+      }
+    });
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: {
+        content: "Rememberable preference: do not extract this run.",
+        workspaceMemory: {
+          writePolicy: "explicit-only"
+        }
+      }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    const run = await runtimeService.getRun(accepted.runId);
+    expect(run.metadata).toMatchObject({
+      workspaceMemory: {
+        writePolicy: "explicit-only"
+      }
+    });
+    const parentRunSteps = await runtimeService.listRunSteps(accepted.runId);
+    expect(parentRunSteps.items.some((step) => step.name === "workspace_memory_extract_queued")).toBe(false);
+  });
 
   it("skips redundant runtime message rewrites when later events do not change the projection", async () => {
     const gateway = new FakeModelGateway();
@@ -13446,6 +13881,8 @@ describe("runtime service", () => {
       "MemoryCaptureSession",
       "MemoryAppendDaily",
       "MemoryRecordDream",
+      "MemoryApplyProposal",
+      "MemoryRejectProposal",
       "ViewImage",
       "WebFetch",
       "TodoWrite",

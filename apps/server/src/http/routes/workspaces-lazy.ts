@@ -53,6 +53,27 @@ export function registerWorkspaceRoutes(
   app.get("/api/v1/workspaces/:workspaceId/catalog", async (request, reply) =>
     dispatchWorkspaceRoute(request, reply, dependencies, options)
   );
+  app.get("/api/v1/workspaces/:workspaceId/memory/status", async (request, reply) =>
+    dispatchWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.get("/api/v1/workspaces/:workspaceId/memory", async (request, reply) =>
+    dispatchWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.get("/api/v1/workspaces/:workspaceId/memory/search", async (request, reply) =>
+    dispatchWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.get("/api/v1/workspaces/:workspaceId/memory/read", async (request, reply) =>
+    dispatchWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.get("/api/v1/workspaces/:workspaceId/memory/proposals", async (request, reply) =>
+    dispatchWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.post("/api/v1/workspaces/:workspaceId/memory/proposals/apply", async (request, reply) =>
+    dispatchWorkspaceRoute(request, reply, dependencies, options)
+  );
+  app.post("/api/v1/workspaces/:workspaceId/memory/proposals/reject", async (request, reply) =>
+    dispatchWorkspaceRoute(request, reply, dependencies, options)
+  );
   app.get("/api/v1/workspaces/:workspaceId/entries", async (request, reply) =>
     dispatchWorkspaceRoute(request, reply, dependencies, options)
   );

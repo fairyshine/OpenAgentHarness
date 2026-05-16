@@ -46,6 +46,9 @@ export interface AgentDefinition {
     toolTimeoutSeconds?: number | undefined;
     parallelToolCalls?: boolean | undefined;
     maxConcurrentSubagents?: number | undefined;
+    workspaceMemory?: {
+      writePolicy?: WorkspaceMemoryWritePolicy | undefined;
+    } | undefined;
   } | undefined;
 }
 

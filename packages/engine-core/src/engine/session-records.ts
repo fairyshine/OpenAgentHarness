@@ -105,6 +105,13 @@ export class SessionRecordService {
       activeAgentName: nextActiveAgentName,
       updatedAt: new Date().toISOString()
     };
+    if (input.workspaceMemory !== undefined) {
+      if (input.workspaceMemory) {
+        updatedSession.workspaceMemory = input.workspaceMemory;
+      } else {
+        delete updatedSession.workspaceMemory;
+      }
+    }
     if (nextModelRef) {
       updatedSession.modelRef = nextModelRef;
     } else {

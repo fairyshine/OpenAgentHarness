@@ -35,6 +35,16 @@ import {
 
 type AppRequest = <T>(path: string, init?: RequestInit, options?: { auth?: boolean }) => Promise<T>;
 
+export interface WorkspaceFileManagerParams {
+  connection: ConnectionSettings;
+  request: AppRequest;
+  workspaceId: string;
+  workspace: Workspace | null;
+  enabled: boolean;
+  setActivity: (value: string) => void;
+  setErrorMessage: (value: string) => void;
+}
+
 export type WorkspaceUploadItem = WorkspaceUploadFileItem | WorkspaceUploadDirectoryItem;
 
 export interface WorkspaceUploadFileItem {
@@ -48,8 +58,14 @@ export interface WorkspaceUploadDirectoryItem {
   relativePath: string;
 }
 
-const LARGE_TEXT_FILE_BYTES = 256 * 1024;
-const BINARY_PREVIEW_BYTES = 192 * 1024;
+const TEXT_PREVIEW_BYTES = 96 * 1024;
+const BINARY_PREVIEW_BYTES = 96 * 1024;
+const ENTRY_METADATA_REFRESH_DELAY_MS = 250;
+const ENTRY_PAGE_SIZE = 200;
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
 
 function toWorkspaceEntry(entry: WorkspaceEntry): WorkspaceEntry {
   return {
@@ -158,12 +174,15 @@ function mergeWorkspaceEntries(pages: WorkspaceEntryPage[]): WorkspaceEntryPage 
   };
 }
 
-async function loadAllEntryPages(input: {
+async function loadEntryPages(input: {
   workspaceId: string;
   targetPath: string;
   sandboxClient: ReturnType<typeof createSandboxHttpClient>;
   includeEntryMetadata: boolean;
   includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+  pageSize?: number | undefined;
+  maxPages?: number | undefined;
+  signal?: AbortSignal | undefined;
   onPage?: ((pages: WorkspaceEntryPage[]) => void) | undefined;
   isCurrent?: (() => boolean) | undefined;
 }): Promise<WorkspaceEntryPage | null> {
@@ -174,13 +193,14 @@ async function loadAllEntryPages(input: {
     const page = toWorkspaceEntryPage(
       await input.sandboxClient.listEntries(input.workspaceId, {
         path: workspaceRelativePathToSandboxPath(input.targetPath),
-        pageSize: 200,
+        pageSize: input.pageSize ?? ENTRY_PAGE_SIZE,
         sortBy: "name",
         sortOrder: "asc",
         ...(cursor ? { cursor } : {}),
         includeDirectoryDescendantUpdatedAt: input.includeDirectoryDescendantUpdatedAt,
         includeEntryMetadata: input.includeEntryMetadata
-      } satisfies WorkspaceEntriesQuery)
+      } satisfies WorkspaceEntriesQuery,
+      input.signal ? { signal: input.signal } : undefined)
     );
     if (input.isCurrent && !input.isCurrent()) {
       return null;
@@ -188,21 +208,40 @@ async function loadAllEntryPages(input: {
 
     pages.push(page);
     input.onPage?.(pages);
+    if (input.maxPages !== undefined && pages.length >= input.maxPages) {
+      break;
+    }
     cursor = page.nextCursor;
   } while (cursor);
 
   return mergeWorkspaceEntries(pages);
 }
 
-export function useWorkspaceFileManager(params: {
-  connection: ConnectionSettings;
-  request: AppRequest;
+async function loadEntryPage(input: {
   workspaceId: string;
-  workspace: Workspace | null;
-  enabled: boolean;
-  setActivity: (value: string) => void;
-  setErrorMessage: (value: string) => void;
-}) {
+  targetPath: string;
+  sandboxClient: ReturnType<typeof createSandboxHttpClient>;
+  includeEntryMetadata: boolean;
+  includeDirectoryDescendantUpdatedAt?: boolean | undefined;
+  cursor?: string | undefined;
+  pageSize?: number | undefined;
+  signal?: AbortSignal | undefined;
+}): Promise<WorkspaceEntryPage> {
+  return toWorkspaceEntryPage(
+    await input.sandboxClient.listEntries(input.workspaceId, {
+      path: workspaceRelativePathToSandboxPath(input.targetPath),
+      pageSize: input.pageSize ?? ENTRY_PAGE_SIZE,
+      sortBy: "name",
+      sortOrder: "asc",
+      ...(input.cursor ? { cursor: input.cursor } : {}),
+      includeDirectoryDescendantUpdatedAt: input.includeDirectoryDescendantUpdatedAt,
+      includeEntryMetadata: input.includeEntryMetadata
+    } satisfies WorkspaceEntriesQuery,
+    input.signal ? { signal: input.signal } : undefined)
+  );
+}
+
+export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
   const [open, setOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState(".");
   const [entryPage, setEntryPage] = useState<WorkspaceEntryPage | null>(null);
@@ -210,6 +249,7 @@ export function useWorkspaceFileManager(params: {
   const [selectedFile, setSelectedFile] = useState<WorkspaceFileContent | null>(null);
   const [selectedFileDraft, setSelectedFileDraft] = useState("");
   const [entriesBusy, setEntriesBusy] = useState(false);
+  const [entriesLoadingMore, setEntriesLoadingMore] = useState(false);
   const [entriesRefreshingMetadata, setEntriesRefreshingMetadata] = useState(false);
   const [fileBusy, setFileBusy] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
@@ -217,6 +257,10 @@ export function useWorkspaceFileManager(params: {
   const previousWorkspaceIdRef = useRef(params.workspaceId.trim());
   const entriesRequestSeqRef = useRef(0);
   const fileRequestSeqRef = useRef(0);
+  const entriesAbortRef = useRef<AbortController | null>(null);
+  const metadataAbortRef = useRef<AbortController | null>(null);
+  const fileAbortRef = useRef<AbortController | null>(null);
+  const metadataRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const workspaceIdValue = params.workspaceId.trim();
   const workspaceReadOnly = params.workspace?.readOnly ?? false;
@@ -272,47 +316,31 @@ export function useWorkspaceFileManager(params: {
   }): Promise<WorkspaceEntryPage | null> {
     const requestSeq = entriesRequestSeqRef.current + 1;
     entriesRequestSeqRef.current = requestSeq;
+    entriesAbortRef.current?.abort();
+    metadataAbortRef.current?.abort();
+    if (metadataRefreshTimerRef.current) {
+      clearTimeout(metadataRefreshTimerRef.current);
+      metadataRefreshTimerRef.current = null;
+    }
     if (!workspaceIdValue) {
       setEntryPage(null);
       return null;
     }
 
     const targetPath = normalizeWorkspaceRelativePath(options?.path ?? currentPath);
+    const entriesController = new AbortController();
+    entriesAbortRef.current = entriesController;
 
     try {
       setEntriesBusy(true);
-      const initialResponse = await loadAllEntryPages({
+      const initialResponse = await loadEntryPage({
         workspaceId: workspaceIdValue,
         targetPath,
         sandboxClient,
-        includeEntryMetadata: false,
+        includeEntryMetadata: true,
         includeDirectoryDescendantUpdatedAt: false,
-        isCurrent: () => entriesRequestSeqRef.current === requestSeq,
-        onPage: (pages) => {
-          if (pages.length !== 1) {
-            return;
-          }
-
-          const initialPage = pages[0];
-          if (!initialPage || entriesRequestSeqRef.current !== requestSeq) {
-            return;
-          }
-
-          const normalizedInitialPage = {
-            ...initialPage,
-            path: normalizeWorkspaceRelativePath(initialPage.path)
-          };
-          setCurrentPath(normalizedInitialPage.path);
-          setEntryPage(normalizedInitialPage);
-          setEntriesBusy(false);
-          if (!options?.quiet) {
-            const responsePath = normalizeWorkspaceRelativePath(normalizedInitialPage.path);
-            params.setActivity(
-              `已加载 ${responsePath === "." ? "workspace 根目录" : responsePath}（${normalizedInitialPage.items.length}${initialPage.nextCursor ? "+" : ""} 项）`
-            );
-            params.setErrorMessage("");
-          }
-        }
+        signal: entriesController.signal,
+        pageSize: ENTRY_PAGE_SIZE
       });
       if (entriesRequestSeqRef.current !== requestSeq) {
         return null;
@@ -323,30 +351,99 @@ export function useWorkspaceFileManager(params: {
         return null;
       }
 
-      setCurrentPath(normalizeWorkspaceRelativePath(response.path));
+      setCurrentPath(normalizeWorkspaceRelativePath(initialResponse.path));
       setEntryPage({
-        ...response,
-        path: normalizeWorkspaceRelativePath(response.path)
+        ...initialResponse,
+        path: normalizeWorkspaceRelativePath(initialResponse.path)
       });
       if (!options?.quiet) {
         const responsePath = normalizeWorkspaceRelativePath(initialResponse.path);
-        params.setActivity(`已加载 ${responsePath === "." ? "workspace 根目录" : responsePath}（${initialResponse.items.length} 项）`);
+        params.setActivity(
+          `已加载 ${responsePath === "." ? "workspace 根目录" : responsePath}（${initialResponse.items.length}${initialResponse.nextCursor ? "+" : ""} 项）`
+        );
         params.setErrorMessage("");
       }
-      void refreshEntryMetadata({
-        path: targetPath,
-        expectedRequestSeq: requestSeq,
-        quiet: options?.quiet
-      });
+      if (initialResponse.items.some((entry) => entry.updatedAt === undefined || (entry.type === "file" && entry.sizeBytes === undefined))) {
+        metadataRefreshTimerRef.current = setTimeout(() => {
+          metadataRefreshTimerRef.current = null;
+          void refreshEntryMetadata({
+            path: targetPath,
+            expectedRequestSeq: requestSeq,
+            quiet: true
+          });
+        }, ENTRY_METADATA_REFRESH_DELAY_MS);
+      }
       return initialResponse;
     } catch (error) {
+      if (isAbortError(error)) {
+        return null;
+      }
       if (entriesRequestSeqRef.current === requestSeq && !options?.quiet) {
         params.setErrorMessage(toErrorMessage(error));
       }
       return null;
     } finally {
+      if (entriesAbortRef.current === entriesController) {
+        entriesAbortRef.current = null;
+      }
       if (entriesRequestSeqRef.current === requestSeq) {
         setEntriesBusy(false);
+      }
+    }
+  }
+
+  async function loadMoreEntries(): Promise<void> {
+    if (!workspaceIdValue || entriesBusy || entriesLoadingMore || !entryPage?.nextCursor) {
+      return;
+    }
+
+    const requestSeq = entriesRequestSeqRef.current;
+    const targetPath = normalizeWorkspaceRelativePath(entryPage.path);
+    const cursor = entryPage.nextCursor;
+    const entriesController = new AbortController();
+    entriesAbortRef.current?.abort();
+    entriesAbortRef.current = entriesController;
+    try {
+      setEntriesLoadingMore(true);
+      const response = await loadEntryPage({
+        workspaceId: workspaceIdValue,
+        targetPath,
+        sandboxClient,
+        includeEntryMetadata: true,
+        includeDirectoryDescendantUpdatedAt: false,
+        cursor,
+        pageSize: ENTRY_PAGE_SIZE,
+        signal: entriesController.signal
+      });
+      if (entriesRequestSeqRef.current !== requestSeq) {
+        return;
+      }
+
+      setEntryPage((current) => {
+        if (!current || normalizeWorkspaceRelativePath(current.path) !== normalizeWorkspaceRelativePath(response.path)) {
+          return current;
+        }
+
+        const itemsByPath = new Map(current.items.map((entry) => [entry.path, entry]));
+        for (const entry of response.items) {
+          itemsByPath.set(entry.path, entry);
+        }
+        return {
+          ...response,
+          path: normalizeWorkspaceRelativePath(response.path),
+          items: [...itemsByPath.values()]
+        };
+      });
+    } catch (error) {
+      if (!isAbortError(error)) {
+        params.setErrorMessage(toErrorMessage(error));
+      }
+    } finally {
+      if (entriesAbortRef.current === entriesController) {
+        entriesAbortRef.current = null;
+      }
+      if (entriesRequestSeqRef.current === requestSeq) {
+        setEntriesLoadingMore(false);
       }
     }
   }
@@ -361,13 +458,21 @@ export function useWorkspaceFileManager(params: {
     }
 
     const targetPath = normalizeWorkspaceRelativePath(options.path);
+    metadataAbortRef.current?.abort();
+    const metadataController = new AbortController();
+    metadataAbortRef.current = metadataController;
     try {
       setEntriesRefreshingMetadata(true);
-      const response = await loadAllEntryPages({
+      const loadedItemCount = entryPage?.items.length ?? ENTRY_PAGE_SIZE;
+      const loadedPageCount = Math.max(1, Math.ceil(loadedItemCount / ENTRY_PAGE_SIZE));
+      const response = await loadEntryPages({
         workspaceId: workspaceIdValue,
         targetPath,
         sandboxClient,
         includeEntryMetadata: true,
+        includeDirectoryDescendantUpdatedAt: false,
+        maxPages: loadedPageCount,
+        signal: metadataController.signal,
         isCurrent: () => entriesRequestSeqRef.current === options.expectedRequestSeq
       });
       if (!response || entriesRequestSeqRef.current !== options.expectedRequestSeq) {
@@ -379,16 +484,26 @@ export function useWorkspaceFileManager(params: {
           return current;
         }
 
+        const itemsByPath = new Map(current.items.map((entry) => [entry.path, entry]));
+        for (const entry of response.items) {
+          itemsByPath.set(entry.path, entry);
+        }
         return {
-          ...response,
-          path: normalizeWorkspaceRelativePath(response.path)
+          ...current,
+          items: [...itemsByPath.values()]
         };
       });
     } catch (error) {
+      if (isAbortError(error)) {
+        return;
+      }
       if (entriesRequestSeqRef.current === options.expectedRequestSeq && !options.quiet) {
         params.setErrorMessage(toErrorMessage(error));
       }
     } finally {
+      if (metadataAbortRef.current === metadataController) {
+        metadataAbortRef.current = null;
+      }
       if (entriesRequestSeqRef.current === options.expectedRequestSeq) {
         setEntriesRefreshingMetadata(false);
       }
@@ -398,11 +513,17 @@ export function useWorkspaceFileManager(params: {
   async function focusEntry(entry: WorkspaceEntry, quiet = false): Promise<void> {
     const requestSeq = fileRequestSeqRef.current + 1;
     fileRequestSeqRef.current = requestSeq;
+    fileAbortRef.current?.abort();
+    const fileController = new AbortController();
+    fileAbortRef.current = fileController;
     setSelectedEntry(entry);
     if (entry.type === "directory") {
       setSelectedFile(null);
       setSelectedFileDraft("");
       setFileBusy(false);
+      if (fileAbortRef.current === fileController) {
+        fileAbortRef.current = null;
+      }
       return;
     }
 
@@ -412,20 +533,24 @@ export function useWorkspaceFileManager(params: {
         await sandboxClient.getFileContent(workspaceIdValue, {
           path: workspaceRelativePathToSandboxPath(entry.path),
           encoding: isTextEntry(entry) ? "utf8" : "base64",
-          ...(!isTextEntry(entry) || (entry.sizeBytes ?? 0) > LARGE_TEXT_FILE_BYTES ? { maxBytes: BINARY_PREVIEW_BYTES } : {})
-        } satisfies WorkspaceFileContentQuery)
+          maxBytes: isTextEntry(entry) ? TEXT_PREVIEW_BYTES : BINARY_PREVIEW_BYTES
+        } satisfies WorkspaceFileContentQuery,
+        { signal: fileController.signal })
       );
       if (fileRequestSeqRef.current !== requestSeq) {
         return;
       }
 
       setSelectedFile(response);
-      setSelectedFileDraft(response.encoding === "utf8" ? response.content : "");
+      setSelectedFileDraft(response.encoding === "utf8" && !response.truncated ? response.content : "");
       if (!quiet) {
         params.setActivity(`已打开 ${entry.name}`);
         params.setErrorMessage("");
       }
     } catch (error) {
+      if (isAbortError(error)) {
+        return;
+      }
       if (fileRequestSeqRef.current !== requestSeq) {
         return;
       }
@@ -436,6 +561,9 @@ export function useWorkspaceFileManager(params: {
         params.setErrorMessage(toErrorMessage(error));
       }
     } finally {
+      if (fileAbortRef.current === fileController) {
+        fileAbortRef.current = null;
+      }
       if (fileRequestSeqRef.current === requestSeq) {
         setFileBusy(false);
       }
@@ -443,10 +571,14 @@ export function useWorkspaceFileManager(params: {
   }
 
   async function openDirectory(path: string, quiet = false): Promise<void> {
+    const targetPath = normalizeWorkspaceRelativePath(path);
+    if (targetPath === normalizedCurrentPath && entryPage && !entriesBusy) {
+      return;
+    }
     setSelectedEntry(null);
     setSelectedFile(null);
     setSelectedFileDraft("");
-    await refreshEntries({ path: normalizeWorkspaceRelativePath(path), quiet });
+    await refreshEntries({ path: targetPath, quiet });
   }
 
   async function createDirectory(path: string): Promise<void> {
@@ -687,7 +819,25 @@ export function useWorkspaceFileManager(params: {
     setCurrentPath(".");
     setEntryPage(null);
     closeSelection();
+    entriesAbortRef.current?.abort();
+    metadataAbortRef.current?.abort();
+    fileAbortRef.current?.abort();
+    if (metadataRefreshTimerRef.current) {
+      clearTimeout(metadataRefreshTimerRef.current);
+      metadataRefreshTimerRef.current = null;
+    }
   }, [workspaceIdValue]);
+
+  useEffect(() => {
+    return () => {
+      entriesAbortRef.current?.abort();
+      metadataAbortRef.current?.abort();
+      fileAbortRef.current?.abort();
+      if (metadataRefreshTimerRef.current) {
+        clearTimeout(metadataRefreshTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const wasOpen = previousOpenRef.current;
@@ -721,6 +871,8 @@ export function useWorkspaceFileManager(params: {
       breadcrumbs,
       entries,
       entriesBusy,
+      entriesLoadingMore,
+      entriesHasMore: Boolean(entryPage?.nextCursor),
       entriesRefreshingMetadata,
       fileBusy,
       mutationBusy,
@@ -731,10 +883,11 @@ export function useWorkspaceFileManager(params: {
       selectedFileEditable,
       selectedFileDirty,
       canManageFiles: Boolean(workspaceIdValue),
-      openDirectory: (path: string) => void openDirectory(path),
+      openDirectory: (path: string) => void openDirectory(path, true),
       refreshEntries: () => void refreshEntries(),
+      loadMoreEntries: () => void loadMoreEntries(),
       focusEntry: (entry: WorkspaceEntry) => void focusEntry(entry),
-      navigateUp: () => void openDirectory(parentWorkspaceRelativePath(normalizedCurrentPath)),
+      navigateUp: () => void openDirectory(parentWorkspaceRelativePath(normalizedCurrentPath), true),
       closeSelection,
       createDirectory: (path: string) => void createDirectory(path),
       createFile: (path: string) => void createFile(path),
@@ -746,3 +899,5 @@ export function useWorkspaceFileManager(params: {
     }
   };
 }
+
+export type WorkspaceFileManagerSurfaceProps = ReturnType<typeof useWorkspaceFileManager>["fileManagerSurfaceProps"];

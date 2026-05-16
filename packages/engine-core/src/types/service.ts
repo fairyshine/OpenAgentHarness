@@ -122,6 +122,7 @@ export interface TriggerActionRunParams {
   sessionId?: string | undefined;
   agentName?: string | undefined;
   input?: unknown;
+  workspaceMemory?: import("@oah/api-contracts").CreateActionRunRequest["workspaceMemory"] | undefined;
   triggerSource?: "api" | "user" | undefined;
 }
 

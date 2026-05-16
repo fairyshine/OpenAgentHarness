@@ -18,7 +18,6 @@ import {
   sandboxSchema,
   workspaceDeleteEntryQuerySchema,
   workspaceDeleteResultSchema,
-  workspaceEntriesQuerySchema,
   workspaceEntryPageSchema,
   workspaceEntryPathQuerySchema,
   workspaceEntrySchema,
@@ -45,9 +44,11 @@ import {
 } from "../proxy-utils.js";
 import { describeSandboxTopology } from "../../sandbox-topology.js";
 import type { AppDependencies, AppRouteOptions } from "../types.js";
+import { listWorkspaceEntriesWithFastPath, parseWorkspaceEntriesQuery } from "../workspace-entry-listing.js";
 
 const DEFAULT_BACKGROUND_SESSION_PREFIX = "sandbox";
 const SLOW_FILE_LIST_LOG_THRESHOLD_MS = 250;
+const SLOW_FILE_CONTENT_LOG_THRESHOLD_MS = 250;
 
 function readRegisteredRouteUrl(request: FastifyRequest): string {
   return typeof request.routeOptions.url === "string" ? request.routeOptions.url : request.url.split("?")[0] ?? request.url;
@@ -382,21 +383,16 @@ async function handleListSandboxEntries(
   request: FastifyRequest,
   reply: FastifyReply
 ) {
-  const query = workspaceEntriesQuerySchema.parse(request.query);
+  const query = parseWorkspaceEntriesQuery(request);
   const workspaceQuery = {
     ...query,
-    path: sandboxPathToWorkspacePath(query.path)
+    path: sandboxPathToWorkspacePath(query.path) ?? "."
   };
-  const page =
-    (await dependencies.listWorkspaceEntriesFast?.({
-      workspaceId: sandboxId,
-      ...workspaceQuery
-    }).catch((error) => {
-      if (dependencies.logger) {
-        console.warn(`[oah-http] Fast sandbox file list failed for ${sandboxId}; falling back to workspace lease.`, error);
-      }
-      return undefined;
-    })) ?? (await dependencies.runtimeService.listWorkspaceEntries(sandboxId, workspaceQuery));
+  const page = await listWorkspaceEntriesWithFastPath(dependencies, {
+    workspaceId: sandboxId,
+    query: workspaceQuery,
+    logLabel: "sandbox"
+  });
   touchWorkspaceActivityLater(dependencies, sandboxId);
   return reply.send(workspaceEntryPageSchema.parse(toSandboxEntryPage(page)));
 }
@@ -799,7 +795,7 @@ export async function dispatchRegisteredSandboxRoute(
         ownershipMs = elapsedMs(ownershipStartedAt);
       }
       const listStartedAt = process.hrtime.bigint();
-      const response = await handleListSandboxEntries(dependencies, params.sandboxId, request, reply);
+      await handleListSandboxEntries(dependencies, params.sandboxId, request, reply);
       const totalMs = elapsedMs(startedAt);
       if (dependencies.logger && totalMs >= SLOW_FILE_LIST_LOG_THRESHOLD_MS) {
         const query = request.query as Record<string, unknown>;
@@ -807,7 +803,7 @@ export async function dispatchRegisteredSandboxRoute(
           `[oah-http] Slow sandbox file list workspace=${params.sandboxId} path=${String(query.path ?? ".")} totalMs=${totalMs.toFixed(1)} ownershipMs=${ownershipMs?.toFixed(1) ?? "0.0"} listMs=${elapsedMs(listStartedAt).toFixed(1)} pageSize=${String(query.pageSize ?? "")} cursor=${query.cursor ? "yes" : "no"} metadata=${String(query.includeEntryMetadata ?? "default")}`
         );
       }
-      return response;
+      return reply;
     }
     case "GET /api/v1/sandboxes/:sandboxId/files/stat":
     case "GET /internal/v1/sandboxes/:sandboxId/files/stat": {
@@ -823,13 +819,26 @@ export async function dispatchRegisteredSandboxRoute(
     case "GET /api/v1/sandboxes/:sandboxId/files/content":
     case "GET /internal/v1/sandboxes/:sandboxId/files/content": {
       const params = createParamsSchema("sandboxId").parse(request.params);
+      const startedAt = process.hrtime.bigint();
+      let ownershipMs: number | undefined;
       if (isPublicApi) {
         assertWorkspaceAccess(toCallerContext(request), params.sandboxId);
+        const ownershipStartedAt = process.hrtime.bigint();
         if ((await guardSandboxOwnership(request, reply, dependencies, params.sandboxId)) !== "local") {
           return reply;
         }
+        ownershipMs = elapsedMs(ownershipStartedAt);
       }
-      return handleGetSandboxFileContent(dependencies, params.sandboxId, request, reply);
+      const readStartedAt = process.hrtime.bigint();
+      await handleGetSandboxFileContent(dependencies, params.sandboxId, request, reply);
+      const totalMs = elapsedMs(startedAt);
+      if (dependencies.logger && totalMs >= SLOW_FILE_CONTENT_LOG_THRESHOLD_MS) {
+        const query = request.query as Record<string, unknown>;
+        console.warn(
+          `[oah-http] Slow sandbox file content workspace=${params.sandboxId} path=${String(query.path ?? ".")} totalMs=${totalMs.toFixed(1)} ownershipMs=${ownershipMs?.toFixed(1) ?? "0.0"} readMs=${elapsedMs(readStartedAt).toFixed(1)} encoding=${String(query.encoding ?? "utf8")} maxBytes=${String(query.maxBytes ?? "")}`
+        );
+      }
+      return reply;
     }
     case "PUT /api/v1/sandboxes/:sandboxId/files/content":
     case "PUT /internal/v1/sandboxes/:sandboxId/files/content": {

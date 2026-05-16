@@ -346,6 +346,7 @@ export class SessionEngineService {
     sessionId,
     agentName,
     input,
+    workspaceMemory,
     triggerSource
   }: TriggerActionRunParams): Promise<ActionRunAcceptedResult> {
     const workspace = await this.#getWorkspaceRecord(workspaceId);
@@ -411,7 +412,8 @@ export class SessionEngineService {
       createdAt: now,
       metadata: {
         actionName,
-        input: input ?? null
+        input: input ?? null,
+        ...(workspaceMemory ? { workspaceMemory } : {})
       }
     };
 

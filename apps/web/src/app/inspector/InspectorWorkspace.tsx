@@ -128,6 +128,7 @@ function InspectorWorkspaceImpl(props: RuntimeProps) {
                 toolServers={props.allToolServers}
                 triggerWorkspaceAction={props.triggerWorkspaceAction}
                 refreshWorkspace={props.refreshWorkspace}
+                workspaceMemory={props.workspaceMemory}
               />
             </TabsContent>
         </div>

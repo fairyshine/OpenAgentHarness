@@ -163,6 +163,47 @@ describe("object storage workspace entry lister", () => {
     ]);
   });
 
+  it("uses flat object listing for descendant directory times even when directory listing is available", async () => {
+    const store = new FakeDirectoryObjectStore(
+      [
+        entry("workspace/ws_1/src/a.ts", 10, "2026-05-01T00:00:00.000Z"),
+        entry("workspace/ws_1/src/nested/b.ts", 10, "2026-05-03T00:00:00.000Z")
+      ],
+      [{ name: "src", kind: "directory" }]
+    );
+    const lister = createObjectStorageWorkspaceEntryLister({
+      store,
+      async getWorkspaceRecord() {
+        return {
+          id: "ws_1",
+          rootPath: "/workspace/ws_1",
+          externalRef: "s3://test-bucket/workspace/ws_1",
+          readOnly: false
+        };
+      }
+    });
+
+    const page = await lister({
+      workspaceId: "ws_1",
+      path: ".",
+      pageSize: 10,
+      sortBy: "name",
+      sortOrder: "asc",
+      includeEntryMetadata: true,
+      includeDirectoryDescendantUpdatedAt: true
+    });
+
+    expect(page?.items).toEqual([
+      expect.objectContaining({
+        path: "src",
+        type: "directory",
+        updatedAt: "2026-05-03T00:00:00.000Z"
+      })
+    ]);
+    expect(store.listCalls).toBe(1);
+    expect(store.directoryListCalls).toEqual([]);
+  });
+
   it("returns undefined when the workspace should use its materialized local copy", async () => {
     const store = new FakeDirectoryObjectStore([
       entry("workspace/ws_1/README.md", 12, "2026-05-01T00:00:00.000Z")

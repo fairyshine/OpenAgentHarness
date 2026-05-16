@@ -6,7 +6,6 @@ import {
   putWorkspaceFileRequestSchema,
   workspaceDeleteEntryQuerySchema,
   workspaceDeleteResultSchema,
-  workspaceEntriesQuerySchema,
   workspaceEntryPageSchema,
   workspaceEntryPathQuerySchema,
   workspaceEntrySchema,
@@ -19,6 +18,7 @@ import { AppError } from "@oah/engine-core";
 import { createParamsSchema } from "../context.js";
 import { readRequestBodyBuffer } from "../proxy-utils.js";
 import type { AppDependencies } from "../types.js";
+import { listWorkspaceEntriesWithFastPath, parseWorkspaceEntriesQuery } from "../workspace-entry-listing.js";
 
 const workspaceLifecycleOperations = new Set(["hydrate", "flush", "evict", "delete", "repair_placement"] as const);
 
@@ -60,17 +60,12 @@ async function handleListWorkspaceEntries(
   request: FastifyRequest,
   reply: FastifyReply
 ) {
-  const query = workspaceEntriesQuerySchema.parse(request.query);
-  const page =
-    (await dependencies.listWorkspaceEntriesFast?.({
-      workspaceId,
-      ...query
-    }).catch((error) => {
-      if (dependencies.logger) {
-        console.warn(`[oah-http] Fast internal workspace file list failed for ${workspaceId}; falling back to workspace lease.`, error);
-      }
-      return undefined;
-    })) ?? (await dependencies.runtimeService.listWorkspaceEntries(workspaceId, query));
+  const query = parseWorkspaceEntriesQuery(request);
+  const page = await listWorkspaceEntriesWithFastPath(dependencies, {
+    workspaceId,
+    query,
+    logLabel: "internal workspace"
+  });
   touchWorkspaceActivityLater(dependencies, workspaceId);
   return reply.send(workspaceEntryPageSchema.parse(page));
 }

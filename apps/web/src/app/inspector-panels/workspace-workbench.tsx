@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
-import type { Run, Session, Workspace, WorkspaceCatalog } from "@oah/api-contracts";
+import { Check, FileText, RefreshCw, Search, X } from "lucide-react";
+
+import type { Run, Session, Workspace, WorkspaceCatalog, WorkspaceMemoryCorpus } from "@oah/api-contracts";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -10,8 +12,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Textarea } from "../../components/ui/textarea";
 import { cn } from "../../lib/utils";
 
-import { type ModelCallTraceEngineTool, type ModelCallTraceToolServer } from "../support";
+import { formatTimestamp, type ModelCallTraceEngineTool, type ModelCallTraceToolServer } from "../support";
 import { CatalogLine, EmptyState, EntityPreview, InsightRow } from "../primitives";
+import type { WorkspaceMemoryController } from "../use-workspace-memory";
 import {
   buildStructuredActionInput,
   deriveStructuredActionInputSpec,
@@ -44,11 +47,203 @@ function WorkspaceCatalogCollection(props: {
   );
 }
 
+const MEMORY_CORPUS_OPTIONS: WorkspaceMemoryCorpus[] = ["all", "index", "topics", "sessions", "daily", "dreams"];
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function MemoryWorkbench(props: {
+  workspace: Workspace | null;
+  memory: WorkspaceMemoryController;
+}) {
+  const memory = props.memory;
+  const fileItems = memory.searchResults?.items ?? memory.index?.items ?? [];
+  const pendingProposals = memory.proposals?.items ?? [];
+
+  async function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await memory.searchMemory();
+  }
+
+  if (!props.workspace) {
+    return <EmptyState title="No workspace selected" description="Open a workspace to inspect memory." />;
+  }
+
+  return (
+    <div className="grid gap-4 2xl:grid-cols-[minmax(360px,0.82fr)_minmax(0,1.18fr)]">
+      <div className="space-y-4">
+        <DetailSection
+          title="Memory Status"
+          description="Workspace-scoped memory inventory and write gate state."
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={memory.status?.enabled ? "secondary" : "outline"}>{memory.status?.enabled ? "enabled" : "disabled"}</Badge>
+            <Badge variant="outline">{memory.status?.writePolicy ?? "n/a"}</Badge>
+            <Badge variant="outline">{memory.status?.rootPath ?? ".openharness/memory"}</Badge>
+            <Button variant="secondary" size="sm" onClick={() => void memory.refreshMemory()} disabled={memory.busy}>
+              <RefreshCw className={cn("h-4 w-4", memory.busy ? "animate-spin" : "")} />
+              Refresh
+            </Button>
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            <InsightRow label="Files" value={String(memory.status?.fileCount ?? 0)} />
+            <InsightRow label="Bytes" value={formatBytes(memory.status?.totalBytes ?? 0)} />
+            <InsightRow label="Topics" value={String(memory.status?.topics ?? 0)} />
+            <InsightRow label="Sessions" value={String(memory.status?.sessions ?? 0)} />
+            <InsightRow label="Daily" value={String(memory.status?.daily ?? 0)} />
+            <InsightRow label="Dreams" value={String(memory.status?.dreams ?? 0)} />
+            <InsightRow label="Proposals" value={String(memory.status?.pendingProposals ?? 0)} />
+            <InsightRow label="Index" value={memory.status?.indexExists ? "present" : "missing"} />
+          </div>
+        </DetailSection>
+
+        <DetailSection
+          title="Search"
+          description="Search across memory files through the workspace memory API."
+        >
+          <form className="space-y-3" onSubmit={(event) => void handleSearchSubmit(event)}>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={memory.searchQuery}
+                  onChange={(event) => memory.setSearchQuery(event.target.value)}
+                  placeholder="Search memory"
+                  className="h-9 pl-8 text-sm"
+                />
+              </div>
+              <Select value={memory.searchCorpus} onValueChange={(value) => memory.setSearchCorpus(value as WorkspaceMemoryCorpus)}>
+                <SelectTrigger className="h-9 w-full text-sm sm:w-36" aria-label="Memory corpus">
+                  <SelectValue placeholder="Corpus" />
+                </SelectTrigger>
+                <SelectContent align="start">
+                  {MEMORY_CORPUS_OPTIONS.map((corpus) => (
+                    <SelectItem key={corpus} value={corpus}>
+                      {corpus}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button type="submit" size="sm" disabled={memory.searchBusy || !memory.searchQuery.trim()}>
+                <Search className={cn("h-4 w-4", memory.searchBusy ? "animate-pulse" : "")} />
+                Search
+              </Button>
+            </div>
+          </form>
+        </DetailSection>
+
+        <DetailSection
+          title="Memory Files"
+          description={memory.searchResults ? `Search results for "${memory.searchResults.query}".` : "Current memory index."}
+        >
+          {fileItems.length === 0 ? (
+            <EmptyState title="No memory files" description="Memory files will appear here after the workspace records them." />
+          ) : (
+            <div className="max-h-[520px] space-y-2 overflow-auto pr-1">
+              {fileItems.map((item) => (
+                <button
+                  key={item.path}
+                  type="button"
+                  onClick={() => void memory.readMemory(item.path)}
+                  className={cn(
+                    "w-full rounded-lg border border-border/70 bg-background/75 p-3 text-left transition hover:border-border hover:bg-muted/25",
+                    memory.selectedMemory?.path === item.path ? "border-foreground/30 bg-muted/30" : ""
+                  )}
+                >
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">{item.title}</p>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">{item.path}</p>
+                    </div>
+                    <Badge variant="outline">{item.corpus}</Badge>
+                  </div>
+                  {item.description ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{item.description}</p> : null}
+                  {"snippet" in item && item.snippet ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-foreground/75">{item.snippet}</p> : null}
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                    <span>{formatBytes(item.sizeBytes)}</span>
+                    <span>{formatTimestamp(item.updatedAt)}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </DetailSection>
+      </div>
+
+      <div className="space-y-4">
+        <DetailSection
+          title="Selected Memory"
+          description={memory.selectedMemory?.path ?? "Select a memory file to inspect its contents."}
+        >
+          {memory.readBusy ? (
+            <p className="text-sm text-muted-foreground">Loading memory file...</p>
+          ) : memory.selectedMemory ? (
+            <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-muted/10 p-3 text-xs leading-6 text-foreground/80">
+              {memory.selectedMemory.content}
+            </pre>
+          ) : (
+            <EmptyState title="No file selected" description="Choose an item from Memory Files." />
+          )}
+        </DetailSection>
+
+        <DetailSection
+          title="Pending Proposals"
+          description="Suggested writes waiting for explicit apply or reject."
+        >
+          {pendingProposals.length === 0 ? (
+            <EmptyState title="No proposals" description="Pending memory proposals will appear here." />
+          ) : (
+            <div className="space-y-2">
+              {pendingProposals.map((proposal) => {
+                const proposalBusy = memory.proposalBusyPath === proposal.path;
+                return (
+                  <div key={proposal.path} className="rounded-lg border border-border/70 bg-background/75 p-3">
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-foreground">{proposal.targetPath ?? proposal.path}</p>
+                        <p className="mt-1 truncate text-xs text-muted-foreground">{proposal.path}</p>
+                      </div>
+                      <Badge variant="outline">{proposal.tool}</Badge>
+                    </div>
+                    {proposal.summary ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{proposal.summary}</p> : null}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <Button size="sm" onClick={() => void memory.applyProposal(proposal.path)} disabled={proposalBusy}>
+                        <Check className="h-4 w-4" />
+                        Apply
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => void memory.rejectProposal(proposal.path)} disabled={proposalBusy}>
+                        <X className="h-4 w-4" />
+                        Reject
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => void memory.readMemory(proposal.path)}>
+                        <FileText className="h-4 w-4" />
+                        Open
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </DetailSection>
+      </div>
+    </div>
+  );
+}
+
 function WorkspaceWorkbench(props: {
   workspace: Workspace | null;
   session: Session | null;
   run: Run | null;
   catalog: WorkspaceCatalog | null;
+  workspaceMemory: WorkspaceMemoryController;
   engineTools: ModelCallTraceEngineTool[];
   engineToolNames: string[];
   activeToolNames: string[];
@@ -56,7 +251,7 @@ function WorkspaceWorkbench(props: {
   triggerWorkspaceAction: (input: { workspaceId: string; actionName: string; input?: unknown }) => Promise<boolean>;
   refreshWorkspace: (targetId: string) => void;
 }) {
-  const [panel, setPanel] = useState<"snapshot" | "catalog" | "records">("snapshot");
+  const [panel, setPanel] = useState<"snapshot" | "catalog" | "records" | "memory">("snapshot");
   const [selectedUserActionName, setSelectedUserActionName] = useState("");
   const [actionInputMode, setActionInputMode] = useState<"structured" | "json">("json");
   const [actionInputText, setActionInputText] = useState("");
@@ -391,6 +586,7 @@ function WorkspaceWorkbench(props: {
             <InspectorTabButton label="Snapshot" active={panel === "snapshot"} onClick={() => setPanel("snapshot")} />
             <InspectorTabButton label="Catalog" active={panel === "catalog"} onClick={() => setPanel("catalog")} />
             <InspectorTabButton label="Records" active={panel === "records"} onClick={() => setPanel("records")} />
+            <InspectorTabButton label="Memory" active={panel === "memory"} onClick={() => setPanel("memory")} />
           </div>
         </div>
 
@@ -446,7 +642,11 @@ function WorkspaceWorkbench(props: {
             </div>
           ) : null}
 
-          {panel !== "snapshot" ? (
+          {panel === "memory" ? (
+            <MemoryWorkbench workspace={props.workspace} memory={props.workspaceMemory} />
+          ) : null}
+
+          {panel !== "snapshot" && panel !== "memory" ? (
             <DetailSection
               title={panel === "catalog" ? "Catalog Detail" : "Record Detail"}
               description={

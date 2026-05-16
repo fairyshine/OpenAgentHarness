@@ -46,6 +46,24 @@ type WorkspaceCleanupOptions = {
   yes?: boolean;
 };
 
+type MemoryCommandOptions = {
+  workspace?: string;
+};
+
+type MemorySearchOptions = MemoryCommandOptions & {
+  corpus?: "all" | "index" | "topics" | "sessions" | "daily" | "dreams";
+  maxResults?: number;
+};
+
+type MemoryGetOptions = MemoryCommandOptions & {
+  from?: number;
+  lines?: number;
+};
+
+type MemoryRejectProposalOptions = MemoryCommandOptions & {
+  reason?: string;
+};
+
 type DaemonMaintenanceOptions = {
   dryRun?: boolean;
   force?: boolean;
@@ -379,6 +397,80 @@ export function createProgram(): Command {
       const client = new OahApiClient(connection);
       const profile = await client.getSystemProfile();
       console.log(JSON.stringify(profile, null, 2));
+    });
+
+  const memory = program.command("memory").description("Inspect local workspace memory files");
+
+  memory
+    .command("status")
+    .description("Show local workspace memory status")
+    .option("--workspace <path>", "Workspace path; defaults to the current directory")
+    .action(async (options: MemoryCommandOptions) => {
+      const { memoryStatus } = await import("./memory.js");
+      console.log(await memoryStatus(options));
+    });
+
+  memory
+    .command("index")
+    .description("List local workspace memory files")
+    .option("--workspace <path>", "Workspace path; defaults to the current directory")
+    .action(async (options: MemoryCommandOptions) => {
+      const { memoryIndex } = await import("./memory.js");
+      console.log(await memoryIndex(options));
+    });
+
+  memory
+    .command("search")
+    .description("Search local workspace memory files")
+    .argument("<query>", "Search query")
+    .option("--workspace <path>", "Workspace path; defaults to the current directory")
+    .option("--corpus <corpus>", "Corpus: all, index, topics, sessions, daily, dreams", parseMemoryCorpusOption)
+    .option("--max-results <count>", "Maximum results to print", parseIntegerOption)
+    .action(async (query: string, options: MemorySearchOptions) => {
+      const { memorySearch } = await import("./memory.js");
+      console.log(await memorySearch(query, options));
+    });
+
+  memory
+    .command("get")
+    .description("Read a local workspace memory file")
+    .argument("<path>", "Memory file path")
+    .option("--workspace <path>", "Workspace path; defaults to the current directory")
+    .option("--from <line>", "Line number to start from", parseIntegerOption)
+    .option("--lines <count>", "Number of lines to print", parseIntegerOption)
+    .action(async (memoryPath: string, options: MemoryGetOptions) => {
+      const { memoryGet } = await import("./memory.js");
+      console.log(await memoryGet(memoryPath, options));
+    });
+
+  memory
+    .command("proposals")
+    .description("List pending local workspace memory proposals")
+    .option("--workspace <path>", "Workspace path; defaults to the current directory")
+    .action(async (options: MemoryCommandOptions) => {
+      const { memoryProposals } = await import("./memory.js");
+      console.log(await memoryProposals(options));
+    });
+
+  memory
+    .command("apply-proposal")
+    .description("Apply a pending local workspace memory proposal")
+    .argument("<path>", "Proposal file path")
+    .option("--workspace <path>", "Workspace path; defaults to the current directory")
+    .action(async (proposalPath: string, options: MemoryCommandOptions) => {
+      const { memoryApplyProposal } = await import("./memory.js");
+      console.log(await memoryApplyProposal(proposalPath, options));
+    });
+
+  memory
+    .command("reject-proposal")
+    .description("Reject a pending local workspace memory proposal")
+    .argument("<path>", "Proposal file path")
+    .option("--workspace <path>", "Workspace path; defaults to the current directory")
+    .option("--reason <text>", "Optional rejection reason")
+    .action(async (proposalPath: string, options: MemoryRejectProposalOptions) => {
+      const { memoryRejectProposal } = await import("./memory.js");
+      console.log(await memoryRejectProposal(proposalPath, options));
     });
 
   const workspace = program.command("workspace").description("Manage visible workspaces");
@@ -753,6 +845,13 @@ function parseIntegerOption(value: string): number {
     throw new Error(`Invalid positive integer: ${value}`);
   }
   return parsed;
+}
+
+function parseMemoryCorpusOption(value: string): MemorySearchOptions["corpus"] {
+  if (value === "all" || value === "index" || value === "topics" || value === "sessions" || value === "daily" || value === "dreams") {
+    return value;
+  }
+  throw new Error(`Invalid memory corpus: ${value}`);
 }
 
 function resolveGroupedHomeOptions(command: Command | undefined, group: Command, program: Command): DaemonGlobalOptions {

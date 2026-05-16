@@ -190,7 +190,8 @@ function useAppControllerSurfaceProps(input: AppControllerSurfacePropsInput) {
       triggerWorkspaceAction: input.triggerWorkspaceAction,
       refreshWorkspace: input.handleRefreshWorkspace,
       isRunning: input.hasActiveSessionRun,
-      fileManager: input.workspaceFileManager.fileManagerSurfaceProps
+      fileManager: input.workspaceFileManager,
+      workspaceMemory: input.workspaceMemory
     }),
     [
       input.allAdvertisedToolNames,
@@ -252,7 +253,8 @@ function useAppControllerSurfaceProps(input: AppControllerSurfacePropsInput) {
       input.switchingSessionModelId,
       input.triggerWorkspaceAction,
       input.workspace,
-      input.workspaceFileManager.fileManagerSurfaceProps,
+      input.workspaceFileManager,
+      input.workspaceMemory,
       input.workspaceId
     ]
   );

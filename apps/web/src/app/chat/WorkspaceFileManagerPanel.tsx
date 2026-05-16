@@ -1,8 +1,10 @@
-import { useMemo, useRef, useState, type DragEvent } from "react";
+import { memo, useMemo, useRef, useState, type DragEvent } from "react";
 
 import {
   ArrowUp,
+  Code2,
   Download,
+  Eye,
   File,
   FileImage,
   FilePlus2,
@@ -22,14 +24,20 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 import { formatRelativeTimestamp, formatTimestamp, formatTimestampPrecise, pathLeaf, prettyJson } from "../support";
-import type { useAppController } from "../use-app-controller";
-import type { WorkspaceUploadItem } from "../use-workspace-file-manager";
+import {
+  useWorkspaceFileManager,
+  type WorkspaceFileManagerParams,
+  type WorkspaceFileManagerSurfaceProps,
+  type WorkspaceUploadItem
+} from "../use-workspace-file-manager";
+import { MarkdownText } from "./conversation-markdown";
 
-type FileManagerProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"]["fileManager"];
+type FileManagerProps = WorkspaceFileManagerSurfaceProps;
 
 interface DroppedFileSystemEntry {
   name: string;
@@ -94,6 +102,12 @@ function formatSize(sizeBytes: number | undefined): string {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function pathExtension(value: string): string {
+  const leaf = pathLeaf(value);
+  const dotIndex = leaf.lastIndexOf(".");
+  return dotIndex >= 0 ? leaf.slice(dotIndex + 1).toLowerCase() : "";
+}
+
 function isImagePreview(fileManager: FileManagerProps): boolean {
   return Boolean(
     fileManager.selectedEntry?.type === "file" &&
@@ -107,6 +121,34 @@ function isTextPreview(fileManager: FileManagerProps): boolean {
     fileManager.selectedEntry?.type === "file" &&
       fileManager.selectedFile?.encoding === "utf8"
   );
+}
+
+function isMarkdownPreview(fileManager: FileManagerProps): boolean {
+  if (!isTextPreview(fileManager) || !fileManager.selectedEntry) {
+    return false;
+  }
+
+  const mimeType = fileManager.selectedFile?.mimeType?.toLowerCase() ?? fileManager.selectedEntry.mimeType?.toLowerCase() ?? "";
+  return mimeType.includes("markdown") || ["md", "mdx"].includes(pathExtension(fileManager.selectedEntry.path));
+}
+
+function isHtmlPreview(fileManager: FileManagerProps): boolean {
+  if (!isTextPreview(fileManager) || !fileManager.selectedEntry) {
+    return false;
+  }
+
+  const mimeType = fileManager.selectedFile?.mimeType?.toLowerCase() ?? fileManager.selectedEntry.mimeType?.toLowerCase() ?? "";
+  return mimeType.includes("text/html") || mimeType.includes("application/xhtml") || ["html", "htm", "xhtml"].includes(pathExtension(fileManager.selectedEntry.path));
+}
+
+function getPreviewText(fileManager: FileManagerProps): string {
+  if (!fileManager.selectedFile || fileManager.selectedFile.encoding !== "utf8") {
+    return "";
+  }
+
+  return fileManager.selectedFileEditable && !fileManager.selectedFile.truncated
+    ? fileManager.selectedFileDraft
+    : fileManager.selectedFile.content;
 }
 
 function DirectoryBreadcrumbs(props: Pick<FileManagerProps, "breadcrumbs" | "openDirectory">) {
@@ -124,6 +166,100 @@ function DirectoryBreadcrumbs(props: Pick<FileManagerProps, "breadcrumbs" | "ope
         </div>
       ))}
     </div>
+  );
+}
+
+function RenderedMarkdownPreview(props: { text: string }) {
+  return (
+    <div className="min-h-[340px] overflow-auto rounded-[24px] border border-black/10 bg-white/60 p-4 text-foreground shadow-inner">
+      <MarkdownText text={props.text} />
+    </div>
+  );
+}
+
+function RenderedHtmlPreview(props: { html: string; title: string }) {
+  return (
+    <iframe
+      title={`Rendered preview of ${props.title}`}
+      sandbox="allow-scripts allow-forms allow-modals"
+      srcDoc={props.html}
+      className="h-[520px] w-full rounded-[24px] border border-black/10 bg-white shadow-inner"
+    />
+  );
+}
+
+function TextSourcePreview(props: {
+  fileManager: FileManagerProps;
+  selectedFile: NonNullable<FileManagerProps["selectedFile"]>;
+}) {
+  if (props.selectedFile.truncated) {
+    return (
+      <>
+        <p className="text-xs text-muted-foreground">Large file preview loaded. Download the file to inspect the full content safely.</p>
+        <pre className="max-h-[520px] overflow-auto rounded-[24px] border border-black/10 bg-black/[0.02] p-4 text-xs leading-6 text-foreground/80">
+          {props.selectedFile.content}
+        </pre>
+      </>
+    );
+  }
+
+  return (
+    <Textarea
+      value={props.fileManager.selectedFileDraft}
+      onChange={(event) => props.fileManager.setSelectedFileDraft(event.target.value)}
+      disabled={!props.fileManager.selectedFileEditable}
+      className="min-h-[340px] resize-y rounded-[24px] border-black/10 bg-black/[0.02] font-mono text-xs leading-6 shadow-none"
+    />
+  );
+}
+
+function TextPreview(props: {
+  fileManager: FileManagerProps;
+  selectedEntry: NonNullable<FileManagerProps["selectedEntry"]>;
+  selectedFile: NonNullable<FileManagerProps["selectedFile"]>;
+}) {
+  const canRenderMarkdown = isMarkdownPreview(props.fileManager);
+  const canRenderHtml = isHtmlPreview(props.fileManager);
+  const previewText = getPreviewText(props.fileManager);
+
+  if (!canRenderMarkdown && !canRenderHtml) {
+    return (
+      <div className="space-y-2">
+        <TextSourcePreview fileManager={props.fileManager} selectedFile={props.selectedFile} />
+      </div>
+    );
+  }
+
+  return (
+    <Tabs defaultValue="rendered" className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <TabsList>
+          <TabsTrigger value="rendered">
+            <Eye className="h-4 w-4" />
+            Rendered
+          </TabsTrigger>
+          <TabsTrigger value="source">
+            <Code2 className="h-4 w-4" />
+            Source
+          </TabsTrigger>
+        </TabsList>
+        {canRenderHtml ? (
+          <Badge variant="outline" className="shrink-0">sandboxed</Badge>
+        ) : null}
+      </div>
+      <TabsContent value="rendered" className="mt-0">
+        {canRenderMarkdown ? (
+          <RenderedMarkdownPreview text={previewText} />
+        ) : (
+          <RenderedHtmlPreview html={previewText} title={props.selectedEntry.name} />
+        )}
+      </TabsContent>
+      <TabsContent value="source" className="mt-0">
+        <div className="space-y-2">
+          <TextSourcePreview fileManager={props.fileManager} selectedFile={props.selectedFile} />
+        </div>
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -356,6 +492,117 @@ function FileManagerCommandBar(props: {
   );
 }
 
+function WorkspaceFilePreviewWindow(props: {
+  fileManager: FileManagerProps;
+  imagePreviewUrl: string | null;
+}) {
+  const { fileManager } = props;
+  const selectedEntry = fileManager.selectedEntry;
+  const selectedFile = fileManager.selectedFile;
+  const selectedEntryUpdatedAt = renderEntryUpdatedAt(selectedEntry?.updatedAt);
+  const selectedPreviewUpdatedAt = renderEntryUpdatedAt(selectedFile?.updatedAt ?? selectedEntry?.updatedAt);
+
+  if (!fileManager.open || !selectedEntry) {
+    return null;
+  }
+
+  return (
+    <div className="workspace-file-preview-shell absolute inset-x-3 bottom-24 top-10 z-40 md:bottom-28 md:left-6 md:right-[408px] md:top-6">
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-black/10 bg-background/94 shadow-[0_32px_90px_-42px_rgba(15,23,42,0.6)] backdrop-blur-xl">
+        <div className="flex items-center justify-between gap-3 border-b border-black/8 px-4 py-3">
+          <div className="min-w-0">
+            <p className="truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Preview</p>
+            <p className="mt-1 truncate text-sm font-medium text-foreground">{selectedEntry.path}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {selectedEntry.type === "file" && selectedFile?.truncated ? <Badge variant="outline">preview only</Badge> : null}
+            {selectedEntry.type === "file" && fileManager.selectedFileDirty ? <Badge variant="secondary">unsaved</Badge> : null}
+            {selectedEntry.type === "file" ? (
+              <Button
+                size="sm"
+                onClick={fileManager.saveSelectedFile}
+                disabled={!fileManager.selectedFileDirty || !fileManager.selectedFileEditable || fileManager.mutationBusy}
+              >
+                Save
+              </Button>
+            ) : null}
+            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl" onClick={fileManager.closeSelection}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          {selectedEntry.type === "directory" ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Directory</p>
+                  <p className="mt-2 text-sm font-medium text-foreground">{selectedEntry.name}</p>
+                  <p className="mt-1 truncate text-xs text-muted-foreground">{selectedEntry.path}</p>
+                </div>
+                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time</p>
+                  <p className="mt-2 text-sm font-medium text-foreground">{selectedEntryUpdatedAt.inline}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{selectedEntryUpdatedAt.detail}</p>
+                </div>
+              </div>
+              <Button variant="outline" onClick={() => fileManager.openDirectory(selectedEntry.path)}>
+                <Folder className="h-4 w-4" />
+                Open Directory
+              </Button>
+            </div>
+          ) : fileManager.fileBusy ? (
+            <div className="flex h-full min-h-[240px] items-center justify-center">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Size</p>
+                  <p className="mt-2 text-sm font-medium text-foreground">{formatSize(selectedFile?.sizeBytes ?? selectedEntry.sizeBytes)}</p>
+                </div>
+                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Encoding</p>
+                  <p className="mt-2 text-sm font-medium text-foreground">{selectedFile?.encoding ?? "unknown"}</p>
+                </div>
+                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">MIME</p>
+                  <p className="mt-2 truncate text-sm font-medium text-foreground">{selectedFile?.mimeType ?? selectedEntry.mimeType ?? "unknown"}</p>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time</p>
+                <p className="mt-2 text-sm font-medium text-foreground">{selectedPreviewUpdatedAt.inline}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{selectedPreviewUpdatedAt.detail}</p>
+              </div>
+
+              {isImagePreview(fileManager) && props.imagePreviewUrl ? (
+                <div className="overflow-hidden rounded-[24px] border border-black/10 bg-black/[0.03] p-3">
+                  <img src={props.imagePreviewUrl} alt={selectedEntry.name} className="max-h-[520px] w-full rounded-[18px] object-contain" />
+                </div>
+              ) : isTextPreview(fileManager) && selectedFile ? (
+                <TextPreview fileManager={fileManager} selectedEntry={selectedEntry} selectedFile={selectedFile} />
+              ) : (
+                <div className="space-y-3">
+                  <div className="rounded-[24px] border border-black/10 bg-black/[0.02] p-4">
+                    <p className="text-sm font-medium text-foreground">Binary or non-editable preview</p>
+                    <p className="mt-1 text-sm text-muted-foreground">This file is being shown as metadata / preview only. Use download for the raw bytes.</p>
+                  </div>
+                  <pre className="max-h-[340px] overflow-auto rounded-[24px] border border-black/10 bg-black/[0.02] p-4 text-xs leading-6 text-foreground/75">
+                    {prettyJson(selectedFile)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps }) {
   const { fileManager } = props;
   const [commandMode, setCommandMode] = useState<"new-file" | "new-directory" | "move" | null>(null);
@@ -376,7 +623,7 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
 
   const selectedEntry = fileManager.selectedEntry;
   const selectedFile = fileManager.selectedFile;
-  const busy = fileManager.entriesBusy || fileManager.fileBusy || fileManager.mutationBusy;
+  const busy = fileManager.entriesBusy || fileManager.entriesLoadingMore || fileManager.fileBusy || fileManager.mutationBusy;
   const displayPath = fileManager.currentPath.trim() === "" || fileManager.currentPath === "." ? "workspace root" : fileManager.currentPath;
   const selectedEntryUpdatedAt = renderEntryUpdatedAt(selectedEntry?.updatedAt);
   const selectedPreviewUpdatedAt = renderEntryUpdatedAt(selectedFile?.updatedAt ?? selectedEntry?.updatedAt);
@@ -559,11 +806,12 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                             "flex w-full items-start gap-3 rounded-2xl px-3 py-2.5 text-left transition",
                             active ? "border border-black/10 bg-black/[0.045] shadow-sm" : "border border-transparent hover:border-black/8 hover:bg-black/[0.025]"
                           )}
-                          onClick={() => fileManager.focusEntry(entry)}
-                          onDoubleClick={() => {
+                          onClick={() => {
                             if (entry.type === "directory") {
                               fileManager.openDirectory(entry.path);
+                              return;
                             }
+                            fileManager.focusEntry(entry);
                           }}
                         >
                           <div className={cn(
@@ -592,6 +840,19 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                         <p className="text-sm font-medium text-foreground">This directory is empty</p>
                         <p className="mt-1 text-xs text-muted-foreground">Drop files/folders here, upload files, or create a folder to get started.</p>
                       </div>
+                    ) : null}
+
+                    {fileManager.entriesHasMore ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={fileManager.loadMoreEntries}
+                        disabled={fileManager.entriesLoadingMore}
+                      >
+                        {fileManager.entriesLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        Load more
+                      </Button>
                     ) : null}
 
                   </div>
@@ -681,18 +942,8 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                         <div className="overflow-hidden rounded-[24px] border border-black/10 bg-black/[0.03] p-3">
                           <img src={imagePreviewUrl} alt={selectedEntry.name} className="max-h-[420px] w-full rounded-[18px] object-contain" />
                         </div>
-                      ) : isTextPreview(fileManager) ? (
-                        <div className="space-y-2">
-                          {selectedFile?.truncated ? (
-                            <p className="text-xs text-muted-foreground">Large file preview loaded. Download the file to inspect the full content safely.</p>
-                          ) : null}
-                          <Textarea
-                            value={fileManager.selectedFileDraft}
-                            onChange={(event) => fileManager.setSelectedFileDraft(event.target.value)}
-                            disabled={!fileManager.selectedFileEditable}
-                            className="min-h-[340px] resize-y rounded-[24px] border-black/10 bg-black/[0.02] font-mono text-xs leading-6 shadow-none"
-                          />
-                        </div>
+                      ) : isTextPreview(fileManager) && selectedFile ? (
+                        <TextPreview fileManager={fileManager} selectedEntry={selectedEntry} selectedFile={selectedFile} />
                       ) : (
                         <div className="space-y-3">
                           <div className="rounded-[24px] border border-black/10 bg-black/[0.02] p-4">
@@ -715,3 +966,8 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
     </>
   );
 }
+
+export const WorkspaceFileManagerContainer = memo(function WorkspaceFileManagerContainer(props: { fileManager: WorkspaceFileManagerParams }) {
+  const fileManager = useWorkspaceFileManager(props.fileManager);
+  return <WorkspaceFileManagerPanel fileManager={fileManager.fileManagerSurfaceProps} />;
+});

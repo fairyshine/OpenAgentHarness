@@ -182,7 +182,10 @@ export class OahApiClient {
     return page.items;
   }
 
-  async createSession(workspaceId: string, input: { title?: string; agentName?: string; modelRef?: string }): Promise<Session> {
+  async createSession(
+    workspaceId: string,
+    input: { title?: string; agentName?: string; modelRef?: string; workspaceMemory?: { writePolicy?: "explicit-only" | "confirm-suggested" | "auto-extract" } }
+  ): Promise<Session> {
     return this.request<Session>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/sessions`, {
       method: "POST",
       headers: {
@@ -209,7 +212,12 @@ export class OahApiClient {
     return page.items;
   }
 
-  async sendMessage(sessionId: string, content: string, runningRunBehavior: "queue" | "interrupt" = "queue"): Promise<MessageAccepted> {
+  async sendMessage(
+    sessionId: string,
+    content: string,
+    runningRunBehavior: "queue" | "interrupt" = "queue",
+    workspaceMemory?: { writePolicy?: "explicit-only" | "confirm-suggested" | "auto-extract" }
+  ): Promise<MessageAccepted> {
     return this.request<MessageAccepted>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       headers: {
@@ -217,6 +225,7 @@ export class OahApiClient {
       },
       body: JSON.stringify({
         content,
+        ...(workspaceMemory ? { workspaceMemory } : {}),
         runningRunBehavior
       })
     });
