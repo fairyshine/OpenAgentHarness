@@ -426,6 +426,9 @@ export async function applyWorkspaceMemoryProposal(input: {
     fileSystem: input.fileSystem,
     workspace: input.workspace
   }).MemoryApplyProposal;
+  if (!tool) {
+    throw new AppError(404, "workspace_memory_tool_not_found", "MemoryApplyProposal tool is unavailable.");
+  }
   const proposalPath = normalizeProposalPath(input.path);
   const output = String(await tool.execute({ path: proposalPath }, {}));
   return {
@@ -447,6 +450,9 @@ export async function rejectWorkspaceMemoryProposal(input: {
     fileSystem: input.fileSystem,
     workspace: input.workspace
   }).MemoryRejectProposal;
+  if (!tool) {
+    throw new AppError(404, "workspace_memory_tool_not_found", "MemoryRejectProposal tool is unavailable.");
+  }
   const proposalPath = normalizeProposalPath(input.path);
   const output = String(await tool.execute({ path: proposalPath, ...(input.reason ? { reason: input.reason } : {}) }, {}));
   return {

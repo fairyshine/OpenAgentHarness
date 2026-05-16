@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text, useWindowSize } from "ink";
-import type { Run, Session, Workspace, WorkspaceRuntime } from "@oah/api-contracts";
+import type { Run, Session, Workspace, WorkspaceMemoryFile, WorkspaceMemoryProposal, WorkspaceRuntime } from "@oah/api-contracts";
 
 import type { Dialog } from "../domain/types.js";
 import {
@@ -160,6 +160,132 @@ export function SessionDialog(props: {
       )}
       <Text dimColor>enter resume · n new session · r refresh · esc close</Text>
     </DialogBox>
+  );
+}
+
+export function MemoryDialog(props: {
+  dialog: Extract<Dialog, { kind: "memory" }>;
+  workspace: Workspace | null;
+  rows: number;
+}) {
+  const status = props.dialog.status;
+  const titleParts = ["Memory"];
+  if (props.dialog.query) {
+    titleParts.push(`search "${props.dialog.query}"`);
+  }
+  if (props.dialog.mode === "proposals") {
+    titleParts.push("proposals");
+  }
+  if (props.dialog.mode === "detail") {
+    titleParts.push("detail");
+  }
+
+  return (
+    <DialogBox title={titleParts.join(" · ")} rows={props.rows}>
+      <Text wrap="truncate-end">
+        <Text color={status?.enabled ? "green" : "yellow"}>{status?.enabled ? "enabled" : "disabled"}</Text>{" "}
+        <Text dimColor>{status?.writePolicy ?? "explicit-only"}</Text>{" "}
+        <Text dimColor>
+          files {status?.fileCount ?? 0} · topics {status?.topics ?? 0} · sessions {status?.sessions ?? 0} · daily {status?.daily ?? 0} · dreams{" "}
+          {status?.dreams ?? 0} · proposals {status?.pendingProposals ?? props.dialog.proposals.length}
+        </Text>
+      </Text>
+      {props.workspace ? (
+        <Text dimColor wrap="truncate-end">
+          {props.workspace.name} · {props.workspace.id}
+        </Text>
+      ) : null}
+      {props.dialog.loading ? <Text color="cyan">loading...</Text> : null}
+      {props.dialog.error ? <Text color="red">{props.dialog.error}</Text> : null}
+      {props.dialog.mode === "detail" ? (
+        <MemoryDetailView dialog={props.dialog} rows={props.rows} />
+      ) : props.dialog.mode === "proposals" ? (
+        <MemoryProposalList dialog={props.dialog} rows={props.rows} />
+      ) : (
+        <MemoryFileList dialog={props.dialog} rows={props.rows} />
+      )}
+      <Text dimColor>enter open · j/k move · f files · p proposals · r refresh · a apply · x reject · esc close</Text>
+    </DialogBox>
+  );
+}
+
+function MemoryFileList(props: { dialog: Extract<Dialog, { kind: "memory" }>; rows: number }) {
+  const limit = Math.max(4, props.rows - 8);
+  const selectedIndex = clampIndex(props.dialog.selectedIndex, props.dialog.files.length);
+  const window = visibleWindow(props.dialog.files, selectedIndex, limit);
+  if (props.dialog.files.length === 0) {
+    return <Text dimColor>No memory files found.</Text>;
+  }
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {window.items.map((file, index) => {
+        const absoluteIndex = window.offset + index;
+        return <MemoryFileLine key={file.path} file={file} selected={absoluteIndex === selectedIndex} />;
+      })}
+    </Box>
+  );
+}
+
+function MemoryFileLine(props: { file: WorkspaceMemoryFile; selected: boolean }) {
+  return (
+    <Text {...(props.selected ? { color: "cyan" } : {})} bold={props.selected} wrap="truncate-end">
+      {props.selected ? "❯" : " "} {props.file.title} <Text dimColor>{props.file.corpus}</Text> <Text dimColor>{props.file.path}</Text>
+    </Text>
+  );
+}
+
+function MemoryProposalList(props: { dialog: Extract<Dialog, { kind: "memory" }>; rows: number }) {
+  const limit = Math.max(4, props.rows - 8);
+  const selectedIndex = clampIndex(props.dialog.selectedIndex, props.dialog.proposals.length);
+  const window = visibleWindow(props.dialog.proposals, selectedIndex, limit);
+  if (props.dialog.proposals.length === 0) {
+    return <Text dimColor>No pending memory proposals.</Text>;
+  }
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {window.items.map((proposal, index) => {
+        const absoluteIndex = window.offset + index;
+        return <MemoryProposalLine key={proposal.path} proposal={proposal} selected={absoluteIndex === selectedIndex} />;
+      })}
+    </Box>
+  );
+}
+
+function MemoryProposalLine(props: { proposal: WorkspaceMemoryProposal; selected: boolean }) {
+  return (
+    <Box flexDirection="column">
+      <Text {...(props.selected ? { color: "cyan" } : {})} bold={props.selected} wrap="truncate-end">
+        {props.selected ? "❯" : " "} {props.proposal.targetPath ?? props.proposal.path} <Text dimColor>{props.proposal.tool}</Text>
+      </Text>
+      {props.proposal.summary ? (
+        <Text dimColor wrap="truncate-end">
+          {"  "}
+          {props.proposal.summary}
+        </Text>
+      ) : null}
+    </Box>
+  );
+}
+
+function MemoryDetailView(props: { dialog: Extract<Dialog, { kind: "memory" }>; rows: number }) {
+  const detail = props.dialog.detail;
+  if (!detail) {
+    return <Text dimColor>No memory file selected.</Text>;
+  }
+  const limit = Math.max(4, props.rows - 8);
+  const lines = detail.content.split("\n").slice(0, limit);
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text color="cyan" wrap="truncate-end">
+        {detail.path}
+      </Text>
+      {lines.map((line, index) => (
+        <Text key={`${detail.path}:${index}`} wrap="truncate-end">
+          {line}
+        </Text>
+      ))}
+      {detail.truncated ? <Text dimColor>truncated · use CLI memory get for full file</Text> : null}
+    </Box>
   );
 }
 

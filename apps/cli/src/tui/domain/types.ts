@@ -1,3 +1,11 @@
+import type {
+  WorkspaceMemoryCorpus,
+  WorkspaceMemoryFile,
+  WorkspaceMemoryProposal,
+  WorkspaceMemoryReadResponse,
+  WorkspaceMemoryStatus
+} from "@oah/api-contracts";
+
 export type Notice = {
   level: "info" | "error";
   message: string;
@@ -63,11 +71,28 @@ export type WorkspaceCreateDialog = {
   serviceName: string;
 };
 
+export type MemoryDialogMode = "files" | "proposals" | "detail";
+
+export type MemoryDialog = {
+  kind: "memory";
+  mode: MemoryDialogMode;
+  selectedIndex: number;
+  query: string;
+  corpus: WorkspaceMemoryCorpus;
+  status: WorkspaceMemoryStatus | null;
+  files: WorkspaceMemoryFile[];
+  proposals: WorkspaceMemoryProposal[];
+  detail: WorkspaceMemoryReadResponse | null;
+  loading: boolean;
+  error?: string | undefined;
+};
+
 export type Dialog =
   | { kind: "workspace-list"; selectedIndex: number }
   | WorkspaceCreateDialog
   | { kind: "session-list"; selectedIndex: number }
   | { kind: "session-create"; draft: string }
+  | MemoryDialog
   | { kind: "help" };
 
 export type VisibleWindow<T> = {

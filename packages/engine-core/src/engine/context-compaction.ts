@@ -446,6 +446,7 @@ export class ContextCompactionService implements ContextPreparationModule {
     }
 
     const engineMessagesById = new Map(compactionSourceMessages.map((message) => [message.id, message]));
+    const persistedMessagesById = new Map(input.messages.map((message) => [message.id, message]));
     const groups = groupMessagesForCompaction(compactProjection.messages, engineMessagesById);
     if (groups.length <= 1) {
       return {
@@ -491,8 +492,8 @@ export class ContextCompactionService implements ContextPreparationModule {
     const compactThroughMessageId = messagesToSummarize.at(-1)?.sourceMessageIds[0];
     const messagesToFlush = messagesToSummarize
       .flatMap((message) => message.sourceMessageIds)
-      .map((messageId) => engineMessagesById.get(messageId))
-      .filter((message): message is EngineMessage => Boolean(message));
+      .map((messageId) => persistedMessagesById.get(messageId))
+      .filter((message): message is Message => Boolean(message));
     const memoryFlush = await this.#captureWorkspaceMemoryBeforeCompaction?.({
       workspace: input.workspace,
       session: input.session,

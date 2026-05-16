@@ -1,4 +1,5 @@
 import type { FSWatcher } from "node:fs";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import type { ServerConfig } from "@oah/config";
 
@@ -72,6 +73,35 @@ function mergeRefreshedWorkspaceRecord(
     ...(workspace.runtime ? { runtime: workspace.runtime } : {}),
     ...(workspace.externalRef ? { externalRef: workspace.externalRef } : {})
   } as WorkspaceRecord;
+}
+
+function workspaceDiscoveryKey(workspace: Pick<WorkspaceRecord, "kind" | "rootPath">): string {
+  return `${workspace.kind}:${path.resolve(workspace.rootPath)}`;
+}
+
+async function managedWorkspaceRootExists(workspace: Pick<WorkspaceRecord, "rootPath">): Promise<boolean> {
+  try {
+    await access(workspace.rootPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function listExistingUndiscoveredManagedWorkspaces(input: {
+  discoveredWorkspaces: WorkspaceRecord[];
+  persistedWorkspaces: WorkspaceRecord[];
+  paths: Pick<ServerConfig["paths"], "workspace_dir">;
+}): Promise<WorkspaceRecord[]> {
+  const discoveredKeys = new Set(input.discoveredWorkspaces.map((workspace) => workspaceDiscoveryKey(workspace)));
+  const candidates = input.persistedWorkspaces.filter(
+    (workspace) => isManagedWorkspace(workspace, input.paths) && !discoveredKeys.has(workspaceDiscoveryKey(workspace))
+  );
+  const existing = await Promise.all(
+    candidates.map(async (workspace) => ((await managedWorkspaceRootExists(workspace)) ? workspace : undefined))
+  );
+
+  return existing.filter((workspace): workspace is WorkspaceRecord => workspace !== undefined);
 }
 
 interface WorkspaceLeaseRegistryLike {
@@ -167,6 +197,21 @@ export async function prepareControlPlaneRuntime(options: {
   const bootDiscoveredWorkspaces = options.discoveredWorkspaces.filter(
     (workspace) => !bootPrunedWorkspaceRootPaths.has(path.resolve(workspace.rootPath))
   );
+  const bootExistingUndiscoveredManagedWorkspaces =
+    options.managesWorkspaceRegistry && !options.singleWorkspaceDefined
+      ? await listExistingUndiscoveredManagedWorkspaces({
+          discoveredWorkspaces: bootDiscoveredWorkspaces,
+          persistedWorkspaces: persistedWorkspaceSnapshots,
+          paths: options.config.paths
+        })
+      : [];
+  if (bootExistingUndiscoveredManagedWorkspaces.length > 0) {
+    console.warn(
+      `[oah-bootstrap] Preserving ${bootExistingUndiscoveredManagedWorkspaces.length} managed workspace(s) whose roots still exist but were not discovered during bootstrap: ${bootExistingUndiscoveredManagedWorkspaces
+        .map((workspace) => workspace.id)
+        .join(", ")}`
+    );
+  }
 
   const bootWorkspaceCandidates =
     options.singleWorkspaceDefined
@@ -175,6 +220,7 @@ export async function prepareControlPlaneRuntime(options: {
         ? persistedWorkspaceSnapshots
         : [
             ...bootDiscoveredWorkspaces,
+            ...bootExistingUndiscoveredManagedWorkspaces,
             ...persistedWorkspaceSnapshots.filter((workspace) => !isManagedWorkspace(workspace, options.config.paths))
           ];
 
@@ -461,24 +507,50 @@ export async function prepareControlPlaneRuntime(options: {
         (workspace) => !prunedWorkspaceRootPaths.has(path.resolve(workspace.rootPath))
       );
       const staticWorkspaces = persistedWorkspaces.filter((workspace) => !isManagedWorkspace(workspace, options.config.paths));
-      const latestDiscoveredWorkspaces = [...retainedProjectWorkspaces, ...staticWorkspaces];
+      const existingUndiscoveredManagedWorkspaces = await listExistingUndiscoveredManagedWorkspaces({
+        discoveredWorkspaces: retainedProjectWorkspaces,
+        persistedWorkspaces,
+        paths: options.config.paths
+      });
+      if (existingUndiscoveredManagedWorkspaces.length > 0) {
+        console.warn(
+          `[oah-bootstrap] Preserving ${existingUndiscoveredManagedWorkspaces.length} managed workspace(s) whose roots still exist but were not discovered during workspace registry sync: ${existingUndiscoveredManagedWorkspaces
+            .map((workspace) => workspace.id)
+            .join(", ")}`
+        );
+      }
+      const latestDiscoveredWorkspaces = [
+        ...retainedProjectWorkspaces,
+        ...existingUndiscoveredManagedWorkspaces,
+        ...staticWorkspaces
+      ];
       const staleWorkspaceIds = findManagedWorkspaceIdsToDelete(
         latestDiscoveredWorkspaces,
         persistedWorkspaces,
         options.config.paths
       );
       const staleWorkspaces = persistedWorkspaces.filter((workspace) => staleWorkspaceIds.includes(workspace.id));
+      const retainedWorkspaceRoots = new Map(
+        latestDiscoveredWorkspaces.map((workspace) => [path.resolve(workspace.rootPath), workspace.id])
+      );
 
       await Promise.all(
         staleWorkspaces.map(async (workspace) => {
-          const cleanup = await cleanupWorkspaceLocalArtifacts({
-            workspace,
-            paths: options.config.paths,
-            sqliteShadowRoot: options.sqliteShadowRoot
-          });
-          console.info(
-            `[oah-bootstrap] Cleaned local artifacts for stale workspace ${workspace.id} (${cleanup.mode}): ${cleanup.removedPaths.join(", ")}`
-          );
+          const retainedWorkspaceIdForRoot = retainedWorkspaceRoots.get(path.resolve(workspace.rootPath));
+          if (retainedWorkspaceIdForRoot && retainedWorkspaceIdForRoot !== workspace.id) {
+            console.info(
+              `[oah-bootstrap] Removing stale workspace registry entry ${workspace.id}; rootPath is retained by workspace ${retainedWorkspaceIdForRoot}.`
+            );
+          } else {
+            const cleanup = await cleanupWorkspaceLocalArtifacts({
+              workspace,
+              paths: options.config.paths,
+              sqliteShadowRoot: options.sqliteShadowRoot
+            });
+            console.info(
+              `[oah-bootstrap] Cleaned local artifacts for stale workspace ${workspace.id} (${cleanup.mode}): ${cleanup.removedPaths.join(", ")}`
+            );
+          }
           await options.persistence.workspaceRepository.delete(workspace.id);
         })
       );

@@ -23,6 +23,7 @@ export const SLASH_COMMANDS = [
   { command: "/clear", description: "Clear the current transcript view" },
   { command: "/workspace", description: "Switch workspace" },
   { command: "/session", description: "Switch session in current workspace" },
+  { command: "/memory", description: "Inspect workspace memory" },
   { command: "/new-workspace", description: "Create workspace" },
   { command: "/new-session", description: "Create session" },
   { command: "/quit", description: "Exit OAH" }

@@ -3,7 +3,7 @@ import type { SetStateAction } from "react";
 import type { Run, Session, SessionEventContract, SystemProfile, Workspace, WorkspaceCatalog, WorkspaceRuntime } from "@oah/api-contracts";
 
 import { OahApiClient, type OahConnection } from "../../api/oah-api.js";
-import type { AskUserQuestionSelection, ChatLine, Dialog, Notice, SessionStartupMode, WorkspaceCreateDialog } from "../domain/types.js";
+import type { AskUserQuestionSelection, ChatLine, Dialog, MemoryDialog, Notice, SessionStartupMode, WorkspaceCreateDialog } from "../domain/types.js";
 import {
   createWorkspaceDialog,
   formatSessionActivity,
@@ -43,6 +43,7 @@ export function useOahReplState(
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [notice, setNotice] = useState<Notice>({ level: "info", message: "Loading workspaces..." });
   const [streamState, setStreamState] = useState("idle");
+  const dialogRef = useRef<Dialog | null>(null);
   const lastCursorRef = useRef<string | undefined>(undefined);
   const composerRef = useRef("");
   const composerCursorRef = useRef(0);
@@ -53,6 +54,10 @@ export function useOahReplState(
     const message = error instanceof Error ? error.message : String(error);
     setNotice({ level: "error", message });
   }, []);
+
+  useEffect(() => {
+    dialogRef.current = dialog;
+  }, [dialog]);
 
   const resetSessionView = useCallback(() => {
     setMessages([]);
@@ -243,6 +248,148 @@ export function useOahReplState(
     [client, loadWorkspace, setError]
   );
 
+  const openMemoryDialog = useCallback(
+    async (query = "") => {
+      if (!currentWorkspace) {
+        setNotice({ level: "error", message: "Select a workspace first." });
+        return;
+      }
+
+      const trimmedQuery = query.trim();
+      setDialog({
+        kind: "memory",
+        mode: "files",
+        selectedIndex: 0,
+        query: trimmedQuery,
+        corpus: "all",
+        status: null,
+        files: [],
+        proposals: [],
+        detail: null,
+        loading: true
+      });
+      try {
+        const [status, files, proposals] = await Promise.all([
+          client.getWorkspaceMemoryStatus(currentWorkspace.id),
+          trimmedQuery
+            ? client.searchWorkspaceMemory(currentWorkspace.id, { query: trimmedQuery, maxResults: 12 }).then((result) => result.items)
+            : client.listWorkspaceMemory(currentWorkspace.id).then((result) => result.items),
+          client.listWorkspaceMemoryProposals(currentWorkspace.id).then((result) => result.items)
+        ]);
+        setDialog((dialog) =>
+          dialog?.kind === "memory"
+            ? {
+                ...dialog,
+                status,
+                files,
+                proposals,
+                loading: false,
+                error: undefined,
+                selectedIndex: 0,
+                detail: null
+              }
+            : dialog
+        );
+        setNotice({ level: "info", message: `Loaded workspace memory for ${currentWorkspace.name}` });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setDialog((dialog) => (dialog?.kind === "memory" ? { ...dialog, loading: false, error: message } : dialog));
+        setNotice({ level: "error", message });
+      }
+    },
+    [client, currentWorkspace]
+  );
+
+  const refreshMemoryDialog = useCallback(async () => {
+    const dialog = dialogRef.current;
+    if (dialog?.kind !== "memory") {
+      return;
+    }
+    await openMemoryDialog(dialog.query);
+  }, [openMemoryDialog]);
+
+  const readMemorySelection = useCallback(async () => {
+    const dialog = dialogRef.current;
+    if (dialog?.kind !== "memory" || !currentWorkspace) {
+      return;
+    }
+    const item = dialog.mode === "proposals" ? dialog.proposals[dialog.selectedIndex] : dialog.files[dialog.selectedIndex];
+    if (!item) {
+      return;
+    }
+    setDialog({ ...dialog, loading: true, error: undefined });
+    try {
+      const detail = await client.readWorkspaceMemory(currentWorkspace.id, { path: item.path, lines: 160 });
+      setDialog((current) =>
+        current?.kind === "memory"
+          ? {
+              ...current,
+              mode: "detail",
+              detail,
+              loading: false,
+              error: undefined
+            }
+          : current
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setDialog((current) => (current?.kind === "memory" ? { ...current, loading: false, error: message } : current));
+      setNotice({ level: "error", message });
+    }
+  }, [client, currentWorkspace]);
+
+  const applyMemoryProposalSelection = useCallback(async () => {
+    const dialog = dialogRef.current;
+    if (dialog?.kind !== "memory" || !currentWorkspace) {
+      return;
+    }
+    const proposal = dialog.proposals[dialog.selectedIndex];
+    if (!proposal) {
+      return;
+    }
+    setDialog({ ...dialog, loading: true, error: undefined });
+    try {
+      await client.applyWorkspaceMemoryProposal(currentWorkspace.id, proposal.path);
+      setNotice({ level: "info", message: `Applied memory proposal ${proposal.path}` });
+      await openMemoryDialog(dialog.query);
+      setDialog((current) =>
+        current?.kind === "memory"
+          ? { ...current, mode: "proposals", selectedIndex: Math.min(dialog.selectedIndex, Math.max(0, current.proposals.length - 1)) }
+          : current
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setDialog((current) => (current?.kind === "memory" ? { ...current, loading: false, error: message } : current));
+      setNotice({ level: "error", message });
+    }
+  }, [client, currentWorkspace, openMemoryDialog]);
+
+  const rejectMemoryProposalSelection = useCallback(async () => {
+    const dialog = dialogRef.current;
+    if (dialog?.kind !== "memory" || !currentWorkspace) {
+      return;
+    }
+    const proposal = dialog.proposals[dialog.selectedIndex];
+    if (!proposal) {
+      return;
+    }
+    setDialog({ ...dialog, loading: true, error: undefined });
+    try {
+      await client.rejectWorkspaceMemoryProposal(currentWorkspace.id, proposal.path);
+      setNotice({ level: "info", message: `Rejected memory proposal ${proposal.path}` });
+      await openMemoryDialog(dialog.query);
+      setDialog((current) =>
+        current?.kind === "memory"
+          ? { ...current, mode: "proposals", selectedIndex: Math.min(dialog.selectedIndex, Math.max(0, current.proposals.length - 1)) }
+          : current
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setDialog((current) => (current?.kind === "memory" ? { ...current, loading: false, error: message } : current));
+      setNotice({ level: "error", message });
+    }
+  }, [client, currentWorkspace, openMemoryDialog]);
+
   const createSession = useCallback(
     async (title?: string) => {
       if (!currentWorkspace) {
@@ -352,6 +499,11 @@ export function useOahReplState(
         openWorkspaceCreator();
         return;
       }
+      if (content === "/memory" || content.startsWith("/memory ")) {
+        setComposerValue("");
+        await openMemoryDialog(content.slice("/memory".length));
+        return;
+      }
       setComposerValue("");
       let targetSession = currentSession;
       if (!targetSession) {
@@ -382,7 +534,7 @@ export function useOahReplState(
         setError(error);
       }
     },
-    [client, createSessionForWorkspace, currentSession, currentWorkspace, openWorkspaceCreator, refreshSession, setComposerValue, setError]
+    [client, createSessionForWorkspace, currentSession, currentWorkspace, openMemoryDialog, openWorkspaceCreator, refreshSession, setComposerValue, setError]
   );
 
   useEffect(() => {
@@ -482,6 +634,11 @@ export function useOahReplState(
     refreshRuntimes,
     refreshWorkspaces,
     refreshCurrentWorkspaceSessions,
+    openMemoryDialog,
+    refreshMemoryDialog,
+    readMemorySelection,
+    applyMemoryProposalSelection,
+    rejectMemoryProposalSelection,
     loadWorkspace,
     createWorkspace,
     createSession,

@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Static, useApp, useWindowSize } from "ink";
 
 import type { OahConnection } from "../api/oah-api.js";
-import { HelpDialog, SessionDialog, WorkspaceDialog } from "./components/dialogs.js";
+import { HelpDialog, MemoryDialog, SessionDialog, WorkspaceDialog } from "./components/dialogs.js";
 import {
   getChatLinesRowCount,
   getTranscriptBannerRows,
@@ -94,6 +94,8 @@ function OahRepl({
         workspace={state.currentWorkspace}
         rows={dialogRows}
       />
+    ) : state.dialog?.kind === "memory" ? (
+      <MemoryDialog dialog={state.dialog} workspace={state.currentWorkspace} rows={dialogRows} />
     ) : state.dialog?.kind === "help" ? (
       <HelpDialog rows={dialogRows} />
     ) : null;

@@ -1,14 +1,12 @@
 import type {
   ActionRetryPolicy,
   ModelGateway,
-  Run,
-  Session,
   WorkspaceCommandExecutor,
   WorkspaceFileAccessProvider,
   WorkspaceFileSystem,
   WorkspaceRecord
 } from "../types.js";
-import type { ChatMessage } from "@oah/api-contracts";
+import type { ChatMessage, Run, Session } from "@oah/api-contracts";
 import { AppError } from "../errors.js";
 
 export const PUBLIC_NATIVE_TOOL_NAMES = [

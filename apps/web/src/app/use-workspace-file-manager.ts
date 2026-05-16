@@ -59,7 +59,11 @@ export interface WorkspaceUploadDirectoryItem {
 }
 
 const BINARY_PREVIEW_BYTES = 96 * 1024;
-const ENTRY_METADATA_REFRESH_DELAY_MS = 250;
+const ENTRY_METADATA_REFRESH_DELAY_MS = 700;
+const ENTRY_CACHE_TTL_MS = 15_000;
+const FILE_PREVIEW_CACHE_TTL_MS = 30_000;
+const FILE_PREFETCH_MAX_BYTES = 128 * 1024;
+const ENTRY_PREFETCH_DELAY_MS = 80;
 const ENTRY_PAGE_SIZE = 200;
 
 function isAbortError(error: unknown): boolean {
@@ -176,6 +180,17 @@ interface WorkspaceFilePreviewWindowState {
   cascadeIndex: number;
 }
 
+interface CachedEntryPage {
+  page: WorkspaceEntryPage;
+  cachedAtMs: number;
+}
+
+interface CachedFileContent {
+  file: WorkspaceFileContent;
+  cachedAtMs: number;
+  entryStamp: string;
+}
+
 function mergeWorkspaceEntries(pages: WorkspaceEntryPage[]): WorkspaceEntryPage | null {
   if (pages.length === 0) {
     return null;
@@ -198,6 +213,105 @@ function mergeWorkspaceEntries(pages: WorkspaceEntryPage[]): WorkspaceEntryPage 
     path: lastPage.path,
     items: [...itemsByPath.values()]
   };
+}
+
+function workspaceCacheKey(workspaceId: string, targetPath: string): string {
+  return `${workspaceId}::${normalizeWorkspaceRelativePath(targetPath)}`;
+}
+
+function filePreviewCacheKey(workspaceId: string, entry: Pick<WorkspaceEntry, "path">): string {
+  return `${workspaceId}::${normalizeWorkspaceRelativePath(entry.path)}`;
+}
+
+function entryCacheStamp(entry: Pick<WorkspaceEntry, "etag" | "sizeBytes" | "updatedAt" | "mimeType">): string {
+  return [entry.etag ?? "", entry.sizeBytes ?? "", entry.updatedAt ?? "", entry.mimeType ?? ""].join("|");
+}
+
+function getCachedEntryPage(
+  cache: Map<string, CachedEntryPage>,
+  workspaceId: string,
+  targetPath: string
+): WorkspaceEntryPage | null {
+  const cached = cache.get(workspaceCacheKey(workspaceId, targetPath));
+  if (!cached || Date.now() - cached.cachedAtMs > ENTRY_CACHE_TTL_MS) {
+    return null;
+  }
+
+  return cached.page;
+}
+
+function setCachedEntryPage(
+  cache: Map<string, CachedEntryPage>,
+  workspaceId: string,
+  targetPath: string,
+  page: WorkspaceEntryPage
+): void {
+  cache.set(workspaceCacheKey(workspaceId, targetPath), {
+    page,
+    cachedAtMs: Date.now()
+  });
+}
+
+function getCachedFileContent(
+  cache: Map<string, CachedFileContent>,
+  workspaceId: string,
+  entry: WorkspaceEntry
+): WorkspaceFileContent | null {
+  const cached = cache.get(filePreviewCacheKey(workspaceId, entry));
+  if (!cached || Date.now() - cached.cachedAtMs > FILE_PREVIEW_CACHE_TTL_MS) {
+    return null;
+  }
+
+  const stamp = entryCacheStamp(entry);
+  if (stamp !== "|||" && cached.entryStamp !== stamp) {
+    return null;
+  }
+
+  return cached.file;
+}
+
+function setCachedFileContent(
+  cache: Map<string, CachedFileContent>,
+  workspaceId: string,
+  entry: WorkspaceEntry,
+  file: WorkspaceFileContent
+): void {
+  cache.set(filePreviewCacheKey(workspaceId, entry), {
+    file,
+    cachedAtMs: Date.now(),
+    entryStamp: entryCacheStamp({
+      ...entry,
+      etag: file.etag ?? entry.etag,
+      sizeBytes: file.sizeBytes ?? entry.sizeBytes,
+      updatedAt: file.updatedAt ?? entry.updatedAt,
+      mimeType: file.mimeType ?? entry.mimeType
+    })
+  });
+}
+
+function areEntryPagesEqual(left: WorkspaceEntryPage | null, right: WorkspaceEntryPage | null): boolean {
+  if (left === right) {
+    return true;
+  }
+
+  if (!left || !right || left.path !== right.path || left.nextCursor !== right.nextCursor || left.items.length !== right.items.length) {
+    return false;
+  }
+
+  return left.items.every((entry, index) => {
+    const next = right.items[index];
+    return Boolean(
+      next &&
+        entry.path === next.path &&
+        entry.name === next.name &&
+        entry.type === next.type &&
+        entry.sizeBytes === next.sizeBytes &&
+        entry.mimeType === next.mimeType &&
+        entry.etag === next.etag &&
+        entry.updatedAt === next.updatedAt &&
+        entry.readOnly === next.readOnly
+    );
+  });
 }
 
 async function loadEntryPages(input: {
@@ -288,6 +402,10 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
   const metadataAbortRef = useRef<AbortController | null>(null);
   const fileAbortRef = useRef<AbortController | null>(null);
   const metadataRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const entryPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const entryPageCacheRef = useRef(new Map<string, CachedEntryPage>());
+  const fileContentCacheRef = useRef(new Map<string, CachedFileContent>());
+  const filePrefetchingRef = useRef(new Set<string>());
   const previewWindowSeqRef = useRef(0);
 
   const workspaceIdValue = params.workspaceId.trim();
@@ -348,6 +466,10 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
       clearTimeout(metadataRefreshTimerRef.current);
       metadataRefreshTimerRef.current = null;
     }
+    if (entryPrefetchTimerRef.current) {
+      clearTimeout(entryPrefetchTimerRef.current);
+      entryPrefetchTimerRef.current = null;
+    }
     if (!workspaceIdValue) {
       setEntryPage(null);
       return null;
@@ -356,14 +478,21 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
     const targetPath = normalizeWorkspaceRelativePath(options?.path ?? currentPath);
     const entriesController = new AbortController();
     entriesAbortRef.current = entriesController;
+    const cachedPage = getCachedEntryPage(entryPageCacheRef.current, workspaceIdValue, targetPath);
 
     try {
-      setEntriesBusy(true);
+      if (cachedPage) {
+        setCurrentPath(normalizeWorkspaceRelativePath(cachedPage.path));
+        setEntryPage(cachedPage);
+      }
+      if (!cachedPage) {
+        setEntriesBusy(true);
+      }
       const initialResponse = await loadEntryPage({
         workspaceId: workspaceIdValue,
         targetPath,
         sandboxClient,
-        includeEntryMetadata: true,
+        includeEntryMetadata: false,
         includeDirectoryDescendantUpdatedAt: false,
         signal: entriesController.signal,
         pageSize: ENTRY_PAGE_SIZE
@@ -378,10 +507,12 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
       }
 
       setCurrentPath(normalizeWorkspaceRelativePath(initialResponse.path));
-      setEntryPage({
+      const normalizedResponse = {
         ...initialResponse,
         path: normalizeWorkspaceRelativePath(initialResponse.path)
-      });
+      };
+      setCachedEntryPage(entryPageCacheRef.current, workspaceIdValue, targetPath, normalizedResponse);
+      setEntryPage((current) => (areEntryPagesEqual(current, normalizedResponse) ? current : normalizedResponse));
       if (!options?.quiet) {
         const responsePath = normalizeWorkspaceRelativePath(initialResponse.path);
         params.setActivity(
@@ -389,16 +520,18 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
         );
         params.setErrorMessage("");
       }
-      if (initialResponse.items.some((entry) => entry.updatedAt === undefined || (entry.type === "file" && entry.sizeBytes === undefined))) {
-        metadataRefreshTimerRef.current = setTimeout(() => {
-          metadataRefreshTimerRef.current = null;
-          void refreshEntryMetadata({
-            path: targetPath,
-            expectedRequestSeq: requestSeq,
-            quiet: true
-          });
-        }, ENTRY_METADATA_REFRESH_DELAY_MS);
-      }
+      metadataRefreshTimerRef.current = setTimeout(() => {
+        metadataRefreshTimerRef.current = null;
+        void refreshEntryMetadata({
+          path: targetPath,
+          expectedRequestSeq: requestSeq,
+          quiet: true
+        });
+      }, ENTRY_METADATA_REFRESH_DELAY_MS);
+      entryPrefetchTimerRef.current = setTimeout(() => {
+        entryPrefetchTimerRef.current = null;
+        void prefetchSmallFilePreviews(initialResponse.items);
+      }, ENTRY_PREFETCH_DELAY_MS);
       return initialResponse;
     } catch (error) {
       if (isAbortError(error)) {
@@ -454,12 +587,15 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
         for (const entry of response.items) {
           itemsByPath.set(entry.path, entry);
         }
-        return {
+        const next = {
           ...response,
           path: normalizeWorkspaceRelativePath(response.path),
           items: [...itemsByPath.values()]
         };
+        setCachedEntryPage(entryPageCacheRef.current, workspaceIdValue, targetPath, next);
+        return next;
       });
+      void prefetchSmallFilePreviews(response.items);
     } catch (error) {
       if (!isAbortError(error)) {
         params.setErrorMessage(toErrorMessage(error));
@@ -514,11 +650,14 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
         for (const entry of response.items) {
           itemsByPath.set(entry.path, entry);
         }
-        return {
+        const next = {
           ...current,
           items: [...itemsByPath.values()]
         };
+        setCachedEntryPage(entryPageCacheRef.current, workspaceIdValue, targetPath, next);
+        return areEntryPagesEqual(current, next) ? current : next;
       });
+      void prefetchSmallFilePreviews(response.items);
     } catch (error) {
       if (isAbortError(error)) {
         return;
@@ -536,7 +675,81 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
     }
   }
 
+  async function prefetchSmallFilePreviews(candidateEntries: WorkspaceEntry[]): Promise<void> {
+    if (!workspaceIdValue) {
+      return;
+    }
+
+    const candidates = candidateEntries
+      .filter((entry) => entry.type === "file")
+      .filter((entry) => typeof entry.sizeBytes === "number" && entry.sizeBytes <= FILE_PREFETCH_MAX_BYTES)
+      .filter((entry) => isTextEntry(entry) || isImageEntry(entry))
+      .filter((entry) => !getCachedFileContent(fileContentCacheRef.current, workspaceIdValue, entry))
+      .slice(0, 8);
+
+    await Promise.all(
+      candidates.map(async (entry) => {
+        const key = filePreviewCacheKey(workspaceIdValue, entry);
+        if (filePrefetchingRef.current.has(key)) {
+          return;
+        }
+
+        filePrefetchingRef.current.add(key);
+        try {
+          const response = toWorkspaceFileContent(
+            await sandboxClient.getFileContent(workspaceIdValue, {
+              path: workspaceRelativePathToSandboxPath(entry.path),
+              encoding: isTextEntry(entry) ? "utf8" : "base64"
+            } satisfies WorkspaceFileContentQuery)
+          );
+          setCachedFileContent(fileContentCacheRef.current, workspaceIdValue, entry, response);
+        } catch {
+          // Prefetch is only an opportunistic latency hint.
+        } finally {
+          filePrefetchingRef.current.delete(key);
+        }
+      })
+    );
+  }
+
   async function focusEntry(entry: WorkspaceEntry, quiet = false): Promise<void> {
+    if (entry.type === "file") {
+      const existingPreview = previewWindows.find((preview) => preview.id === entry.path);
+      if (existingPreview?.file) {
+        setSelectedEntry(entry);
+        setPreviewWindows((current) => [existingPreview, ...current.filter((preview) => preview.id !== entry.path)]);
+        if (!quiet) {
+          params.setActivity(`已打开 ${entry.name}`);
+          params.setErrorMessage("");
+        }
+        return;
+      }
+
+      const cachedFile = getCachedFileContent(fileContentCacheRef.current, workspaceIdValue, entry);
+      if (cachedFile) {
+        fileRequestSeqRef.current += 1;
+        fileAbortRef.current?.abort();
+        setSelectedEntry(entry);
+        setFileBusy(false);
+        setPreviewWindows((current) => {
+          const existing = current.find((preview) => preview.id === entry.path);
+          const nextPreview: WorkspaceFilePreviewWindowState = {
+            id: entry.path,
+            entry,
+            file: cachedFile,
+            draft: existing && existing.file?.content === cachedFile.content ? existing.draft : cachedFile.encoding === "utf8" ? cachedFile.content : "",
+            cascadeIndex: existing?.cascadeIndex ?? previewWindowSeqRef.current++
+          };
+          return [nextPreview, ...current.filter((preview) => preview.id !== entry.path)];
+        });
+        if (!quiet) {
+          params.setActivity(`已打开 ${entry.name}`);
+          params.setErrorMessage("");
+        }
+        return;
+      }
+    }
+
     const requestSeq = fileRequestSeqRef.current + 1;
     fileRequestSeqRef.current = requestSeq;
     fileAbortRef.current?.abort();
@@ -579,8 +792,7 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
         return;
       }
 
-      setSelectedFile(response);
-      setSelectedFileDraft(response.encoding === "utf8" ? response.content : "");
+      setCachedFileContent(fileContentCacheRef.current, workspaceIdValue, entry, response);
       setPreviewWindows((current) => {
         const existing = current.find((preview) => preview.id === entry.path);
         const nextPreview: WorkspaceFilePreviewWindowState = {
@@ -604,8 +816,9 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
         return;
       }
 
-      setSelectedFile(null);
-      setSelectedFileDraft("");
+      setPreviewWindows((current) =>
+        current.map((preview) => (preview.id === entry.path ? { ...preview, file: null, draft: "" } : preview))
+      );
       if (!quiet) {
         params.setErrorMessage(toErrorMessage(error));
       }
@@ -762,11 +975,7 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
             : item
         )
       );
-      if (selectedEntry?.path === id) {
-        setSelectedEntry(entry);
-        setSelectedFile(response);
-        setSelectedFileDraft(response.encoding === "utf8" ? response.content : "");
-      }
+      setCachedFileContent(fileContentCacheRef.current, workspaceIdValue, entry, response);
       params.setActivity(`已保存 ${entry.path}`);
       params.setErrorMessage("");
     } catch (error) {
@@ -793,6 +1002,7 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
           overwrite: false
         } satisfies MoveWorkspaceEntryRequest)
       );
+      fileContentCacheRef.current.delete(filePreviewCacheKey(workspaceIdValue, { path: normalizedSourcePath }));
       const targetDirectory = parentWorkspaceRelativePath(entry.path);
       if (targetDirectory === currentPath) {
         await refreshEntries({ path: currentPath, quiet: true });
@@ -823,6 +1033,15 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
         path: workspaceRelativePathToSandboxPath(entry.path),
         recursive: entry.type === "directory"
       } satisfies WorkspaceDeleteEntryQuery);
+      for (const key of fileContentCacheRef.current.keys()) {
+        const pathKey = `${workspaceIdValue}::`;
+        if (key.startsWith(pathKey)) {
+          const cachedPath = key.slice(pathKey.length);
+          if (entry.type === "directory" ? cachedPath === entry.path || cachedPath.startsWith(`${entry.path}/`) : cachedPath === entry.path) {
+            fileContentCacheRef.current.delete(key);
+          }
+        }
+      }
       await refreshEntries({ path: currentPath, quiet: true });
       setPreviewWindows((current) =>
         current.filter((preview) =>
@@ -950,6 +1169,13 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
       clearTimeout(metadataRefreshTimerRef.current);
       metadataRefreshTimerRef.current = null;
     }
+    if (entryPrefetchTimerRef.current) {
+      clearTimeout(entryPrefetchTimerRef.current);
+      entryPrefetchTimerRef.current = null;
+    }
+    entryPageCacheRef.current.clear();
+    fileContentCacheRef.current.clear();
+    filePrefetchingRef.current.clear();
   }, [workspaceIdValue]);
 
   useEffect(() => {
@@ -959,6 +1185,9 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
       fileAbortRef.current?.abort();
       if (metadataRefreshTimerRef.current) {
         clearTimeout(metadataRefreshTimerRef.current);
+      }
+      if (entryPrefetchTimerRef.current) {
+        clearTimeout(entryPrefetchTimerRef.current);
       }
     };
   }, []);

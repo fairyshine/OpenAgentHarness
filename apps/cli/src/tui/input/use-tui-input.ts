@@ -208,6 +208,10 @@ function handleDialogInput(input: { value: string; key: TuiInputKey; state: OahR
   if (dialog.kind === "help") {
     return;
   }
+  if (dialog.kind === "memory") {
+    handleMemoryDialogInput({ value, key, dialog, state });
+    return;
+  }
   if (dialog.kind === "workspace-create") {
     handleWorkspaceCreateInput({ value, key, dialog, state });
     return;
@@ -266,6 +270,49 @@ function handleDialogInput(input: { value: string; key: TuiInputKey; state: OahR
         state.selectSession(session);
       }
     }
+  }
+}
+
+function handleMemoryDialogInput(input: {
+  value: string;
+  key: TuiInputKey;
+  dialog: Extract<Dialog, { kind: "memory" }>;
+  state: OahReplState;
+}) {
+  const { dialog, key, state, value } = input;
+  if (value === "r") {
+    void state.refreshMemoryDialog();
+    return;
+  }
+  if (value === "p") {
+    state.setDialog({ ...dialog, mode: "proposals", selectedIndex: 0, detail: null });
+    return;
+  }
+  if (value === "f") {
+    state.setDialog({ ...dialog, mode: "files", selectedIndex: 0, detail: null });
+    return;
+  }
+  if (value === "b" && dialog.mode === "detail") {
+    state.setDialog({ ...dialog, mode: dialog.proposals.length > 0 ? "proposals" : "files", detail: null });
+    return;
+  }
+  if (dialog.mode === "proposals" && value === "a") {
+    void state.applyMemoryProposalSelection();
+    return;
+  }
+  if (dialog.mode === "proposals" && value === "x") {
+    void state.rejectMemoryProposalSelection();
+    return;
+  }
+  const activeLength = dialog.mode === "proposals" ? dialog.proposals.length : dialog.mode === "files" ? dialog.files.length : 0;
+  const cleanInput = cleanControlInput(value);
+  const moveDelta = key.downArrow || cleanInput === "j" ? 1 : key.upArrow || cleanInput === "k" ? -1 : 0;
+  if (moveDelta !== 0 && activeLength > 0) {
+    state.setDialog({ ...dialog, selectedIndex: clampIndex(dialog.selectedIndex + moveDelta, activeLength) });
+    return;
+  }
+  if (isReturnInput(value, key) && dialog.mode !== "detail") {
+    void state.readMemorySelection();
   }
 }
 

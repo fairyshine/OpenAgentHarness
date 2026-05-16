@@ -325,7 +325,14 @@ POST /api/v1/workspaces/:workspaceId/memory/proposals/reject
 - 支持读取 memory markdown 内容。
 - 支持查看 pending proposals，并通过 structured API apply/reject。
 
-后续 TUI 面板也应接这层 API，而不是直接读取 `.openharness/memory` 文件。
+当前 TUI 已接入同一层 API，并新增 `/memory [query]` review dialog：
+
+- `/memory` 展示当前 workspace memory 索引和状态。
+- `/memory <query>` 展示搜索结果。
+- `p` 切到 pending proposals，`enter` 读取选中文件，`a` apply proposal，`x` reject proposal。
+- `r` 刷新，`f` 回到 memory files。
+
+Web/TUI 都不直接读取 `.openharness/memory` 文件。
 
 ## 权限与安全
 
@@ -359,7 +366,7 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 - 已将 `MemorySearch` / `MemoryRead` 注册为 `safe` native tools。
 - 已将自动 topic recall 收窄为只读取 `.openharness/memory/topics/**/*.md`，避免 sessions/daily/dreams/proposals 自动进入主上下文。
 - 已实现 `MemoryCaptureSession`，可在 session/run 边界或 compact 前生成 `sessions/*.md`。
-- 基础 CLI 可查看、搜索、读取和列出 pending proposals；HTTP memory inspection/review API 已补齐；Web Inspector 已接入 `Memory` 子面板；TUI 面板后续接入同一层 API。
+- 基础 CLI 可查看、搜索、读取和列出 pending proposals；HTTP memory inspection/review API 已补齐；Web Inspector 已接入 `Memory` 子面板；TUI 已接入 `/memory [query]` review dialog。
 
 ### Phase 2：Claude Code 式 topic memory
 

@@ -375,7 +375,12 @@ function createMemoryProposalCliTools(workspaceRoot: string) {
 export async function memoryApplyProposal(proposalPath: string, options: MemoryCommandOptions = {}): Promise<string> {
   const workspaceRoot = normalizeWorkspacePath(options.workspace);
   const tools = createMemoryProposalCliTools(workspaceRoot);
-  return String(await tools.MemoryApplyProposal.execute({ path: proposalPath }, {}));
+  const tool = tools.MemoryApplyProposal;
+  if (!tool) {
+    throw new Error("MemoryApplyProposal tool is unavailable.");
+  }
+
+  return String(await tool.execute({ path: proposalPath }, {}));
 }
 
 export async function memoryRejectProposal(
@@ -384,8 +389,13 @@ export async function memoryRejectProposal(
 ): Promise<string> {
   const workspaceRoot = normalizeWorkspacePath(options.workspace);
   const tools = createMemoryProposalCliTools(workspaceRoot);
+  const tool = tools.MemoryRejectProposal;
+  if (!tool) {
+    throw new Error("MemoryRejectProposal tool is unavailable.");
+  }
+
   return String(
-    await tools.MemoryRejectProposal.execute(
+    await tool.execute(
       {
         path: proposalPath,
         ...(options.reason ? { reason: options.reason } : {})

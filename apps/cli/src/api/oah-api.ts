@@ -13,6 +13,13 @@ import type {
   SystemProfile,
   Workspace,
   WorkspaceCatalog,
+  WorkspaceMemoryCorpus,
+  WorkspaceMemoryIndex,
+  WorkspaceMemoryProposalActionResult,
+  WorkspaceMemoryProposalPage,
+  WorkspaceMemoryReadResponse,
+  WorkspaceMemorySearchResponse,
+  WorkspaceMemoryStatus,
   WorkspaceRuntime,
   WorkspaceRuntimeList,
   WorkspacePage
@@ -170,6 +177,62 @@ export class OahApiClient {
 
   async getWorkspaceCatalog(workspaceId: string): Promise<WorkspaceCatalog> {
     return this.request<WorkspaceCatalog>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/catalog`);
+  }
+
+  async getWorkspaceMemoryStatus(workspaceId: string): Promise<WorkspaceMemoryStatus> {
+    return this.request<WorkspaceMemoryStatus>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/memory/status`);
+  }
+
+  async listWorkspaceMemory(workspaceId: string): Promise<WorkspaceMemoryIndex> {
+    return this.request<WorkspaceMemoryIndex>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/memory`);
+  }
+
+  async searchWorkspaceMemory(
+    workspaceId: string,
+    input: { query: string; corpus?: WorkspaceMemoryCorpus; maxResults?: number }
+  ): Promise<WorkspaceMemorySearchResponse> {
+    const query = new URLSearchParams({
+      query: input.query,
+      corpus: input.corpus ?? "all",
+      maxResults: String(input.maxResults ?? 12)
+    });
+    return this.request<WorkspaceMemorySearchResponse>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/memory/search?${query.toString()}`);
+  }
+
+  async readWorkspaceMemory(
+    workspaceId: string,
+    input: { path: string; from?: number; lines?: number }
+  ): Promise<WorkspaceMemoryReadResponse> {
+    const query = new URLSearchParams({
+      path: input.path,
+      from: String(input.from ?? 1),
+      lines: String(input.lines ?? 160)
+    });
+    return this.request<WorkspaceMemoryReadResponse>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/memory/read?${query.toString()}`);
+  }
+
+  async listWorkspaceMemoryProposals(workspaceId: string): Promise<WorkspaceMemoryProposalPage> {
+    return this.request<WorkspaceMemoryProposalPage>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/memory/proposals`);
+  }
+
+  async applyWorkspaceMemoryProposal(workspaceId: string, path: string): Promise<WorkspaceMemoryProposalActionResult> {
+    return this.request<WorkspaceMemoryProposalActionResult>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/memory/proposals/apply`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ path })
+    });
+  }
+
+  async rejectWorkspaceMemoryProposal(workspaceId: string, path: string): Promise<WorkspaceMemoryProposalActionResult> {
+    return this.request<WorkspaceMemoryProposalActionResult>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/memory/proposals/reject`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ path })
+    });
   }
 
   async listWorkspaceSessions(workspaceId: string): Promise<Session[]> {

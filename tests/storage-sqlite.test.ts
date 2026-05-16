@@ -525,6 +525,72 @@ describe("storage sqlite", () => {
     await persistenceB.close();
   });
 
+  it("keeps a workspace registered after deleting its last session", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-empty-workspace-"));
+    tempDirs.push(tempDir);
+
+    const workspaceRoot = path.join(tempDir, "workspace");
+    const shadowRoot = path.join(tempDir, "shadow");
+    await mkdir(workspaceRoot, { recursive: true });
+
+    const workspace = createWorkspace({
+      id: "ws_empty_after_session_delete",
+      rootPath: workspaceRoot
+    });
+    const session = {
+      id: "ses_delete_last",
+      workspaceId: workspace.id,
+      subjectRef: "dev:test",
+      agentName: "assistant",
+      activeAgentName: "assistant",
+      title: "delete me",
+      status: "active" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+
+    const persistenceA = await createSQLiteRuntimePersistence({ shadowRoot });
+    await persistenceA.workspaceRepository.upsert(workspace);
+    await persistenceA.sessionRepository.create(session);
+    await persistenceA.sessionRepository.delete(session.id);
+
+    await expect(persistenceA.workspaceRepository.getById(workspace.id)).resolves.toEqual(workspace);
+    await expect(persistenceA.workspaceRepository.list(20)).resolves.toEqual([workspace]);
+    await expect(persistenceA.sessionRepository.listByWorkspaceId(workspace.id, 20)).resolves.toEqual([]);
+    await persistenceA.close();
+
+    const registryDb = new DatabaseSync(path.join(shadowRoot, "workspace-registry.db"));
+    try {
+      const workspaceRegistryRow = registryDb
+        .prepare("select id from workspace_registry where id = ? limit 1")
+        .get(workspace.id) as { id: string } | undefined;
+      const sessionRegistryRow = registryDb
+        .prepare("select id from session_registry where workspace_id = ? limit 1")
+        .get(workspace.id) as { id: string } | undefined;
+      expect(workspaceRegistryRow).toEqual({ id: workspace.id });
+      expect(sessionRegistryRow).toBeUndefined();
+    } finally {
+      registryDb.close();
+    }
+
+    const persistenceB = await createSQLiteRuntimePersistence({ shadowRoot });
+    const restoredSnapshots = await persistenceB.listWorkspaceSnapshots([workspace]);
+    expect(restoredSnapshots).toEqual([
+      expect.objectContaining({
+        id: workspace.id,
+        rootPath: workspace.rootPath
+      })
+    ]);
+
+    await persistenceB.workspaceRepository.upsert(restoredSnapshots[0] ?? workspace);
+    await expect(persistenceB.workspaceRepository.getById(workspace.id)).resolves.toEqual(expect.objectContaining({
+      id: workspace.id,
+      rootPath: workspace.rootPath
+    }));
+    await expect(persistenceB.sessionRepository.listByWorkspaceId(workspace.id, 20)).resolves.toEqual([]);
+    await persistenceB.close();
+  });
+
   it("stores writable project history in shadow storage when configured", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-shadow-project-"));
     tempDirs.push(tempDir);

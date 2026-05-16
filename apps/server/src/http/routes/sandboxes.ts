@@ -432,7 +432,7 @@ async function handleGetSandboxFileContent(
     ...query,
     path: sandboxPathToWorkspacePath(query.path) ?? "."
   });
-  await touchWorkspaceActivity(dependencies, sandboxId);
+  touchWorkspaceActivityLater(dependencies, sandboxId);
   return reply.send(workspaceFileContentSchema.parse(toSandboxFileContent(file)));
 }
 

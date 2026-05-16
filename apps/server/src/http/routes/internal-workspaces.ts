@@ -78,7 +78,7 @@ async function handleGetWorkspaceFileContent(
 ) {
   const query = workspaceFileContentQuerySchema.parse(request.query);
   const file = await dependencies.runtimeService.getWorkspaceFileContent(workspaceId, query);
-  await touchWorkspaceActivity(dependencies, workspaceId);
+  touchWorkspaceActivityLater(dependencies, workspaceId);
   return reply.send(workspaceFileContentSchema.parse(file));
 }
 

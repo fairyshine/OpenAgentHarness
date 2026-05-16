@@ -227,6 +227,23 @@ async function createRuntime(
 }
 
 describe("runtime service", () => {
+  it("keeps a workspace visible after deleting its last session", async () => {
+    const { runtimeService, workspace } = await createRuntime();
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller: { subjectRef: "dev:test" },
+      input: {}
+    });
+
+    await runtimeService.deleteSession(session.id);
+
+    await expect(runtimeService.getWorkspace(workspace.id)).resolves.toMatchObject({ id: workspace.id });
+    await expect(runtimeService.listWorkspaces(20)).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: workspace.id })]
+    });
+    await expect(runtimeService.listWorkspaceSessions(workspace.id, 20)).resolves.toEqual({ items: [] });
+  });
+
   it("stores human messages as prompt mode and strips reserved runtime metadata", async () => {
     const { runtimeService, workspace } = await createRuntime();
     const caller = {

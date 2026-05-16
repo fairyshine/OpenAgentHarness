@@ -152,11 +152,11 @@ function pathExtension(value: string): string {
 type PreviewWindowState = FileManagerProps["previewWindows"][number];
 
 function isEditablePreview(input: {
-  fileManager: FileManagerProps;
+  workspaceReadOnly: boolean;
   preview: PreviewWindowState;
 }): boolean {
   return Boolean(
-    !input.fileManager.workspaceReadOnly &&
+    !input.workspaceReadOnly &&
       input.preview.entry.type === "file" &&
       input.preview.file?.encoding === "utf8" &&
       !input.preview.file.truncated &&
@@ -165,7 +165,7 @@ function isEditablePreview(input: {
 }
 
 function isPreviewDirty(input: {
-  fileManager: FileManagerProps;
+  workspaceReadOnly: boolean;
   preview: PreviewWindowState;
 }): boolean {
   return Boolean(isEditablePreview(input) && input.preview.file && input.preview.draft !== input.preview.file.content);
@@ -330,6 +330,8 @@ function TextPreview(props: {
   editable: boolean;
   onDraftChange: (value: string) => void;
 }) {
+  const [activeTab, setActiveTab] = useState<"rendered" | "source">("rendered");
+
   if (!props.preview.file) {
     return null;
   }
@@ -352,7 +354,11 @@ function TextPreview(props: {
   }
 
   return (
-    <Tabs defaultValue="rendered" className="relative h-full min-h-0">
+    <Tabs
+      value={activeTab}
+      onValueChange={(value) => setActiveTab(value === "source" ? "source" : "rendered")}
+      className="relative h-full min-h-0"
+    >
       <div className="pointer-events-none absolute right-2 top-2 z-10 flex items-center gap-2">
         <TabsList className="pointer-events-auto h-7 rounded-xl border-black/10 bg-background/86 p-0.5 shadow-sm backdrop-blur">
           <TabsTrigger value="rendered" className="h-6 px-2 text-xs">
@@ -368,23 +374,26 @@ function TextPreview(props: {
           <Badge variant="outline" className="pointer-events-auto h-6 shrink-0 bg-background/86 px-2 text-[10px] shadow-sm backdrop-blur">scripts on</Badge>
         ) : null}
       </div>
-      <TabsContent value="rendered" className="m-0 h-full min-h-0">
-        {canRenderMarkdown ? (
-          <RenderedMarkdownPreview text={previewText} />
-        ) : (
-          <RenderedHtmlPreview html={previewText} title={props.preview.entry.name} />
-        )}
-      </TabsContent>
-      <TabsContent value="source" className="m-0 h-full min-h-0">
-        <div className="h-full min-h-0">
-          <TextSourcePreview
-            selectedFile={props.preview.file}
-            draft={props.preview.draft}
-            editable={props.editable}
-            onDraftChange={props.onDraftChange}
-          />
-        </div>
-      </TabsContent>
+      {activeTab === "rendered" ? (
+        <TabsContent value="rendered" className="m-0 h-full min-h-0">
+          {canRenderMarkdown ? (
+            <RenderedMarkdownPreview text={previewText} />
+          ) : (
+            <RenderedHtmlPreview html={previewText} title={props.preview.entry.name} />
+          )}
+        </TabsContent>
+      ) : (
+        <TabsContent value="source" className="m-0 h-full min-h-0">
+          <div className="h-full min-h-0">
+            <TextSourcePreview
+              selectedFile={props.preview.file}
+              draft={props.preview.draft}
+              editable={props.editable}
+              onDraftChange={props.onDraftChange}
+            />
+          </div>
+        </TabsContent>
+      )}
     </Tabs>
   );
 }
@@ -763,18 +772,27 @@ function FileManagerCommandBar(props: {
   );
 }
 
-function WorkspaceFilePreviewWindow(props: {
-  fileManager: FileManagerProps;
+interface PreviewWindowActions {
+  closePreviewWindow: (id: string) => void;
+  focusPreviewWindow: (id: string) => void;
+  savePreviewWindow: (id: string) => void;
+  setPreviewWindowDraft: (id: string, value: string) => void;
+}
+
+const WorkspaceFilePreviewWindow = memo(function WorkspaceFilePreviewWindow(props: {
   preview: PreviewWindowState;
   index: number;
+  previewCount: number;
+  workspaceReadOnly: boolean;
+  mutationBusy: boolean;
+  actions: PreviewWindowActions;
 }) {
-  const { fileManager } = props;
   const { preview } = props;
   const selectedEntry = preview.entry;
   const selectedFile = preview.file;
   const imagePreviewUrl = getImagePreviewUrl(preview);
-  const previewEditable = isEditablePreview({ fileManager, preview });
-  const previewDirty = isPreviewDirty({ fileManager, preview });
+  const previewEditable = isEditablePreview({ workspaceReadOnly: props.workspaceReadOnly, preview });
+  const previewDirty = isPreviewDirty({ workspaceReadOnly: props.workspaceReadOnly, preview });
   const [frame, setFrame] = useState<PreviewWindowFrame>(() => {
     const frame = getDefaultPreviewFrame();
     const offset = (preview.cascadeIndex % 6) * 34;
@@ -879,20 +897,17 @@ function WorkspaceFilePreviewWindow(props: {
     setFrame(getDefaultPreviewFrame());
   }
 
-  if (!fileManager.open) {
-    return null;
-  }
-
   return (
     <div
       className="workspace-file-preview-shell absolute z-40"
-      onPointerDown={() => fileManager.focusPreviewWindow(preview.id)}
+      onPointerDown={() => props.actions.focusPreviewWindow(preview.id)}
       style={{
-        left: frame.x,
-        top: frame.y,
+        left: 0,
+        top: 0,
         width: frame.width,
         height: frame.height,
-        zIndex: 40 + Math.max(0, fileManager.previewWindows.length - props.index)
+        transform: `translate3d(${frame.x}px, ${frame.y}px, 0)`,
+        zIndex: 40 + Math.max(0, props.previewCount - props.index)
       }}
       onPointerMove={updateInteraction}
       onPointerUp={endInteraction}
@@ -926,15 +941,15 @@ function WorkspaceFilePreviewWindow(props: {
             <Button
               size="sm"
               className="h-8"
-              onClick={() => fileManager.savePreviewWindow(preview.id)}
-              disabled={!previewDirty || !previewEditable || fileManager.mutationBusy}
+              onClick={() => props.actions.savePreviewWindow(preview.id)}
+              disabled={!previewDirty || !previewEditable || props.mutationBusy}
             >
               Save
             </Button>
             <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={resetFrame} title="Reset preview window" aria-label="Reset preview window">
               <Maximize2 className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => fileManager.closePreviewWindow(preview.id)} aria-label="Close preview">
+            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => props.actions.closePreviewWindow(preview.id)} aria-label="Close preview">
               <X className="h-4 w-4" />
             </Button>
           </div>
@@ -959,7 +974,7 @@ function WorkspaceFilePreviewWindow(props: {
                   <TextPreview
                     preview={preview}
                     editable={previewEditable}
-                    onDraftChange={(value) => fileManager.setPreviewWindowDraft(preview.id, value)}
+                    onDraftChange={(value) => props.actions.setPreviewWindowDraft(preview.id, value)}
                   />
                 </div>
               ) : (
@@ -987,7 +1002,7 @@ function WorkspaceFilePreviewWindow(props: {
       </div>
     </div>
   );
-}
+});
 
 export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps }) {
   const { fileManager } = props;
@@ -995,6 +1010,24 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
   const [commandValue, setCommandValue] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const previewActionRef = useRef({
+    closePreviewWindow: fileManager.closePreviewWindow,
+    focusPreviewWindow: fileManager.focusPreviewWindow,
+    savePreviewWindow: fileManager.savePreviewWindow,
+    setPreviewWindowDraft: fileManager.setPreviewWindowDraft
+  });
+  previewActionRef.current = {
+    closePreviewWindow: fileManager.closePreviewWindow,
+    focusPreviewWindow: fileManager.focusPreviewWindow,
+    savePreviewWindow: fileManager.savePreviewWindow,
+    setPreviewWindowDraft: fileManager.setPreviewWindowDraft
+  };
+  const previewActions = useMemo<PreviewWindowActions>(() => ({
+    closePreviewWindow: (id) => previewActionRef.current.closePreviewWindow(id),
+    focusPreviewWindow: (id) => previewActionRef.current.focusPreviewWindow(id),
+    savePreviewWindow: (id) => previewActionRef.current.savePreviewWindow(id),
+    setPreviewWindowDraft: (id, value) => previewActionRef.current.setPreviewWindowDraft(id, value)
+  }), []);
 
   if (!fileManager.canManageFiles) {
     return null;
@@ -1096,9 +1129,12 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
           {fileManager.previewWindows.map((preview, index) => (
             <WorkspaceFilePreviewWindow
               key={preview.id}
-              fileManager={fileManager}
               preview={preview}
               index={index}
+              previewCount={fileManager.previewWindows.length}
+              workspaceReadOnly={fileManager.workspaceReadOnly}
+              mutationBusy={fileManager.mutationBusy}
+              actions={previewActions}
             />
           ))}
           <div
@@ -1179,7 +1215,7 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Directory</p>
                     <p className="mt-1 text-xs text-muted-foreground">{displayPath}</p>
                   </div>
-                  {busy || fileManager.entriesRefreshingMetadata ? (
+                  {busy ? (
                     <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                   ) : null}
                 </div>

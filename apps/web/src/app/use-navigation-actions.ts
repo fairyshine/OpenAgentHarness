@@ -196,6 +196,10 @@ export function useNavigationActions(params: NavigationActionParams) {
     const previousSavedSessions = params.navigation.savedSessions;
     const previousRecentSessions = params.navigation.recentSessions;
     const previousExpandedSessionIds = params.navigation.expandedSessionIds;
+    const removedWorkspaceId =
+      previousSavedSessions.find((entry) => entry.id === sessionToRemoveId)?.workspaceId ??
+      params.navigation.session?.workspaceId ??
+      params.navigation.workspaceId;
     const wasSelected = Boolean(params.navigation.sessionId && sessionIdsToRemoveSet.has(params.navigation.sessionId));
 
     params.navigation.setSavedSessions((current) => current.filter((entry) => !sessionIdsToRemoveSet.has(entry.id)));
@@ -204,6 +208,11 @@ export function useNavigationActions(params: NavigationActionParams) {
 
     if (wasSelected) {
       clearSessionSelection();
+      if (removedWorkspaceId.trim()) {
+        params.navigation.setWorkspaceId(removedWorkspaceId);
+        params.navigation.setRecentWorkspaces((current) => addRecentId(current, removedWorkspaceId));
+        expandWorkspaceInSidebar(removedWorkspaceId);
+      }
     }
 
     try {
