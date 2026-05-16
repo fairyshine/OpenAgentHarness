@@ -1,21 +1,36 @@
-import { memo, useMemo, useRef, useState, type DragEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent, type ReactNode } from "react";
 
 import {
   ArrowUp,
+  Braces,
+  Check,
   Code2,
+  Database,
   Download,
   Eye,
-  File,
+  FileArchive,
+  FileAudio,
+  FileCode2,
+  FileCog,
   FileImage,
+  FileJson,
   FilePlus2,
+  FileSpreadsheet,
+  FileTerminal,
   FileText,
+  FileType,
+  FileVideo,
   Folder,
   FolderPlus,
   Loader2,
+  Maximize2,
+  Move,
+  Package,
   PanelRightClose,
   PanelRightOpen,
   PencilLine,
   RefreshCw,
+  Settings,
   Trash2,
   Upload,
   X
@@ -26,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import { formatRelativeTimestamp, formatTimestamp, formatTimestampPrecise, pathLeaf, prettyJson } from "../support";
@@ -38,6 +54,31 @@ import {
 import { MarkdownText } from "./conversation-markdown";
 
 type FileManagerProps = WorkspaceFileManagerSurfaceProps;
+
+type PreviewWindowInteraction =
+  | {
+      type: "move";
+      pointerId: number;
+      startClientX: number;
+      startClientY: number;
+      startX: number;
+      startY: number;
+    }
+  | {
+      type: "resize";
+      pointerId: number;
+      startClientX: number;
+      startClientY: number;
+      startWidth: number;
+      startHeight: number;
+    };
+
+interface PreviewWindowFrame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 interface DroppedFileSystemEntry {
   name: string;
@@ -108,58 +149,127 @@ function pathExtension(value: string): string {
   return dotIndex >= 0 ? leaf.slice(dotIndex + 1).toLowerCase() : "";
 }
 
-function isImagePreview(fileManager: FileManagerProps): boolean {
+type PreviewWindowState = FileManagerProps["previewWindows"][number];
+
+function isEditablePreview(input: {
+  fileManager: FileManagerProps;
+  preview: PreviewWindowState;
+}): boolean {
   return Boolean(
-    fileManager.selectedEntry?.type === "file" &&
-      fileManager.selectedFile?.encoding === "base64" &&
-      fileManager.selectedFile.mimeType?.startsWith("image/")
+    !input.fileManager.workspaceReadOnly &&
+      input.preview.entry.type === "file" &&
+      input.preview.file?.encoding === "utf8" &&
+      !input.preview.file.truncated &&
+      !input.preview.file.readOnly
   );
 }
 
-function isTextPreview(fileManager: FileManagerProps): boolean {
-  return Boolean(
-    fileManager.selectedEntry?.type === "file" &&
-      fileManager.selectedFile?.encoding === "utf8"
-  );
+function isPreviewDirty(input: {
+  fileManager: FileManagerProps;
+  preview: PreviewWindowState;
+}): boolean {
+  return Boolean(isEditablePreview(input) && input.preview.file && input.preview.draft !== input.preview.file.content);
 }
 
-function isMarkdownPreview(fileManager: FileManagerProps): boolean {
-  if (!isTextPreview(fileManager) || !fileManager.selectedEntry) {
-    return false;
-  }
-
-  const mimeType = fileManager.selectedFile?.mimeType?.toLowerCase() ?? fileManager.selectedEntry.mimeType?.toLowerCase() ?? "";
-  return mimeType.includes("markdown") || ["md", "mdx"].includes(pathExtension(fileManager.selectedEntry.path));
-}
-
-function isHtmlPreview(fileManager: FileManagerProps): boolean {
-  if (!isTextPreview(fileManager) || !fileManager.selectedEntry) {
-    return false;
-  }
-
-  const mimeType = fileManager.selectedFile?.mimeType?.toLowerCase() ?? fileManager.selectedEntry.mimeType?.toLowerCase() ?? "";
-  return mimeType.includes("text/html") || mimeType.includes("application/xhtml") || ["html", "htm", "xhtml"].includes(pathExtension(fileManager.selectedEntry.path));
-}
-
-function getPreviewText(fileManager: FileManagerProps): string {
-  if (!fileManager.selectedFile || fileManager.selectedFile.encoding !== "utf8") {
+function getPreviewFileText(preview: PreviewWindowState): string {
+  if (!preview.file || preview.file.encoding !== "utf8") {
     return "";
   }
 
-  return fileManager.selectedFileEditable && !fileManager.selectedFile.truncated
-    ? fileManager.selectedFileDraft
-    : fileManager.selectedFile.content;
+  return !preview.file.truncated ? preview.draft : preview.file.content;
+}
+
+function getImagePreviewUrl(preview: PreviewWindowState): string | null {
+  if (preview.entry.type !== "file" || preview.file?.encoding !== "base64" || !preview.file.mimeType?.startsWith("image/")) {
+    return null;
+  }
+
+  return `data:${preview.file.mimeType};base64,${preview.file.content}`;
+}
+
+function isPreviewText(preview: PreviewWindowState): boolean {
+  return preview.entry.type === "file" && preview.file?.encoding === "utf8";
+}
+
+function isPreviewMarkdown(preview: PreviewWindowState): boolean {
+  if (!isPreviewText(preview)) {
+    return false;
+  }
+
+  const mimeType = preview.file?.mimeType?.toLowerCase() ?? preview.entry.mimeType?.toLowerCase() ?? "";
+  return mimeType.includes("markdown") || ["md", "mdx"].includes(pathExtension(preview.entry.path));
+}
+
+function isPreviewHtml(preview: PreviewWindowState): boolean {
+  if (!isPreviewText(preview)) {
+    return false;
+  }
+
+  const mimeType = preview.file?.mimeType?.toLowerCase() ?? preview.entry.mimeType?.toLowerCase() ?? "";
+  return mimeType.includes("text/html") || mimeType.includes("application/xhtml") || ["html", "htm", "xhtml"].includes(pathExtension(preview.entry.path));
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getDefaultPreviewFrame(): PreviewWindowFrame {
+  if (typeof window === "undefined") {
+    return {
+      x: 24,
+      y: 56,
+      width: 960,
+      height: 640
+    };
+  }
+
+  const margin = 24;
+  const reservedRight = window.innerWidth >= 768 ? 408 : margin;
+  const reservedBottom = window.innerWidth >= 768 ? 112 : 96;
+  const maxWidth = Math.max(320, window.innerWidth - reservedRight - margin);
+  const maxHeight = Math.max(280, window.innerHeight - 112 - reservedBottom);
+  const width = clampNumber(maxWidth, 360, 1040);
+  const height = clampNumber(maxHeight, 320, 760);
+
+  return {
+    x: margin,
+    y: window.innerWidth >= 768 ? 56 : 56,
+    width,
+    height
+  };
+}
+
+function constrainPreviewFrame(frame: PreviewWindowFrame): PreviewWindowFrame {
+  if (typeof window === "undefined") {
+    return frame;
+  }
+
+  const margin = 12;
+  const minWidth = Math.min(360, window.innerWidth - margin * 2);
+  const minHeight = Math.min(260, window.innerHeight - margin * 2);
+  const maxWidth = Math.max(minWidth, window.innerWidth - margin * 2);
+  const maxHeight = Math.max(minHeight, window.innerHeight - margin * 2);
+  const width = clampNumber(frame.width, minWidth, maxWidth);
+  const height = clampNumber(frame.height, minHeight, maxHeight);
+
+  return {
+    width,
+    height,
+    x: clampNumber(frame.x, margin, Math.max(margin, window.innerWidth - width - margin)),
+    y: clampNumber(frame.y, margin, Math.max(margin, window.innerHeight - height - margin))
+  };
 }
 
 function DirectoryBreadcrumbs(props: Pick<FileManagerProps, "breadcrumbs" | "openDirectory">) {
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1">
+    <div className="flex min-w-0 items-center gap-1 overflow-x-auto whitespace-nowrap">
       {props.breadcrumbs.map((segment, index) => (
-        <div key={segment.path} className="flex items-center gap-1">
-          {index > 0 ? <span className="text-muted-foreground/40">/</span> : null}
+        <div key={segment.path} className="flex shrink-0 items-center gap-1">
+          {index > 0 ? <span className="shrink-0 text-muted-foreground/40">/</span> : null}
           <button
-            className="rounded-full px-2 py-1 text-xs text-muted-foreground transition hover:bg-black/5 hover:text-foreground"
+            className="max-w-28 truncate rounded-full px-2 py-1 text-xs text-muted-foreground transition hover:bg-black/5 hover:text-foreground"
             onClick={() => props.openDirectory(segment.path)}
+            title={segment.path}
           >
             {segment.label}
           </button>
@@ -171,7 +281,7 @@ function DirectoryBreadcrumbs(props: Pick<FileManagerProps, "breadcrumbs" | "ope
 
 function RenderedMarkdownPreview(props: { text: string }) {
   return (
-    <div className="min-h-[340px] overflow-auto rounded-[24px] border border-black/10 bg-white/60 p-4 text-foreground shadow-inner">
+    <div className="h-full min-h-[280px] overflow-auto rounded-2xl border border-black/10 bg-white/60 p-4 text-foreground shadow-inner">
       <MarkdownText text={props.text} />
     </div>
   );
@@ -183,20 +293,22 @@ function RenderedHtmlPreview(props: { html: string; title: string }) {
       title={`Rendered preview of ${props.title}`}
       sandbox="allow-scripts allow-forms allow-modals"
       srcDoc={props.html}
-      className="h-[520px] w-full rounded-[24px] border border-black/10 bg-white shadow-inner"
+      className="h-full min-h-[320px] w-full rounded-2xl border border-black/10 bg-white shadow-inner"
     />
   );
 }
 
 function TextSourcePreview(props: {
-  fileManager: FileManagerProps;
-  selectedFile: NonNullable<FileManagerProps["selectedFile"]>;
+  selectedFile: NonNullable<PreviewWindowState["file"]>;
+  draft: string;
+  editable: boolean;
+  onDraftChange: (value: string) => void;
 }) {
   if (props.selectedFile.truncated) {
     return (
       <>
         <p className="text-xs text-muted-foreground">Large file preview loaded. Download the file to inspect the full content safely.</p>
-        <pre className="max-h-[520px] overflow-auto rounded-[24px] border border-black/10 bg-black/[0.02] p-4 text-xs leading-6 text-foreground/80">
+        <pre className="h-full min-h-[280px] overflow-auto rounded-2xl border border-black/10 bg-black/[0.02] p-4 text-xs leading-6 text-foreground/80">
           {props.selectedFile.content}
         </pre>
       </>
@@ -205,74 +317,175 @@ function TextSourcePreview(props: {
 
   return (
     <Textarea
-      value={props.fileManager.selectedFileDraft}
-      onChange={(event) => props.fileManager.setSelectedFileDraft(event.target.value)}
-      disabled={!props.fileManager.selectedFileEditable}
-      className="min-h-[340px] resize-y rounded-[24px] border-black/10 bg-black/[0.02] font-mono text-xs leading-6 shadow-none"
+      value={props.draft}
+      onChange={(event) => props.onDraftChange(event.target.value)}
+      disabled={!props.editable}
+      className="h-full min-h-[280px] resize-none rounded-2xl border-black/10 bg-black/[0.02] font-mono text-xs leading-6 shadow-none"
     />
   );
 }
 
 function TextPreview(props: {
-  fileManager: FileManagerProps;
-  selectedEntry: NonNullable<FileManagerProps["selectedEntry"]>;
-  selectedFile: NonNullable<FileManagerProps["selectedFile"]>;
+  preview: PreviewWindowState;
+  editable: boolean;
+  onDraftChange: (value: string) => void;
 }) {
-  const canRenderMarkdown = isMarkdownPreview(props.fileManager);
-  const canRenderHtml = isHtmlPreview(props.fileManager);
-  const previewText = getPreviewText(props.fileManager);
+  if (!props.preview.file) {
+    return null;
+  }
+
+  const canRenderMarkdown = isPreviewMarkdown(props.preview);
+  const canRenderHtml = isPreviewHtml(props.preview);
+  const previewText = getPreviewFileText(props.preview);
 
   if (!canRenderMarkdown && !canRenderHtml) {
     return (
-      <div className="space-y-2">
-        <TextSourcePreview fileManager={props.fileManager} selectedFile={props.selectedFile} />
+      <div className="h-full min-h-0">
+        <TextSourcePreview
+          selectedFile={props.preview.file}
+          draft={props.preview.draft}
+          editable={props.editable}
+          onDraftChange={props.onDraftChange}
+        />
       </div>
     );
   }
 
   return (
-    <Tabs defaultValue="rendered" className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <TabsList>
-          <TabsTrigger value="rendered">
-            <Eye className="h-4 w-4" />
+    <Tabs defaultValue="rendered" className="relative h-full min-h-0">
+      <div className="pointer-events-none absolute right-2 top-2 z-10 flex items-center gap-2">
+        <TabsList className="pointer-events-auto h-7 rounded-xl border-black/10 bg-background/86 p-0.5 shadow-sm backdrop-blur">
+          <TabsTrigger value="rendered" className="h-6 px-2 text-xs">
+            <Eye className="h-3.5 w-3.5" />
             Rendered
           </TabsTrigger>
-          <TabsTrigger value="source">
-            <Code2 className="h-4 w-4" />
+          <TabsTrigger value="source" className="h-6 px-2 text-xs">
+            <Code2 className="h-3.5 w-3.5" />
             Source
           </TabsTrigger>
         </TabsList>
         {canRenderHtml ? (
-          <Badge variant="outline" className="shrink-0">sandboxed</Badge>
+          <Badge variant="outline" className="pointer-events-auto h-6 shrink-0 bg-background/86 px-2 text-[10px] shadow-sm backdrop-blur">scripts on</Badge>
         ) : null}
       </div>
-      <TabsContent value="rendered" className="mt-0">
+      <TabsContent value="rendered" className="m-0 h-full min-h-0">
         {canRenderMarkdown ? (
           <RenderedMarkdownPreview text={previewText} />
         ) : (
-          <RenderedHtmlPreview html={previewText} title={props.selectedEntry.name} />
+          <RenderedHtmlPreview html={previewText} title={props.preview.entry.name} />
         )}
       </TabsContent>
-      <TabsContent value="source" className="mt-0">
-        <div className="space-y-2">
-          <TextSourcePreview fileManager={props.fileManager} selectedFile={props.selectedFile} />
+      <TabsContent value="source" className="m-0 h-full min-h-0">
+        <div className="h-full min-h-0">
+          <TextSourcePreview
+            selectedFile={props.preview.file}
+            draft={props.preview.draft}
+            editable={props.editable}
+            onDraftChange={props.onDraftChange}
+          />
         </div>
       </TabsContent>
     </Tabs>
   );
 }
 
-function EntryIcon(props: { type: "file" | "directory"; image?: boolean }) {
-  if (props.type === "directory") {
-    return <Folder className="h-4 w-4" />;
+function EntryIcon(props: { entry: Pick<NonNullable<FileManagerProps["selectedEntry"]>, "type" | "path" | "mimeType"> }) {
+  const iconClassName = "h-3.5 w-3.5";
+  const extension = pathExtension(props.entry.path);
+  const mimeType = props.entry.mimeType?.toLowerCase() ?? "";
+
+  if (props.entry.type === "directory") {
+    return <Folder className={iconClassName} />;
   }
 
-  if (props.image) {
-    return <FileImage className="h-4 w-4" />;
+  if (mimeType.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(extension)) {
+    return <FileImage className={iconClassName} />;
   }
 
-  return <FileText className="h-4 w-4" />;
+  if (mimeType.startsWith("video/") || ["mp4", "mov", "webm", "mkv", "avi"].includes(extension)) {
+    return <FileVideo className={iconClassName} />;
+  }
+
+  if (mimeType.startsWith("audio/") || ["mp3", "wav", "flac", "ogg", "m4a"].includes(extension)) {
+    return <FileAudio className={iconClassName} />;
+  }
+
+  if (["zip", "tar", "gz", "tgz", "rar", "7z", "bz2", "xz"].includes(extension)) {
+    return <FileArchive className={iconClassName} />;
+  }
+
+  if (["csv", "tsv", "xls", "xlsx"].includes(extension)) {
+    return <FileSpreadsheet className={iconClassName} />;
+  }
+
+  if (["json", "jsonl", "map"].includes(extension) || mimeType.includes("json")) {
+    return <FileJson className={iconClassName} />;
+  }
+
+  if (["yml", "yaml", "toml", "ini", "conf", "config"].includes(extension)) {
+    return <FileCog className={iconClassName} />;
+  }
+
+  if (["env", "settings"].includes(extension) || props.entry.path.endsWith(".env")) {
+    return <Settings className={iconClassName} />;
+  }
+
+  if (["sh", "bash", "zsh", "fish", "ps1", "bat", "cmd"].includes(extension)) {
+    return <FileTerminal className={iconClassName} />;
+  }
+
+  if (["sql", "sqlite", "db"].includes(extension)) {
+    return <Database className={iconClassName} />;
+  }
+
+  if (["html", "htm", "xml", "svg"].includes(extension)) {
+    return <FileCode2 className={iconClassName} />;
+  }
+
+  if (["js", "jsx", "ts", "tsx", "mjs", "cjs", "css", "scss", "less", "py", "rb", "go", "rs", "java", "kt", "swift", "php", "c", "cpp", "h", "hpp"].includes(extension)) {
+    return <Braces className={iconClassName} />;
+  }
+
+  if (["lock", "log"].includes(extension)) {
+    return <FileType className={iconClassName} />;
+  }
+
+  if (["wasm", "bin", "dylib", "so", "dll", "exe"].includes(extension)) {
+    return <Package className={iconClassName} />;
+  }
+
+  return <FileText className={iconClassName} />;
+}
+
+function getEntryIconTone(entry: Pick<NonNullable<FileManagerProps["selectedEntry"]>, "type" | "path" | "mimeType">) {
+  const extension = pathExtension(entry.path);
+  const mimeType = entry.mimeType?.toLowerCase() ?? "";
+
+  if (entry.type === "directory") {
+    return "border-amber-500/18 bg-amber-500/8 text-amber-700";
+  }
+
+  if (mimeType.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(extension)) {
+    return "border-sky-500/18 bg-sky-500/8 text-sky-700";
+  }
+
+  if (mimeType.startsWith("video/") || mimeType.startsWith("audio/")) {
+    return "border-fuchsia-500/18 bg-fuchsia-500/8 text-fuchsia-700";
+  }
+
+  if (["json", "jsonl", "map", "yml", "yaml", "toml", "ini", "conf", "config"].includes(extension) || mimeType.includes("json")) {
+    return "border-emerald-500/18 bg-emerald-500/8 text-emerald-700";
+  }
+
+  if (["js", "jsx", "ts", "tsx", "mjs", "cjs", "html", "htm", "css", "scss", "less", "py", "rb", "go", "rs", "java", "kt", "swift", "php", "c", "cpp", "h", "hpp", "sh", "bash", "zsh"].includes(extension)) {
+    return "border-violet-500/18 bg-violet-500/8 text-violet-700";
+  }
+
+  if (["zip", "tar", "gz", "tgz", "rar", "7z", "bz2", "xz"].includes(extension)) {
+    return "border-orange-500/18 bg-orange-500/8 text-orange-700";
+  }
+
+  return "border-black/8 bg-black/[0.03] text-muted-foreground";
 }
 
 function renderEntryUpdatedAt(value?: string): { inline: string; detail: string } {
@@ -389,203 +602,368 @@ function FileManagerCommandBar(props: {
   const selectedEntry = props.fileManager.selectedEntry;
   const readOnly = props.fileManager.workspaceReadOnly;
   const atWorkspaceRoot = props.fileManager.currentPath.trim() === "" || props.fileManager.currentPath === ".";
+  const commandLabel =
+    props.mode === "new-file"
+      ? "Create file"
+      : props.mode === "new-directory"
+        ? "Create folder"
+        : "Move entry";
+
+  function commandIconButton(input: {
+    label: string;
+    icon: ReactNode;
+    onClick: () => void;
+    disabled?: boolean;
+    active?: boolean;
+    destructive?: boolean;
+  }) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant={input.active ? "secondary" : "ghost"}
+            size="icon"
+            title={input.label}
+            aria-label={input.label}
+            onClick={input.onClick}
+            disabled={input.disabled}
+            className={cn(
+              "h-8 w-8 rounded-xl border border-transparent text-muted-foreground hover:border-black/8 hover:bg-white/70 hover:text-foreground",
+              input.active ? "border-black/10 bg-white/80 text-foreground shadow-sm" : "",
+              input.destructive ? "hover:text-destructive" : ""
+            )}
+          >
+            {input.icon}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{input.label}</TooltipContent>
+      </Tooltip>
+    );
+  }
 
   return (
-    <div className="space-y-3 border-b border-black/8 px-4 py-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" size="sm" onClick={props.fileManager.navigateUp} disabled={atWorkspaceRoot || props.fileManager.entriesBusy}>
-          <ArrowUp className="h-4 w-4" />
-          Up
-        </Button>
-        <Button variant="outline" size="sm" onClick={props.fileManager.refreshEntries} disabled={props.fileManager.entriesBusy}>
-          <RefreshCw className={cn("h-4 w-4", props.fileManager.entriesBusy ? "animate-spin" : "")} />
-          Refresh
-        </Button>
-        <Button variant="outline" size="sm" onClick={props.onUpload} disabled={readOnly || props.fileManager.mutationBusy}>
-          <Upload className="h-4 w-4" />
-          Upload
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => props.setMode(props.mode === "new-file" ? null : "new-file")} disabled={readOnly || props.fileManager.mutationBusy}>
-          <FilePlus2 className="h-4 w-4" />
-          New File
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => props.setMode(props.mode === "new-directory" ? null : "new-directory")} disabled={readOnly || props.fileManager.mutationBusy}>
-          <FolderPlus className="h-4 w-4" />
-          New Folder
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => props.setMode(props.mode === "move" ? null : "move")}
-          disabled={readOnly || props.fileManager.mutationBusy || !selectedEntry}
-        >
-          <PencilLine className="h-4 w-4" />
-          Rename / Move
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => selectedEntry && props.fileManager.downloadEntry(selectedEntry)}
-          disabled={!selectedEntry || selectedEntry.type !== "file" || props.fileManager.mutationBusy}
-        >
-          <Download className="h-4 w-4" />
-          Download
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-destructive hover:text-destructive"
-          onClick={() => {
-            if (!selectedEntry) {
-              return;
-            }
-
-            const confirmed = window.confirm(
-              selectedEntry.type === "directory"
-                ? `Delete directory ${selectedEntry.path} recursively?`
-                : `Delete file ${selectedEntry.path}?`
-            );
-            if (confirmed) {
-              props.fileManager.deleteEntry(selectedEntry);
-            }
-          }}
-          disabled={readOnly || !selectedEntry || props.fileManager.mutationBusy}
-        >
-          <Trash2 className="h-4 w-4" />
-          Delete
-        </Button>
-      </div>
-
-      {props.mode ? (
-        <div className="flex flex-col gap-2 rounded-2xl border border-black/8 bg-black/[0.025] p-3 md:flex-row md:items-center">
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              {props.mode === "new-file" ? "Create File" : props.mode === "new-directory" ? "Create Folder" : "Move Entry"}
-            </p>
-            <Input
-              value={props.inputValue}
-              onChange={(event) => props.setInputValue(event.target.value)}
-              placeholder={props.mode === "move" ? "Target path" : "Path"}
-              className="mt-2 h-9 rounded-xl border-black/10 bg-white/70 text-sm shadow-none"
-            />
+    <TooltipProvider>
+      <div className="space-y-2 border-b border-black/8 px-4 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center rounded-2xl border border-black/8 bg-black/[0.025] p-0.5">
+            {commandIconButton({
+              label: "Up",
+              icon: <ArrowUp className="h-4 w-4" />,
+              onClick: props.fileManager.navigateUp,
+              disabled: atWorkspaceRoot || props.fileManager.entriesBusy
+            })}
+            {commandIconButton({
+              label: "Refresh",
+              icon: <RefreshCw className={cn("h-4 w-4", props.fileManager.entriesBusy ? "animate-spin" : "")} />,
+              onClick: props.fileManager.refreshEntries,
+              disabled: props.fileManager.entriesBusy
+            })}
           </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" onClick={props.onSubmit} disabled={!props.inputValue.trim() || props.fileManager.mutationBusy}>
-              {props.fileManager.mutationBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Apply
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                props.setMode(null);
-                props.setInputValue("");
-              }}
-            >
-              <X className="h-4 w-4" />
-              Cancel
-            </Button>
+
+          <div className="flex items-center rounded-2xl border border-black/8 bg-black/[0.025] p-0.5">
+            {commandIconButton({
+              label: "Upload",
+              icon: <Upload className="h-4 w-4" />,
+              onClick: props.onUpload,
+              disabled: readOnly || props.fileManager.mutationBusy
+            })}
+            {commandIconButton({
+              label: "New file",
+              icon: <FilePlus2 className="h-4 w-4" />,
+              onClick: () => props.setMode(props.mode === "new-file" ? null : "new-file"),
+              disabled: readOnly || props.fileManager.mutationBusy,
+              active: props.mode === "new-file"
+            })}
+            {commandIconButton({
+              label: "New folder",
+              icon: <FolderPlus className="h-4 w-4" />,
+              onClick: () => props.setMode(props.mode === "new-directory" ? null : "new-directory"),
+              disabled: readOnly || props.fileManager.mutationBusy,
+              active: props.mode === "new-directory"
+            })}
+          </div>
+
+          <div className="flex items-center rounded-2xl border border-black/8 bg-black/[0.025] p-0.5">
+            {commandIconButton({
+              label: "Rename or move",
+              icon: <PencilLine className="h-4 w-4" />,
+              onClick: () => props.setMode(props.mode === "move" ? null : "move"),
+              disabled: readOnly || props.fileManager.mutationBusy || !selectedEntry,
+              active: props.mode === "move"
+            })}
+            {commandIconButton({
+              label: "Download",
+              icon: <Download className="h-4 w-4" />,
+              onClick: () => selectedEntry && props.fileManager.downloadEntry(selectedEntry),
+              disabled: !selectedEntry || selectedEntry.type !== "file" || props.fileManager.mutationBusy
+            })}
+            {commandIconButton({
+              label: "Delete",
+              icon: <Trash2 className="h-4 w-4" />,
+              destructive: true,
+              onClick: () => {
+                if (!selectedEntry) {
+                  return;
+                }
+
+                const confirmed = window.confirm(
+                  selectedEntry.type === "directory"
+                    ? `Delete directory ${selectedEntry.path} recursively?`
+                    : `Delete file ${selectedEntry.path}?`
+                );
+                if (confirmed) {
+                  props.fileManager.deleteEntry(selectedEntry);
+                }
+              },
+              disabled: readOnly || !selectedEntry || props.fileManager.mutationBusy
+            })}
           </div>
         </div>
-      ) : null}
-    </div>
+
+        {props.mode ? (
+          <div className="rounded-2xl border border-black/8 bg-white/45 p-1.5 shadow-inner">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 min-w-7 shrink-0 items-center justify-center rounded-xl bg-black/[0.045] text-muted-foreground">
+                {props.mode === "new-file" ? (
+                  <FilePlus2 className="h-4 w-4" />
+                ) : props.mode === "new-directory" ? (
+                  <FolderPlus className="h-4 w-4" />
+                ) : (
+                  <PencilLine className="h-4 w-4" />
+                )}
+              </div>
+              <Input
+                value={props.inputValue}
+                onChange={(event) => props.setInputValue(event.target.value)}
+                placeholder={props.mode === "move" ? "Target path" : commandLabel}
+                aria-label={commandLabel}
+                className="h-8 min-w-0 flex-1 rounded-xl border-black/10 bg-white/80 text-sm shadow-none"
+              />
+              <Button size="icon" className="h-8 w-8 rounded-xl" onClick={props.onSubmit} disabled={!props.inputValue.trim() || props.fileManager.mutationBusy} title="Apply" aria-label="Apply">
+                {props.fileManager.mutationBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-xl"
+                title="Cancel"
+                aria-label="Cancel"
+                onClick={() => {
+                  props.setMode(null);
+                  props.setInputValue("");
+                }}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </TooltipProvider>
   );
 }
 
 function WorkspaceFilePreviewWindow(props: {
   fileManager: FileManagerProps;
-  imagePreviewUrl: string | null;
+  preview: PreviewWindowState;
+  index: number;
 }) {
   const { fileManager } = props;
-  const selectedEntry = fileManager.selectedEntry;
-  const selectedFile = fileManager.selectedFile;
-  const selectedEntryUpdatedAt = renderEntryUpdatedAt(selectedEntry?.updatedAt);
-  const selectedPreviewUpdatedAt = renderEntryUpdatedAt(selectedFile?.updatedAt ?? selectedEntry?.updatedAt);
+  const { preview } = props;
+  const selectedEntry = preview.entry;
+  const selectedFile = preview.file;
+  const imagePreviewUrl = getImagePreviewUrl(preview);
+  const previewEditable = isEditablePreview({ fileManager, preview });
+  const previewDirty = isPreviewDirty({ fileManager, preview });
+  const [frame, setFrame] = useState<PreviewWindowFrame>(() => {
+    const frame = getDefaultPreviewFrame();
+    const offset = (preview.cascadeIndex % 6) * 34;
+    return constrainPreviewFrame({
+      ...frame,
+      x: frame.x + offset,
+      y: frame.y + offset
+    });
+  });
+  const interactionRef = useRef<PreviewWindowInteraction | null>(null);
 
-  if (!fileManager.open || !selectedEntry) {
+  useEffect(() => {
+    const handleResize = () => {
+      setFrame((current) => constrainPreviewFrame(current));
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, []);
+
+  function startMove(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, input, textarea, select, a, [role='tab']")) {
+      return;
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    interactionRef.current = {
+      type: "move",
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: frame.x,
+      startY: frame.y
+    };
+  }
+
+  function startResize(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    interactionRef.current = {
+      type: "resize",
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startWidth: frame.width,
+      startHeight: frame.height
+    };
+  }
+
+  function updateInteraction(event: PointerEvent<HTMLDivElement>) {
+    const interaction = interactionRef.current;
+    if (!interaction || interaction.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - interaction.startClientX;
+    const deltaY = event.clientY - interaction.startClientY;
+    if (interaction.type === "move") {
+      setFrame((current) =>
+        constrainPreviewFrame({
+          ...current,
+          x: interaction.startX + deltaX,
+          y: interaction.startY + deltaY
+        })
+      );
+      return;
+    }
+
+    setFrame((current) =>
+      constrainPreviewFrame({
+        ...current,
+        width: interaction.startWidth + deltaX,
+        height: interaction.startHeight + deltaY
+      })
+    );
+  }
+
+  function endInteraction(event: PointerEvent<HTMLDivElement>) {
+    const interaction = interactionRef.current;
+    if (!interaction || interaction.pointerId !== event.pointerId) {
+      return;
+    }
+
+    interactionRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function resetFrame() {
+    setFrame(getDefaultPreviewFrame());
+  }
+
+  if (!fileManager.open) {
     return null;
   }
 
   return (
-    <div className="workspace-file-preview-shell absolute inset-x-3 bottom-24 top-10 z-40 md:bottom-28 md:left-6 md:right-[408px] md:top-6">
-      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-black/10 bg-background/94 shadow-[0_32px_90px_-42px_rgba(15,23,42,0.6)] backdrop-blur-xl">
-        <div className="flex items-center justify-between gap-3 border-b border-black/8 px-4 py-3">
+    <div
+      className="workspace-file-preview-shell absolute z-40"
+      onPointerDown={() => fileManager.focusPreviewWindow(preview.id)}
+      style={{
+        left: frame.x,
+        top: frame.y,
+        width: frame.width,
+        height: frame.height,
+        zIndex: 40 + Math.max(0, fileManager.previewWindows.length - props.index)
+      }}
+      onPointerMove={updateInteraction}
+      onPointerUp={endInteraction}
+      onPointerCancel={endInteraction}
+    >
+      <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-black/10 bg-background/94 shadow-[0_32px_90px_-42px_rgba(15,23,42,0.6)] backdrop-blur-xl">
+        <div
+          className="flex cursor-move touch-none select-none items-center justify-between gap-3 border-b border-black/8 px-3 py-2"
+          onPointerDown={startMove}
+          onDoubleClick={resetFrame}
+        >
           <div className="min-w-0">
-            <p className="truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Preview</p>
-            <p className="mt-1 truncate text-sm font-medium text-foreground">{selectedEntry.path}</p>
+            <div className="flex min-w-0 items-center gap-2">
+              <Move className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+              <p className="truncate text-sm font-semibold tracking-tight text-foreground">{selectedEntry.name}</p>
+              <span className="shrink-0 rounded-full border border-black/8 bg-black/[0.025] px-2 py-0.5 text-[10px] text-muted-foreground">
+                {formatSize(selectedFile?.sizeBytes ?? selectedEntry.sizeBytes)}
+              </span>
+              <span
+                className="hidden max-w-56 shrink truncate rounded-full border border-black/8 bg-black/[0.025] px-2 py-0.5 text-[10px] text-muted-foreground md:inline-block"
+                title={selectedFile?.mimeType ?? selectedEntry.mimeType ?? "unknown"}
+              >
+                {selectedFile?.mimeType ?? selectedEntry.mimeType ?? "unknown"}
+              </span>
+            </div>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{selectedEntry.path}</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {selectedEntry.type === "file" && selectedFile?.truncated ? <Badge variant="outline">preview only</Badge> : null}
-            {selectedEntry.type === "file" && fileManager.selectedFileDirty ? <Badge variant="secondary">unsaved</Badge> : null}
-            {selectedEntry.type === "file" ? (
-              <Button
-                size="sm"
-                onClick={fileManager.saveSelectedFile}
-                disabled={!fileManager.selectedFileDirty || !fileManager.selectedFileEditable || fileManager.mutationBusy}
-              >
-                Save
-              </Button>
-            ) : null}
-            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl" onClick={fileManager.closeSelection}>
+            {selectedFile?.truncated ? <Badge variant="outline">preview only</Badge> : null}
+            {previewDirty ? <Badge variant="secondary">unsaved</Badge> : null}
+            <Button
+              size="sm"
+              className="h-8"
+              onClick={() => fileManager.savePreviewWindow(preview.id)}
+              disabled={!previewDirty || !previewEditable || fileManager.mutationBusy}
+            >
+              Save
+            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={resetFrame} title="Reset preview window" aria-label="Reset preview window">
+              <Maximize2 className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => fileManager.closePreviewWindow(preview.id)} aria-label="Close preview">
               <X className="h-4 w-4" />
             </Button>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-          {selectedEntry.type === "directory" ? (
-            <div className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Directory</p>
-                  <p className="mt-2 text-sm font-medium text-foreground">{selectedEntry.name}</p>
-                  <p className="mt-1 truncate text-xs text-muted-foreground">{selectedEntry.path}</p>
-                </div>
-                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time</p>
-                  <p className="mt-2 text-sm font-medium text-foreground">{selectedEntryUpdatedAt.inline}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{selectedEntryUpdatedAt.detail}</p>
-                </div>
-              </div>
-              <Button variant="outline" onClick={() => fileManager.openDirectory(selectedEntry.path)}>
-                <Folder className="h-4 w-4" />
-                Open Directory
-              </Button>
-            </div>
-          ) : fileManager.fileBusy ? (
+        <div className="min-h-0 flex-1 overflow-hidden px-3 py-3">
+          {!selectedFile ? (
             <div className="flex h-full min-h-[240px] items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <div className="text-center">
+                <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
+                <p className="mt-3 text-xs text-muted-foreground">Loading preview</p>
+              </div>
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Size</p>
-                  <p className="mt-2 text-sm font-medium text-foreground">{formatSize(selectedFile?.sizeBytes ?? selectedEntry.sizeBytes)}</p>
+            <div className="h-full min-h-0">
+              {imagePreviewUrl ? (
+                <div className="h-full min-h-0 overflow-hidden rounded-2xl border border-black/10 bg-black/[0.03] p-2">
+                  <img src={imagePreviewUrl} alt={selectedEntry.name} className="h-full w-full rounded-xl object-contain" />
                 </div>
-                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Encoding</p>
-                  <p className="mt-2 text-sm font-medium text-foreground">{selectedFile?.encoding ?? "unknown"}</p>
+              ) : isPreviewText(preview) ? (
+                <div className="h-full min-h-0">
+                  <TextPreview
+                    preview={preview}
+                    editable={previewEditable}
+                    onDraftChange={(value) => fileManager.setPreviewWindowDraft(preview.id, value)}
+                  />
                 </div>
-                <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">MIME</p>
-                  <p className="mt-2 truncate text-sm font-medium text-foreground">{selectedFile?.mimeType ?? selectedEntry.mimeType ?? "unknown"}</p>
-                </div>
-              </div>
-              <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time</p>
-                <p className="mt-2 text-sm font-medium text-foreground">{selectedPreviewUpdatedAt.inline}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{selectedPreviewUpdatedAt.detail}</p>
-              </div>
-
-              {isImagePreview(fileManager) && props.imagePreviewUrl ? (
-                <div className="overflow-hidden rounded-[24px] border border-black/10 bg-black/[0.03] p-3">
-                  <img src={props.imagePreviewUrl} alt={selectedEntry.name} className="max-h-[520px] w-full rounded-[18px] object-contain" />
-                </div>
-              ) : isTextPreview(fileManager) && selectedFile ? (
-                <TextPreview fileManager={fileManager} selectedEntry={selectedEntry} selectedFile={selectedFile} />
               ) : (
-                <div className="space-y-3">
+                <div className="h-full min-h-0 space-y-3 overflow-auto">
                   <div className="rounded-[24px] border border-black/10 bg-black/[0.02] p-4">
                     <p className="text-sm font-medium text-foreground">Binary or non-editable preview</p>
                     <p className="mt-1 text-sm text-muted-foreground">This file is being shown as metadata / preview only. Use download for the raw bytes.</p>
@@ -598,6 +976,14 @@ function WorkspaceFilePreviewWindow(props: {
             </div>
           )}
         </div>
+        <div
+          className="absolute bottom-2 right-2 h-5 w-5 cursor-nwse-resize touch-none rounded-md border border-black/10 bg-background/70 shadow-sm backdrop-blur transition hover:bg-background"
+          onPointerDown={startResize}
+          title="Resize preview window"
+          aria-label="Resize preview window"
+        >
+          <div className="absolute bottom-1 right-1 h-2.5 w-2.5 border-b-2 border-r-2 border-muted-foreground/45" />
+        </div>
       </div>
     </div>
   );
@@ -609,24 +995,14 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
   const [commandValue, setCommandValue] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const imagePreviewUrl = useMemo(() => {
-    if (!isImagePreview(fileManager) || !fileManager.selectedFile?.mimeType) {
-      return null;
-    }
-
-    return `data:${fileManager.selectedFile.mimeType};base64,${fileManager.selectedFile.content}`;
-  }, [fileManager]);
 
   if (!fileManager.canManageFiles) {
     return null;
   }
 
   const selectedEntry = fileManager.selectedEntry;
-  const selectedFile = fileManager.selectedFile;
   const busy = fileManager.entriesBusy || fileManager.entriesLoadingMore || fileManager.fileBusy || fileManager.mutationBusy;
   const displayPath = fileManager.currentPath.trim() === "" || fileManager.currentPath === "." ? "workspace root" : fileManager.currentPath;
-  const selectedEntryUpdatedAt = renderEntryUpdatedAt(selectedEntry?.updatedAt);
-  const selectedPreviewUpdatedAt = renderEntryUpdatedAt(selectedFile?.updatedAt ?? selectedEntry?.updatedAt);
 
   function openCommand(mode: "new-file" | "new-directory" | "move") {
     setCommandMode(mode);
@@ -716,74 +1092,88 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
           </Button>
         </div>
       ) : (
-        <div className="workspace-file-panel-shell absolute inset-x-3 bottom-24 z-30 top-4 md:inset-x-auto md:bottom-28 md:right-6 md:top-6 md:w-[min(940px,calc(100%-3rem))]">
-          <div
-            className={cn(
-              "relative flex h-full flex-col overflow-hidden rounded-[28px] border bg-background/92 shadow-[0_32px_90px_-42px_rgba(15,23,42,0.55)] backdrop-blur-xl transition",
-              dragActive ? "border-primary/45 ring-4 ring-primary/10" : "border-black/10"
-            )}
-            onDragOver={handleDragOver}
-            onDragEnter={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            {dragActive ? (
-              <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-[24px] border border-dashed border-primary/50 bg-background/35">
-                <div className="text-center">
-                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                    <Upload className="h-5 w-5" />
-                  </div>
-                  <p className="mt-3 text-sm font-semibold text-foreground">Drop files or folders to upload</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Folder structure is preserved under {displayPath}.</p>
-                </div>
-              </div>
-            ) : null}
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-black/8 px-4 py-4">
-              <div className="min-w-0 space-y-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-black/10 bg-black/[0.03] text-foreground">
-                    <Folder className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold tracking-tight text-foreground">Workspace Files</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {fileManager.workspaceName || fileManager.workspaceId}
-                    </p>
-                  </div>
-                  {fileManager.workspaceReadOnly ? <Badge variant="outline">read only</Badge> : null}
-                </div>
-                <DirectoryBreadcrumbs breadcrumbs={fileManager.breadcrumbs} openDirectory={fileManager.openDirectory} />
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Badge variant="outline">{fileManager.entries.length} items</Badge>
-                {selectedEntry ? <Badge variant="secondary">{pathLeaf(selectedEntry.path)}</Badge> : null}
-                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl" onClick={() => fileManager.setOpen(false)}>
-                  <PanelRightClose className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-
-            <FileManagerCommandBar
+        <>
+          {fileManager.previewWindows.map((preview, index) => (
+            <WorkspaceFilePreviewWindow
+              key={preview.id}
               fileManager={fileManager}
-              mode={commandMode}
-              setMode={(value) => {
-                if (value === null) {
-                  setCommandMode(null);
-                  setCommandValue("");
-                  return;
-                }
-
-                openCommand(value);
-              }}
-              inputValue={commandValue}
-              setInputValue={setCommandValue}
-              onSubmit={submitCommand}
-              onUpload={() => fileInputRef.current?.click()}
+              preview={preview}
+              index={index}
             />
+          ))}
+          <div
+            className="workspace-file-panel-shell absolute inset-x-3 bottom-24 z-20 md:inset-x-auto md:bottom-28 md:right-5 md:w-[320px]"
+            style={{ top: "auto", height: "min(50%, calc(100% - 10.5rem))" }}
+          >
+            <div
+              className={cn(
+                "relative flex h-full flex-col overflow-hidden rounded-[28px] border bg-background/92 shadow-[0_32px_90px_-42px_rgba(15,23,42,0.55)] backdrop-blur-xl transition",
+                dragActive ? "border-primary/45 ring-4 ring-primary/10" : "border-black/10"
+              )}
+              onDragOver={handleDragOver}
+              onDragEnter={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
+              {dragActive ? (
+                <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-[24px] border border-dashed border-primary/50 bg-background/35">
+                  <div className="text-center">
+                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                      <Upload className="h-5 w-5" />
+                    </div>
+                    <p className="mt-3 text-sm font-semibold text-foreground">Drop files or folders to upload</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Folder structure is preserved under {displayPath}.</p>
+                  </div>
+                </div>
+              ) : null}
+              <div className="border-b border-black/8 px-4 py-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-black/10 bg-black/[0.03] text-foreground">
+                      <Folder className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <p className="truncate text-sm font-semibold tracking-tight text-foreground">Workspace Files</p>
+                        {fileManager.workspaceReadOnly ? <Badge variant="outline" className="shrink-0">read only</Badge> : null}
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {fileManager.workspaceName || fileManager.workspaceId}
+                      </p>
+                    </div>
+                  </div>
 
-            <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,320px)_minmax(0,1fr)] md:grid-cols-[320px_minmax(0,1fr)] md:grid-rows-1">
-              <div className="flex min-h-0 flex-col border-b border-black/8 md:border-b-0 md:border-r">
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Badge variant="outline" className="shrink-0">{fileManager.entries.length}</Badge>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => fileManager.setOpen(false)} aria-label="Close files">
+                    <PanelRightClose className="h-4 w-4" />
+                  </Button>
+                  </div>
+                </div>
+                <div className="mt-2 min-w-0 overflow-hidden rounded-xl border border-black/6 bg-black/[0.018] px-2 py-1">
+                  <DirectoryBreadcrumbs breadcrumbs={fileManager.breadcrumbs} openDirectory={fileManager.openDirectory} />
+                </div>
+              </div>
+
+              <FileManagerCommandBar
+                fileManager={fileManager}
+                mode={commandMode}
+                setMode={(value) => {
+                  if (value === null) {
+                    setCommandMode(null);
+                    setCommandValue("");
+                    return;
+                  }
+
+                  openCommand(value);
+                }}
+                inputValue={commandValue}
+                setInputValue={setCommandValue}
+                onSubmit={submitCommand}
+                onUpload={() => fileInputRef.current?.click()}
+              />
+
+              <div className="flex min-h-0 flex-1 flex-col">
                 <div className="flex items-center justify-between px-4 py-3">
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Directory</p>
@@ -793,19 +1183,23 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                     <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                   ) : null}
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-                  <div className="space-y-1.5">
+                <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
+                  <div className="space-y-1">
                     {fileManager.entries.map((entry) => {
                       const active = selectedEntry?.path === entry.path;
-                      const image = entry.type === "file" && (entry.mimeType?.startsWith("image/") ?? false);
                       const updatedAt = renderEntryUpdatedAt(entry.updatedAt);
+                      const metaText = entry.type === "directory"
+                        ? entry.updatedAt ? updatedAt.inline : "dir"
+                        : `${formatSize(entry.sizeBytes)}${entry.updatedAt ? ` · ${updatedAt.inline}` : ""}`;
+
                       return (
                         <button
                           key={entry.path}
                           className={cn(
-                            "flex w-full items-start gap-3 rounded-2xl px-3 py-2.5 text-left transition",
-                            active ? "border border-black/10 bg-black/[0.045] shadow-sm" : "border border-transparent hover:border-black/8 hover:bg-black/[0.025]"
+                            "flex h-9 w-full items-center gap-2 rounded-xl border px-2 text-left transition",
+                            active ? "border-black/10 bg-black/[0.045] shadow-sm" : "border-transparent hover:border-black/8 hover:bg-black/[0.025]"
                           )}
+                          title={`${entry.path}${entry.updatedAt ? `\n${updatedAt.detail}` : ""}`}
                           onClick={() => {
                             if (entry.type === "directory") {
                               fileManager.openDirectory(entry.path);
@@ -815,22 +1209,15 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                           }}
                         >
                           <div className={cn(
-                            "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border",
-                            active ? "border-black/10 bg-white text-foreground" : "border-black/8 bg-black/[0.03] text-muted-foreground"
+                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border",
+                            active ? "border-black/10 bg-white text-foreground" : getEntryIconTone(entry)
                           )}>
-                            <EntryIcon type={entry.type} image={image} />
+                            <EntryIcon entry={entry} />
                           </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <p className="truncate text-sm font-medium text-foreground">{entry.name}</p>
-                              {entry.type === "directory" ? <Badge variant="outline">dir</Badge> : null}
-                            </div>
-                            <p className="mt-1 truncate text-xs text-muted-foreground" title={updatedAt.detail}>
-                              {entry.type === "directory"
-                                ? entry.updatedAt ? updatedAt.inline : "directory"
-                                : `${formatSize(entry.sizeBytes)}${entry.updatedAt ? ` · ${updatedAt.inline}` : ""}`}
-                            </p>
-                          </div>
+                          <p className="min-w-0 flex-1 truncate text-[13px] font-medium leading-none text-foreground">{entry.name}</p>
+                          <p className="max-w-[108px] shrink-0 truncate text-right text-[11px] leading-none text-muted-foreground">
+                            {metaText}
+                          </p>
                         </button>
                       );
                     })}
@@ -858,110 +1245,9 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                   </div>
                 </div>
               </div>
-
-              <div className="flex min-h-0 flex-col">
-                <div className="flex items-center justify-between gap-3 border-b border-black/8 px-4 py-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Preview</p>
-                    <p className="mt-1 truncate text-sm font-medium text-foreground">
-                      {selectedEntry ? selectedEntry.path : "Select an entry"}
-                    </p>
-                  </div>
-                  {selectedEntry?.type === "file" ? (
-                    <div className="flex items-center gap-2">
-                      {selectedFile?.truncated ? <Badge variant="outline">preview only</Badge> : null}
-                      {fileManager.selectedFileDirty ? <Badge variant="secondary">unsaved</Badge> : null}
-                      <Button
-                        size="sm"
-                        onClick={fileManager.saveSelectedFile}
-                        disabled={!fileManager.selectedFileDirty || !fileManager.selectedFileEditable || fileManager.mutationBusy}
-                      >
-                        Save
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-                  {!selectedEntry ? (
-                    <div className="flex h-full min-h-[240px] items-center justify-center">
-                      <div className="max-w-sm text-center">
-                        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-black/10 bg-black/[0.03] text-muted-foreground">
-                          <File className="h-5 w-5" />
-                        </div>
-                        <p className="mt-4 text-sm font-medium text-foreground">Browse a directory or open a file</p>
-                        <p className="mt-1 text-sm text-muted-foreground">The panel supports drag-and-drop folder upload, download, text editing, renaming, and recursive delete.</p>
-                      </div>
-                    </div>
-                  ) : selectedEntry.type === "directory" ? (
-                    <div className="space-y-4">
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Directory</p>
-                          <p className="mt-2 text-sm font-medium text-foreground">{selectedEntry.name}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">{selectedEntry.path}</p>
-                        </div>
-                        <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time</p>
-                          <p className="mt-2 text-sm font-medium text-foreground">{selectedEntryUpdatedAt.inline}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">{selectedEntryUpdatedAt.detail}</p>
-                        </div>
-                      </div>
-                      <Button variant="outline" onClick={() => fileManager.openDirectory(selectedEntry.path)}>
-                        <Folder className="h-4 w-4" />
-                        Open Directory
-                      </Button>
-                    </div>
-                  ) : fileManager.fileBusy ? (
-                    <div className="flex h-full min-h-[240px] items-center justify-center">
-                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="grid gap-3 md:grid-cols-3">
-                        <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Size</p>
-                          <p className="mt-2 text-sm font-medium text-foreground">{formatSize(selectedFile?.sizeBytes ?? selectedEntry.sizeBytes)}</p>
-                        </div>
-                        <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Encoding</p>
-                          <p className="mt-2 text-sm font-medium text-foreground">{selectedFile?.encoding ?? "unknown"}</p>
-                        </div>
-                        <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">MIME</p>
-                          <p className="mt-2 truncate text-sm font-medium text-foreground">{selectedFile?.mimeType ?? selectedEntry.mimeType ?? "unknown"}</p>
-                        </div>
-                      </div>
-                      <div className="rounded-2xl border border-black/8 bg-black/[0.02] px-4 py-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Time</p>
-                        <p className="mt-2 text-sm font-medium text-foreground">{selectedPreviewUpdatedAt.inline}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">{selectedPreviewUpdatedAt.detail}</p>
-                      </div>
-
-                      {isImagePreview(fileManager) && imagePreviewUrl ? (
-                        <div className="overflow-hidden rounded-[24px] border border-black/10 bg-black/[0.03] p-3">
-                          <img src={imagePreviewUrl} alt={selectedEntry.name} className="max-h-[420px] w-full rounded-[18px] object-contain" />
-                        </div>
-                      ) : isTextPreview(fileManager) && selectedFile ? (
-                        <TextPreview fileManager={fileManager} selectedEntry={selectedEntry} selectedFile={selectedFile} />
-                      ) : (
-                        <div className="space-y-3">
-                          <div className="rounded-[24px] border border-black/10 bg-black/[0.02] p-4">
-                            <p className="text-sm font-medium text-foreground">Binary or non-editable preview</p>
-                            <p className="mt-1 text-sm text-muted-foreground">This file is being shown as metadata / preview only. Use download for the raw bytes.</p>
-                          </div>
-                          <pre className="max-h-[340px] overflow-auto rounded-[24px] border border-black/10 bg-black/[0.02] p-4 text-xs leading-6 text-foreground/75">
-                            {prettyJson(selectedFile)}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
     </>
   );

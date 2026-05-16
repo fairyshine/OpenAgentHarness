@@ -58,7 +58,6 @@ export interface WorkspaceUploadDirectoryItem {
   relativePath: string;
 }
 
-const TEXT_PREVIEW_BYTES = 96 * 1024;
 const BINARY_PREVIEW_BYTES = 96 * 1024;
 const ENTRY_METADATA_REFRESH_DELAY_MS = 250;
 const ENTRY_PAGE_SIZE = 200;
@@ -101,6 +100,10 @@ function isImageEntry(entry: Pick<WorkspaceEntry, "path" | "mimeType">): boolean
   }
 
   return ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(pathExtension(entry.path));
+}
+
+function shouldLimitFilePreview(entry: Pick<WorkspaceEntry, "path" | "mimeType">): boolean {
+  return !isTextEntry(entry) && !isImageEntry(entry);
 }
 
 function isTextEntry(entry: Pick<WorkspaceEntry, "path" | "mimeType">): boolean {
@@ -148,6 +151,29 @@ function isTextEntry(entry: Pick<WorkspaceEntry, "path" | "mimeType">): boolean 
     "sql",
     "log"
   ].includes(pathExtension(entry.path));
+}
+
+function isEditableFile(input: {
+  workspaceReadOnly: boolean;
+  entry: WorkspaceEntry | null;
+  file: WorkspaceFileContent | null;
+}): boolean {
+  return Boolean(
+    !input.workspaceReadOnly &&
+      input.entry?.type === "file" &&
+      input.file?.encoding === "utf8" &&
+      !input.file.truncated &&
+      !input.file.readOnly &&
+      isTextEntry(input.entry)
+  );
+}
+
+interface WorkspaceFilePreviewWindowState {
+  id: string;
+  entry: WorkspaceEntry;
+  file: WorkspaceFileContent | null;
+  draft: string;
+  cascadeIndex: number;
 }
 
 function mergeWorkspaceEntries(pages: WorkspaceEntryPage[]): WorkspaceEntryPage | null {
@@ -248,6 +274,7 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
   const [selectedEntry, setSelectedEntry] = useState<WorkspaceEntry | null>(null);
   const [selectedFile, setSelectedFile] = useState<WorkspaceFileContent | null>(null);
   const [selectedFileDraft, setSelectedFileDraft] = useState("");
+  const [previewWindows, setPreviewWindows] = useState<WorkspaceFilePreviewWindowState[]>([]);
   const [entriesBusy, setEntriesBusy] = useState(false);
   const [entriesLoadingMore, setEntriesLoadingMore] = useState(false);
   const [entriesRefreshingMetadata, setEntriesRefreshingMetadata] = useState(false);
@@ -261,6 +288,7 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
   const metadataAbortRef = useRef<AbortController | null>(null);
   const fileAbortRef = useRef<AbortController | null>(null);
   const metadataRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewWindowSeqRef = useRef(0);
 
   const workspaceIdValue = params.workspaceId.trim();
   const workspaceReadOnly = params.workspace?.readOnly ?? false;
@@ -286,13 +314,11 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
     return createSandboxHttpClient(transport);
   }, [params.connection, params.request]);
 
-  const selectedFileEditable =
-    !workspaceReadOnly &&
-    selectedEntry?.type === "file" &&
-    selectedFile?.encoding === "utf8" &&
-    !selectedFile.truncated &&
-    !selectedFile.readOnly &&
-    isTextEntry(selectedEntry);
+  const selectedFileEditable = isEditableFile({
+    workspaceReadOnly,
+    entry: selectedEntry,
+    file: selectedFile
+  });
   const selectedFileDirty = selectedFileEditable && selectedFile !== null && selectedFileDraft !== selectedFile.content;
 
   const breadcrumbs = useMemo(() => {
@@ -527,13 +553,25 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
       return;
     }
 
+    setPreviewWindows((current) => {
+      const existing = current.find((preview) => preview.id === entry.path);
+      const nextPreview: WorkspaceFilePreviewWindowState = existing ?? {
+        id: entry.path,
+        entry,
+        file: null,
+        draft: "",
+        cascadeIndex: previewWindowSeqRef.current++
+      };
+      return [nextPreview, ...current.filter((preview) => preview.id !== entry.path)];
+    });
+
     try {
       setFileBusy(true);
       const response = toWorkspaceFileContent(
         await sandboxClient.getFileContent(workspaceIdValue, {
           path: workspaceRelativePathToSandboxPath(entry.path),
           encoding: isTextEntry(entry) ? "utf8" : "base64",
-          maxBytes: isTextEntry(entry) ? TEXT_PREVIEW_BYTES : BINARY_PREVIEW_BYTES
+          ...(shouldLimitFilePreview(entry) ? { maxBytes: BINARY_PREVIEW_BYTES } : {})
         } satisfies WorkspaceFileContentQuery,
         { signal: fileController.signal })
       );
@@ -542,7 +580,18 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
       }
 
       setSelectedFile(response);
-      setSelectedFileDraft(response.encoding === "utf8" && !response.truncated ? response.content : "");
+      setSelectedFileDraft(response.encoding === "utf8" ? response.content : "");
+      setPreviewWindows((current) => {
+        const existing = current.find((preview) => preview.id === entry.path);
+        const nextPreview: WorkspaceFilePreviewWindowState = {
+          id: entry.path,
+          entry,
+          file: response,
+          draft: existing && existing.file?.content === response.content ? existing.draft : response.encoding === "utf8" ? response.content : "",
+          cascadeIndex: existing?.cascadeIndex ?? previewWindowSeqRef.current++
+        };
+        return [nextPreview, ...current.filter((preview) => preview.id !== entry.path)];
+      });
       if (!quiet) {
         params.setActivity(`已打开 ${entry.name}`);
         params.setErrorMessage("");
@@ -579,6 +628,35 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
     setSelectedFile(null);
     setSelectedFileDraft("");
     await refreshEntries({ path: targetPath, quiet });
+  }
+
+  function closePreviewWindow(id: string): void {
+    setPreviewWindows((current) => current.filter((preview) => preview.id !== id));
+    if (selectedEntry?.path === id) {
+      setSelectedEntry(null);
+      setSelectedFile(null);
+      setSelectedFileDraft("");
+    }
+  }
+
+  function focusPreviewWindow(id: string): void {
+    setPreviewWindows((current) => {
+      const target = current.find((preview) => preview.id === id);
+      if (!target) {
+        return current;
+      }
+
+      return [target, ...current.filter((preview) => preview.id !== id)];
+    });
+  }
+
+  function setPreviewWindowDraft(id: string, draft: string): void {
+    setPreviewWindows((current) =>
+      current.map((preview) => (preview.id === id ? { ...preview, draft } : preview))
+    );
+    if (selectedEntry?.path === id) {
+      setSelectedFileDraft(draft);
+    }
   }
 
   async function createDirectory(path: string): Promise<void> {
@@ -640,19 +718,55 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
       return;
     }
 
+    await savePreviewWindow(selectedEntry.path);
+  }
+
+  async function savePreviewWindow(id: string): Promise<void> {
+    if (!workspaceIdValue) {
+      return;
+    }
+
+    const preview = previewWindows.find((item) => item.id === id);
+    if (!preview || !isEditableFile({ workspaceReadOnly, entry: preview.entry, file: preview.file })) {
+      return;
+    }
+
     try {
       setMutationBusy(true);
       const entry = toWorkspaceEntry(
         await sandboxClient.putFileContent(workspaceIdValue, {
-          path: workspaceRelativePathToSandboxPath(selectedEntry.path),
-          content: selectedFileDraft,
+          path: workspaceRelativePathToSandboxPath(preview.entry.path),
+          content: preview.draft,
           encoding: "utf8",
           overwrite: true,
-          ...(selectedFile?.etag ? { ifMatch: selectedFile.etag } : {})
+          ...(preview.file?.etag ? { ifMatch: preview.file.etag } : {})
         } satisfies PutWorkspaceFileRequest)
       );
       await refreshEntries({ path: parentWorkspaceRelativePath(entry.path), quiet: true });
-      await focusEntry(entry, true);
+      const response = toWorkspaceFileContent(
+        await sandboxClient.getFileContent(workspaceIdValue, {
+          path: workspaceRelativePathToSandboxPath(entry.path),
+          encoding: "utf8"
+        } satisfies WorkspaceFileContentQuery)
+      );
+      setPreviewWindows((current) =>
+        current.map((item) =>
+          item.id === id
+            ? {
+                id: entry.path,
+                entry,
+                file: response,
+                draft: response.encoding === "utf8" ? response.content : "",
+                cascadeIndex: item.cascadeIndex
+              }
+            : item
+        )
+      );
+      if (selectedEntry?.path === id) {
+        setSelectedEntry(entry);
+        setSelectedFile(response);
+        setSelectedFileDraft(response.encoding === "utf8" ? response.content : "");
+      }
       params.setActivity(`已保存 ${entry.path}`);
       params.setErrorMessage("");
     } catch (error) {
@@ -710,6 +824,11 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
         recursive: entry.type === "directory"
       } satisfies WorkspaceDeleteEntryQuery);
       await refreshEntries({ path: currentPath, quiet: true });
+      setPreviewWindows((current) =>
+        current.filter((preview) =>
+          entry.type === "directory" ? preview.entry.path !== entry.path && !preview.entry.path.startsWith(`${entry.path}/`) : preview.entry.path !== entry.path
+        )
+      );
       if (selectedEntry?.path === entry.path) {
         setSelectedEntry(null);
         setSelectedFile(null);
@@ -815,10 +934,15 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
     setSelectedFileDraft("");
   }
 
+  function closeAllPreviewWindows(): void {
+    setPreviewWindows([]);
+    closeSelection();
+  }
+
   useEffect(() => {
     setCurrentPath(".");
     setEntryPage(null);
-    closeSelection();
+    closeAllPreviewWindows();
     entriesAbortRef.current?.abort();
     metadataAbortRef.current?.abort();
     fileAbortRef.current?.abort();
@@ -882,6 +1006,7 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
       setSelectedFileDraft,
       selectedFileEditable,
       selectedFileDirty,
+      previewWindows,
       canManageFiles: Boolean(workspaceIdValue),
       openDirectory: (path: string) => void openDirectory(path, true),
       refreshEntries: () => void refreshEntries(),
@@ -892,6 +1017,10 @@ export function useWorkspaceFileManager(params: WorkspaceFileManagerParams) {
       createDirectory: (path: string) => void createDirectory(path),
       createFile: (path: string) => void createFile(path),
       saveSelectedFile: () => void saveSelectedFile(),
+      savePreviewWindow: (id: string) => void savePreviewWindow(id),
+      setPreviewWindowDraft,
+      closePreviewWindow,
+      focusPreviewWindow,
       moveEntry: (sourcePath: string, targetPath: string) => void moveEntry(sourcePath, targetPath),
       deleteEntry: (entry: WorkspaceEntry) => void deleteEntry(entry),
       uploadFiles: (files: FileList | File[] | WorkspaceUploadItem[]) => void uploadFiles(files),
