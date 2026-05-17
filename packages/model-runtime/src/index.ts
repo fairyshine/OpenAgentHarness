@@ -1,3 +1,5 @@
+import { createDeepSeek } from "@ai-sdk/deepseek";
+import { createMoonshotAI } from "@ai-sdk/moonshotai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
@@ -315,6 +317,20 @@ export class AiSdkModelRuntime implements ModelGateway {
           baseURL: definition.url,
           ...(definition.key ? { apiKey: definition.key } : {}),
           includeUsage: true
+        });
+        return provider(definition.name);
+      }
+      case "deepseek": {
+        const provider = createDeepSeek({
+          ...(definition.key ? { apiKey: definition.key } : {}),
+          ...(definition.url ? { baseURL: definition.url } : {})
+        });
+        return provider(definition.name);
+      }
+      case "moonshotai": {
+        const provider = createMoonshotAI({
+          ...(definition.key ? { apiKey: definition.key } : {}),
+          ...(definition.url ? { baseURL: definition.url } : {})
         });
         return provider(definition.name);
       }

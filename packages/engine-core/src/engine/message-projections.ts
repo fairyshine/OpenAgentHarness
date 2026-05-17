@@ -4,6 +4,8 @@ import { toolResultContent } from "../execution-message-content.js";
 import type { EngineMessage } from "./engine-messages.js";
 
 export type ProjectionView = "transcript" | "model" | "compact" | "debug" | "export";
+type MessagePart = Extract<Message["content"], unknown[]>[number];
+type ToolCallPart = Extract<MessagePart, { type: "tool-call" }>;
 
 export interface ProjectedMessageBase {
   view: ProjectionView;
@@ -82,7 +84,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isToolCallPart(value: unknown): value is Extract<Extract<Message["content"], unknown[]>[number], { type: "tool-call" }> {
+function isToolCallPart(value: unknown): value is ToolCallPart {
   return isRecord(value) && value.type === "tool-call" && typeof value.toolCallId === "string";
 }
 
@@ -106,12 +108,16 @@ function contentToolResultIds(content: Message["content"]): string[] {
   return content.filter(isToolResultPart).map((part) => part.toolCallId);
 }
 
+function isPureToolCallContent(content: Message["content"]): content is ToolCallPart[] {
+  return Array.isArray(content) && content.length > 0 && content.every(isToolCallPart);
+}
+
 function isPureToolCallMessage(message: EngineMessage): boolean {
   if (message.role !== "assistant" || !Array.isArray(message.content)) {
     return false;
   }
 
-  return message.content.length > 0 && message.content.every((part) => part.type === "tool-call");
+  return isPureToolCallContent(message.content);
 }
 
 function removeDuplicateCompositeToolCallMessages(messages: EngineMessage[]): EngineMessage[] {
@@ -335,6 +341,28 @@ function buildModelMessage(
   };
 }
 
+function mergeAdjacentPureToolCallModelMessages(messages: ModelMessage[]): ModelMessage[] {
+  const merged: ModelMessage[] = [];
+
+  for (const message of messages) {
+    const previous = merged[merged.length - 1];
+    if (
+      previous?.role === "assistant" &&
+      message.role === "assistant" &&
+      isPureToolCallContent(previous.content) &&
+      isPureToolCallContent(message.content)
+    ) {
+      previous.content = [...previous.content, ...message.content];
+      previous.sourceMessageIds = [...previous.sourceMessageIds, ...message.sourceMessageIds];
+      continue;
+    }
+
+    merged.push(message);
+  }
+
+  return merged;
+}
+
 export class EngineMessageProjector {
   projectToTranscript(
     engineMessages: EngineMessage[],
@@ -387,9 +415,10 @@ export class EngineMessageProjector {
 
       return [result.message];
     });
+    const providerSafeProjected = mergeAdjacentPureToolCallModelMessages(projected);
 
     if (context.injectRuntimeReminder) {
-      projected.push({
+      providerSafeProjected.push({
         view: "model",
         role: "system",
         semanticType: "runtime_reminder",
@@ -400,7 +429,7 @@ export class EngineMessageProjector {
     }
 
     return {
-      messages: projected,
+      messages: providerSafeProjected,
       diagnostics: {
         hiddenMessageIds,
         truncatedMessageIds,

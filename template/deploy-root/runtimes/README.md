@@ -6,7 +6,7 @@ Included runtimes:
 
 - `micro-learning/`
   - Short teaching loop runtime with `learn` / `plan` / `eval` / `research` agents
-  - Template-adjusted to use `platform/openai-default` only
+  - Uses the platform default model unless a workspace overrides it
 - `vibe-coding/`
   - OpenCode-style coding runtime with `build` / `plan` plus `general` / `explore` subagents
   - Good fit for repository-oriented coding workflows

@@ -83,6 +83,50 @@ describe("native tools", () => {
     expect(acquire).toHaveBeenCalledWith({ workspace, access: "write", path: "generated.txt" });
   });
 
+  it("restricts workspace memory extraction runs to the memory directory", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-extractor-sandbox-"));
+    tempDirs.push(workspaceRoot);
+
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await writeFile(path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"), "- Memory index\n", "utf8");
+    await writeFile(path.join(workspaceRoot, "README.md"), "# Project\n", "utf8");
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["Read", "Write", "Glob"], {
+      sessionId: "session-memory-extractor-sandbox",
+      run: {
+        id: "run_memory_extractor_sandbox",
+        workspaceId: "ws_memory_extractor_sandbox",
+        triggerType: "system",
+        effectiveAgentName: "__workspace_memory_extractor__",
+        status: "running",
+        createdAt: new Date(0).toISOString(),
+        metadata: {
+          workspaceMemoryExtraction: true
+        }
+      }
+    });
+
+    const memoryReadResult = String(
+      await tools.Read.execute({ file_path: ".openharness/memory/MEMORY.md" }, {})
+    );
+    expect(memoryReadResult).toContain("file_path: .openharness/memory/MEMORY.md");
+
+    await expect(tools.Read.execute({ file_path: "README.md" }, {})).rejects.toMatchObject({
+      code: "native_tool_workspace_memory_path_not_allowed"
+    });
+    await expect(tools.Glob.execute({ pattern: "**/*.md", path: "." }, {})).rejects.toMatchObject({
+      code: "native_tool_workspace_memory_path_not_allowed"
+    });
+    await expect(tools.Write.execute({ file_path: "notes.md", content: "nope\n" }, {})).rejects.toMatchObject({
+      code: "native_tool_workspace_memory_path_not_allowed"
+    });
+    await expect(
+      tools.Write.execute({ file_path: ".openharness/memory/../../escaped.md", content: "nope\n" }, {})
+    ).rejects.toMatchObject({
+      code: "native_tool_workspace_memory_path_not_allowed"
+    });
+  });
+
   it("executes Title Case workspace tools", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-title-case-"));
     tempDirs.push(workspaceRoot);
@@ -1023,6 +1067,20 @@ describe("native tools", () => {
       ".openharness/memory/topics/feedback/database-testing.md"
     );
 
+    const duplicateResult = String(
+      await tools.MemoryRemember.execute(
+        {
+          type: "feedback",
+          title: "Database testing",
+          description: "Use real database integration tests.",
+          content: "Do not mock database tests in this repo."
+        },
+        {}
+      )
+    );
+    expect(duplicateResult).toContain("duplicate: true");
+    expect(duplicateResult).toContain("updated: false");
+
     const updateResult = String(
       await tools.MemoryUpdate.execute(
         {
@@ -1605,6 +1663,61 @@ describe("native tools", () => {
     expect(searchResult).toContain("path=.openharness/memory/dreams/DREAMS.md");
   });
 
+  it("previews and applies workspace memory promotions", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-promote-"));
+    tempDirs.push(workspaceRoot);
+
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory", "sessions"), { recursive: true });
+    await writeFile(
+      path.join(workspaceRoot, ".openharness", "memory", "sessions", "2026-05-16-testing.md"),
+      "The user repeatedly asked to keep database tests real.\n",
+      "utf8"
+    );
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryPromote", "MemoryApplyProposal"], {
+      sessionId: "session-memory-promote"
+    });
+
+    const previewResult = String(
+      await tools.MemoryPromote.execute(
+        {
+          type: "feedback",
+          title: "Database testing preference",
+          description: "Use real database integration tests.",
+          content: "Keep database tests on the real storage layer instead of mocks.",
+          sourcePaths: [".openharness/memory/sessions/2026-05-16-testing.md"]
+        },
+        {}
+      )
+    );
+    expect(previewResult).toContain("pending: true");
+    expect(previewResult).toContain("tool: MemoryPromote");
+    expect(previewResult).toContain("target_path: .openharness/memory/topics/feedback/database-testing-preference.md");
+    const proposalPath = previewResult.match(/proposal_path: (.+)/)?.[1]?.trim();
+    expect(proposalPath).toBeTruthy();
+    await expect(
+      readFile(path.join(workspaceRoot, ".openharness", "memory", "topics", "feedback", "database-testing-preference.md"), "utf8")
+    ).rejects.toThrow();
+
+    const applyResult = String(
+      await tools.MemoryApplyProposal.execute(
+        {
+          path: proposalPath
+        },
+        {}
+      )
+    );
+    expect(applyResult).toContain("proposal_status: applied");
+    expect(applyResult).toContain("tool: MemoryPromote");
+    const topicContent = await readFile(
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "feedback", "database-testing-preference.md"),
+      "utf8"
+    );
+    expect(topicContent).toContain("Keep database tests on the real storage layer instead of mocks.");
+    expect(topicContent).toContain("## Sources");
+    expect(topicContent).toContain(".openharness/memory/sessions/2026-05-16-testing.md");
+  });
+
   it("refuses to write obvious secrets into workspace memory", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-secret-"));
     tempDirs.push(workspaceRoot);
@@ -1623,6 +1736,26 @@ describe("native tools", () => {
         {}
       )
     ).rejects.toMatchObject({ code: "native_tool_memory_secret_detected" });
+  });
+
+  it("refuses oversized workspace memory topic writes", async () => {
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "oah-native-tools-memory-too-large-"));
+    tempDirs.push(workspaceRoot);
+
+    const tools = createNativeToolSet(workspaceRoot, () => ["MemoryRemember"], {
+      sessionId: "session-memory-too-large"
+    });
+
+    await expect(
+      tools.MemoryRemember.execute(
+        {
+          type: "project",
+          title: "Huge memory",
+          content: "A".repeat(49_000)
+        },
+        {}
+      )
+    ).rejects.toMatchObject({ code: "native_tool_memory_content_too_large" });
   });
 
   it("accepts todos when no item is marked in progress", async () => {

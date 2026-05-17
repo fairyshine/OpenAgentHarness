@@ -1,7 +1,6 @@
 ---
 mode: primary
 description: 主教学 agent，负责组织微学习闭环并与用户直接交互
-model: learn
 background: false
 hidden: false
 color: teal
@@ -18,20 +17,15 @@ tools:
     - Grep
     - WebFetch
     - TodoWrite
-  external: []
-actions: []
-skills: []
 switch:
   - plan
   - eval
 subagents:
   - research
 policy:
-  max_steps: 16
   run_timeout_seconds: 1800
   tool_timeout_seconds: 180
-  parallel_tool_calls: false
-  max_concurrent_subagents: 2
+  parallel_tool_calls: true
 ---
 
 # Learn Agent
@@ -75,7 +69,7 @@ C. 避免所有错误
 ## 工具与产物
 
 - 复杂结构、流程、可视化内容，优先产出小而精的学习材料，而不是纯文字堆砌
-- 如果有可用的演示或可视化能力，优先把它当作交互式教学媒介来使用
+- 如果 `frontend-slides` skill 可用，优先把它当作交互式教学媒介来使用
 - 需要可执行演示时，可以用 `Bash` 做最小验证
 - 修改或生成学习材料时，保持文件结构简单，避免生成无关噪音文件
 

@@ -37,11 +37,54 @@ kimi-campus:
   name: Kimi-K25
 ```
 
+### `deepseek`
+
+- AI SDK package: `@ai-sdk/deepseek`
+- `url`: 可选；不配置时使用 DeepSeek 官方默认 endpoint
+
+```yaml
+deepseek-chat:
+  provider: deepseek
+  key: ${env.DEEPSEEK_API_KEY}
+  name: deepseek-chat
+```
+
+```yaml
+deepseek-reasoner:
+  provider: deepseek
+  key: ${env.DEEPSEEK_API_KEY}
+  name: deepseek-reasoner
+```
+
+### `moonshotai`
+
+- AI SDK package: `@ai-sdk/moonshotai`
+- `url`: 可选；不配置时使用 Moonshot AI 官方默认 endpoint
+
+```yaml
+kimi-k2:
+  provider: moonshotai
+  key: ${env.MOONSHOT_API_KEY}
+  name: kimi-k2
+```
+
+如果部署使用 Moonshot 中国区 endpoint，可以显式覆盖 `url`：
+
+```yaml
+kimi-k26:
+  provider: moonshotai
+  key: ${env.MOONSHOT_API_KEY}
+  url: https://api.moonshot.cn/v1
+  name: kimi-k2.6
+```
+
 ## 选择建议
 
 | 场景 | Provider |
 | --- | --- |
 | OpenAI 官方接口 | `openai` |
+| DeepSeek 官方接口 | `deepseek` |
+| Moonshot/Kimi 官方接口 | `moonshotai` |
 | 仅保证 `/chat/completions` 兼容的端点 | `openai-compatible` |
 
 如果工具流或 assistant 历史消息行为异常，优先确认 provider 选择是否正确。

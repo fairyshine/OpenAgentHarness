@@ -16,11 +16,9 @@ subagents:
   - general
   - explore
 policy:
-  max_steps: 30
   run_timeout_seconds: 1800
   tool_timeout_seconds: 120
   parallel_tool_calls: true
-  max_concurrent_subagents: 3
 ---
 
 # Plan

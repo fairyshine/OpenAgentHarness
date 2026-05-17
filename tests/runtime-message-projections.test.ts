@@ -747,6 +747,130 @@ describe("runtime message projections", () => {
     expect(serialized.map((message) => message.role)).toEqual(["user", "assistant", "assistant", "tool", "user"]);
   });
 
+  it("merges adjacent pure assistant tool-call messages for provider replay", async () => {
+    const messages: Message[] = [
+      {
+        id: "msg_user",
+        sessionId: "sess_1",
+        runId: "run_1",
+        role: "user",
+        content: "Inspect the workspace.",
+        createdAt: "2026-05-16T09:37:00.000Z"
+      },
+      {
+        id: "msg_tool_call_fast",
+        sessionId: "sess_1",
+        runId: "run_1",
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call_list_fast",
+            toolName: "Bash",
+            input: {
+              command: "ls -la"
+            }
+          }
+        ],
+        createdAt: "2026-05-16T09:37:03.208Z"
+      },
+      {
+        id: "msg_tool_call_slow",
+        sessionId: "sess_1",
+        runId: "run_1",
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call_list_slow",
+            toolName: "Bash",
+            input: {
+              command: "which godot"
+            }
+          }
+        ],
+        createdAt: "2026-05-16T09:37:03.211Z"
+      },
+      {
+        id: "msg_tool_result_fast",
+        sessionId: "sess_1",
+        runId: "run_1",
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call_list_fast",
+            toolName: "Bash",
+            output: {
+              type: "text",
+              value: "workspace files"
+            }
+          }
+        ],
+        createdAt: "2026-05-16T09:37:03.213Z"
+      },
+      {
+        id: "msg_tool_result_slow",
+        sessionId: "sess_1",
+        runId: "run_1",
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call_list_slow",
+            toolName: "Bash",
+            output: {
+              type: "text",
+              value: "/opt/homebrew/bin/godot"
+            }
+          }
+        ],
+        createdAt: "2026-05-16T09:37:03.217Z"
+      },
+      {
+        id: "msg_continue",
+        sessionId: "sess_1",
+        runId: "run_2",
+        role: "user",
+        content: "继续",
+        createdAt: "2026-05-16T09:37:55.509Z"
+      }
+    ];
+
+    const engineMessages = buildSessionEngineMessages({
+      messages,
+      events: []
+    });
+    const modelProjection = new EngineMessageProjector().projectToModel(engineMessages, {
+      sessionId: "sess_1",
+      activeAgentName: "build",
+      includeReasoning: true,
+      includeToolResults: true
+    });
+    const serialized = await new ModelMessageSerializer().toAiSdkMessages(modelProjection.messages);
+
+    expect(serialized.map((message) => message.role)).toEqual(["user", "assistant", "tool", "tool", "user"]);
+    expect(modelProjection.messages[1]?.sourceMessageIds).toEqual(["msg_tool_call_fast", "msg_tool_call_slow"]);
+    expect(modelProjection.messages[1]?.content).toEqual([
+      {
+        type: "tool-call",
+        toolCallId: "call_list_fast",
+        toolName: "Bash",
+        input: {
+          command: "ls -la"
+        }
+      },
+      {
+        type: "tool-call",
+        toolCallId: "call_list_slow",
+        toolName: "Bash",
+        input: {
+          command: "which godot"
+        }
+      }
+    ]);
+  });
+
   it("infers compact engine kinds from runtime metadata", () => {
     const messages: Message[] = [
       {

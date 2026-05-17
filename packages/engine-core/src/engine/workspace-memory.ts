@@ -39,6 +39,7 @@ const WORKSPACE_MEMORY_SESSIONS_DIRECTORY = `${WORKSPACE_MEMORY_DIRECTORY}/sessi
 const WORKSPACE_MEMORY_CONTEXT_MAX_CHARS = 6_000;
 const WORKSPACE_MEMORY_TRANSCRIPT_MAX_CHARS = 12_000;
 const WORKSPACE_MEMORY_FLUSH_MAX_CHARS = 12_000;
+const WORKSPACE_MEMORY_SESSION_CAPTURE_MAX_CHARS = 8_000;
 const WORKSPACE_MEMORY_TAG = "workspace-memory";
 const WORKSPACE_MEMORY_TOPIC_TAG = "workspace-memory-topic";
 const WORKSPACE_MEMORY_RECALL_STEP_NAME = "workspace_memory_recall";
@@ -150,6 +151,85 @@ function buildCompactionFlushContent(input: {
     input.transcript.trim(),
     ""
   ].join("\n");
+}
+
+function buildRunSessionCaptureContent(input: {
+  session: Session;
+  run: Run;
+  capturedAt: string;
+  capturedMessageCount: number;
+  transcript: string;
+}): string {
+  const title = `Run summary ${input.capturedAt.slice(0, 10)}`;
+  return [
+    "---",
+    `name: ${escapeWorkspaceMemoryFrontmatterValue(title)}`,
+    "description: \"Low-weight session context captured after a successful run.\"",
+    "type: session",
+    `session_id: ${escapeWorkspaceMemoryFrontmatterValue(input.session.id)}`,
+    `run_id: ${escapeWorkspaceMemoryFrontmatterValue(input.run.id)}`,
+    `captured_at: ${escapeWorkspaceMemoryFrontmatterValue(input.capturedAt)}`,
+    `reason: "after_successful_run"`,
+    `captured_message_count: ${input.capturedMessageCount}`,
+    ...(input.run.triggerType ? [`trigger_type: ${escapeWorkspaceMemoryFrontmatterValue(input.run.triggerType)}`] : []),
+    "---",
+    "",
+    `# ${title}`,
+    "",
+    "Captured after a successful run. This is low-weight session memory for search and later consolidation.",
+    "",
+    "## Transcript",
+    "",
+    input.transcript.trim(),
+    ""
+  ].join("\n");
+}
+
+function upsertWorkspaceMemoryFrontmatterField(lines: string[], key: string, value: string): void {
+  const existingIndex = lines.findIndex((line) => line.match(new RegExp(`^${key}\\s*:`, "u")));
+  const nextLine = `${key}: ${value}`;
+  if (existingIndex >= 0) {
+    lines[existingIndex] = nextLine;
+    return;
+  }
+
+  lines.push(nextLine);
+}
+
+function updateWorkspaceMemoryTopicRecallFrontmatter(
+  content: string,
+  recalledAt: string
+): { updated: boolean; content: string; recallCount: number } {
+  const lines = content.split(/\r?\n/u);
+  if (lines[0]?.trim() !== "---") {
+    return {
+      updated: false,
+      content,
+      recallCount: 0
+    };
+  }
+
+  const endIndex = lines.slice(1).findIndex((line) => line.trim() === "---");
+  if (endIndex < 0) {
+    return {
+      updated: false,
+      content,
+      recallCount: 0
+    };
+  }
+
+  const frontmatterEndIndex = endIndex + 1;
+  const frontmatterLines = lines.slice(1, frontmatterEndIndex);
+  const recallCountLine = frontmatterLines.find((line) => /^recall_count\s*:/u.test(line));
+  const recallCount = Math.max(0, Number.parseInt(recallCountLine?.split(/:\s*/u)[1] ?? "0", 10) || 0) + 1;
+  upsertWorkspaceMemoryFrontmatterField(frontmatterLines, "recall_count", String(recallCount));
+  upsertWorkspaceMemoryFrontmatterField(frontmatterLines, "last_recalled_at", escapeWorkspaceMemoryFrontmatterValue(recalledAt));
+
+  return {
+    updated: true,
+    content: ["---", ...frontmatterLines, ...lines.slice(frontmatterEndIndex)].join("\n"),
+    recallCount
+  };
 }
 
 export interface WorkspaceMemoryServiceDependencies {
@@ -287,15 +367,17 @@ export class WorkspaceMemoryService implements ContextPreparationModule {
     ];
   }
 
-  async recordRecallForCompletedRun(run: Run): Promise<void> {
-    const recalledPaths = this.#recalledPathsByRunId.get(run.id) ?? [];
-    this.#recalledPathsByRunId.delete(run.id);
+  async recordRecallForCompletedRun(input: { workspace: WorkspaceRecord; run: Run }): Promise<void> {
+    const recalledPaths = this.#recalledPathsByRunId.get(input.run.id) ?? [];
+    this.#recalledPathsByRunId.delete(input.run.id);
     if (recalledPaths.length === 0) {
       return;
     }
 
-    await this.#recordSystemStep(run, WORKSPACE_MEMORY_RECALL_STEP_NAME, {
-      recalledPaths
+    const tracked = await this.#trackTopicRecall(input.workspace, recalledPaths);
+    await this.#recordSystemStep(input.run, WORKSPACE_MEMORY_RECALL_STEP_NAME, {
+      recalledPaths,
+      tracked
     });
   }
 
@@ -306,6 +388,63 @@ export class WorkspaceMemoryService implements ContextPreparationModule {
     }
 
     this.#recalledPathsByRunId.set(runId, [...new Set(recalledPaths)]);
+  }
+
+  async #trackTopicRecall(workspace: WorkspaceRecord, recalledPaths: string[]): Promise<Array<{ path: string; recallCount: number }>> {
+    const topicPaths = [...new Set(recalledPaths)].filter(
+      (memoryPath) =>
+        memoryPath.startsWith(`${WORKSPACE_MEMORY_TOPICS_DIRECTORY}/`) &&
+        memoryPath.endsWith(".md")
+    );
+    if (topicPaths.length === 0) {
+      return [];
+    }
+
+    if (!workspace || !this.isEnabled(workspace) || workspace.readOnly || workspace.kind !== "project") {
+      return [];
+    }
+
+    const recalledAt = this.#nowIso();
+    const tracked: Array<{ path: string; recallCount: number }> = [];
+    for (const memoryPath of topicPaths) {
+      const result = await this.#updateTopicRecallMetadata(workspace, memoryPath, recalledAt);
+      if (result) {
+        tracked.push(result);
+      }
+    }
+
+    return tracked;
+  }
+
+  async #updateTopicRecallMetadata(
+    workspace: WorkspaceRecord,
+    memoryPath: string,
+    recalledAt: string
+  ): Promise<{ path: string; recallCount: number } | undefined> {
+    return this.#withWorkspaceFileAccess(workspace, "write", memoryPath, async (leasedWorkspace) => {
+      const absolutePath = path.join(leasedWorkspace.rootPath, memoryPath);
+      let current: string;
+      try {
+        current = (await this.#workspaceFileSystem.readFile(absolutePath)).toString("utf8");
+      } catch (error) {
+        if (getErrorCode(error) === "ENOENT") {
+          return undefined;
+        }
+
+        throw error;
+      }
+
+      const next = updateWorkspaceMemoryTopicRecallFrontmatter(current, recalledAt);
+      if (!next.updated) {
+        return undefined;
+      }
+
+      await this.#workspaceFileSystem.writeFile(absolutePath, Buffer.from(next.content, "utf8"));
+      return {
+        path: memoryPath,
+        recallCount: next.recallCount
+      };
+    });
   }
 
   scheduleBackgroundUpdate(input: {
@@ -399,6 +538,66 @@ export class WorkspaceMemoryService implements ContextPreparationModule {
       path: relativePath,
       summarizedMessageCount: input.summarizedMessageCount,
       ...(input.compactThroughMessageId ? { compactThroughMessageId: input.compactThroughMessageId } : {})
+    });
+
+    return {
+      captured: true,
+      path: relativePath
+    };
+  }
+
+  async captureAfterSuccessfulRun(input: {
+    workspace: WorkspaceRecord;
+    session: Session;
+    run: Run;
+  }): Promise<{ captured: boolean; path?: string | undefined; reason?: string | undefined }> {
+    if (
+      !this.isEnabled(input.workspace) ||
+      input.workspace.readOnly ||
+      input.workspace.kind !== "project" ||
+      isWorkspaceMemoryExtractionRun(input.run)
+    ) {
+      return {
+        captured: false,
+        reason: "disabled"
+      };
+    }
+
+    const messages = (await this.#messageRepository.listBySessionId(input.session.id))
+      .filter((message) => message.runId === input.run.id)
+      .filter((message) => !isHiddenEngineMemoryMessage(message));
+    const transcript = truncateText(renderMessagesForMemory(messages), WORKSPACE_MEMORY_SESSION_CAPTURE_MAX_CHARS).trim();
+    if (!transcript || messages.length === 0) {
+      return {
+        captured: false,
+        reason: "empty"
+      };
+    }
+
+    const capturedAt = this.#nowIso();
+    const fileName = `${capturedAt.slice(0, 10)}-run-${slugifyWorkspaceMemoryTitle(input.session.title || input.session.id)}-${input.run.id}.md`;
+    const relativePath = `${WORKSPACE_MEMORY_SESSIONS_DIRECTORY}/${fileName}`;
+    await this.#withWorkspaceFileAccess(input.workspace, "write", relativePath, async (leasedWorkspace) => {
+      const absolutePath = path.join(leasedWorkspace.rootPath, relativePath);
+      await this.#workspaceFileSystem.mkdir(path.dirname(absolutePath), { recursive: true });
+      await this.#workspaceFileSystem.writeFile(
+        absolutePath,
+        Buffer.from(
+          buildRunSessionCaptureContent({
+            session: input.session,
+            run: input.run,
+            capturedAt,
+            capturedMessageCount: messages.length,
+            transcript
+          }),
+          "utf8"
+        )
+      );
+    });
+
+    await this.#recordSystemStep(input.run, "workspace_memory_session_capture", {
+      path: relativePath,
+      capturedMessageCount: messages.length
     });
 
     return {

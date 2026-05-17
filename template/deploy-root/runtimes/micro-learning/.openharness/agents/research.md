@@ -1,7 +1,6 @@
 ---
 mode: subagent
 description: 检索 agent，搜索并整理适合当前微学习步骤的资料
-model: research
 background: true
 hidden: true
 color: violet
@@ -11,14 +10,10 @@ system_reminder: |
 tools:
   native:
     - WebFetch
-  external: []
-actions: []
-skills: []
 policy:
-  max_steps: 8
   run_timeout_seconds: 900
   tool_timeout_seconds: 90
-  parallel_tool_calls: false
+  parallel_tool_calls: true
 ---
 
 # Research Agent
@@ -27,7 +22,7 @@ policy:
 
 ## 工作方式
 
-- 用 `WebSearch` 找候选资料
+- 需要检索时，使用当前可用的搜索或网页读取能力找候选资料
 - 用 `WebFetch` 抓取关键页面
 - 输出少量高信号资料，方便上游 agent 直接采用
 

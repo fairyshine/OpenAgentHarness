@@ -3,7 +3,7 @@ import { jsonObjectSchema, jsonValueSchema } from "./common.js";
 import { chatMessageSchema } from "./messages.js";
 
 export const modelProviderSchema = z.object({
-  id: z.enum(["openai", "openai-compatible"]),
+  id: z.enum(["openai", "openai-compatible", "deepseek", "moonshotai"]),
   packageName: z.string(),
   description: z.string(),
   requiresUrl: z.boolean(),

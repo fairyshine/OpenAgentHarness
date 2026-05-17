@@ -15,7 +15,6 @@ tools:
     - WebFetch
     - TodoWrite
 policy:
-  max_steps: 24
   run_timeout_seconds: 1500
   tool_timeout_seconds: 150
   parallel_tool_calls: true

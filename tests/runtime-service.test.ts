@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -4071,8 +4071,20 @@ describe("runtime service", () => {
     const firstRunSteps = await runtimeService.listRunSteps(firstAccepted.runId);
     const firstRecallStep = firstRunSteps.items.find((step) => step.name === "workspace_memory_recall");
     expect(firstRecallStep?.output).toMatchObject({
-      recalledPaths: [".openharness/memory/topics/testing.md"]
+      recalledPaths: [".openharness/memory/topics/testing.md"],
+      tracked: [
+        {
+          path: ".openharness/memory/topics/testing.md",
+          recallCount: 1
+        }
+      ]
     });
+    const trackedTopicAfterFirstRun = await readFile(
+      path.join(workspaceRoot, ".openharness", "memory", "topics", "testing.md"),
+      "utf8"
+    );
+    expect(trackedTopicAfterFirstRun).toContain("recall_count: 1");
+    expect(trackedTopicAfterFirstRun).toContain('last_recalled_at: "');
 
     const secondAccepted = await runtimeService.createSessionMessage({
       sessionId: session.id,
@@ -4703,11 +4715,167 @@ describe("runtime service", () => {
       true
     );
     expect(writeToolMessages.some((message) => messageText(message)?.includes("file_path: .openharness/memory/MEMORY.md"))).toBe(true);
+    const sessionCaptureFiles = await readdir(path.join(workspaceRoot, ".openharness", "memory", "sessions")).catch(() => []);
+    expect(sessionCaptureFiles.some((file) => childRun?.id && file.includes(childRun.id))).toBe(false);
     expect(memoryContent).toContain("repo-conventions.md");
     expect(topicContent).toContain("Stable repo fact: validation uses pnpm test.");
     expect(topicContent).toContain("Constraint: keep responses concise and actionable.");
     expect(topicContent).toContain("Existing note: keep memory concise.");
   }, 15_000);
+
+  it("blocks workspace memory extraction from reading or writing non-memory files", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-extractor-sandbox-"));
+    await mkdir(path.join(workspaceRoot, ".openharness", "memory"), { recursive: true });
+    await writeFile(path.join(workspaceRoot, ".openharness", "memory", "MEMORY.md"), "- Keep memory scoped.\n", "utf8");
+    await writeFile(path.join(workspaceRoot, "README.md"), "# Do not touch\n", "utf8");
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      rootPath: workspaceRoot,
+      workspaceSettings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "auto-extract"
+          }
+        }
+      }
+    });
+    gateway.streamScenarioFactory = (input) => {
+      const systemPrompt = input.messages?.find((message) => message.role === "system");
+      if (
+        typeof systemPrompt?.content === "string" &&
+        systemPrompt.content.includes("workspace memory extraction subagent")
+      ) {
+        return {
+          text: "Tried to inspect and update the project root.",
+          toolSteps: [
+            {
+              toolName: "Read",
+              input: {
+                file_path: "README.md"
+              },
+              toolCallId: "call_workspace_memory_forbidden_read",
+              continueOnError: true
+            },
+            {
+              toolName: "Write",
+              input: {
+                file_path: "README.md",
+                content: "# Changed\n"
+              },
+              toolCallId: "call_workspace_memory_forbidden_write",
+              continueOnError: true
+            }
+          ]
+        };
+      }
+
+      return undefined;
+    };
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Please remember that memory extraction must stay scoped." }
+    });
+
+    let queuedWorkspaceMemoryStep:
+      | Awaited<ReturnType<typeof runtimeService.listRunSteps>>["items"][number]
+      | undefined;
+    await waitFor(async () => {
+      const parentRunSteps = await runtimeService.listRunSteps(accepted.runId);
+      queuedWorkspaceMemoryStep = parentRunSteps.items.find((step) => step.name === "workspace_memory_extract_queued");
+      return Boolean(queuedWorkspaceMemoryStep);
+    });
+    const childRunId =
+      typeof (queuedWorkspaceMemoryStep?.output as { childRunId?: unknown } | undefined)?.childRunId === "string"
+        ? ((queuedWorkspaceMemoryStep?.output as { childRunId: string }).childRunId)
+        : undefined;
+    expect(childRunId).toBeTruthy();
+
+    let childRun: Run | undefined;
+    await waitFor(async () => {
+      if (!childRunId) {
+        return false;
+      }
+
+      childRun = await runtimeService.getRun(childRunId);
+      return childRun.status === "completed";
+    });
+
+    const childMessages = childRun?.sessionId ? await runtimeService.listSessionMessages(childRun.sessionId, 50) : { items: [] };
+    const forbiddenToolMessages = childMessages.items.filter(
+      (message) =>
+        message.role === "tool" &&
+        (messageToolCallId(message) === "call_workspace_memory_forbidden_read" ||
+          messageToolCallId(message) === "call_workspace_memory_forbidden_write")
+    );
+
+    expect(forbiddenToolMessages).toHaveLength(2);
+    expect(
+      forbiddenToolMessages.every((message) =>
+        messageText(message)?.includes("Workspace memory extraction runs can only access files under .openharness/memory/.")
+      )
+    ).toBe(true);
+    expect(await readFile(path.join(workspaceRoot, "README.md"), "utf8")).toBe("# Do not touch\n");
+  }, 15_000);
+
+  it("captures low-weight workspace session memory after a successful run", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-session-capture-"));
+    const { runtimeService, workspace } = await createRuntime(0, {
+      rootPath: workspaceRoot,
+      workspaceSettings: {
+        engine: {
+          workspaceMemory: {
+            enabled: true,
+            writePolicy: "explicit-only"
+          }
+        }
+      }
+    });
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: { title: "Boundary capture" }
+    });
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Please remember this low-weight run context for later search." }
+    });
+
+    await waitFor(async () => (await runtimeService.getRun(accepted.runId)).status === "completed");
+
+    let captureStep: Awaited<ReturnType<typeof runtimeService.listRunSteps>>["items"][number] | undefined;
+    await waitFor(async () => {
+      const steps = await runtimeService.listRunSteps(accepted.runId);
+      captureStep = steps.items.find((step) => step.name === "workspace_memory_session_capture");
+      return Boolean(captureStep);
+    });
+    const capturePath = (captureStep?.output as { path?: string } | undefined)?.path;
+    expect(capturePath).toMatch(/^\.openharness\/memory\/sessions\//u);
+    const captureContent = await readFile(path.join(workspaceRoot, capturePath ?? ""), "utf8");
+    expect(captureContent).toContain('reason: "after_successful_run"');
+    expect(captureContent).toContain(`run_id: ${JSON.stringify(accepted.runId)}`);
+    expect(captureContent).toContain("Please remember this low-weight run context for later search.");
+  });
 
   it("uses agent-level workspace memory policy for background extraction", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-memory-agent-extract-"));
@@ -13898,6 +14066,7 @@ describe("runtime service", () => {
       "MemoryCaptureSession",
       "MemoryAppendDaily",
       "MemoryRecordDream",
+      "MemoryPromote",
       "MemoryApplyProposal",
       "MemoryRejectProposal",
       "ViewImage",

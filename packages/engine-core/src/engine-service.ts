@@ -390,7 +390,8 @@ export class EngineService {
       enqueueRun: (sessionId, runId, options) => runtimeKernel.engineLifecycle.enqueueRun(sessionId, runId, options),
       dispatchNextQueuedRun: (sessionId) => runtimeKernel.sessionRuntime.dispatchNextQueuedRun(sessionId),
       afterSuccessfulRun: async ({ workspace, session, run }) => {
-        await runtimeKernel.workspaceMemory.recordRecallForCompletedRun(run);
+        await runtimeKernel.workspaceMemory.recordRecallForCompletedRun({ workspace, run });
+        await runtimeKernel.workspaceMemory.captureAfterSuccessfulRun({ workspace, session, run });
         runtimeKernel.sessionMemory.scheduleBackgroundUpdate({ workspace, session, run });
         runtimeKernel.workspaceMemory.scheduleBackgroundUpdate({ workspace, session, run });
       }

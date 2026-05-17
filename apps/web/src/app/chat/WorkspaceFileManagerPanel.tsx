@@ -1181,9 +1181,6 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
 
                   <div className="flex shrink-0 items-center gap-2">
                     <Badge variant="outline" className="shrink-0">{fileManager.entries.length}</Badge>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl" onClick={() => fileManager.setOpen(false)} aria-label="Close files">
-                    <PanelRightClose className="h-4 w-4" />
-                  </Button>
                   </div>
                 </div>
                 <div className="mt-2 min-w-0 overflow-hidden rounded-xl border border-black/6 bg-black/[0.018] px-2 py-1">
@@ -1219,7 +1216,7 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                     <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                   ) : null}
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
+                <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pb-14">
                   <div className="space-y-1">
                     {fileManager.entries.map((entry) => {
                       const active = selectedEntry?.path === entry.path;
@@ -1281,6 +1278,16 @@ export function WorkspaceFileManagerPanel(props: { fileManager: FileManagerProps
                   </div>
                 </div>
               </div>
+              <Button
+                variant="secondary"
+                size="icon"
+                className="absolute bottom-3 right-3 z-10 h-9 w-9 rounded-2xl border border-black/10 bg-background/95 shadow-[0_16px_34px_-20px_rgba(15,23,42,0.7)] backdrop-blur hover:bg-background"
+                onClick={() => fileManager.setOpen(false)}
+                aria-label="Close files"
+                title="Close files"
+              >
+                <PanelRightClose className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </>

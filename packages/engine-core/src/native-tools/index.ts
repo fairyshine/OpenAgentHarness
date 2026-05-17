@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { AppError } from "../errors.js";
-import type { EngineToolSet } from "../types.js";
+import type { EngineToolSet, WorkspaceFileSystem } from "../types.js";
 import { createAskUserQuestionTool } from "./ask-user-question.js";
 import { createBashTool } from "./bash.js";
 import { createEditTool } from "./edit.js";
@@ -22,6 +22,7 @@ import { createWebFetchTool } from "./web-fetch.js";
 import { createWriteTool } from "./write.js";
 import { createLocalWorkspaceCommandExecutor } from "../workspace/workspace-command-executor.js";
 import { createLocalWorkspaceFileSystem } from "../workspace/workspace-file-system.js";
+import { resolveWorkspacePath } from "./paths.js";
 import {
   type NativeToolFactoryContext,
   type NativeToolSetOptions,
@@ -32,8 +33,40 @@ import {
   isNativeToolName
 } from "./types.js";
 
+const WORKSPACE_MEMORY_DIRECTORY = ".openharness/memory";
+
 export { NATIVE_TOOL_NAMES, PUBLIC_NATIVE_TOOL_NAMES, getNativeToolRetryPolicy, isNativeToolName };
 export type { NativeToolName, NativeToolSetOptions };
+
+function normalizeToolPathForPolicy(targetPath: string): string {
+  return targetPath.trim().replaceAll("\\", "/").replace(/^\/+/, "");
+}
+
+async function assertWorkspaceMemoryExtractionPathAllowed(input: {
+  fileSystem: WorkspaceFileSystem;
+  workspaceRoot: string;
+  targetPath: string | undefined;
+}): Promise<void> {
+  if (!input.targetPath) {
+    throw new AppError(
+      403,
+      "native_tool_workspace_memory_path_not_allowed",
+      `Workspace memory extraction runs can only access files under ${WORKSPACE_MEMORY_DIRECTORY}/.`
+    );
+  }
+
+  const resolved = await resolveWorkspacePath(input.fileSystem, input.workspaceRoot, input.targetPath);
+  const normalizedPath = normalizeToolPathForPolicy(resolved.relativePath);
+  if (normalizedPath === WORKSPACE_MEMORY_DIRECTORY || normalizedPath.startsWith(`${WORKSPACE_MEMORY_DIRECTORY}/`)) {
+    return;
+  }
+
+  throw new AppError(
+    403,
+    "native_tool_workspace_memory_path_not_allowed",
+    `Workspace memory extraction runs can only access files under ${WORKSPACE_MEMORY_DIRECTORY}/.`
+  );
+}
 
 export function createNativeToolSet(
   workspaceRoot: string,
@@ -47,6 +80,7 @@ export function createNativeToolSet(
   const fileSystem = options?.fileSystem ?? createLocalWorkspaceFileSystem();
   const workspaceFileAccessProvider = options?.workspaceFileAccessProvider;
   const workspace = options?.workspace;
+  const restrictToWorkspaceMemory = options?.run?.metadata?.workspaceMemoryExtraction === true;
 
   const context: NativeToolFactoryContext = {
     workspaceRoot,
@@ -57,6 +91,10 @@ export function createNativeToolSet(
     commandExecutor,
     fileSystem,
     async withFileSystem(access, targetPath, operation) {
+      if (restrictToWorkspaceMemory) {
+        await assertWorkspaceMemoryExtractionPathAllowed({ fileSystem, workspaceRoot, targetPath });
+      }
+
       if (!workspaceFileAccessProvider || !workspace) {
         return operation({ workspaceRoot, fileSystem, workspace });
       }
@@ -68,6 +106,14 @@ export function createNativeToolSet(
       });
 
       try {
+        if (restrictToWorkspaceMemory) {
+          await assertWorkspaceMemoryExtractionPathAllowed({
+            fileSystem,
+            workspaceRoot: lease.workspace.rootPath,
+            targetPath
+          });
+        }
+
         return await operation({
           workspaceRoot: lease.workspace.rootPath,
           fileSystem,
@@ -80,6 +126,10 @@ export function createNativeToolSet(
       }
     },
     async readVirtualFile(input) {
+      if (restrictToWorkspaceMemory) {
+        await assertWorkspaceMemoryExtractionPathAllowed({ fileSystem, workspaceRoot, targetPath: input.filePath });
+      }
+
       return options?.readVirtualFile?.(input) ?? null;
     },
     injectModelContextMessage(message) {

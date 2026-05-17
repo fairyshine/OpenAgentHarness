@@ -1,7 +1,6 @@
 ---
 mode: primary
 description: 主评估 agent，基于学习过程证据判断当前目标是否达成
-model: eval
 background: false
 hidden: false
 color: yellow
@@ -11,16 +10,12 @@ system_reminder: |
 tools:
   native:
     - TodoWrite
-  external: []
-actions: []
-skills: []
 switch:
   - learn
 policy:
-  max_steps: 6
   run_timeout_seconds: 600
   tool_timeout_seconds: 60
-  parallel_tool_calls: false
+  parallel_tool_calls: true
 ---
 
 # Eval Agent

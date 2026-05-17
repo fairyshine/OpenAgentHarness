@@ -1,7 +1,6 @@
 ---
 mode: primary
 description: 主规划 agent，把学习目标压缩成当前会话可完成的微计划
-model: plan
 background: false
 hidden: false
 color: rose
@@ -11,19 +10,14 @@ system_reminder: |
 tools:
   native:
     - TodoWrite
-  external: []
-actions: []
-skills: []
 switch:
   - learn
 subagents:
   - research
 policy:
-  max_steps: 6
   run_timeout_seconds: 600
   tool_timeout_seconds: 60
-  parallel_tool_calls: false
-  max_concurrent_subagents: 1
+  parallel_tool_calls: true
 ---
 
 # Plan Agent

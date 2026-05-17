@@ -26,6 +26,8 @@ const MEMORY_SEARCH_MAX_RESULTS = 20;
 const MEMORY_SEARCH_SNIPPET_MAX_CHARS = 220;
 const MEMORY_TITLE_MAX_CHARS = 120;
 const MEMORY_DESCRIPTION_MAX_CHARS = 220;
+const MEMORY_TOPIC_CONTENT_WARNING_CHARS = 8_000;
+const MEMORY_TOPIC_CONTENT_HARD_LIMIT_CHARS = 48_000;
 const SECRET_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/u,
   /\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/u,
@@ -91,6 +93,13 @@ Usage:
 - Use for proposed promotions, duplicate cleanup, conflicts, or stale memory review notes
 - This records review material only; it does not directly modify topics/*.md
 - Keep recommendations concise and auditable`;
+
+const MEMORY_PROMOTE_DESCRIPTION = `Preview or apply promotion of low-weight workspace memory into a durable topic.
+
+Usage:
+- Use after reviewing sessions, daily notes, dreams, or repeated recall evidence
+- Produces a MemoryRemember-compatible topic proposal by default
+- Set apply=true only after explicit user confirmation; otherwise review and apply with MemoryApplyProposal`;
 
 const MEMORY_APPLY_PROPOSAL_DESCRIPTION = `Apply a pending memory proposal created under .openharness/memory/proposals.
 
@@ -177,6 +186,18 @@ const MemoryRecordDreamInputSchema = z
     recommendation: z.string().min(1).describe("Consolidation, promotion, cleanup, or review recommendation"),
     sourcePaths: z.array(z.string().min(1)).optional().describe("Memory files considered as sources"),
     targetPath: z.string().min(1).optional().describe("Suggested target memory path, if any")
+  })
+  .strict();
+
+const MemoryPromoteInputSchema = z
+  .object({
+    type: MemoryTypeSchema.describe("Durable memory type for the promoted topic"),
+    title: z.string().min(1).max(MEMORY_TITLE_MAX_CHARS).describe("Short promoted topic title"),
+    content: z.string().min(1).describe("Durable topic content to promote"),
+    description: z.string().min(1).max(MEMORY_DESCRIPTION_MAX_CHARS).optional().describe("One-line promoted topic summary"),
+    sourcePaths: z.array(z.string().min(1)).min(1).optional().describe("Source memory files that justify this promotion"),
+    path: z.string().min(1).optional().describe("Optional target path under .openharness/memory/topics"),
+    apply: z.boolean().optional().describe("Apply immediately only after explicit user confirmation")
   })
   .strict();
 
@@ -451,6 +472,44 @@ function buildMemoryTopicContent(input: z.infer<typeof MemoryRememberInputSchema
   ].join("\n");
 }
 
+function normalizeMemoryContentForDuplicateCheck(value: string): string {
+  return value.replace(/\r\n/gu, "\n").replace(/[ \t]+/gu, " ").trim();
+}
+
+function assertMemoryTopicContentLength(content: string, toolName: string): void {
+  if (content.length > MEMORY_TOPIC_CONTENT_HARD_LIMIT_CHARS) {
+    throw new AppError(
+      400,
+      "native_tool_memory_content_too_large",
+      `${toolName} refused to write memory content larger than ${MEMORY_TOPIC_CONTENT_HARD_LIMIT_CHARS} characters.`
+    );
+  }
+}
+
+function memoryContentWarning(content: string): string | undefined {
+  return content.length > MEMORY_TOPIC_CONTENT_WARNING_CHARS
+    ? `content exceeds ${MEMORY_TOPIC_CONTENT_WARNING_CHARS} characters; consider splitting or summarizing this memory`
+    : undefined;
+}
+
+async function readExistingMemoryContent(input: {
+  fileSystem: WorkspaceFileSystem;
+  absolutePath: string;
+}): Promise<string | null> {
+  try {
+    return (await input.fileSystem.readFile(input.absolutePath)).toString("utf8");
+  } catch (error) {
+    if (getErrorCode(error) === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function isDuplicateMemoryContent(existingContent: string | null, nextContent: string): boolean {
+  return existingContent !== null && normalizeMemoryContentForDuplicateCheck(existingContent) === normalizeMemoryContentForDuplicateCheck(nextContent);
+}
+
 function parseMemoryFrontmatter(content: string): { attributes: Record<string, string>; body: string } {
   const lines = content.split(/\r?\n/u);
   if (lines[0]?.trim() !== "---") {
@@ -567,6 +626,19 @@ function defaultMemoryTopicPath(input: z.infer<typeof MemoryRememberInputSchema>
   return `${WORKSPACE_MEMORY_DIRECTORY}/topics/${input.type}/${slugifyMemoryTitle(input.title)}.md`;
 }
 
+function memoryRememberInputFromPromotion(input: z.infer<typeof MemoryPromoteInputSchema>): z.infer<typeof MemoryRememberInputSchema> {
+  const sourceLines = input.sourcePaths && input.sourcePaths.length > 0
+    ? ["", "## Sources", "", ...input.sourcePaths.map((sourcePath) => `- ${normalizeMemoryPath(sourcePath)}`)]
+    : [];
+  return {
+    type: input.type,
+    title: input.title,
+    content: [input.content.trim(), ...sourceLines].join("\n"),
+    ...(input.description ? { description: input.description } : {}),
+    ...(input.path ? { path: input.path } : {})
+  };
+}
+
 function defaultSessionCapturePath(input: z.infer<typeof MemoryCaptureSessionInputSchema>): string {
   const date = new Date().toISOString().slice(0, 10);
   return `${WORKSPACE_MEMORY_DIRECTORY}/sessions/${date}-${slugifyMemoryTitle(input.title)}.md`;
@@ -596,6 +668,16 @@ function buildDreamEntry(input: z.infer<typeof MemoryRecordDreamInputSchema>, ti
     input.recommendation.trim(),
     ""
   ].join("\n");
+}
+
+function assertPromotionSourcesUnderWorkspaceMemory(sourcePaths: string[] | undefined): void {
+  for (const sourcePath of sourcePaths ?? []) {
+    const normalized = normalizeMemoryPath(sourcePath);
+    assertPathUnderWorkspaceMemory(normalized, "MemoryPromote");
+    if (normalized.startsWith(`${WORKSPACE_MEMORY_PROPOSALS_DIRECTORY}/`)) {
+      throw new AppError(403, "native_tool_memory_path_not_allowed", "MemoryPromote cannot use pending proposals as promotion sources.");
+    }
+  }
 }
 
 function normalizeMemoryWritePath(inputPath: string, options?: { defaultDirectory?: string | undefined }): string {
@@ -854,6 +936,7 @@ async function applyMemoryRemember(input: {
 }): Promise<string> {
   const proposalInput = MemoryRememberInputSchema.parse(input.proposal);
   assertNoMemorySecretsInJson(proposalInput, "MemoryApplyProposal");
+  assertMemoryTopicContentLength(proposalInput.content, "MemoryApplyProposal");
   const requestedPath = proposalInput.path
     ? normalizeMemoryWritePath(proposalInput.path, { defaultDirectory: `${WORKSPACE_MEMORY_DIRECTORY}/topics/${proposalInput.type}` })
     : defaultMemoryTopicPath(proposalInput);
@@ -871,6 +954,24 @@ async function applyMemoryRemember(input: {
   }
 
   const content = buildMemoryTopicContent(proposalInput);
+  const existingContent = await readExistingMemoryContent({
+    fileSystem: input.fileSystem,
+    absolutePath: resolved.absolutePath
+  });
+  const duplicate = isDuplicateMemoryContent(existingContent, content);
+  if (duplicate) {
+    await input.context.rememberRead(resolved.relativePath, input.workspaceRoot, input.fileSystem);
+    return formatToolOutput([
+      ["path", resolved.relativePath],
+      ["type", proposalInput.type],
+      ["title", proposalInput.title],
+      ["created", false],
+      ["updated", false],
+      ["duplicate", true],
+      ["warning", memoryContentWarning(proposalInput.content)]
+    ]);
+  }
+
   await ensureParentDirectory(input.fileSystem, resolved.absolutePath);
   await input.fileSystem.writeFile(resolved.absolutePath, Buffer.from(content, "utf8"));
   await input.context.rememberRead(resolved.relativePath, input.workspaceRoot, input.fileSystem);
@@ -1119,6 +1220,11 @@ async function applyMemoryProposalPayload(input: {
       return applyMemoryAppendDaily(input);
     case "MemoryRecordDream":
       return applyMemoryRecordDream(input);
+    case "MemoryPromote":
+      return applyMemoryRemember({
+        ...input,
+        proposal: memoryRememberInputFromPromotion(MemoryPromoteInputSchema.parse(input.proposal))
+      });
     default:
       throw new AppError(400, "native_tool_memory_proposal_invalid", `Unsupported memory proposal tool: ${input.toolName}`);
   }
@@ -1247,6 +1353,7 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
         context.assertVisible("MemoryRemember");
         const input = MemoryRememberInputSchema.parse(rawInput);
         assertNoMemorySecretsInJson(input, "MemoryRemember");
+        assertMemoryTopicContentLength(input.content, "MemoryRemember");
 
         const requestedPath = input.path
           ? normalizeMemoryWritePath(input.path, { defaultDirectory: `${WORKSPACE_MEMORY_DIRECTORY}/topics/${input.type}` })
@@ -1273,6 +1380,25 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
           }
 
           const content = buildMemoryTopicContent(input);
+          const existingContent = await readExistingMemoryContent({
+            fileSystem,
+            absolutePath: resolved.absolutePath
+          });
+          const duplicate = isDuplicateMemoryContent(existingContent, content);
+          if (duplicate) {
+            await context.rememberRead(resolved.relativePath, workspaceRoot, fileSystem);
+            return formatToolOutput([
+              ["path", resolved.relativePath],
+              ["type", input.type],
+              ["title", input.title],
+              ["created", false],
+              ["updated", false],
+              ["duplicate", true],
+              ["warning", memoryContentWarning(input.content)],
+              ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
+            ]);
+          }
+
           await ensureParentDirectory(fileSystem, resolved.absolutePath);
           await fileSystem.writeFile(resolved.absolutePath, Buffer.from(content, "utf8"));
           await context.rememberRead(resolved.relativePath, workspaceRoot, fileSystem);
@@ -1289,7 +1415,9 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
             ["title", input.title],
             ["created", !existing],
             ["updated", Boolean(existing)],
+            ["duplicate", false],
             ["index_updated", indexUpdated],
+            ["warning", memoryContentWarning(input.content)],
             ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
           ]);
         });
@@ -1626,6 +1754,48 @@ export function createMemoryTools(context: NativeToolFactoryContext): EngineTool
             ["target_path", input.targetPath],
             ["write_policy", resolveEffectiveWorkspaceMemoryWritePolicy(context)]
           ]);
+        });
+      }
+    },
+    MemoryPromote: {
+      description: MEMORY_PROMOTE_DESCRIPTION,
+      retryPolicy: getNativeToolRetryPolicy("MemoryPromote"),
+      inputSchema: MemoryPromoteInputSchema,
+      async execute(rawInput) {
+        context.assertVisible("MemoryPromote");
+        const input = MemoryPromoteInputSchema.parse(rawInput);
+        assertNoMemorySecretsInJson(input, "MemoryPromote");
+        assertMemoryTopicContentLength(input.content, "MemoryPromote");
+        assertPromotionSourcesUnderWorkspaceMemory(input.sourcePaths);
+
+        const proposalInput = memoryRememberInputFromPromotion(input);
+        const requestedPath = proposalInput.path
+          ? normalizeMemoryWritePath(proposalInput.path, { defaultDirectory: `${WORKSPACE_MEMORY_DIRECTORY}/topics/${proposalInput.type}` })
+          : defaultMemoryTopicPath(proposalInput);
+        assertMarkdownMemoryFile(requestedPath, "MemoryPromote");
+        if (!requestedPath.startsWith(`${WORKSPACE_MEMORY_DIRECTORY}/topics/`)) {
+          throw new AppError(403, "native_tool_memory_path_not_allowed", "MemoryPromote can only promote into .openharness/memory/topics.");
+        }
+
+        if (!input.apply || memoryWriteRequiresConfirmationForContext(context)) {
+          return createPendingMemoryProposal(context, {
+            tool: "MemoryPromote",
+            targetPath: requestedPath,
+            proposal: input
+          });
+        }
+
+        return context.withFileSystem("write", requestedPath, async ({ workspaceRoot, fileSystem, workspace }) => {
+          if (workspace?.readOnly) {
+            throw new AppError(403, "native_tool_memory_read_only", "MemoryPromote cannot write in a read-only workspace.");
+          }
+
+          return applyMemoryRemember({
+            context,
+            fileSystem,
+            workspaceRoot,
+            proposal: proposalInput
+          });
         });
       }
     },

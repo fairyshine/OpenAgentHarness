@@ -21,7 +21,7 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["openai", "openai-compatible"]
+          "enum": ["openai", "openai-compatible", "deepseek", "moonshotai"]
         },
         "key": {
           "type": "string"

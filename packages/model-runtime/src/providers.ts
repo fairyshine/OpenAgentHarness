@@ -20,6 +20,20 @@ export const SUPPORTED_MODEL_PROVIDERS = [
     description: "OpenAI 兼容接口 provider，适合接入第三方或自建的 `/chat/completions` 风格端点。",
     requiresUrl: true,
     useCases: ["OpenRouter 等兼容端点", "自建网关", "学校或企业内网的兼容代理"]
+  },
+  {
+    id: "deepseek",
+    packageName: "@ai-sdk/deepseek",
+    description: "DeepSeek 官方 AI SDK provider，适合直接连接 DeepSeek 官方接口并获得更完整的工具调用兼容性。",
+    requiresUrl: false,
+    useCases: ["DeepSeek 官方模型", "DeepSeek tool calling / streaming", "DeepSeek reasoning 模型"]
+  },
+  {
+    id: "moonshotai",
+    packageName: "@ai-sdk/moonshotai",
+    description: "Moonshot AI 官方 AI SDK provider，适合直接连接 Moonshot/Kimi 官方接口。",
+    requiresUrl: false,
+    useCases: ["Moonshot 官方模型", "Kimi 模型", "Moonshot tool calling / streaming"]
   }
 ] as const satisfies readonly SupportedModelProviderDefinition[];
 

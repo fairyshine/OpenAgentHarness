@@ -792,3 +792,126 @@ describe("AiSdkModelRuntime openai-compatible provider", () => {
     }
   });
 });
+
+describe("AiSdkModelRuntime dedicated providers", () => {
+  it("streams through the DeepSeek provider", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+    globalThis.fetch = (async (input, init) => {
+      const url = typeof input === "string" ? input : input.url;
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requests.push({ url, body });
+
+      return new Response(
+        [
+          'data: {"id":"deepseek_1","object":"chat.completion.chunk","created":1,"model":"deepseek-chat","choices":[{"index":0,"delta":{"role":"assistant","content":"deep"},"finish_reason":null}]}',
+          'data: {"id":"deepseek_1","object":"chat.completion.chunk","created":1,"model":"deepseek-chat","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}',
+          "data: [DONE]",
+          ""
+        ].join("\n\n"),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream"
+          }
+        }
+      );
+    }) as typeof fetch;
+
+    try {
+      const runtime = new AiSdkModelRuntime({
+        defaultModelName: "deepseek-entry",
+        models: {
+          "deepseek-entry": {
+            provider: "deepseek",
+            key: "test-key",
+            name: "deepseek-chat"
+          }
+        }
+      });
+
+      const response = await runtime.stream({
+        model: "deepseek-entry",
+        messages: [{ role: "user", content: "ping" }]
+      });
+
+      let streamed = "";
+      for await (const chunk of response.chunks) {
+        streamed += chunk;
+      }
+
+      await expect(response.completed).resolves.toMatchObject({
+        model: "deepseek-entry",
+        text: "deep",
+        finishReason: "stop"
+      });
+      expect(streamed).toBe("deep");
+      expect(requests[0]?.url).toBe("https://api.deepseek.com/chat/completions");
+      expect(requests[0]?.body.model).toBe("deepseek-chat");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("streams through the Moonshot AI provider", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+    globalThis.fetch = (async (input, init) => {
+      const url = typeof input === "string" ? input : input.url;
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requests.push({ url, body });
+
+      return new Response(
+        [
+          'data: {"id":"moonshot_1","object":"chat.completion.chunk","created":1,"model":"kimi-k2","choices":[{"index":0,"delta":{"role":"assistant","content":"moon"},"finish_reason":null}]}',
+          'data: {"id":"moonshot_1","object":"chat.completion.chunk","created":1,"model":"kimi-k2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}',
+          "data: [DONE]",
+          ""
+        ].join("\n\n"),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream"
+          }
+        }
+      );
+    }) as typeof fetch;
+
+    try {
+      const runtime = new AiSdkModelRuntime({
+        defaultModelName: "moonshot-entry",
+        models: {
+          "moonshot-entry": {
+            provider: "moonshotai",
+            key: "test-key",
+            url: "https://api.moonshot.cn/v1",
+            name: "kimi-k2"
+          }
+        }
+      });
+
+      const response = await runtime.stream({
+        model: "moonshot-entry",
+        messages: [{ role: "user", content: "ping" }]
+      });
+
+      let streamed = "";
+      for await (const chunk of response.chunks) {
+        streamed += chunk;
+      }
+
+      await expect(response.completed).resolves.toMatchObject({
+        model: "moonshot-entry",
+        text: "moon",
+        finishReason: "stop"
+      });
+      expect(streamed).toBe("moon");
+      expect(requests[0]?.url).toBe("https://api.moonshot.cn/v1/chat/completions");
+      expect(requests[0]?.body.model).toBe("kimi-k2");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

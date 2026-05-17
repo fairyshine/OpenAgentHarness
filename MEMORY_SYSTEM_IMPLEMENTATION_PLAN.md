@@ -379,7 +379,7 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 - `confirm-suggested` 已持久化 pending proposal 到 `.openharness/memory/proposals/*.md`，并从普通 search/index 中排除，避免待确认建议被误当成已确认记忆。
 - 已实现 `MemoryApplyProposal` / `MemoryRejectProposal`，支持确认后应用或拒绝 pending proposal，并回写 proposal 状态。
 - `MEMORY.md` 作为短索引由 `MemoryRemember` 自动补充链接。
-- 防重复、校验、truncation warning。
+- 已实现基础防重复、校验和长度 warning：明显 secret 会被拒绝，超大 topic 写入会失败，重复 topic 内容不会重复覆盖，较长 topic 写入会返回 warning。
 
 ### Phase 3：后台抽取与 compaction flush
 
@@ -387,9 +387,9 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 
 - turn-end extraction agent。
 - 已实现 compaction 前 memory flush，会把即将被压缩的早期消息保存到 `sessions/*.md`。
-- session-boundary summary 更稳定。
+- 已实现 successful run 后的低权重 session-boundary capture，会把本轮消息保存到 `sessions/*.md`，并记录 `workspace_memory_session_capture` run step；extractor 子 run 不会捕获自身。
 - 已实现 `MemoryAppendDaily`，可生成/追加 `daily/*.md` 低权重工作日志。
-- 自动写入权限隔离。
+- 已实现自动写入权限隔离：workspace memory extraction run 在 native tool 文件访问入口被硬限制为只能访问 `.openharness/memory/`，即使模型尝试通过 `Read` / `Write` / `Edit` / `Glob` / `Grep` 访问其它 workspace 路径，也会被 runtime 拦截；路径会先解析为 workspace-relative path，避免 `../` 绕过。
 
 ### Phase 4：搜索增强与晋升
 
@@ -397,8 +397,8 @@ Shared/team memory 暂不作为第一阶段目标。以后如果支持，需要�
 
 - SQLite FTS。
 - 可选 embedding hybrid search。
-- recall tracking。
-- promotion preview/apply。
+- 已实现基础 recall tracking：每次自动召回 confirmed `topics/*.md` 后，会记录 `workspace_memory_recall` run step，并在对应 topic frontmatter 中维护 `recall_count` / `last_recalled_at`，供后续 dreaming、清理和晋升策略使用。
+- 已实现 promotion preview/apply 的原生工具入口：`MemoryPromote` 默认把低权重 `sessions/`、`daily/`、`dreams/` 来源提炼为 pending topic proposal，用户确认后可通过 `MemoryApplyProposal` 应用；显式确认场景也可设置 `apply=true` 直接写入 `topics/*.md`。
 - 已实现 `MemoryRecordDream`，可记录 `dreams/DREAMS.md` 整理、晋升、去重和清理建议。
 
 ### Phase 5：Global user memory 可选层

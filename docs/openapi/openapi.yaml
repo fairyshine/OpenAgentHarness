@@ -1736,7 +1736,7 @@ components:
       properties:
         id:
           type: string
-          enum: [openai, openai-compatible]
+          enum: [openai, openai-compatible, deepseek, moonshotai]
         packageName:
           type: string
         description:

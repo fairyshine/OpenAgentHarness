@@ -11,7 +11,6 @@ tools:
     - Grep
     - WebFetch
 policy:
-  max_steps: 16
   run_timeout_seconds: 900
   tool_timeout_seconds: 90
   parallel_tool_calls: true
