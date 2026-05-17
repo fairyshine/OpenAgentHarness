@@ -130,11 +130,28 @@ export interface ModelStepPreparation {
   activeToolNames?: string[] | undefined;
 }
 
-export interface ModelStreamChunk {
-  type: "reasoning-delta";
-  id: string;
-  text: string;
-}
+export type ModelStreamChunk =
+  | {
+      type: "reasoning-delta";
+      id: string;
+      text: string;
+    }
+  | {
+      type: "tool-input-start";
+      toolCallId: string;
+      toolName: string;
+    }
+  | {
+      type: "tool-input-delta";
+      toolCallId: string;
+      inputTextDelta: string;
+    }
+  | {
+      type: "tool-input-available";
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+    };
 
 export interface ModelStreamOptions {
   signal?: AbortSignal | undefined;

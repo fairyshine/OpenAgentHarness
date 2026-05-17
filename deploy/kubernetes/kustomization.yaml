@@ -3,6 +3,8 @@ kind: Kustomization
 namespace: open-agent-harness
 resources:
   - namespace.yaml
+  - storage-secret.example.yaml
+  - configmap.example.yaml
   - controller-rbac.yaml
   - api-server.yaml
   - worker.yaml

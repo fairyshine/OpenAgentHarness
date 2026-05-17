@@ -25,6 +25,13 @@ type ToolMessageMetadata = {
 
 type AssistantMessage = Extract<Message, { role: "assistant" }>;
 
+type LiveToolInputState = {
+  toolCallId: string;
+  toolName: string;
+  inputText: string;
+  input?: unknown;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -71,6 +78,23 @@ function buildDeltaEventMetadata(
     metadata: Object.keys(trimmedMetadata).length > 0 ? trimmedMetadata : undefined,
     systemMessageSignature: nextSystemMessageSignature
   };
+}
+
+function parsePartialToolInput(inputText: string): unknown {
+  const trimmed = inputText.trim();
+  if (!trimmed) {
+    return {
+      __streamingInput: ""
+    };
+  }
+
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return {
+      __streamingInput: inputText
+    };
+  }
 }
 
 function buildAgentEventMetadata(workspace: WorkspaceRecord, agentName: string): Record<string, unknown> {
@@ -282,6 +306,8 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
   readonly #toolMessageMetadataByCallId = new Map<string, ToolMessageMetadata>();
   readonly #liveReasoningById = new Map<string, string>();
   readonly #liveReasoningOrder: string[] = [];
+  readonly #liveToolInputsById = new Map<string, LiveToolInputState>();
+  readonly #liveToolInputOrder: string[] = [];
 
   #assistantMessage: AssistantMessage | undefined;
   #accumulatedText = "";
@@ -555,6 +581,21 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
       onChunk: async (chunk) => {
         if (chunk.type === "reasoning-delta") {
           await this.consumeReasoningDelta(chunk.id, chunk.text);
+          return;
+        }
+
+        if (chunk.type === "tool-input-start") {
+          await this.consumeToolInputStart(chunk.toolCallId, chunk.toolName);
+          return;
+        }
+
+        if (chunk.type === "tool-input-delta") {
+          await this.consumeToolInputDelta(chunk.toolCallId, chunk.inputTextDelta);
+          return;
+        }
+
+        if (chunk.type === "tool-input-available") {
+          await this.consumeToolInputAvailable(chunk.toolCallId, chunk.toolName, chunk.input);
         }
       },
       onStepFinish: async (step) => {
@@ -703,6 +744,7 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
           this.#toolMessageMetadataByCallId.delete(toolError.toolCallId);
         }
         this.#resetLiveReasoning();
+        this.#resetLiveToolInputs();
       }
     };
   }
@@ -759,24 +801,60 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
       this.#liveReasoningOrder.push(reasoningId);
     }
     this.#liveReasoningById.set(reasoningId, `${previousReasoning}${text}`);
-    const liveStructuredContent = this.#buildLiveStructuredContent();
-    if (!liveStructuredContent) {
+    await this.#emitLiveStructuredContent(message);
+  }
+
+  async consumeToolInputStart(toolCallId: string, toolName: string): Promise<void> {
+    if (!toolCallId || !toolName) {
       return;
     }
 
-    const deltaEventMetadata = buildDeltaEventMetadata(message.metadata, this.#latestDeltaSystemMessageSignature);
-    this.#latestDeltaSystemMessageSignature = deltaEventMetadata.systemMessageSignature;
-    await this.#messages.appendEvent({
-      sessionId: this.#session.id,
-      runId: this.#run.id,
-      event: "message.delta",
-      data: {
-        runId: this.#run.id,
-        messageId: message.id,
-        content: liveStructuredContent,
-        ...(deltaEventMetadata.metadata ? { metadata: deltaEventMetadata.metadata } : {})
-      }
+    const existing = this.#liveToolInputsById.get(toolCallId);
+    if (!existing) {
+      this.#liveToolInputOrder.push(toolCallId);
+    }
+    this.#liveToolInputsById.set(toolCallId, {
+      toolCallId,
+      toolName,
+      inputText: existing?.inputText ?? "",
+      ...(existing?.input !== undefined ? { input: existing.input } : {})
     });
+    await this.#emitLiveStructuredContent();
+  }
+
+  async consumeToolInputDelta(toolCallId: string, inputTextDelta: string): Promise<void> {
+    if (!toolCallId || inputTextDelta.length === 0) {
+      return;
+    }
+
+    const existing = this.#liveToolInputsById.get(toolCallId);
+    if (!existing) {
+      return;
+    }
+
+    this.#liveToolInputsById.set(toolCallId, {
+      ...existing,
+      inputText: `${existing.inputText}${inputTextDelta}`
+    });
+    await this.#emitLiveStructuredContent();
+  }
+
+  async consumeToolInputAvailable(toolCallId: string, toolName: string, input: unknown): Promise<void> {
+    if (!toolCallId || !toolName) {
+      return;
+    }
+
+    const existing = this.#liveToolInputsById.get(toolCallId);
+    if (!existing) {
+      this.#liveToolInputOrder.push(toolCallId);
+    }
+    this.#liveToolInputsById.set(toolCallId, {
+      toolCallId,
+      toolName,
+      inputText: existing?.inputText ?? "",
+      input
+    });
+    await this.#emitLiveStructuredContent();
   }
 
   async completePendingModelSteps(
@@ -796,7 +874,7 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
   }
 
   #buildLiveStructuredContent() {
-    if (this.#liveReasoningOrder.length === 0) {
+    if (this.#liveReasoningOrder.length === 0 && this.#liveToolInputOrder.length === 0) {
       return null;
     }
 
@@ -808,20 +886,70 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
         text: reasoningText
       }));
 
-    if (reasoning.length === 0) {
+    const toolCalls = this.#liveToolInputOrder
+      .map((toolCallId) => this.#liveToolInputsById.get(toolCallId))
+      .filter((toolInput): toolInput is LiveToolInputState => Boolean(toolInput))
+      .map((toolInput) => ({
+        type: "tool-call" as const,
+        toolCallId: toolInput.toolCallId,
+        toolName: toolInput.toolName,
+        input: toolInput.input ?? parsePartialToolInput(toolInput.inputText)
+      }));
+
+    if (reasoning.length === 0 && toolCalls.length === 0) {
       return null;
     }
 
     const content = assistantContentFromModelOutput({
       text: this.#accumulatedText,
-      reasoning
+      reasoning,
+      content: toolCalls
     });
 
     return Array.isArray(content) ? content : null;
   }
 
+  async #emitLiveStructuredContent(existingMessage?: AssistantMessage | undefined): Promise<void> {
+    const liveStructuredContent = this.#buildLiveStructuredContent();
+    if (!liveStructuredContent) {
+      return;
+    }
+
+    const currentMetadata =
+      this.#modelCallMessageMetadata.get(this.#completedModelStepCount) ?? this.#latestMessageGenerationMetadata;
+    const message =
+      existingMessage ??
+      (await this.#messages.ensureAssistantMessage(
+        this.#session,
+        this.#run,
+        this.#assistantMessage,
+        this.#allMessages,
+        "",
+        currentMetadata
+      ));
+    this.#assistantMessage = message;
+    const deltaEventMetadata = buildDeltaEventMetadata(message.metadata, this.#latestDeltaSystemMessageSignature);
+    this.#latestDeltaSystemMessageSignature = deltaEventMetadata.systemMessageSignature;
+    await this.#messages.appendEvent({
+      sessionId: this.#session.id,
+      runId: this.#run.id,
+      event: "message.delta",
+      data: {
+        runId: this.#run.id,
+        messageId: message.id,
+        content: liveStructuredContent,
+        ...(deltaEventMetadata.metadata ? { metadata: deltaEventMetadata.metadata } : {})
+      }
+    });
+  }
+
   #resetLiveReasoning() {
     this.#liveReasoningById.clear();
     this.#liveReasoningOrder.length = 0;
+  }
+
+  #resetLiveToolInputs() {
+    this.#liveToolInputsById.clear();
+    this.#liveToolInputOrder.length = 0;
   }
 }

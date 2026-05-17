@@ -9,6 +9,7 @@ data:
       port: 8787
 
     storage:
+      # DATABASE_URL and REDIS_URL are injected from oah-storage in the Deployment manifests.
       postgres_url: ${env.DATABASE_URL}
       redis_url: ${env.REDIS_URL}
 

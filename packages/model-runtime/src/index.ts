@@ -235,15 +235,41 @@ export class AiSdkModelRuntime implements ModelGateway {
       ...(options?.onChunk
         ? {
             onChunk: async ({ chunk }) => {
-              if (chunk.type !== "reasoning-delta") {
+              if (chunk.type === "reasoning-delta") {
+                await options.onChunk?.({
+                  type: "reasoning-delta",
+                  id: chunk.id,
+                  text: chunk.text
+                });
                 return;
               }
 
-              await options.onChunk?.({
-                type: "reasoning-delta",
-                id: chunk.id,
-                text: chunk.text
-              });
+              if (chunk.type === "tool-input-start") {
+                await options.onChunk?.({
+                  type: "tool-input-start",
+                  toolCallId: chunk.id,
+                  toolName: chunk.toolName
+                });
+                return;
+              }
+
+              if (chunk.type === "tool-input-delta") {
+                await options.onChunk?.({
+                  type: "tool-input-delta",
+                  toolCallId: chunk.id,
+                  inputTextDelta: chunk.delta
+                });
+                return;
+              }
+
+              if (chunk.type === "tool-call") {
+                await options.onChunk?.({
+                  type: "tool-input-available",
+                  toolCallId: chunk.toolCallId,
+                  toolName: chunk.toolName,
+                  input: chunk.input
+                });
+              }
             }
           }
         : {})

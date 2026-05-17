@@ -105,6 +105,7 @@ The repository now includes a minimal Kubernetes split-deployment skeleton:
 - [`deploy/kustomization.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kustomization.yaml)
 - [`deploy/controller-servicemonitor.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/controller-servicemonitor.yaml)
 - [`deploy/kubernetes/controller-rbac.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller-rbac.yaml)
+- [`deploy/kubernetes/storage-secret.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/storage-secret.example.yaml)
 - [`deploy/kubernetes/configmap.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/configmap.example.yaml)
 - [`docs/production-readiness.md`](/Users/wumengsong/Code/OpenAgentHarness/docs/production-readiness.md)
 
@@ -112,6 +113,7 @@ Apply them in order:
 
 ```bash
 kubectl apply -f ./deploy/kubernetes/namespace.yaml
+kubectl apply -f ./deploy/kubernetes/storage-secret.example.yaml
 kubectl apply -f ./deploy/kubernetes/configmap.example.yaml
 kubectl apply -f ./deploy/kubernetes/controller-rbac.yaml
 kubectl apply -f ./deploy/kubernetes/api-server.yaml

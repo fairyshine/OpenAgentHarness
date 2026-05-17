@@ -486,6 +486,12 @@ export function MessageContent({
   onInspectRun?: (runId: string) => void;
   onAnswerAskUserQuestion?: (answer: string) => void;
 }) {
+  const structuredContent = typeof content === "string" ? [] : content;
+  const { textParts, imageParts, reasoningParts, toolParts, approvalParts } = useMemo(
+    () => partitionStructuredMessageContent(structuredContent),
+    [structuredContent]
+  );
+
   if (typeof content === "string") {
     const taskReference = parseAgentTaskReference(content);
     if (taskReference) {
@@ -506,11 +512,6 @@ export function MessageContent({
 
     return <ExpandableMarkdownText text={content} {...(isUser !== undefined ? { isUser } : {})} />;
   }
-
-  const { textParts, imageParts, reasoningParts, toolParts, approvalParts } = useMemo(
-    () => partitionStructuredMessageContent(content),
-    [content]
-  );
 
   return (
     <div className="space-y-2">

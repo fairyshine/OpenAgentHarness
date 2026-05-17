@@ -1,4 +1,4 @@
-import { startTransition, useEffectEvent, type Dispatch, type SetStateAction } from "react";
+import { startTransition, useEffect, useEffectEvent, useRef, type Dispatch, type SetStateAction } from "react";
 
 import type { Message, SessionEventContract, SessionQueuedRun } from "@oah/api-contracts";
 
@@ -21,9 +21,64 @@ import {
 } from "./app-controller-utils";
 import { createClientId } from "./client-id";
 
+const MAX_LIVE_SESSION_EVENTS = 1200;
+const LIVE_SESSION_EVENT_FLUSH_MS = 50;
+
 type CursorRef = {
   current: string | undefined;
 };
+
+type PendingLiveMessageDelta = {
+  persistedMessageId: string;
+  runId: string;
+  sessionId: string;
+  contentDelta: string;
+  content?: Message["content"];
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+};
+
+function readEventMessageId(event: SessionEventContract) {
+  return typeof event.data.messageId === "string" ? event.data.messageId : undefined;
+}
+
+function canCoalesceTextDelta(left: SessionEventContract, right: SessionEventContract) {
+  return (
+    left.event === "message.delta" &&
+    right.event === "message.delta" &&
+    left.runId === right.runId &&
+    readEventMessageId(left) === readEventMessageId(right) &&
+    typeof left.data.delta === "string" &&
+    typeof right.data.delta === "string" &&
+    left.data.content === undefined &&
+    right.data.content === undefined
+  );
+}
+
+function mergeTextDeltaEvent(left: SessionEventContract, right: SessionEventContract): SessionEventContract {
+  return {
+    ...left,
+    data: {
+      ...left.data,
+      delta: `${left.data.delta}${right.data.delta}`
+    }
+  };
+}
+
+function coalesceChronologicalEvents(events: SessionEventContract[]) {
+  const coalesced: SessionEventContract[] = [];
+  for (const event of events) {
+    const previous = coalesced.at(-1);
+    if (previous && canCoalesceTextDelta(previous, event)) {
+      coalesced[coalesced.length - 1] = mergeTextDeltaEvent(previous, event);
+      continue;
+    }
+
+    coalesced.push(event);
+  }
+
+  return coalesced;
+}
 
 export function useSessionEventHandler(input: {
   sessionId: string;
@@ -45,6 +100,109 @@ export function useSessionEventHandler(input: {
   refreshSessionById: (targetId: string, quiet?: boolean) => Promise<unknown>;
   syncCurrentSessionAgent: (agentName: string, updatedAt: string) => void;
 }) {
+  const pendingEventsRef = useRef<SessionEventContract[]>([]);
+  const pendingEventFlushTimerRef = useRef<number | undefined>(undefined);
+  const pendingLiveMessageDeltasRef = useRef<Record<string, PendingLiveMessageDelta>>({});
+  const pendingLiveMessageFlushTimerRef = useRef<number | undefined>(undefined);
+
+  const flushPendingEvents = useEffectEvent(() => {
+    window.clearTimeout(pendingEventFlushTimerRef.current);
+    pendingEventFlushTimerRef.current = undefined;
+    const pendingEvents = coalesceChronologicalEvents(pendingEventsRef.current);
+    pendingEventsRef.current = [];
+    if (pendingEvents.length === 0) {
+      return;
+    }
+
+    startTransition(() => {
+      input.setEvents((current) => {
+        let next = current;
+        for (const event of pendingEvents) {
+          const previousHead = next[0];
+          if (previousHead && canCoalesceTextDelta(previousHead, event)) {
+            next = [mergeTextDeltaEvent(previousHead, event), ...next.slice(1)];
+          } else {
+            next = [event, ...next];
+          }
+        }
+        return next.slice(0, MAX_LIVE_SESSION_EVENTS);
+      });
+    });
+  });
+
+  const scheduleEventFlush = useEffectEvent((event: SessionEventContract) => {
+    pendingEventsRef.current.push(event);
+    if (pendingEventFlushTimerRef.current !== undefined) {
+      return;
+    }
+
+    pendingEventFlushTimerRef.current = window.setTimeout(flushPendingEvents, LIVE_SESSION_EVENT_FLUSH_MS);
+  });
+
+  const flushPendingLiveMessageDeltas = useEffectEvent(() => {
+    window.clearTimeout(pendingLiveMessageFlushTimerRef.current);
+    pendingLiveMessageFlushTimerRef.current = undefined;
+    const pendingByKey = pendingLiveMessageDeltasRef.current;
+    pendingLiveMessageDeltasRef.current = {};
+    const pendingEntries = Object.entries(pendingByKey);
+    if (pendingEntries.length === 0) {
+      return;
+    }
+
+    input.setLiveMessagesByKey((current) => {
+      let next: Record<string, LiveConversationMessageRecord> | undefined;
+      for (const [liveMessageKey, pending] of pendingEntries) {
+        const existingEntry = (next ?? current)[liveMessageKey];
+        const content =
+          pending.content ??
+          `${typeof existingEntry?.content === "string" ? existingEntry.content : ""}${pending.contentDelta}`;
+        const metadata = existingEntry?.metadata ?? pending.metadata;
+        next = next ?? { ...current };
+        next[liveMessageKey] = {
+          ...(existingEntry?.persistedMessageId ? { persistedMessageId: existingEntry.persistedMessageId } : {}),
+          persistedMessageId: pending.persistedMessageId,
+          runId: pending.runId,
+          sessionId: pending.sessionId,
+          role: "assistant",
+          content,
+          ...(metadata ? { metadata } : {}),
+          createdAt: existingEntry?.createdAt ?? pending.createdAt
+        };
+      }
+
+      return next ?? current;
+    });
+  });
+
+  const scheduleLiveMessageDeltaFlush = useEffectEvent((inputDelta: PendingLiveMessageDelta) => {
+    const liveMessageKey = `message:${inputDelta.persistedMessageId}`;
+    const existingDelta = pendingLiveMessageDeltasRef.current[liveMessageKey];
+    pendingLiveMessageDeltasRef.current[liveMessageKey] = {
+      ...inputDelta,
+      contentDelta: `${existingDelta?.contentDelta ?? ""}${inputDelta.contentDelta}`,
+      ...(inputDelta.content !== undefined ? { content: inputDelta.content } : existingDelta?.content !== undefined ? { content: existingDelta.content } : {}),
+      ...(existingDelta?.metadata ?? inputDelta.metadata ? { metadata: existingDelta?.metadata ?? inputDelta.metadata } : {}),
+      createdAt: existingDelta?.createdAt ?? inputDelta.createdAt
+    };
+
+    if (pendingLiveMessageFlushTimerRef.current !== undefined) {
+      return;
+    }
+
+    pendingLiveMessageFlushTimerRef.current = window.setTimeout(flushPendingLiveMessageDeltas, LIVE_SESSION_EVENT_FLUSH_MS);
+  });
+
+  useEffect(() => {
+    return () => {
+      window.clearTimeout(pendingEventFlushTimerRef.current);
+      window.clearTimeout(pendingLiveMessageFlushTimerRef.current);
+      pendingEventsRef.current = [];
+      pendingLiveMessageDeltasRef.current = {};
+      pendingEventFlushTimerRef.current = undefined;
+      pendingLiveMessageFlushTimerRef.current = undefined;
+    };
+  }, [input.sessionId]);
+
   return useEffectEvent((frame: SseFrame) => {
     const event = {
       id: frame.cursor ?? createClientId(),
@@ -60,9 +218,7 @@ export function useSessionEventHandler(input: {
       input.lastCursorRef.current = frame.cursor;
     }
 
-    startTransition(() => {
-      input.setEvents((current) => [event, ...current].slice(0, 5000));
-    });
+    scheduleEventFlush(event);
 
     if (event.runId) {
       input.setSelectedRunId((current) => current || event.runId || "");
@@ -167,27 +323,18 @@ export function useSessionEventHandler(input: {
       const runId = event.runId;
       const liveMessageKey = `message:${eventMessageId}`;
       const needsMessageHydration =
+        !pendingLiveMessageDeltasRef.current[liveMessageKey] &&
         !input.liveMessagesByKey[liveMessageKey] &&
         !input.messages.some((message) => message.id === eventMessageId);
-      input.setLiveMessagesByKey((current) => ({
-        ...current,
-        [liveMessageKey]: {
-          persistedMessageId: eventMessageId,
-          runId,
-          sessionId: input.sessionId,
-          role: "assistant",
-          content:
-            eventStructuredContent ??
-            `${typeof current[liveMessageKey]?.content === "string" ? current[liveMessageKey].content : ""}${
-              typeof event.data.delta === "string" ? event.data.delta : ""
-            }`,
-          ...(() => {
-            const metadata = current[liveMessageKey]?.metadata ?? eventMetadata;
-            return metadata ? { metadata } : {};
-          })(),
-          createdAt: current[liveMessageKey]?.createdAt ?? event.createdAt
-        }
-      }));
+      scheduleLiveMessageDeltaFlush({
+        persistedMessageId: eventMessageId,
+        runId,
+        sessionId: input.sessionId,
+        contentDelta: typeof event.data.delta === "string" ? event.data.delta : "",
+        ...(eventStructuredContent !== null ? { content: eventStructuredContent } : {}),
+        ...(eventMetadata ? { metadata: eventMetadata } : {}),
+        createdAt: event.createdAt
+      });
       if (needsMessageHydration) {
         input.scheduleMessagesRefresh();
       }
@@ -297,6 +444,10 @@ export function useSessionEventHandler(input: {
       const messageId = eventMessageId;
       const runId = event.runId;
       const content = normalizeMessageContent(event.data.content);
+      if (messageId) {
+        delete pendingLiveMessageDeltasRef.current[`message:${messageId}`];
+        delete pendingLiveMessageDeltasRef.current[messageId];
+      }
       if (messageId && content !== null) {
         startTransition(() => {
           input.setMessages((current) => {

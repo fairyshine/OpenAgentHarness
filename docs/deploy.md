@@ -124,12 +124,14 @@ WebUI 和 TUI 都只通过 `oah-api` 访问系统能力；TUI 更适合在服务
 - [`deploy/controller-prometheusrule.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/controller-prometheusrule.yaml)
 - [`docs/production-readiness.md`](/Users/wumengsong/Code/OpenAgentHarness/docs/production-readiness.md)
 - [`deploy/kubernetes/controller-rbac.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/controller-rbac.yaml)
+- [`deploy/kubernetes/storage-secret.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/storage-secret.example.yaml)
 - [`deploy/kubernetes/configmap.example.yaml`](/Users/wumengsong/Code/OpenAgentHarness/deploy/kubernetes/configmap.example.yaml)
 
 使用方式：
 
 ```bash
 kubectl apply -f ./deploy/kubernetes/namespace.yaml
+kubectl apply -f ./deploy/kubernetes/storage-secret.example.yaml
 kubectl apply -f ./deploy/kubernetes/configmap.example.yaml
 kubectl apply -f ./deploy/kubernetes/controller-rbac.yaml
 kubectl apply -f ./deploy/kubernetes/api-server.yaml

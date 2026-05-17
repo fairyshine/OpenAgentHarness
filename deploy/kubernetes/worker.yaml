@@ -33,6 +33,16 @@ spec:
           env:
             - name: OAH_CONFIG
               value: /etc/oah/server.yaml
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: oah-storage
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: oah-storage
+                  key: REDIS_URL
             - name: NODE_OPTIONS
               value: "--max-old-space-size=2048 --max-semi-space-size=32"
             - name: OAH_INTERNAL_BASE_URL
