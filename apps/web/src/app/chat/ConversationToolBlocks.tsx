@@ -18,6 +18,11 @@ import {
   toolStatusTone
 } from "./conversation-model";
 
+const MAX_STREAMING_INPUT_PREVIEW_CHARS = 12000;
+const MAX_STRING_PARAM_PREVIEW_CHARS = 12000;
+const MAX_JSON_PARAM_PREVIEW_CHARS = 16000;
+const MAX_TOOL_OUTPUT_PREVIEW_CHARS = 32000;
+
 export type ParamKind = "string" | "number" | "boolean" | "null" | "array" | "object" | "unknown";
 
 export function getParamKind(value: unknown): ParamKind {
@@ -42,6 +47,74 @@ export function paramTypeBadgeClass(kind: ParamKind) {
   }
 }
 
+function readStreamingInput(value: unknown) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    typeof (value as { __streamingInput?: unknown }).__streamingInput !== "string"
+  ) {
+    return undefined;
+  }
+
+  const truncatedChars = (value as { __streamingInputTruncatedChars?: unknown }).__streamingInputTruncatedChars;
+  return {
+    text: (value as { __streamingInput: string }).__streamingInput,
+    truncatedChars: typeof truncatedChars === "number" && Number.isFinite(truncatedChars) ? Math.max(0, truncatedChars) : 0
+  };
+}
+
+function previewHead(value: string, limit: number) {
+  if (value.length <= limit) {
+    return {
+      text: value,
+      truncatedChars: 0
+    };
+  }
+
+  return {
+    text: value.slice(0, limit),
+    truncatedChars: value.length - limit
+  };
+}
+
+function previewTail(value: string, limit: number, alreadyTruncatedChars = 0) {
+  if (value.length <= limit) {
+    return {
+      text: value,
+      truncatedChars: alreadyTruncatedChars
+    };
+  }
+
+  return {
+    text: value.slice(-limit),
+    truncatedChars: alreadyTruncatedChars + value.length - limit
+  };
+}
+
+function formatJsonPreview(value: unknown, limit = MAX_JSON_PARAM_PREVIEW_CHARS) {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value, null, 2);
+  } catch {
+    serialized = String(value);
+  }
+
+  return previewHead(serialized, limit);
+}
+
+function TruncationNotice({ truncatedChars, prefix = "Showing preview" }: { truncatedChars: number; prefix?: string }) {
+  if (truncatedChars <= 0) {
+    return null;
+  }
+
+  return (
+    <div className="mb-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-200">
+      {prefix}; {truncatedChars.toLocaleString()} chars hidden while rendering.
+    </div>
+  );
+}
+
 export function ToolCallBlock({
   part,
   messageMetadata
@@ -52,18 +125,25 @@ export function ToolCallBlock({
   const [expanded, setExpanded] = useState(true);
   const toolMeta = readToolMeta(messageMetadata);
   const durationLabel = formatToolDuration(toolMeta.durationMs);
-  const { params, paramEntries, paramKeys, hasParams, shouldDeferParams } = useMemo(() => {
-    const params = part.input ?? {};
+  const { paramEntries, paramKeys, hasParams, shouldDeferParams, streamingInputPreview } = useMemo(() => {
+    const streamingInput = readStreamingInput(part.input);
+    const params = streamingInput === undefined ? (part.input ?? {}) : {};
     const paramEntries = Object.entries(params);
     const paramKeys = paramEntries.map(([key]) => key);
     return {
-      params,
       paramEntries,
       paramKeys,
-      hasParams: paramEntries.length > 0,
+      hasParams: paramEntries.length > 0 || streamingInput !== undefined,
+      streamingInputPreview:
+        streamingInput !== undefined
+          ? previewTail(streamingInput.text, MAX_STREAMING_INPUT_PREVIEW_CHARS, streamingInput.truncatedChars)
+          : undefined,
       shouldDeferParams:
+        streamingInput === undefined &&
         paramEntries.length > 0 &&
-        (paramEntries.length > 6 || paramEntries.some(([, value]) => typeof value === "string" && value.length > 400))
+        (paramEntries.length > 6 ||
+          paramEntries.some(([, value]) => typeof value === "string" && value.length > 400) ||
+          paramEntries.some(([, value]) => typeof value === "object" && value !== null))
     };
   }, [part.input]);
 
@@ -95,11 +175,16 @@ export function ToolCallBlock({
             {durationLabel}
           </span>
         ) : null}
-        {hasParams && (
+        {paramKeys.length > 0 && (
           <span className="text-xs text-muted-foreground/50 truncate flex-1">
             · {paramKeys.join(", ")}
           </span>
         )}
+        {streamingInputPreview !== undefined ? (
+          <span className="text-xs text-muted-foreground/50 truncate flex-1">
+            · receiving parameters…
+          </span>
+        ) : null}
       </button>
       {expanded && (
         <DeferredConversationBlock
@@ -111,9 +196,31 @@ export function ToolCallBlock({
             {hasParams ? (
               <div className="space-y-2">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-2">Parameters</div>
+                {streamingInputPreview !== undefined ? (
+                  <div className="rounded-xl border border-border/50 bg-background/40 px-3 py-2.5">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center rounded-md border border-primary/15 bg-primary/5 px-2 py-0.5 text-[11px] font-mono font-semibold text-primary/90">
+                        input
+                      </span>
+                      <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${paramTypeBadgeClass("string")}`}>
+                        streaming
+                      </span>
+                      <Loader2 className="h-3 w-3 animate-spin text-muted-foreground/60" />
+                    </div>
+                    <TruncationNotice truncatedChars={streamingInputPreview.truncatedChars} prefix="Showing latest parameters" />
+                    <pre className="code-panel max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-lg px-3 py-2 text-xs font-mono">
+                      {streamingInputPreview.text || "Waiting for parameters..."}
+                    </pre>
+                  </div>
+                ) : null}
                 {paramEntries.map(([key, value]) => {
                   const kind = getParamKind(value);
                   const isMultiline = typeof value === "string" && value.includes("\n");
+                  const stringPreview = typeof value === "string" ? previewHead(value, MAX_STRING_PARAM_PREVIEW_CHARS) : null;
+                  const jsonPreview =
+                    typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean" && value !== null
+                      ? formatJsonPreview(value)
+                      : null;
                   return (
                     <div key={key} className="rounded-xl border border-border/50 bg-background/40 px-3 py-2.5">
                       <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -126,10 +233,13 @@ export function ToolCallBlock({
                       </div>
                       <div className="text-xs font-mono text-foreground/80">
                         {typeof value === "string" ? (
-                          isMultiline ? (
-                            <pre className={`rounded-lg border px-3 py-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto ${toneBadgeClass("sky")}`}>
-                              {value}
-                            </pre>
+                          isMultiline || (stringPreview?.truncatedChars ?? 0) > 0 ? (
+                            <>
+                              <TruncationNotice truncatedChars={stringPreview?.truncatedChars ?? 0} />
+                              <pre className={`rounded-lg border px-3 py-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto ${toneBadgeClass("sky")}`}>
+                                {stringPreview?.text ?? ""}
+                              </pre>
+                            </>
                           ) : (
                             <span className={`inline-flex items-center rounded-md border px-2 py-1 ${toneBadgeClass("sky")}`}>
                               <span className="opacity-50 mr-0.5">"</span>{value}<span className="opacity-50 ml-0.5">"</span>
@@ -142,9 +252,12 @@ export function ToolCallBlock({
                         ) : value === null ? (
                           <span className="info-inline inline-flex items-center rounded-md px-2 py-1 text-muted-foreground">null</span>
                         ) : (
-                          <pre className="code-panel rounded-lg px-3 py-2 overflow-x-auto whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
-                            {JSON.stringify(value, null, 2)}
-                          </pre>
+                          <>
+                            <TruncationNotice truncatedChars={jsonPreview?.truncatedChars ?? 0} />
+                            <pre className="code-panel rounded-lg px-3 py-2 overflow-x-auto whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+                              {jsonPreview?.text ?? ""}
+                            </pre>
+                          </>
                         )}
                       </div>
                     </div>
@@ -172,7 +285,8 @@ export function ToolResultBlock({
 }) {
   const [expanded, setExpanded] = useState(true);
   const { content, isError } = resolveToolResultContent(part.output);
-  const preview = content.slice(0, 60).replace(/\n/g, " ") + (content.length > 60 ? "…" : "");
+  const outputPreview = useMemo(() => previewHead(content, MAX_TOOL_OUTPUT_PREVIEW_CHARS), [content]);
+  const preview = outputPreview.text.slice(0, 60).replace(/\n/g, " ") + (content.length > 60 ? "…" : "");
   const toolMeta = readToolMeta(messageMetadata);
   const durationLabel = formatToolDuration(toolMeta.durationMs);
   const shouldDeferOutput = content.length > 800 || part.output?.type === "json" || part.output?.type === "error-json";
@@ -230,12 +344,13 @@ export function ToolResultBlock({
         >
           <div className="border-t border-border/40 px-4 py-3">
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/60 mb-2">Output</div>
+            <TruncationNotice truncatedChars={outputPreview.truncatedChars} />
             <pre className={`rounded-xl border px-3 py-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-64 overflow-y-auto shadow-sm ${
               isError
                 ? "border-destructive/20 bg-destructive/5 text-destructive/90"
                 : "code-panel"
             }`}>
-              {content}
+              {outputPreview.text}
             </pre>
           </div>
         </DeferredConversationBlock>
@@ -362,4 +477,3 @@ export function AskUserQuestionCard({ payload, onAnswer }: { payload: AskUserQue
     </div>
   );
 }
-

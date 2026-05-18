@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 
 import { WorkspaceFileManagerContainer } from "./WorkspaceFileManagerPanel";
 import { ConversationComposer } from "./ConversationComposer";
@@ -16,39 +16,198 @@ import {
 /** Persist scroll positions per session across component re-mounts */
 const scrollPositions = new Map<string, number>();
 
+function summarizeAuxiliaryValue(value: unknown) {
+  if (typeof value === "string") {
+    return value.length <= 160 ? value : `${value.slice(0, 80)}…${value.slice(-80)}:${value.length}`;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `array:${value.length}`;
+  }
+
+  if (typeof value === "object") {
+    let count = 0;
+    for (const key in value as Record<string, unknown>) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        count += 1;
+        if (count > 160) {
+          return "object:160+";
+        }
+      }
+    }
+    return `object:${count}`;
+  }
+
+  return typeof value;
+}
+
+function summarizeTodoValue(value: unknown) {
+  if (!Array.isArray(value)) {
+    return summarizeAuxiliaryValue(value);
+  }
+
+  return value
+    .slice(0, 80)
+    .map((item, index) => {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        return `${index}:${summarizeAuxiliaryValue(item)}`;
+      }
+
+      const record = item as { content?: unknown; activeForm?: unknown; status?: unknown };
+      return [
+        index,
+        summarizeAuxiliaryValue(record.status),
+        summarizeAuxiliaryValue(record.content),
+        summarizeAuxiliaryValue(record.activeForm)
+      ].join(":");
+    })
+    .join("|");
+}
+
+function buildConversationAuxiliaryStateKey(messages: RuntimeProps["messageFeed"]) {
+  const parts: string[] = [];
+  for (const message of messages) {
+    if (typeof message.content === "string") {
+      continue;
+    }
+
+    for (const part of message.content) {
+      if (part.type === "tool-call" && part.toolName === "TodoWrite") {
+        const todos = typeof part.input === "object" && part.input !== null && !Array.isArray(part.input)
+          ? (part.input as { todos?: unknown }).todos
+          : undefined;
+        parts.push(`${message.id}:${message.createdAt}:todo:${summarizeTodoValue(todos)}`);
+        continue;
+      }
+
+      if (part.type !== "tool-call" && part.type !== "tool-result") {
+        continue;
+      }
+
+      if (part.toolName !== "TerminalOutput" && part.toolName !== "TerminalInput") {
+        continue;
+      }
+
+      const payload =
+        part.type === "tool-call"
+          ? part.input
+          : typeof part.output === "object" && part.output !== null && "value" in part.output
+            ? (part.output as { value?: unknown }).value
+            : part.output;
+      parts.push(`${message.id}:${message.createdAt}:${part.type}:${part.toolName}:${part.toolCallId}:${summarizeAuxiliaryValue(payload)}`);
+    }
+  }
+
+  return parts.join("\n");
+}
+
 function ConversationWorkspaceImpl(props: RuntimeProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const autoFollowPausedRef = useRef(false);
   const lastScrollTopRef = useRef(0);
+  const scrollTopValueRef = useRef(0);
+  const userScrollIntentUntilRef = useRef(0);
   const programmaticScrollUntilRef = useRef(0);
+  const followAnimationFrameRef = useRef<number | undefined>(undefined);
+  const touchYRef = useRef<number | undefined>(undefined);
   const prevMessageCountRef = useRef(0);
   const restoredRef = useRef(false);
   const prependSnapshotRef = useRef<{ messageCount: number; scrollHeight: number; scrollTop: number } | null>(null);
+  const messageFeedRef = useRef(props.messageFeed);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [terminalDialogOpen, setTerminalDialogOpen] = useState(false);
   const [selectedTerminalId, setSelectedTerminalId] = useState<string | undefined>(undefined);
 
   const sessionId = props.session?.id ?? "";
+  messageFeedRef.current = props.messageFeed;
   const messageCount = props.messageFeed.length;
   const hasStreamingMessage = useMemo(() => props.messageFeed.some((message) => message.id.startsWith("live:")), [props.messageFeed]);
+  const shouldPinActiveRun = props.isRunning || hasStreamingMessage;
   const isRunning = props.isRunning;
   const queuedSessionRuns = props.queuedSessionRuns;
-  const todoProgress = useMemo(() => buildConversationTodoProgress(props.messageFeed), [props.messageFeed]);
-  const terminalStates = useMemo(() => buildConversationTerminalStates(props.messageFeed), [props.messageFeed]);
+  const auxiliaryStateKey = useMemo(() => buildConversationAuxiliaryStateKey(props.messageFeed), [props.messageFeed]);
+  const todoProgress = useMemo(() => buildConversationTodoProgress(messageFeedRef.current), [auxiliaryStateKey, sessionId]);
+  const terminalStates = useMemo(() => buildConversationTerminalStates(messageFeedRef.current), [auxiliaryStateKey, sessionId]);
   const handleOpenTerminal = useCallback((terminalId?: string) => {
     setSelectedTerminalId(terminalId);
     setTerminalDialogOpen(true);
+  }, []);
+  const updateScrollTopState = useCallback((nextScrollTop: number) => {
+    const previousScrollTop = scrollTopValueRef.current;
+    scrollTopValueRef.current = nextScrollTop;
+    if (Math.abs(previousScrollTop - nextScrollTop) > 0.5) {
+      setScrollTop(nextScrollTop);
+    }
+  }, []);
+  const cancelPendingFollowFrames = useCallback(() => {
+    if (followAnimationFrameRef.current !== undefined) {
+      window.cancelAnimationFrame(followAnimationFrameRef.current);
+      followAnimationFrameRef.current = undefined;
+    }
+  }, []);
+  const pauseAutoFollow = useCallback(() => {
+    userScrollIntentUntilRef.current = Date.now() + 900;
+    programmaticScrollUntilRef.current = 0;
+    isNearBottomRef.current = false;
+    autoFollowPausedRef.current = true;
+    props.shouldAutoFollowConversationRef.current = false;
+    cancelPendingFollowFrames();
+  }, [cancelPendingFollowFrames, props.shouldAutoFollowConversationRef]);
+  const pinConversationToBottom = useCallback((frames = 2) => {
+    const el = scrollContainerRef.current;
+    if (!el) {
+      return;
+    }
+    if (autoFollowPausedRef.current || !props.shouldAutoFollowConversationRef.current) {
+      return;
+    }
+
+    const nextScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    const distance = Math.abs(el.scrollTop - nextScrollTop);
+    programmaticScrollUntilRef.current = Date.now() + 650;
+    props.shouldAutoFollowConversationRef.current = true;
+    isNearBottomRef.current = true;
+    if (distance > 0.5) {
+      el.scrollTop = nextScrollTop;
+    }
+    lastScrollTopRef.current = el.scrollTop;
+    updateScrollTopState(el.scrollTop);
+
+    if (followAnimationFrameRef.current !== undefined) {
+      cancelPendingFollowFrames();
+    }
+
+    if (frames > 0) {
+      followAnimationFrameRef.current = window.requestAnimationFrame(() => {
+        followAnimationFrameRef.current = undefined;
+        if (!autoFollowPausedRef.current && props.shouldAutoFollowConversationRef.current) {
+          pinConversationToBottom(frames - 1);
+        }
+      });
+    }
+  }, [cancelPendingFollowFrames, props.shouldAutoFollowConversationRef, updateScrollTopState]);
+  const noteUserScrollIntent = useCallback(() => {
+    userScrollIntentUntilRef.current = Date.now() + 700;
   }, []);
 
   // Reset restored flag when session changes
   useEffect(() => {
     restoredRef.current = false;
     autoFollowPausedRef.current = false;
+    props.shouldAutoFollowConversationRef.current = true;
     lastScrollTopRef.current = 0;
+    scrollTopValueRef.current = 0;
+    userScrollIntentUntilRef.current = 0;
     programmaticScrollUntilRef.current = 0;
-  }, [sessionId]);
+    touchYRef.current = undefined;
+    cancelPendingFollowFrames();
+  }, [cancelPendingFollowFrames, props.shouldAutoFollowConversationRef, sessionId]);
 
   // Restore saved scroll position once messages are loaded
   useEffect(() => {
@@ -61,15 +220,16 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     if (saved != null) {
       requestAnimationFrame(() => {
         el.scrollTop = saved;
-        setScrollTop(saved);
+        updateScrollTopState(saved);
         lastScrollTopRef.current = el.scrollTop;
         isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= CONVERSATION_BOTTOM_THRESHOLD_PX;
         autoFollowPausedRef.current = !isNearBottomRef.current;
+        props.shouldAutoFollowConversationRef.current = isNearBottomRef.current;
       });
     }
     restoredRef.current = true;
     prevMessageCountRef.current = messageCount;
-  }, [sessionId, messageCount]);
+  }, [messageCount, props.shouldAutoFollowConversationRef, sessionId, updateScrollTopState]);
 
   // Track scroll position
   const handleScroll = useCallback(() => {
@@ -77,22 +237,26 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     if (!el) return;
     const nextScrollTop = el.scrollTop;
     const previousScrollTop = lastScrollTopRef.current;
-    const isProgrammaticScroll = Date.now() < programmaticScrollUntilRef.current;
+    const now = Date.now();
+    const hasRecentUserScrollIntent = now < userScrollIntentUntilRef.current;
     const bottomDistance = el.scrollHeight - nextScrollTop - el.clientHeight;
     const isNearBottom = bottomDistance <= CONVERSATION_BOTTOM_THRESHOLD_PX;
-    setScrollTop(el.scrollTop);
+    updateScrollTopState(el.scrollTop);
     setViewportHeight(el.clientHeight);
-    isNearBottomRef.current = isNearBottom;
     if (isNearBottom) {
+      isNearBottomRef.current = true;
       autoFollowPausedRef.current = false;
-    } else if (!isProgrammaticScroll && nextScrollTop < previousScrollTop - 1) {
-      autoFollowPausedRef.current = true;
+      props.shouldAutoFollowConversationRef.current = true;
+    } else if (hasRecentUserScrollIntent && nextScrollTop < previousScrollTop - 1) {
+      pauseAutoFollow();
+    } else if (!props.shouldAutoFollowConversationRef.current) {
+      isNearBottomRef.current = false;
     }
     lastScrollTopRef.current = nextScrollTop;
     if (sessionId) {
       scrollPositions.set(sessionId, el.scrollTop);
     }
-  }, [sessionId]);
+  }, [pauseAutoFollow, props.shouldAutoFollowConversationRef, sessionId, updateScrollTopState]);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -106,26 +270,31 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
       if (lastMsg?.role === "user" && !isTaskNotificationMessage(lastMsg)) {
         isNearBottomRef.current = true;
         autoFollowPausedRef.current = false;
+        props.shouldAutoFollowConversationRef.current = true;
       }
     }
 
     if (isNewMessage && isNearBottomRef.current && !autoFollowPausedRef.current) {
-      programmaticScrollUntilRef.current = Date.now() + 500;
-      props.conversationTailRef?.current?.scrollIntoView({ behavior: "smooth" });
+      pinConversationToBottom(3);
     }
-  }, [messageCount, props.messageFeed, props.conversationTailRef]);
+  }, [messageCount, pinConversationToBottom, props.messageFeed, props.shouldAutoFollowConversationRef]);
 
   // Streaming auto-scroll: pin to bottom without smooth animation
-  useEffect(() => {
-    if (!isNearBottomRef.current || autoFollowPausedRef.current || !hasStreamingMessage) return;
-    const el = scrollContainerRef.current;
-    if (el) {
-      programmaticScrollUntilRef.current = Date.now() + 100;
-      el.scrollTop = el.scrollHeight;
-      setScrollTop(el.scrollTop);
-      lastScrollTopRef.current = el.scrollTop;
+  useLayoutEffect(() => {
+    if (prependSnapshotRef.current || autoFollowPausedRef.current || !shouldPinActiveRun) {
+      return;
+    }
+
+    if (isNearBottomRef.current || props.shouldAutoFollowConversationRef.current) {
+      pinConversationToBottom(2);
     }
   });
+
+  useEffect(() => {
+    return () => {
+      cancelPendingFollowFrames();
+    };
+  }, [cancelPendingFollowFrames]);
 
   useEffect(() => {
     if (props.loadingOlderMessages) {
@@ -140,10 +309,10 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
 
     const heightDelta = el.scrollHeight - snapshot.scrollHeight;
     el.scrollTop = snapshot.scrollTop + Math.max(0, heightDelta);
-    setScrollTop(el.scrollTop);
+    updateScrollTopState(el.scrollTop);
     prevMessageCountRef.current = messageCount;
     prependSnapshotRef.current = null;
-  }, [messageCount, props.loadingOlderMessages]);
+  }, [messageCount, props.loadingOlderMessages, updateScrollTopState]);
 
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -220,6 +389,28 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
         }}
         className="flex-1 overflow-y-auto min-h-0"
         onScroll={handleScroll}
+        onPointerDown={noteUserScrollIntent}
+        onWheel={(event) => {
+          if (event.deltaY < -1) {
+            pauseAutoFollow();
+          } else {
+            noteUserScrollIntent();
+          }
+        }}
+        onTouchStart={(event) => {
+          touchYRef.current = event.touches[0]?.clientY;
+          noteUserScrollIntent();
+        }}
+        onTouchMove={(event) => {
+          const nextY = event.touches[0]?.clientY;
+          const previousY = touchYRef.current;
+          if (nextY !== undefined && previousY !== undefined && nextY > previousY + 1) {
+            pauseAutoFollow();
+          } else {
+            noteUserScrollIntent();
+          }
+          touchYRef.current = nextY;
+        }}
       >
         <div className="mx-auto flex w-full max-w-4xl flex-col px-4 py-6 md:px-6 md:py-8">
           <ConversationFeed

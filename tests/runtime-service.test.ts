@@ -1424,6 +1424,196 @@ describe("runtime service", () => {
     expect(messageText(readToolMessage)).toContain('1: {"task":"demo"}');
   });
 
+  it("emits live tool-call input snapshots before the tool starts executing", async () => {
+    const sourceRoot = "/source/workspace/ws_live_tool_input";
+    const activeRoot = "/__sandbox__/workspace/ws_live_tool_input";
+    const files = new Map<string, Buffer>([
+      [path.posix.join(activeRoot, "README.md"), Buffer.from("# live tool input\n", "utf8")]
+    ]);
+    const directories = new Set<string>([activeRoot]);
+    const normalizeVirtualPath = (targetPath: string) => targetPath.split(path.sep).join("/");
+    const missing = (targetPath: string) => Object.assign(new Error(`ENOENT: ${targetPath}`), { code: "ENOENT" });
+    const fileSystem: WorkspaceFileSystem = {
+      async realpath(targetPath) {
+        const normalized = normalizeVirtualPath(targetPath);
+        if (files.has(normalized) || directories.has(normalized)) {
+          return normalized;
+        }
+        throw missing(targetPath);
+      },
+      async stat(targetPath) {
+        const normalized = normalizeVirtualPath(targetPath);
+        const data = files.get(normalized);
+        if (data) {
+          return { kind: "file", size: data.byteLength, mtimeMs: 1, birthtimeMs: 1 };
+        }
+        if (directories.has(normalized)) {
+          return { kind: "directory", size: 0, mtimeMs: 1, birthtimeMs: 1 };
+        }
+        throw missing(targetPath);
+      },
+      async readFile(targetPath) {
+        const data = files.get(normalizeVirtualPath(targetPath));
+        if (!data) {
+          throw missing(targetPath);
+        }
+        return data;
+      },
+      openReadStream() {
+        throw new Error("not used");
+      },
+      async readdir() {
+        return [];
+      },
+      async mkdir(targetPath) {
+        directories.add(normalizeVirtualPath(targetPath));
+      },
+      async writeFile(targetPath, data) {
+        files.set(normalizeVirtualPath(targetPath), data);
+      },
+      async rm() {
+        return undefined;
+      },
+      async rename() {
+        return undefined;
+      }
+    };
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = () => ({
+      text: "Done.",
+      toolSteps: [
+        {
+          toolName: "Read",
+          input: {
+            file_path: "README.md"
+          },
+          toolCallId: "call_live_read",
+          streamInput: true
+        }
+      ]
+    });
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      workspaceFileSystem: fileSystem,
+      workspaceExecutionProvider: {
+        async acquire({ workspace }) {
+          return {
+            workspace: {
+              ...workspace,
+              rootPath: activeRoot
+            },
+            async release() {
+              return undefined;
+            }
+          };
+        }
+      },
+      workspaceInitializer: {
+        async initialize(input) {
+          return {
+            rootPath: input.rootPath,
+            settings: {
+              defaultAgent: "builder",
+              skillDirs: []
+            },
+            defaultAgent: "builder",
+            workspaceModels: {},
+            agents: {
+              builder: {
+                name: "builder",
+                mode: "primary",
+                prompt: "You are builder.",
+                tools: {
+                  native: ["Read"]
+                },
+                switch: [],
+                subagents: []
+              }
+            },
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "runtime",
+              agents: [{ name: "builder", mode: "primary", source: "workspace" as const }],
+              models: [],
+              actions: [],
+              skills: [],
+              tools: [],
+              hooks: [],
+              nativeTools: ["Read"]
+            }
+          };
+        }
+      }
+    });
+
+    const workspace = await runtimeService.createWorkspace({
+      input: {
+        name: "demo",
+        runtime: "workspace",
+        rootPath: sourceRoot,
+        executionPolicy: "local"
+      }
+    });
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {
+        agentName: "builder"
+      }
+    });
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Read README." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+    const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+    const firstLiveToolInputIndex = events.findIndex(
+      (event) =>
+        event.event === "message.delta" &&
+        Array.isArray(event.data.content) &&
+        event.data.content.some(
+          (part) =>
+            typeof part === "object" &&
+            part !== null &&
+            (part as { type?: unknown }).type === "tool-call" &&
+            (part as { toolCallId?: unknown }).toolCallId === "call_live_read"
+        )
+    );
+    const toolStartedIndex = events.findIndex(
+      (event) => event.event === "tool.started" && event.data.toolCallId === "call_live_read"
+    );
+
+    expect(firstLiveToolInputIndex).toBeGreaterThanOrEqual(0);
+    expect(toolStartedIndex).toBeGreaterThan(firstLiveToolInputIndex);
+    expect(events[firstLiveToolInputIndex]?.data.content).toEqual([
+      {
+        type: "tool-call",
+        toolCallId: "call_live_read",
+        toolName: "Read",
+        input: {
+          __streamingInput: ""
+        }
+      }
+    ]);
+  });
+
   it("keeps a read lease open for workspace downloads until the caller releases it", async () => {
     const sourceRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-source-"));
     const materializedRoot = await mkdtemp(path.join(tmpdir(), "oah-workspace-materialized-"));

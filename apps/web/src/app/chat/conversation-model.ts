@@ -8,23 +8,128 @@ import { toneBadgeClass } from "../support";
 export type RuntimeProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"];
 export type ToolResultOutput = { type: string; value?: unknown; reason?: string };
 
+const MAX_RESOLVED_TOOL_RESULT_CONTENT_CHARS = 64000;
+const MAX_JSON_PREVIEW_DEPTH = 8;
+
+function capTextPreview(value: string, limit = MAX_RESOLVED_TOOL_RESULT_CONTENT_CHARS) {
+  if (value.length <= limit) {
+    return value;
+  }
+
+  return `${value.slice(0, limit)}\n... ${Math.max(0, value.length - limit).toLocaleString()} chars truncated`;
+}
+
+function stringifyJsonPreview(value: unknown, limit = MAX_RESOLVED_TOOL_RESULT_CONTENT_CHARS) {
+  const chunks: string[] = [];
+  const seen = new WeakSet<object>();
+  let remaining = limit;
+  let truncated = false;
+
+  const write = (text: string) => {
+    if (remaining <= 0) {
+      truncated = true;
+      return;
+    }
+
+    if (text.length > remaining) {
+      chunks.push(text.slice(0, remaining));
+      remaining = 0;
+      truncated = true;
+      return;
+    }
+
+    chunks.push(text);
+    remaining -= text.length;
+  };
+
+  const walk = (entry: unknown, depth: number, indent: string) => {
+    if (remaining <= 0) {
+      truncated = true;
+      return;
+    }
+
+    if (entry === null || typeof entry !== "object") {
+      write(JSON.stringify(entry) ?? String(entry));
+      return;
+    }
+
+    if (seen.has(entry)) {
+      write("\"[Circular]\"");
+      return;
+    }
+
+    if (depth >= MAX_JSON_PREVIEW_DEPTH) {
+      write("\"[Max depth]\"");
+      return;
+    }
+
+    seen.add(entry);
+    const childIndent = `${indent}  `;
+    if (Array.isArray(entry)) {
+      write("[");
+      for (let index = 0; index < entry.length; index += 1) {
+        if (remaining <= 0) {
+          truncated = true;
+          break;
+        }
+        write(`${index === 0 ? "\n" : ",\n"}${childIndent}`);
+        walk(entry[index], depth + 1, childIndent);
+      }
+      if (entry.length > 0 && remaining > 0) {
+        write(`\n${indent}`);
+      }
+      write("]");
+      seen.delete(entry);
+      return;
+    }
+
+    write("{");
+    let index = 0;
+    for (const key in entry as Record<string, unknown>) {
+      if (!Object.prototype.hasOwnProperty.call(entry, key)) {
+        continue;
+      }
+      if (remaining <= 0) {
+        truncated = true;
+        break;
+      }
+      write(`${index === 0 ? "\n" : ",\n"}${childIndent}${JSON.stringify(key)}: `);
+      walk((entry as Record<string, unknown>)[key], depth + 1, childIndent);
+      index += 1;
+    }
+    if (index > 0 && remaining > 0) {
+      write(`\n${indent}`);
+    }
+    write("}");
+    seen.delete(entry);
+  };
+
+  try {
+    walk(value, 0, "");
+  } catch {
+    return capTextPreview(String(value), limit);
+  }
+
+  return `${chunks.join("")}${truncated ? "\n... truncated" : ""}`;
+}
+
 export function resolveToolResultContent(output: ToolResultOutput | undefined): { content: string; isError: boolean } {
   if (!output) return { content: "", isError: false };
   switch (output.type) {
     case "text":
-      return { content: typeof output.value === "string" ? output.value : "", isError: false };
+      return { content: typeof output.value === "string" ? capTextPreview(output.value) : "", isError: false };
     case "json":
-      return { content: JSON.stringify(output.value, null, 2), isError: false };
+      return { content: stringifyJsonPreview(output.value), isError: false };
     case "error-text":
-      return { content: typeof output.value === "string" ? output.value : "", isError: true };
+      return { content: typeof output.value === "string" ? capTextPreview(output.value) : "", isError: true };
     case "error-json":
-      return { content: JSON.stringify(output.value, null, 2), isError: true };
+      return { content: stringifyJsonPreview(output.value), isError: true };
     case "execution-denied":
       return { content: output.reason ?? "execution denied", isError: true };
     case "content":
-      return { content: JSON.stringify(output.value, null, 2), isError: false };
+      return { content: stringifyJsonPreview(output.value), isError: false };
     default:
-      return { content: JSON.stringify(output, null, 2), isError: false };
+      return { content: stringifyJsonPreview(output), isError: false };
   }
 }
 
@@ -474,8 +579,8 @@ export function formatToolDuration(durationMs: number | undefined) {
 export const LONG_MESSAGE_COLLAPSE_CHARS = 2800;
 export const LONG_MESSAGE_PREVIEW_CHARS = 1200;
 export const COMPACT_SUMMARY_PREVIEW_CHARS = 900;
-export const CONVERSATION_VIRTUALIZATION_THRESHOLD = 80;
-export const CONVERSATION_OVERSCAN_PX = 1200;
+export const CONVERSATION_VIRTUALIZATION_THRESHOLD = 40;
+export const CONVERSATION_OVERSCAN_PX = 900;
 
 export type CompactRuntimeKind = "compact_boundary" | "compact_summary";
 

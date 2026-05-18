@@ -63,7 +63,14 @@ function estimateConversationMessageHeight(message: Message) {
         break;
       case "tool-call":
       case "tool-result":
-        estimate += 140;
+        estimate +=
+          part.type === "tool-call" &&
+          typeof part.input === "object" &&
+          part.input !== null &&
+          !Array.isArray(part.input) &&
+          typeof (part.input as { __streamingInput?: unknown }).__streamingInput === "string"
+            ? 220
+            : 140;
         break;
       case "tool-approval-request":
       case "tool-approval-response":
@@ -75,9 +82,17 @@ function estimateConversationMessageHeight(message: Message) {
   return Math.min(960, estimate);
 }
 
+function useLatestValueRef<T>(value: T) {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
+
 const ConversationVirtualMessageRow = memo(function ConversationVirtualMessageRow(props: ConversationVirtualMessageRowProps) {
   const { message, agentName, agentMode, onInspectRun, onOpenSession, onAnswerAskUserQuestion, onHeightChange } = props;
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const messageIdRef = useLatestValueRef(message.id);
+  const onHeightChangeRef = useLatestValueRef(onHeightChange);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -85,8 +100,16 @@ const ConversationVirtualMessageRow = memo(function ConversationVirtualMessageRo
       return;
     }
 
+    let animationFrameId: number | undefined;
     const reportHeight = () => {
-      onHeightChange(message.id, Math.ceil(element.getBoundingClientRect().height));
+      if (animationFrameId !== undefined) {
+        return;
+      }
+
+      animationFrameId = window.requestAnimationFrame(() => {
+        animationFrameId = undefined;
+        onHeightChangeRef.current(messageIdRef.current, Math.ceil(element.getBoundingClientRect().height));
+      });
     };
 
     reportHeight();
@@ -100,9 +123,12 @@ const ConversationVirtualMessageRow = memo(function ConversationVirtualMessageRo
     });
     observer.observe(element);
     return () => {
+      if (animationFrameId !== undefined) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
       observer.disconnect();
     };
-  }, [agentMode, agentName, message, onHeightChange]);
+  }, [message.id, messageIdRef, onHeightChangeRef]);
 
   return (
     <div ref={containerRef}>
@@ -348,4 +374,3 @@ export const ConversationFeed = memo(function ConversationFeed(props: Conversati
     </>
   );
 });
-

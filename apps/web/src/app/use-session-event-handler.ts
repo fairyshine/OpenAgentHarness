@@ -21,8 +21,11 @@ import {
 } from "./app-controller-utils";
 import { createClientId } from "./client-id";
 
-const MAX_LIVE_SESSION_EVENTS = 1200;
-const LIVE_SESSION_EVENT_FLUSH_MS = 50;
+const MAX_LIVE_SESSION_EVENTS = 600;
+const LIVE_SESSION_EVENT_FLUSH_MS = 80;
+const MAX_LIVE_STREAMING_TOOL_INPUT_CHARS = 16000;
+const MAX_LIVE_TOOL_PAYLOAD_CHARS = 32000;
+const MAX_LIVE_TOOL_COLLECTION_ITEMS = 80;
 
 type CursorRef = {
   current: string | undefined;
@@ -80,6 +83,252 @@ function coalesceChronologicalEvents(events: SessionEventContract[]) {
   return coalesced;
 }
 
+function compactMessageDeltaMetadata(metadata: unknown) {
+  if (!isRecord(metadata)) {
+    return undefined;
+  }
+
+  const compacted: Record<string, unknown> = {};
+  for (const key of [
+    "agentName",
+    "effectiveAgentName",
+    "agentMode",
+    "modelCallStepId",
+    "modelCallStepSeq",
+    "toolStatus",
+    "toolSourceType",
+    "toolDurationMs"
+  ]) {
+    if (metadata[key] !== undefined) {
+      compacted[key] = metadata[key];
+    }
+  }
+
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
+function compactLivePayloadValue(value: unknown, limit = MAX_LIVE_TOOL_PAYLOAD_CHARS) {
+  const seen = new WeakSet<object>();
+  let remaining = limit;
+  let truncated = false;
+
+  const consume = (amount: number) => {
+    remaining -= amount;
+    if (remaining < 0) {
+      truncated = true;
+      return false;
+    }
+    return true;
+  };
+
+  const walk = (entry: unknown, depth: number): unknown => {
+    if (remaining <= 0) {
+      truncated = true;
+      return "[truncated]";
+    }
+
+    if (typeof entry === "string") {
+      if (consume(entry.length)) {
+        return entry;
+      }
+      return `${entry.slice(0, Math.max(0, remaining + entry.length))}... truncated`;
+    }
+
+    if (entry === null || typeof entry !== "object") {
+      consume(String(entry).length);
+      return entry;
+    }
+
+    if (seen.has(entry)) {
+      return "[Circular]";
+    }
+
+    if (depth >= 8) {
+      truncated = true;
+      return "[Max depth]";
+    }
+
+    seen.add(entry);
+    if (Array.isArray(entry)) {
+      const next: unknown[] = [];
+      for (let index = 0; index < entry.length && index < MAX_LIVE_TOOL_COLLECTION_ITEMS; index += 1) {
+        next.push(walk(entry[index], depth + 1));
+        if (remaining <= 0) {
+          break;
+        }
+      }
+      if (entry.length > next.length) {
+        truncated = true;
+        next.push(`... ${entry.length - next.length} more items`);
+      }
+      seen.delete(entry);
+      return next;
+    }
+
+    const next: Record<string, unknown> = {};
+    let copiedCount = 0;
+    for (const key in entry as Record<string, unknown>) {
+      if (!Object.prototype.hasOwnProperty.call(entry, key)) {
+        continue;
+      }
+      if (copiedCount >= MAX_LIVE_TOOL_COLLECTION_ITEMS || remaining <= 0) {
+        truncated = true;
+        break;
+      }
+      consume(key.length);
+      next[key] = walk((entry as Record<string, unknown>)[key], depth + 1);
+      copiedCount += 1;
+    }
+    seen.delete(entry);
+    return next;
+  };
+
+  const compacted = walk(value, 0);
+  if (!truncated) {
+    return compacted;
+  }
+
+  if (isRecord(compacted)) {
+    return {
+      ...compacted,
+      __previewTruncated: true
+    };
+  }
+
+  return compacted;
+}
+
+function compactSessionEventForState(event: SessionEventContract): SessionEventContract {
+  if (event.event === "tool.started") {
+    return {
+      ...event,
+      data: {
+        ...event.data,
+        ...(event.data.input !== undefined ? { input: compactLivePayloadValue(event.data.input) } : {})
+      }
+    };
+  }
+
+  if (event.event === "tool.completed" || event.event === "tool.failed") {
+    return {
+      ...event,
+      data: {
+        ...event.data,
+        ...(event.data.output !== undefined ? { output: compactLivePayloadValue(event.data.output) } : {}),
+        ...(typeof event.data.errorMessage === "string" ? { errorMessage: capStreamingToolInputText(event.data.errorMessage).__streamingInput } : {})
+      }
+    };
+  }
+
+  if (event.event !== "message.delta") {
+    return event;
+  }
+
+  const data: Record<string, unknown> = { ...event.data };
+  delete data.content;
+
+  const compactedMetadata = compactMessageDeltaMetadata(data.metadata);
+  if (compactedMetadata) {
+    data.metadata = compactedMetadata;
+  } else {
+    delete data.metadata;
+  }
+
+  return {
+    ...event,
+    data
+  };
+}
+
+function isStreamingToolInput(value: unknown): value is { __streamingInput: string } {
+  return isRecord(value) && typeof value.__streamingInput === "string";
+}
+
+function findStreamingTextOverlap(existingText: string, nextText: string) {
+  const maxOverlap = Math.min(existingText.length, nextText.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (existingText.endsWith(nextText.slice(0, overlap))) {
+      return overlap;
+    }
+  }
+
+  return 0;
+}
+
+function capStreamingToolInputText(text: string, alreadyTruncatedChars = 0) {
+  if (text.length <= MAX_LIVE_STREAMING_TOOL_INPUT_CHARS) {
+    return {
+      __streamingInput: text,
+      ...(alreadyTruncatedChars > 0 ? { __streamingInputTruncatedChars: alreadyTruncatedChars } : {})
+    };
+  }
+
+  return {
+    __streamingInput: text.slice(-MAX_LIVE_STREAMING_TOOL_INPUT_CHARS),
+    __streamingInputTruncatedChars: alreadyTruncatedChars + text.length - MAX_LIVE_STREAMING_TOOL_INPUT_CHARS
+  };
+}
+
+function mergeStreamingToolInputText(existingText: string, nextText: string) {
+  if (!existingText) {
+    return nextText;
+  }
+
+  if (!nextText) {
+    return existingText;
+  }
+
+  if (nextText.startsWith(existingText) || nextText.includes(existingText)) {
+    return nextText;
+  }
+
+  if (existingText.includes(nextText)) {
+    return existingText;
+  }
+
+  const overlap = findStreamingTextOverlap(existingText, nextText);
+  return `${existingText}${nextText.slice(overlap)}`;
+}
+
+function mergeStreamingToolInputContent(
+  existingContent: Message["content"] | undefined,
+  nextContent: Message["content"]
+): Message["content"] {
+  if (!Array.isArray(nextContent)) {
+    return nextContent;
+  }
+
+  return nextContent.map((part) => {
+    if (part.type !== "tool-call" || !isStreamingToolInput(part.input)) {
+      return part;
+    }
+
+    const existingPart = Array.isArray(existingContent)
+      ? existingContent.find((candidate) => candidate.type === "tool-call" && candidate.toolCallId === part.toolCallId)
+      : undefined;
+    if (existingPart?.type !== "tool-call" || !isStreamingToolInput(existingPart.input)) {
+      return {
+        ...part,
+        input: capStreamingToolInputText(part.input.__streamingInput)
+      };
+    }
+
+    const nextText = part.input.__streamingInput;
+    const existingText = existingPart.input.__streamingInput;
+    const existingTruncatedChars =
+      isRecord(existingPart.input) &&
+      typeof existingPart.input.__streamingInputTruncatedChars === "number" &&
+      Number.isFinite(existingPart.input.__streamingInputTruncatedChars)
+        ? existingPart.input.__streamingInputTruncatedChars
+        : 0;
+    const mergedText = mergeStreamingToolInputText(existingText, nextText);
+    return {
+      ...part,
+      input: capStreamingToolInputText(mergedText, existingTruncatedChars)
+    };
+  });
+}
+
 export function useSessionEventHandler(input: {
   sessionId: string;
   messages: Message[];
@@ -131,7 +380,7 @@ export function useSessionEventHandler(input: {
   });
 
   const scheduleEventFlush = useEffectEvent((event: SessionEventContract) => {
-    pendingEventsRef.current.push(event);
+    pendingEventsRef.current.push(compactSessionEventForState(event));
     if (pendingEventFlushTimerRef.current !== undefined) {
       return;
     }
@@ -154,8 +403,9 @@ export function useSessionEventHandler(input: {
       for (const [liveMessageKey, pending] of pendingEntries) {
         const existingEntry = (next ?? current)[liveMessageKey];
         const content =
-          pending.content ??
-          `${typeof existingEntry?.content === "string" ? existingEntry.content : ""}${pending.contentDelta}`;
+          pending.content !== undefined
+            ? mergeStreamingToolInputContent(existingEntry?.content, pending.content)
+            : `${typeof existingEntry?.content === "string" ? existingEntry.content : ""}${pending.contentDelta}`;
         const metadata = existingEntry?.metadata ?? pending.metadata;
         next = next ?? { ...current };
         next[liveMessageKey] = {
@@ -240,8 +490,9 @@ export function useSessionEventHandler(input: {
     const eventQueueAction = typeof event.data.action === "string" ? event.data.action : undefined;
 
     const normalizeToolCallInput = (value: unknown): Record<string, unknown> | undefined => {
+      const compactedValue = compactLivePayloadValue(value);
       if (isRecord(value)) {
-        return value;
+        return isRecord(compactedValue) ? compactedValue : { value: compactedValue };
       }
 
       if (value === undefined) {
@@ -249,19 +500,22 @@ export function useSessionEventHandler(input: {
       }
 
       return {
-        value
+        value: compactedValue
       };
     };
 
     const normalizeToolResultOutput = (value: unknown, failed: boolean, fallback?: string) => {
       if (isRecord(value) && typeof value.type === "string") {
-        return value;
+        return {
+          ...value,
+          ...(value.value !== undefined ? { value: compactLivePayloadValue(value.value) } : {})
+        };
       }
 
       if (typeof value === "string") {
         return {
           type: failed ? "error-text" : "text",
-          value
+          value: compactLivePayloadValue(value)
         };
       }
 
@@ -274,7 +528,7 @@ export function useSessionEventHandler(input: {
 
       return {
         type: failed ? "error-json" : "json",
-        value
+        value: compactLivePayloadValue(value)
       };
     };
 

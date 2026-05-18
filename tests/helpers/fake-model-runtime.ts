@@ -93,6 +93,7 @@ export class FakeModelGateway implements ModelGateway {
               input: unknown;
               toolCallId?: string | undefined;
               delayMs?: number | undefined;
+              streamInput?: boolean | undefined;
               continueOnError?: boolean | undefined;
               output?: unknown;
               error?: unknown;
@@ -104,6 +105,7 @@ export class FakeModelGateway implements ModelGateway {
                     input: unknown;
                     toolCallId?: string | undefined;
                     delayMs?: number | undefined;
+                    streamInput?: boolean | undefined;
                     continueOnError?: boolean | undefined;
                     output?: unknown;
                     error?: unknown;
@@ -228,6 +230,7 @@ export class FakeModelGateway implements ModelGateway {
               input: unknown;
               toolCallId?: string | undefined;
               delayMs?: number | undefined;
+              streamInput?: boolean | undefined;
               continueOnError?: boolean | undefined;
               output?: unknown;
               error?: unknown;
@@ -235,6 +238,27 @@ export class FakeModelGateway implements ModelGateway {
             toolIndex: number
           ) => {
             const toolCallId = toolStep.toolCallId ?? `call_${index + 1}_${toolIndex + 1}`;
+            if (toolStep.streamInput) {
+              const inputText = JSON.stringify(toolStep.input);
+              await options?.onChunk?.({
+                type: "tool-input-start",
+                toolCallId,
+                toolName: toolStep.toolName
+              });
+              for (const delta of inputText.match(/.{1,8}/g) ?? [inputText]) {
+                await options?.onChunk?.({
+                  type: "tool-input-delta",
+                  toolCallId,
+                  inputTextDelta: delta
+                });
+              }
+              await options?.onChunk?.({
+                type: "tool-input-available",
+                toolCallId,
+                toolName: toolStep.toolName,
+                input: toolStep.input
+              });
+            }
             await options?.onToolCallStart?.({
               toolCallId,
               toolName: toolStep.toolName,
