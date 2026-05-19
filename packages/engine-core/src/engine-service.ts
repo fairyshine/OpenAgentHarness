@@ -72,6 +72,7 @@ import {
   type WorkspaceListResult,
   type RunListResult,
   type WorkspaceRecord,
+  type DeleteWorkspaceOptions,
   type SessionCurrentStateRecord
 } from "./types.js";
 import { createId, nowIso } from "./utils.js";
@@ -693,8 +694,8 @@ export class EngineService {
     return this.#workspaceRuntime.getWorkspaceFileStat(workspaceId, targetPath);
   }
 
-  async deleteWorkspace(workspaceId: string): Promise<void> {
-    await this.#workspaceRuntime.deleteWorkspace(workspaceId);
+  async deleteWorkspace(workspaceId: string, options?: DeleteWorkspaceOptions): Promise<void> {
+    await this.#workspaceRuntime.deleteWorkspace(workspaceId, options);
   }
 
   async createSession({ workspaceId, caller, input }: CreateSessionParams): Promise<Session> {

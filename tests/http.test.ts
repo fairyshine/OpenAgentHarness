@@ -2492,6 +2492,118 @@ describe("http api", () => {
     await expect(access(workspaceRoot)).rejects.toBeDefined();
   });
 
+  it("returns from workspace deletion before managed artifact cleanup finishes over HTTP", async () => {
+    const managedRoot = await mkdtemp(path.join(os.tmpdir(), "oah-http-delete-async-root-"));
+    const workspaceRoot = path.join(managedRoot, "workspace-a");
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeFile(path.join(workspaceRoot, "README.md"), "temporary workspace", "utf8");
+
+    let releaseCleanup: (() => void) | undefined;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const cleanupStarted = vi.fn();
+    const cleanupFinished = vi.fn();
+    const gateway = new FakeModelGateway(20);
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence,
+      workspaceDeletionHandler: {
+        async deleteWorkspace(workspace) {
+          cleanupStarted(workspace.id);
+          await cleanupGate;
+          await rm(workspace.rootPath, {
+            recursive: true,
+            force: true
+          });
+          cleanupFinished(workspace.id);
+        }
+      },
+      workspaceInitializer: {
+        async initialize(input) {
+          return {
+            rootPath: input.rootPath,
+            settings: {
+              defaultAgent: "default",
+              skillDirs: []
+            },
+            defaultAgent: "default",
+            workspaceModels: {},
+            agents: {},
+            actions: {},
+            skills: {},
+            toolServers: {},
+            hooks: {},
+            catalog: {
+              workspaceId: "runtime",
+              agents: [],
+              models: [],
+              actions: [],
+              skills: [],
+              tools: [],
+              hooks: [],
+              nativeTools: []
+            }
+          };
+        }
+      }
+    });
+
+    activeApp = await createStartedAppWithEngineService(runtimeService, gateway);
+
+    const authHeaders = {
+      authorization: "Bearer token-1",
+      "content-type": "application/json"
+    };
+
+    const workspaceResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        name: "managed-workspace",
+        runtime: "workspace",
+        rootPath: workspaceRoot
+      })
+    });
+    expect(workspaceResponse.status).toBe(201);
+    const workspace = (await workspaceResponse.json()) as { id: string };
+
+    let deleteSettled = false;
+    const deletePromise = fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}`, {
+      method: "DELETE",
+      headers: {
+        authorization: "Bearer token-1"
+      }
+    }).then((response) => {
+      deleteSettled = true;
+      return response;
+    });
+
+    try {
+      await waitFor(() => deleteSettled, 1_000);
+      const deleteResponse = await deletePromise;
+      expect(deleteResponse.status).toBe(204);
+      expect(cleanupStarted).toHaveBeenCalledWith(workspace.id);
+      expect(cleanupFinished).not.toHaveBeenCalled();
+      await expect(access(workspaceRoot)).resolves.toBeUndefined();
+
+      const missingWorkspaceResponse = await fetch(`${activeApp.baseUrl}/api/v1/workspaces/${workspace.id}`, {
+        headers: {
+          authorization: "Bearer token-1"
+        }
+      });
+      expect(missingWorkspaceResponse.status).toBe(404);
+    } finally {
+      releaseCleanup?.();
+    }
+
+    await deletePromise;
+    await waitFor(() => cleanupFinished.mock.calls.length > 0);
+    await expect(access(workspaceRoot)).rejects.toBeDefined();
+  });
+
   it("treats deleting an already-missing workspace as idempotent and clears coordination state", async () => {
     const clearedWorkspaceIds: string[] = [];
     activeApp = await createStartedAppWithEngineService(
@@ -3394,7 +3506,7 @@ describe("http api", () => {
 
     expect(deleteResponse.status).toBe(204);
     expect(apiDeleteHandler).not.toHaveBeenCalled();
-    expect(workerDeleted).toHaveBeenCalledWith(workspace.id);
+    await waitFor(() => workerDeleted.mock.calls.some(([workspaceId]) => workspaceId === workspace.id));
     await expect(workerPersistence.workspaceRepository.getById(workspace.id)).resolves.toBeNull();
     await expect(apiPersistence.workspaceRepository.getById(workspace.id)).resolves.toEqual(expect.objectContaining({ id: workspace.id }));
   });

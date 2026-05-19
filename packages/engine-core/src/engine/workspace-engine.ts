@@ -22,6 +22,7 @@ import type {
   EngineServiceOptions,
   EngineWorkspaceCatalog,
   WorkspaceCommandExecutor,
+  DeleteWorkspaceOptions,
   WorkspaceFileSystem,
   WorkspaceInitializationResult,
   WorkspaceListResult,
@@ -527,7 +528,7 @@ export class WorkspaceEngineService {
     });
   }
 
-  async deleteWorkspace(workspaceId: string): Promise<void> {
+  async deleteWorkspace(workspaceId: string, options?: DeleteWorkspaceOptions): Promise<void> {
     const workspace = await this.getWorkspaceRecord(workspaceId);
     if (this.#workspaceArchiveRepository) {
       await this.#workspaceArchiveRepository.archiveWorkspace({
@@ -535,6 +536,27 @@ export class WorkspaceEngineService {
         ...buildArchiveMetadata()
       });
     }
+    if (options?.cleanupMode === "background") {
+      await this.#workspaceRepository.delete(workspaceId);
+      try {
+        const cleanup = this.#workspaceDeletionHandler?.deleteWorkspace(workspace);
+        cleanup?.catch((error: unknown) => {
+          console.warn(
+            `[oah-engine] Background cleanup failed for deleted workspace ${workspace.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        });
+      } catch (error) {
+        console.warn(
+          `[oah-engine] Background cleanup failed for deleted workspace ${workspace.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+      return;
+    }
+
     await this.#workspaceDeletionHandler?.deleteWorkspace(workspace);
     await this.#workspaceRepository.delete(workspaceId);
   }

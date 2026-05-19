@@ -450,10 +450,11 @@ async function handleMoveWorkspaceEntry(
 async function handleDeleteWorkspace(
   dependencies: AppDependencies,
   workspaceId: string,
-  reply: FastifyReply
+  reply: FastifyReply,
+  options?: { cleanupMode?: "sync" | "background" | undefined }
 ) {
   try {
-    await dependencies.runtimeService.deleteWorkspace(workspaceId);
+    await dependencies.runtimeService.deleteWorkspace(workspaceId, options);
   } catch (error) {
     if (!(error instanceof Error) || (error as Error & { code?: string }).code !== "workspace_not_found") {
       throw error;
@@ -679,7 +680,7 @@ export async function dispatchRegisteredWorkspaceRoute(
         });
         return reply;
       }
-      return handleDeleteWorkspace(dependencies, params.workspaceId, reply);
+      return handleDeleteWorkspace(dependencies, params.workspaceId, reply, { cleanupMode: "background" });
     }
     case "GET /api/v1/workspaces/:workspaceId/catalog": {
       const params = createParamsSchema("workspaceId").parse(request.params);
