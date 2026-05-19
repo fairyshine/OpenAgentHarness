@@ -529,3 +529,5 @@ export function useStorageController(params: {
     }
   };
 }
+
+export type StorageSurfaceProps = ReturnType<typeof useStorageController>["storageSurfaceProps"];

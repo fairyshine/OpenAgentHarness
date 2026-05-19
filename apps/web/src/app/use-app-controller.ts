@@ -47,6 +47,8 @@ import { useAppControllerSurfaceProps } from "./use-app-controller-surface-props
 import {
   buildMessagePagePath,
   isPendingSessionId,
+  LATEST_SESSION_EVENT_CURSOR,
+  RECENT_SESSION_MESSAGE_PAGE_SIZE,
   sortRunSteps
 } from "./app-controller-utils";
 
@@ -296,6 +298,7 @@ export function useAppController() {
 
   const {
     messagesNextCursor,
+    messagesTotalCount,
     messagesLoading,
     loadingOlderMessages,
     setMessagesLoading,
@@ -775,6 +778,10 @@ export function useAppController() {
       return;
     }
 
+    if (!lastCursorRef.current) {
+      lastCursorRef.current = LATEST_SESSION_EVENT_CURSOR;
+    }
+
     if (!session && workspaceId.trim()) {
       const now = new Date().toISOString();
       startTransition(() => {
@@ -795,7 +802,7 @@ export function useAppController() {
       return;
     }
 
-    void refreshMessages(true, { pageSize: 24, reset: true });
+    void refreshMessages(true, { pageSize: RECENT_SESSION_MESSAGE_PAGE_SIZE, reset: true });
     scheduleSessionQueueRefresh();
   }, [sessionId]);
 
@@ -1013,6 +1020,7 @@ export function useAppController() {
     messageFeed,
     messagesLoading,
     messagesNextCursor,
+    messagesTotalCount,
     modelCallTraces,
     modelProviders,
     navigationActions,

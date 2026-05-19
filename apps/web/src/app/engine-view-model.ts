@@ -6,6 +6,7 @@ import {
   contentText,
   contentToolRefs,
   countMessagesByRole,
+  isRecord,
   readMessageModelCallStepRef,
   readMessageSystemPromptSnapshot,
   toModelCallTrace,
@@ -13,6 +14,8 @@ import {
   type LiveConversationMessageRecord,
   type ModelCallTrace
 } from "./support";
+
+type AssistantMessageContent = Extract<Message, { role: "assistant" }>["content"];
 
 function readEventMessageId(event: SessionEventContract) {
   return typeof event.data.messageId === "string" ? event.data.messageId : undefined;
@@ -88,6 +91,110 @@ function isToolOnlyAssistantMessage(message: Message) {
   return hasToolOrApproval && !hasText;
 }
 
+function hasDisplayableConversationContent(content: Message["content"]) {
+  if (typeof content === "string") {
+    return content.trim().length > 0;
+  }
+
+  return content.some((part) => {
+    switch (part.type) {
+      case "text":
+      case "reasoning":
+        return typeof part.text === "string" && part.text.trim().length > 0;
+      case "image":
+      case "file":
+      case "tool-call":
+      case "tool-result":
+      case "tool-approval-request":
+      case "tool-approval-response":
+        return true;
+    }
+  });
+}
+
+function hasDisplayableConversationMessage(message: Message) {
+  return hasDisplayableConversationContent(message.content);
+}
+
+function readStructuredEventContent(event: SessionEventContract): AssistantMessageContent | null {
+  const content = event.data.content;
+  return Array.isArray(content) ? (content as AssistantMessageContent) : null;
+}
+
+function normalizeNarrativeAssistantPart(value: unknown): Extract<AssistantMessageContent, unknown[]>[number] | null {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return null;
+  }
+
+  if (value.type === "text" && typeof value.text === "string" && value.text.trim().length > 0) {
+    return value as Extract<Extract<AssistantMessageContent, unknown[]>[number], { type: "text" }>;
+  }
+
+  if (value.type === "reasoning" && typeof value.text === "string" && value.text.trim().length > 0) {
+    return value as Extract<Extract<AssistantMessageContent, unknown[]>[number], { type: "reasoning" }>;
+  }
+
+  if (value.type === "file" && typeof value.data === "string" && typeof value.mediaType === "string") {
+    return value as Extract<Extract<AssistantMessageContent, unknown[]>[number], { type: "file" }>;
+  }
+
+  return null;
+}
+
+function readRunStepNarrativeContent(step: RunStep): AssistantMessageContent | null {
+  const response = isRecord(step.output) && isRecord(step.output.response) ? step.output.response : null;
+  if (!response) {
+    return null;
+  }
+
+  const parts: Extract<AssistantMessageContent, unknown[]> = [];
+  const seen = new Set<string>();
+  const pushPart = (part: Extract<AssistantMessageContent, unknown[]>[number]) => {
+    const serialized = JSON.stringify(part);
+    if (seen.has(serialized)) {
+      return;
+    }
+    seen.add(serialized);
+    parts.push(part);
+  };
+
+  for (const rawPart of Array.isArray(response.content) ? response.content : []) {
+    const part = normalizeNarrativeAssistantPart(rawPart);
+    if (part) {
+      pushPart(part);
+    }
+  }
+
+  for (const rawPart of Array.isArray(response.reasoning) ? response.reasoning : []) {
+    const part = normalizeNarrativeAssistantPart(rawPart);
+    if (part?.type === "reasoning") {
+      pushPart(part);
+    }
+  }
+
+  if (parts.length > 0) {
+    return parts;
+  }
+
+  return typeof response.text === "string" && response.text.trim().length > 0 ? response.text : null;
+}
+
+function hydrateEmptyAssistantMessageFromRunStep(
+  message: Message,
+  contentByStepId: ReadonlyMap<string, AssistantMessageContent>,
+  contentByStepSeq: ReadonlyMap<number, AssistantMessageContent>
+): Message {
+  if (message.role !== "assistant" || hasDisplayableConversationContent(message.content)) {
+    return message;
+  }
+
+  const stepRef = readMessageModelCallStepRef(message);
+  const content =
+    (stepRef?.stepId ? contentByStepId.get(stepRef.stepId) : undefined) ??
+    (stepRef?.stepSeq !== undefined ? contentByStepSeq.get(stepRef.stepSeq) : undefined);
+  return content ? { ...message, content } : message;
+}
+
 function isStreamedAssistantTextMessage(message: Message, deltaMessageIds: Set<string>) {
   if (message.role !== "assistant" || !deltaMessageIds.has(readComparableMessageId(message))) {
     return false;
@@ -129,6 +236,7 @@ function projectRunConversation(messages: Message[], events: SessionEventContrac
       createdAt: string;
     }
   >();
+  const latestStructuredContentByMessageId = new Map<string, AssistantMessageContent>();
   const segmentCounts = new Map<string, number>();
   const flushSegment = (messageId: string) => {
     const activeSegment = activeSegments.get(messageId);
@@ -165,7 +273,18 @@ function projectRunConversation(messages: Message[], events: SessionEventContrac
   for (const event of events) {
     const messageId = readEventMessageId(event);
 
+    if ((event.event === "message.delta" || event.event === "message.completed") && messageId && runMessagesById.has(messageId)) {
+      const structuredContent = readStructuredEventContent(event);
+      if (structuredContent && hasDisplayableConversationContent(structuredContent)) {
+        latestStructuredContentByMessageId.set(messageId, structuredContent);
+      }
+    }
+
     if (event.event === "message.delta" && messageId && runMessagesById.has(messageId)) {
+      if (latestStructuredContentByMessageId.has(messageId)) {
+        continue;
+      }
+
       const existingSegment = activeSegments.get(messageId);
       if (existingSegment) {
         existingSegment.content += typeof event.data.delta === "string" ? event.data.delta : "";
@@ -196,6 +315,17 @@ function projectRunConversation(messages: Message[], events: SessionEventContrac
 
       if (isStreamedAssistantTextMessage(completedMessage, deltaMessageIds)) {
         flushSegment(messageId);
+        continue;
+      }
+
+      const latestStructuredContent = latestStructuredContentByMessageId.get(messageId);
+      if (completedMessage.role === "assistant" && !hasDisplayableConversationContent(completedMessage.content) && latestStructuredContent) {
+        activeSegments.delete(messageId);
+        projected.push({
+          ...completedMessage,
+          content: latestStructuredContent
+        });
+        seenProjectedMessageIds.add(messageId);
         continue;
       }
 
@@ -366,6 +496,8 @@ export function buildRuntimeViewModel(params: {
   const modelCallTraces: ModelCallTrace[] = [];
   const modelCallTracesById = new Map<string, ModelCallTrace>();
   const modelCallTracesBySeq = new Map<number, ModelCallTrace>();
+  const narrativeContentByStepId = new Map<string, AssistantMessageContent>();
+  const narrativeContentByStepSeq = new Map<number, AssistantMessageContent>();
   const engineToolNames: string[] = [];
   const advertisedToolNames: string[] = [];
   const resolvedModelNameCandidates: string[] = [];
@@ -377,6 +509,12 @@ export function buildRuntimeViewModel(params: {
     const trace = toModelCallTrace(step);
     if (!trace) {
       continue;
+    }
+
+    const narrativeContent = readRunStepNarrativeContent(step);
+    if (narrativeContent && hasDisplayableConversationContent(narrativeContent)) {
+      narrativeContentByStepId.set(step.id, narrativeContent);
+      narrativeContentByStepSeq.set(step.seq, narrativeContent);
     }
 
     modelCallTraces.push(trace);
@@ -398,14 +536,17 @@ export function buildRuntimeViewModel(params: {
     }
   }
 
+  const hydratedVisibleMessages = visibleMessages.map((message) =>
+    hydrateEmptyAssistantMessageFromRunStep(message, narrativeContentByStepId, narrativeContentByStepSeq)
+  );
   const firstModelCallTrace = modelCallTraces[0] ?? null;
   const latestModelCallTrace = modelCallTraces.at(-1) ?? null;
   const selectedModelCallTrace = modelCallTracesById.get(params.selectedTraceId) ?? firstModelCallTrace;
   const composedSystemMessages = firstModelCallTrace?.input.messages.filter((message) => message.role === "system") ?? [];
-  const storedMessageCounts = countMessagesByRole(visibleMessages);
+  const storedMessageCounts = countMessagesByRole(hydratedVisibleMessages);
   const latestModelMessageCounts = countMessagesByRole(latestModelCallTrace?.input.messages ?? []);
   const selectedSessionMessage =
-    visibleMessages.find((message) => message.id === params.selectedMessageId) ?? visibleMessages[0] ?? null;
+    hydratedVisibleMessages.find((message) => message.id === params.selectedMessageId) ?? hydratedVisibleMessages[0] ?? null;
   const selectedMessageSystemMessages = (() => {
     if (!selectedSessionMessage) {
       return [];
@@ -431,9 +572,9 @@ export function buildRuntimeViewModel(params: {
   const allToolServers = [...toolServersByName.values()];
   const resolvedModelNames = uniqueStrings(resolvedModelNameCandidates);
   const resolvedModelRefs = uniqueStrings(resolvedModelRefCandidates);
-  const persistedMessagesById = new Map(visibleMessages.map((message) => [message.id, message] as const));
+  const persistedMessagesById = new Map(hydratedVisibleMessages.map((message) => [message.id, message] as const));
   const persistedToolRefKeys = new Set<string>();
-  for (const message of visibleMessages) {
+  for (const message of hydratedVisibleMessages) {
     for (const ref of contentToolRefs(message.content)) {
       persistedToolRefKeys.add(`${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`);
     }
@@ -475,10 +616,10 @@ export function buildRuntimeViewModel(params: {
     }
   }
   const messageFeed = buildProjectedMessageFeed({
-    messages: visibleMessages,
+    messages: hydratedVisibleMessages,
     deferredEvents: params.deferredEvents,
     liveMessages
-  });
+  }).filter(hasDisplayableConversationMessage);
 
   return {
     modelCallTraces,
@@ -501,3 +642,5 @@ export function buildRuntimeViewModel(params: {
     messageFeed
   };
 }
+
+export type RuntimeViewModel = ReturnType<typeof buildRuntimeViewModel>;

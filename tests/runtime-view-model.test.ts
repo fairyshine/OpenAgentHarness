@@ -381,6 +381,172 @@ describe("buildRuntimeViewModel", () => {
     });
   });
 
+  it("filters empty assistant messages from the conversation view without hiding reasoning-only messages", () => {
+    const emptyAssistantMessage = createAssistantMessage({
+      id: "msg_empty",
+      content: "",
+      createdAt: "2026-04-07T00:00:02.000Z"
+    });
+    const reasoningOnlyMessage = createAssistantMessage({
+      id: "msg_reasoning",
+      content: [
+        {
+          type: "reasoning",
+          text: "thinking step"
+        }
+      ],
+      createdAt: "2026-04-07T00:00:03.000Z"
+    });
+
+    const viewModel = buildRuntimeViewModel({
+      messages: [emptyAssistantMessage, reasoningOnlyMessage],
+      queuedMessageIds: new Set(),
+      runSteps: [createModelCallStep()],
+      deferredEvents: [],
+      liveMessagesByKey: {},
+      selectedTraceId: "",
+      selectedMessageId: "",
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(viewModel.messageFeed.map((message) => message.id)).toEqual(["msg_reasoning"]);
+    expect(viewModel.messageFeed[0]?.content).toEqual([
+      {
+        type: "reasoning",
+        text: "thinking step"
+      }
+    ]);
+  });
+
+  it("hydrates an empty persisted assistant message from structured reasoning delta snapshots", () => {
+    const emptyAssistantMessage = createAssistantMessage({
+      id: "msg_reasoning_shell",
+      content: "",
+      createdAt: "2026-04-07T00:00:02.000Z"
+    });
+
+    const viewModel = buildRuntimeViewModel({
+      messages: [emptyAssistantMessage],
+      queuedMessageIds: new Set(),
+      runSteps: [createModelCallStep()],
+      deferredEvents: [
+        createEvent({
+          cursor: "1",
+          runId: "run_1",
+          event: "message.delta",
+          data: {
+            messageId: "msg_reasoning_shell",
+            content: [
+              {
+                type: "reasoning",
+                text: "thinking step"
+              }
+            ]
+          }
+        }),
+        createEvent({
+          cursor: "2",
+          runId: "run_1",
+          event: "message.completed",
+          data: {
+            messageId: "msg_reasoning_shell",
+            content: ""
+          }
+        })
+      ],
+      liveMessagesByKey: {},
+      selectedTraceId: "",
+      selectedMessageId: "",
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(viewModel.messageFeed).toHaveLength(1);
+    expect(viewModel.messageFeed[0]).toMatchObject({
+      id: "msg_reasoning_shell",
+      role: "assistant",
+      content: [
+        {
+          type: "reasoning",
+          text: "thinking step"
+        }
+      ]
+    });
+  });
+
+  it("hydrates an empty persisted assistant message from its model call step reasoning when historical events are absent", () => {
+    const emptyAssistantMessage = createAssistantMessage({
+      id: "msg_reasoning_shell",
+      content: "",
+      metadata: {
+        modelCallStepId: "step_reasoning",
+        modelCallStepSeq: 4
+      },
+      createdAt: "2026-04-07T00:00:02.000Z"
+    });
+
+    const viewModel = buildRuntimeViewModel({
+      messages: [emptyAssistantMessage],
+      queuedMessageIds: new Set(),
+      runSteps: [
+        createModelCallStep({
+          id: "step_reasoning",
+          seq: 4,
+          output: {
+            response: {
+              text: "",
+              finishReason: "tool-calls",
+              toolCalls: [],
+              toolResults: [],
+              content: [
+                {
+                  type: "tool-call",
+                  toolCallId: "call_1",
+                  toolName: "Read",
+                  input: {
+                    file_path: "README.md"
+                  }
+                }
+              ],
+              reasoning: [
+                {
+                  type: "reasoning",
+                  text: "thinking step"
+                }
+              ]
+            },
+            runtime: {
+              toolCallsCount: 1,
+              toolResultsCount: 0
+            }
+          }
+        })
+      ],
+      deferredEvents: [],
+      liveMessagesByKey: {},
+      selectedTraceId: "",
+      selectedMessageId: "",
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(viewModel.messageFeed).toHaveLength(1);
+    expect(viewModel.messageFeed[0]).toMatchObject({
+      id: "msg_reasoning_shell",
+      role: "assistant",
+      content: [
+        {
+          type: "reasoning",
+          text: "thinking step"
+        }
+      ]
+    });
+  });
+
   it("renders live tool-call and tool-result messages before persistence catches up", () => {
     const viewModel = buildRuntimeViewModel({
       messages: [],
@@ -457,6 +623,79 @@ describe("buildRuntimeViewModel", () => {
         toolSourceType: "native",
         toolDurationMs: 320
       }
+    });
+  });
+
+  it("renders a live streaming tool-call snapshot as soon as the tool name is known", () => {
+    const viewModel = buildRuntimeViewModel({
+      messages: [],
+      queuedMessageIds: new Set(),
+      runSteps: [createModelCallStep()],
+      deferredEvents: [
+        createEvent({
+          cursor: "1",
+          runId: "run_1",
+          event: "message.delta",
+          data: {
+            messageId: "msg_streaming_tool_call",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "call_readme",
+                toolName: "Read",
+                input: {
+                  __streamingInput: "{\"file_path\":\"README"
+                }
+              }
+            ]
+          }
+        })
+      ],
+      liveMessagesByKey: {
+        "tool-call:call_readme": {
+          toolCallId: "call_readme",
+          runId: "run_1",
+          sessionId: "ses_1",
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "call_readme",
+              toolName: "Read",
+              input: {
+                __streamingInput: "{\"file_path\":\"README"
+              }
+            }
+          ],
+          metadata: {
+            toolStatus: "running"
+          },
+          createdAt: "2026-04-07T00:00:03.000Z"
+        }
+      },
+      selectedTraceId: "",
+      selectedMessageId: "",
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(viewModel.messageFeed.map((message) => message.id)).toEqual(["live:tool-call:call_readme"]);
+    expect(viewModel.messageFeed[0]).toMatchObject({
+      role: "assistant",
+      metadata: {
+        toolStatus: "running"
+      },
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: "call_readme",
+          toolName: "Read",
+          input: {
+            __streamingInput: "{\"file_path\":\"README"
+          }
+        }
+      ]
     });
   });
 

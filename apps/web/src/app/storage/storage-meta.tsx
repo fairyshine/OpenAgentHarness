@@ -24,6 +24,9 @@ export const STORAGE_TABLE_META: Record<
   session_events: {
     label: "Session Events"
   },
+  session_current_state: {
+    label: "Session Current State"
+  },
   tool_calls: {
     label: "Tool Calls"
   },

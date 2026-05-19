@@ -9,6 +9,7 @@ import type {
   Run,
   RunStep,
   Session,
+  SessionCurrentStateRecord,
   SessionEvent,
   ToolCallAuditRecord,
   WorkspaceArchiveRecord,
@@ -148,6 +149,28 @@ export const sessionPendingRuns = pgTable("session_pending_runs", {
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull()
 });
 
+export const sessionCurrentState = pgTable("session_current_state", {
+  sessionId: text("session_id")
+    .primaryKey()
+    .references(() => sessions.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  activeAgentName: text("active_agent_name").notNull(),
+  modelRef: text("model_ref"),
+  latestRunId: text("latest_run_id").references(() => runs.id, { onDelete: "set null" }),
+  latestRunStatus: text("latest_run_status").$type<SessionCurrentStateRecord["latestRunStatus"]>(),
+  latestRunStartedAt: timestamp("latest_run_started_at", { withTimezone: true, mode: "string" }),
+  latestRunEndedAt: timestamp("latest_run_ended_at", { withTimezone: true, mode: "string" }),
+  latestRunCreatedAt: timestamp("latest_run_created_at", { withTimezone: true, mode: "string" }),
+  latestMessageId: text("latest_message_id").references(() => messages.id, { onDelete: "set null" }),
+  latestMessageCreatedAt: timestamp("latest_message_created_at", { withTimezone: true, mode: "string" }),
+  messageTotalCount: integer("message_total_count").notNull(),
+  queueCount: integer("queue_count").notNull(),
+  eventCursor: integer("event_cursor"),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull()
+});
+
 export const toolCalls = pgTable("tool_calls", {
   id: text("id").primaryKey(),
   runId: text("run_id")
@@ -282,6 +305,7 @@ export const oahPostgresSchema = {
   runSteps,
   sessionEvents,
   sessionPendingRuns,
+  sessionCurrentState,
   toolCalls,
   hookRuns,
   artifacts,

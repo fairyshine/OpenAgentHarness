@@ -368,6 +368,191 @@ const schemaStatements = [
   )`,
   `create unique index if not exists session_events_session_cursor_idx on session_events (session_id, cursor)`,
   `create index if not exists session_events_session_run_cursor_idx on session_events (session_id, run_id, cursor)`,
+  `create table if not exists session_current_state (
+    session_id text primary key references sessions(id) on delete cascade,
+    workspace_id text not null references workspaces(id) on delete cascade,
+    active_agent_name text not null,
+    model_ref text,
+    latest_run_id text references runs(id) on delete set null,
+    latest_run_status text,
+    latest_run_started_at timestamptz,
+    latest_run_ended_at timestamptz,
+    latest_run_created_at timestamptz,
+    latest_message_id text references messages(id) on delete set null,
+    latest_message_created_at timestamptz,
+    message_total_count integer not null default 0,
+    queue_count integer not null default 0,
+    event_cursor integer,
+    updated_at timestamptz not null
+  )`,
+  `create index if not exists session_current_state_workspace_idx on session_current_state (workspace_id, updated_at desc)`,
+  `create or replace function oah_refresh_session_current_state(target_session_id text)
+  returns void
+  language plpgsql
+  as $$
+  begin
+    insert into session_current_state (
+      session_id,
+      workspace_id,
+      active_agent_name,
+      model_ref,
+      latest_run_id,
+      latest_run_status,
+      latest_run_started_at,
+      latest_run_ended_at,
+      latest_run_created_at,
+      latest_message_id,
+      latest_message_created_at,
+      message_total_count,
+      queue_count,
+      event_cursor,
+      updated_at
+    )
+    select
+      s.id,
+      s.workspace_id,
+      s.active_agent_name,
+      s.model_ref,
+      latest_run.id,
+      latest_run.status,
+      latest_run.started_at,
+      latest_run.ended_at,
+      latest_run.created_at,
+      latest_message.id,
+      latest_message.created_at,
+      coalesce(message_counts.total_count, 0)::integer,
+      coalesce(queue_counts.total_count, 0)::integer,
+      latest_event.cursor,
+      now()
+    from sessions s
+    left join lateral (
+      select id, status, started_at, ended_at, created_at
+      from runs
+      where session_id = s.id
+      order by created_at desc, id desc
+      limit 1
+    ) latest_run on true
+    left join lateral (
+      select id, created_at
+      from messages
+      where session_id = s.id
+      order by created_at desc, id desc
+      limit 1
+    ) latest_message on true
+    left join lateral (
+      select count(*) as total_count
+      from messages
+      where session_id = s.id
+    ) message_counts on true
+    left join lateral (
+      select count(*) as total_count
+      from session_pending_runs
+      where session_id = s.id
+    ) queue_counts on true
+    left join lateral (
+      select max(cursor) as cursor
+      from session_events
+      where session_id = s.id
+    ) latest_event on true
+    where s.id = target_session_id
+    on conflict (session_id) do update set
+      workspace_id = excluded.workspace_id,
+      active_agent_name = excluded.active_agent_name,
+      model_ref = excluded.model_ref,
+      latest_run_id = excluded.latest_run_id,
+      latest_run_status = excluded.latest_run_status,
+      latest_run_started_at = excluded.latest_run_started_at,
+      latest_run_ended_at = excluded.latest_run_ended_at,
+      latest_run_created_at = excluded.latest_run_created_at,
+      latest_message_id = excluded.latest_message_id,
+      latest_message_created_at = excluded.latest_message_created_at,
+      message_total_count = excluded.message_total_count,
+      queue_count = excluded.queue_count,
+      event_cursor = excluded.event_cursor,
+      updated_at = excluded.updated_at;
+  end
+  $$`,
+  `create or replace function oah_refresh_session_current_state_from_session()
+  returns trigger
+  language plpgsql
+  as $$
+  begin
+    if tg_op = 'DELETE' then
+      return old;
+    end if;
+    perform oah_refresh_session_current_state(new.id);
+    return new;
+  end
+  $$`,
+  `create or replace function oah_refresh_session_current_state_from_child_row()
+  returns trigger
+  language plpgsql
+  as $$
+  declare
+    target_session_id text;
+  begin
+    if tg_op = 'DELETE' then
+      target_session_id := old.session_id;
+      if target_session_id is not null then
+        perform oah_refresh_session_current_state(target_session_id);
+      end if;
+      return old;
+    end if;
+    target_session_id := new.session_id;
+    if target_session_id is not null then
+      perform oah_refresh_session_current_state(target_session_id);
+    end if;
+    return new;
+  end
+  $$`,
+  `create or replace function oah_touch_session_current_state_event_cursor()
+  returns trigger
+  language plpgsql
+  as $$
+  begin
+    update session_current_state
+    set event_cursor = greatest(coalesce(event_cursor, -1), new.cursor),
+        updated_at = now()
+    where session_id = new.session_id;
+    if not found then
+      perform oah_refresh_session_current_state(new.session_id);
+    end if;
+    return new;
+  end
+  $$`,
+  `do $$
+  begin
+    if not exists (select 1 from pg_trigger where tgname = 'session_current_state_sessions_refresh') then
+      create trigger session_current_state_sessions_refresh
+      after insert or update on sessions
+      for each row execute function oah_refresh_session_current_state_from_session();
+    end if;
+    if not exists (select 1 from pg_trigger where tgname = 'session_current_state_messages_refresh') then
+      create trigger session_current_state_messages_refresh
+      after insert or update or delete on messages
+      for each row execute function oah_refresh_session_current_state_from_child_row();
+    end if;
+    if not exists (select 1 from pg_trigger where tgname = 'session_current_state_runs_refresh') then
+      create trigger session_current_state_runs_refresh
+      after insert or update or delete on runs
+      for each row execute function oah_refresh_session_current_state_from_child_row();
+    end if;
+    if not exists (select 1 from pg_trigger where tgname = 'session_current_state_queue_refresh') then
+      create trigger session_current_state_queue_refresh
+      after insert or update or delete on session_pending_runs
+      for each row execute function oah_refresh_session_current_state_from_child_row();
+    end if;
+    if not exists (select 1 from pg_trigger where tgname = 'session_current_state_events_cursor') then
+      create trigger session_current_state_events_cursor
+      after insert on session_events
+      for each row execute function oah_touch_session_current_state_event_cursor();
+    end if;
+  end
+  $$`,
+  `select oah_refresh_session_current_state(s.id)
+   from sessions s
+   left join session_current_state sc on sc.session_id = s.id
+   where sc.session_id is null`,
   `create table if not exists oah_schema_migrations (
     id text primary key,
     applied_at timestamptz not null default now()

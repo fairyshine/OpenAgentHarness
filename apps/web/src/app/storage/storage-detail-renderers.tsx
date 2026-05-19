@@ -536,6 +536,8 @@ export function getStoragePostgresDetailTitle(table: StoragePostgresTableName) {
       return "Run Step Detail";
     case "session_events":
       return "Session Event Detail";
+    case "session_current_state":
+      return "Session Current State Detail";
     case "tool_calls":
       return "Tool Call Detail";
     case "hook_runs":
@@ -565,6 +567,8 @@ export function renderStoragePostgresRowDetail(table: StoragePostgresTableName, 
       return <StorageRunStepRowDetail row={row} />;
     case "session_events":
       return <StorageSessionEventRowDetail row={row} />;
+    case "session_current_state":
+      return <StoragePlainRowDetail row={row} prettyJson={prettyJson} />;
     case "tool_calls":
       return <StorageToolCallRowDetail row={row} />;
     case "hook_runs":

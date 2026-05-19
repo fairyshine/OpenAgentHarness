@@ -491,6 +491,12 @@ export function MessageContent({
     () => partitionStructuredMessageContent(structuredContent),
     [structuredContent]
   );
+  const hasVisibleNonReasoningContent =
+    typeof content === "string" ||
+    imageParts.length > 0 ||
+    textParts.some((part) => part.text.trim().length > 0) ||
+    toolParts.length > 0 ||
+    approvalParts.length > 0;
 
   if (typeof content === "string") {
     const taskReference = parseAgentTaskReference(content);
@@ -517,7 +523,7 @@ export function MessageContent({
     <div className="space-y-2">
       {imageParts.length > 0 ? <ImagePartsGrid parts={imageParts} /> : null}
       {reasoningParts.length > 0 && (
-        <ReasoningBlock parts={reasoningParts} isStreaming={isStreaming} />
+        <ReasoningBlock parts={reasoningParts} isStreaming={isStreaming} defaultExpanded={!hasVisibleNonReasoningContent} />
       )}
       {textParts.map((part, i) => (
         <div key={i}>
@@ -588,37 +594,47 @@ export function MessageContent({
 
 export function ReasoningBlock({
   parts,
-  isStreaming
+  isStreaming,
+  defaultExpanded = false
 }: {
   parts: Extract<MessagePart, { type: "reasoning" }>[];
   isStreaming: boolean;
+  defaultExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(isStreaming);
-  const hasAutoExpandedRef = useRef(isStreaming);
+  const [expanded, setExpanded] = useState(isStreaming || defaultExpanded);
+  const hasAutoExpandedRef = useRef(isStreaming || defaultExpanded);
   const previousStreamingRef = useRef(isStreaming);
 
   useEffect(() => {
-    if (isStreaming && parts.length > 0 && !hasAutoExpandedRef.current) {
+    if ((isStreaming || defaultExpanded) && parts.length > 0 && !hasAutoExpandedRef.current) {
       hasAutoExpandedRef.current = true;
       setExpanded(true);
     }
-  }, [isStreaming, parts.length]);
+  }, [defaultExpanded, isStreaming, parts.length]);
 
   useEffect(() => {
-    if (previousStreamingRef.current && !isStreaming) {
+    if (previousStreamingRef.current && !isStreaming && !defaultExpanded) {
       setExpanded(false);
     }
     previousStreamingRef.current = isStreaming;
-  }, [isStreaming]);
+  }, [defaultExpanded, isStreaming]);
+
+  const reasoningText = parts.map((part) => part.text).filter(Boolean).join("\n\n").trim();
+  const previewText = reasoningText.length > 180 ? `${reasoningText.slice(0, 180).trimEnd()}…` : reasoningText;
 
   return (
     <div className="group/reasoning">
       <button type="button" className="cursor-pointer select-none" onClick={() => setExpanded((current) => !current)} aria-expanded={expanded}>
         <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-medium transition ${toneBadgeClass("plum")}`}>
-          <Sparkles className="h-3 w-3 opacity-70" /> reasoning
+          <Sparkles className="h-3 w-3 opacity-70" /> Thinking
           <span className="opacity-50 text-[10px]">{expanded ? "▾" : "▸"}</span>
         </span>
       </button>
+      {!expanded && previewText ? (
+        <div className={`mt-1.5 rounded-lg border px-3 py-2 text-xs leading-5 whitespace-pre-wrap break-words ${toneBadgeClass("plum")}`}>
+          {previewText}
+        </div>
+      ) : null}
       {expanded ? (
         <DeferredConversationBlock
           estimatedHeight={Math.min(520, Math.max(140, parts.reduce((sum, part) => sum + (part.text?.length ?? 0), 0) / 8))}

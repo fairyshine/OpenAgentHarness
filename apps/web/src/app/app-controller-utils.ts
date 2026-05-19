@@ -3,6 +3,8 @@ import type { RunStep, Session, SessionEventContract, SessionQueuedRun } from "@
 import { compareSavedSessionsByRecency, isRecord, type SavedSessionRecord } from "./support";
 
 const MESSAGE_PAGE_SIZE = 48;
+export const RECENT_SESSION_MESSAGE_PAGE_SIZE = 8;
+export const LATEST_SESSION_EVENT_CURSOR = "$latest";
 const LIVE_MESSAGE_PAGE_SIZE = 24;
 
 export function isPendingSessionId(sessionId: string | null | undefined) {

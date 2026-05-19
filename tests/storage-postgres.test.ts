@@ -610,8 +610,10 @@ describe("storage postgres", () => {
       query
     } as unknown as import("pg").Pool);
 
-    expect(query.mock.calls.some(([statement]) => String(statement).includes("from messages"))).toBe(false);
-    expect(query.mock.calls.some(([statement]) => String(statement).includes("from run_steps"))).toBe(false);
-    expect(query.mock.calls.some(([statement]) => String(statement).includes("from history_events"))).toBe(false);
+    expect(
+      query.mock.calls.some(([statement]) => String(statement).includes("select id, session_id, run_id, role, content, metadata, created_at"))
+    ).toBe(false);
+    expect(query.mock.calls.some(([statement]) => String(statement).includes("select id, run_id, seq, step_type"))).toBe(false);
+    expect(query.mock.calls.some(([statement]) => String(statement).includes("select id, entity_type, payload"))).toBe(false);
   });
 });

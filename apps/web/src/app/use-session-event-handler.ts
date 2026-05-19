@@ -41,6 +41,17 @@ type PendingLiveMessageDelta = {
   createdAt: string;
 };
 
+type PendingLiveToolMessage = {
+  key: string;
+  role: "assistant" | "tool";
+  runId: string;
+  sessionId: string;
+  content: Message["content"];
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+  toolCallId?: string;
+};
+
 function readEventMessageId(event: SessionEventContract) {
   return typeof event.data.messageId === "string" ? event.data.messageId : undefined;
 }
@@ -240,7 +251,12 @@ function compactSessionEventForState(event: SessionEventContract): SessionEventC
   };
 }
 
-function isStreamingToolInput(value: unknown): value is { __streamingInput: string } {
+type StreamingToolInput = {
+  __streamingInput: string;
+  __streamingInputTruncatedChars?: number;
+};
+
+function isStreamingToolInput(value: unknown): value is StreamingToolInput {
   return isRecord(value) && typeof value.__streamingInput === "string";
 }
 
@@ -326,7 +342,24 @@ function mergeStreamingToolInputContent(
       ...part,
       input: capStreamingToolInputText(mergedText, existingTruncatedChars)
     };
-  });
+  }) as Message["content"];
+}
+
+function structuredToolCallParts(content: Message["content"] | null) {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  return content.filter((part): part is Extract<(typeof content)[number], { type: "tool-call" }> => part.type === "tool-call");
+}
+
+function structuredContentWithoutToolCalls(content: Message["content"] | null) {
+  if (!Array.isArray(content)) {
+    return content;
+  }
+
+  const filtered = content.filter((part) => part.type !== "tool-call");
+  return filtered.length > 0 ? normalizeMessageContent(filtered) : null;
 }
 
 export function useSessionEventHandler(input: {
@@ -353,6 +386,8 @@ export function useSessionEventHandler(input: {
   const pendingEventFlushTimerRef = useRef<number | undefined>(undefined);
   const pendingLiveMessageDeltasRef = useRef<Record<string, PendingLiveMessageDelta>>({});
   const pendingLiveMessageFlushTimerRef = useRef<number | undefined>(undefined);
+  const pendingLiveToolMessagesRef = useRef<Record<string, PendingLiveToolMessage>>({});
+  const pendingLiveToolMessageFlushTimerRef = useRef<number | undefined>(undefined);
 
   const flushPendingEvents = useEffectEvent(() => {
     window.clearTimeout(pendingEventFlushTimerRef.current);
@@ -442,14 +477,81 @@ export function useSessionEventHandler(input: {
     pendingLiveMessageFlushTimerRef.current = window.setTimeout(flushPendingLiveMessageDeltas, LIVE_SESSION_EVENT_FLUSH_MS);
   });
 
+  const flushPendingLiveToolMessages = useEffectEvent(() => {
+    window.clearTimeout(pendingLiveToolMessageFlushTimerRef.current);
+    pendingLiveToolMessageFlushTimerRef.current = undefined;
+    const pendingByKey = pendingLiveToolMessagesRef.current;
+    pendingLiveToolMessagesRef.current = {};
+    const pendingEntries = Object.entries(pendingByKey);
+    if (pendingEntries.length === 0) {
+      return;
+    }
+
+    input.setLiveMessagesByKey((current) => {
+      let next: Record<string, LiveConversationMessageRecord> | undefined;
+      for (const [liveMessageKey, pending] of pendingEntries) {
+        const existingEntry = (next ?? current)[liveMessageKey];
+        const metadata = {
+          ...(isRecord(existingEntry?.metadata) ? existingEntry.metadata : {}),
+          ...(pending.metadata ?? {})
+        };
+        next = next ?? { ...current };
+        next[liveMessageKey] = {
+          ...(existingEntry?.persistedMessageId ? { persistedMessageId: existingEntry.persistedMessageId } : {}),
+          ...(() => {
+            const toolCallId = pending.toolCallId ?? existingEntry?.toolCallId;
+            return toolCallId ? { toolCallId } : {};
+          })(),
+          runId: pending.runId,
+          sessionId: pending.sessionId,
+          role: pending.role,
+          content: mergeStreamingToolInputContent(existingEntry?.content, pending.content),
+          ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+          createdAt: existingEntry?.createdAt ?? pending.createdAt
+        };
+      }
+
+      return next ?? current;
+    });
+  });
+
+  const scheduleLiveToolMessageFlush = useEffectEvent((inputMessage: PendingLiveToolMessage) => {
+    const existingMessage = pendingLiveToolMessagesRef.current[inputMessage.key];
+    pendingLiveToolMessagesRef.current[inputMessage.key] = {
+      ...inputMessage,
+      content:
+        existingMessage?.content !== undefined
+          ? mergeStreamingToolInputContent(existingMessage.content, inputMessage.content)
+          : inputMessage.content,
+      ...(existingMessage?.metadata ?? inputMessage.metadata
+        ? {
+            metadata: {
+              ...(existingMessage?.metadata ?? {}),
+              ...(inputMessage.metadata ?? {})
+            }
+          }
+        : {}),
+      createdAt: existingMessage?.createdAt ?? inputMessage.createdAt
+    };
+
+    if (pendingLiveToolMessageFlushTimerRef.current !== undefined) {
+      return;
+    }
+
+    pendingLiveToolMessageFlushTimerRef.current = window.setTimeout(flushPendingLiveToolMessages, LIVE_SESSION_EVENT_FLUSH_MS);
+  });
+
   useEffect(() => {
     return () => {
       window.clearTimeout(pendingEventFlushTimerRef.current);
       window.clearTimeout(pendingLiveMessageFlushTimerRef.current);
+      window.clearTimeout(pendingLiveToolMessageFlushTimerRef.current);
       pendingEventsRef.current = [];
       pendingLiveMessageDeltasRef.current = {};
+      pendingLiveToolMessagesRef.current = {};
       pendingEventFlushTimerRef.current = undefined;
       pendingLiveMessageFlushTimerRef.current = undefined;
+      pendingLiveToolMessageFlushTimerRef.current = undefined;
     };
   }, [input.sessionId]);
 
@@ -540,31 +642,18 @@ export function useSessionEventHandler(input: {
       metadata?: Record<string, unknown>;
       toolCallId?: string;
     }) => {
-      input.setLiveMessagesByKey((current) => {
-        const existingEntry = current[upsertInput.key];
-        return {
-          ...current,
-          [upsertInput.key]: {
-            ...(existingEntry?.persistedMessageId ? { persistedMessageId: existingEntry.persistedMessageId } : {}),
-            ...(() => {
-              const toolCallId = upsertInput.toolCallId ?? existingEntry?.toolCallId;
-              return toolCallId ? { toolCallId } : {};
-            })(),
-            runId: event.runId ?? "",
-            sessionId: input.sessionId,
-            role: upsertInput.role,
-            content: upsertInput.content,
-            ...(() => {
-              const metadata = {
-                ...(isRecord(existingEntry?.metadata) ? existingEntry.metadata : {}),
-                ...(eventMetadata ?? {}),
-                ...(upsertInput.metadata ?? {})
-              };
-              return Object.keys(metadata).length > 0 ? { metadata } : {};
-            })(),
-            createdAt: existingEntry?.createdAt ?? upsertInput.createdAt
-          }
-        };
+      scheduleLiveToolMessageFlush({
+        key: upsertInput.key,
+        role: upsertInput.role,
+        runId: event.runId ?? "",
+        sessionId: input.sessionId,
+        content: upsertInput.content,
+        createdAt: upsertInput.createdAt,
+        metadata: {
+          ...(eventMetadata ?? {}),
+          ...(upsertInput.metadata ?? {})
+        },
+        ...(upsertInput.toolCallId ? { toolCallId: upsertInput.toolCallId } : {})
       });
     };
 
@@ -575,22 +664,44 @@ export function useSessionEventHandler(input: {
       (typeof event.data.delta === "string" || eventStructuredContent !== null)
     ) {
       const runId = event.runId;
+      const liveToolCallParts = structuredToolCallParts(eventStructuredContent);
+      const nonToolStructuredContent = structuredContentWithoutToolCalls(eventStructuredContent);
       const liveMessageKey = `message:${eventMessageId}`;
       const needsMessageHydration =
         !pendingLiveMessageDeltasRef.current[liveMessageKey] &&
         !input.liveMessagesByKey[liveMessageKey] &&
         !input.messages.some((message) => message.id === eventMessageId);
-      scheduleLiveMessageDeltaFlush({
-        persistedMessageId: eventMessageId,
-        runId,
-        sessionId: input.sessionId,
-        contentDelta: typeof event.data.delta === "string" ? event.data.delta : "",
-        ...(eventStructuredContent !== null ? { content: eventStructuredContent } : {}),
-        ...(eventMetadata ? { metadata: eventMetadata } : {}),
-        createdAt: event.createdAt
-      });
+      if (typeof event.data.delta === "string" || nonToolStructuredContent !== null || liveToolCallParts.length === 0) {
+        scheduleLiveMessageDeltaFlush({
+          persistedMessageId: eventMessageId,
+          runId,
+          sessionId: input.sessionId,
+          contentDelta: typeof event.data.delta === "string" ? event.data.delta : "",
+          ...(nonToolStructuredContent !== null ? { content: nonToolStructuredContent } : {}),
+          ...(eventMetadata ? { metadata: eventMetadata } : {}),
+          createdAt: event.createdAt
+        });
+      }
       if (needsMessageHydration) {
         input.scheduleMessagesRefresh();
+      }
+      for (const part of liveToolCallParts) {
+        const toolCallContent = normalizeMessageContent([part]);
+        if (toolCallContent === null) {
+          continue;
+        }
+
+        upsertLiveToolMessage({
+          key: `tool-call:${part.toolCallId}`,
+          role: "assistant",
+          content: toolCallContent,
+          createdAt: event.createdAt,
+          metadata: {
+            ...(eventMetadata ?? {}),
+            toolStatus: "running"
+          },
+          toolCallId: part.toolCallId
+        });
       }
     }
 
@@ -620,6 +731,7 @@ export function useSessionEventHandler(input: {
             content: toolCallMessage.content,
             createdAt: event.createdAt,
             metadata: {
+              ...(eventMetadata ?? {}),
               toolStatus: "running",
               ...(typeof event.data.sourceType === "string" ? { toolSourceType: event.data.sourceType } : {})
             },
@@ -673,6 +785,19 @@ export function useSessionEventHandler(input: {
         }
         input.setLiveMessagesByKey((current) => {
           const toolCallKey = `tool-call:${eventToolCallId}`;
+          const pendingToolCall = pendingLiveToolMessagesRef.current[toolCallKey];
+          if (pendingToolCall) {
+            pendingLiveToolMessagesRef.current[toolCallKey] = {
+              ...pendingToolCall,
+              metadata: {
+                ...(pendingToolCall.metadata ?? {}),
+                toolStatus: event.event === "tool.failed" ? "failed" : (eventToolStatus ?? "completed"),
+                ...(typeof event.data.sourceType === "string" ? { toolSourceType: event.data.sourceType } : {}),
+                ...(typeof event.data.durationMs === "number" ? { toolDurationMs: event.data.durationMs } : {})
+              }
+            };
+          }
+
           const currentEntry = current[toolCallKey];
           if (!currentEntry) {
             return current;
@@ -733,6 +858,14 @@ export function useSessionEventHandler(input: {
           const completedRefs = new Set(
             contentToolRefs(content).map((ref) => `${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`)
           );
+          for (const [key, entry] of Object.entries(pendingLiveToolMessagesRef.current)) {
+            const entryRefs = contentToolRefs(entry.content).map(
+              (ref) => `${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`
+            );
+            if (entryRefs.some((ref) => completedRefs.has(ref))) {
+              delete pendingLiveToolMessagesRef.current[key];
+            }
+          }
           for (const [key, entry] of Object.entries(next)) {
             const entryRefs = contentToolRefs(entry.content).map(
               (ref) => `${ref.type}:${ref.toolCallId ?? ""}:${ref.toolName ?? ""}`

@@ -23,7 +23,7 @@ import {
 import type { NavigationActionParams } from "./navigation-action-types";
 import type { SessionSnapshotResponse } from "./navigation-action-types";
 import { createNavigationStateActions } from "./navigation-state-actions";
-import { isPendingSessionId } from "./app-controller-utils";
+import { LATEST_SESSION_EVENT_CURSOR, isPendingSessionId } from "./app-controller-utils";
 import { createClientId } from "./client-id";
 
 const DEFAULT_NEW_SESSION_TITLE = "New session";
@@ -795,7 +795,7 @@ export function useNavigationActions(params: NavigationActionParams) {
       rememberWorkspace(created, {
         runtime
       });
-      params.runtime.lastCursorRef.current = undefined;
+      params.runtime.lastCursorRef.current = LATEST_SESSION_EVENT_CURSOR;
       params.navigation.setWorkspaceDraft((current) => ({
         ...current,
         runtime: "",
@@ -877,6 +877,14 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.runtime.setRunSteps([]);
         params.runtime.setLiveMessagesByKey({});
       });
+    } else if (!quiet) {
+      params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: nextSessionId, at: Date.now() };
+      params.runtime.sessionSnapshotHydrationRef.current = { sessionId: nextSessionId, at: Date.now() };
+      startTransition(() => {
+        params.runtime.setMessages([]);
+        params.runtime.setEvents([]);
+        params.runtime.setLiveMessagesByKey({});
+      });
     }
 
     try {
@@ -900,7 +908,7 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.navigation.setSessionId(nextSessionId);
         params.navigation.setWorkspaceId(nextWorkspaceId);
         params.runtime.setMessages(snapshotResponse.messages.items);
-        params.runtime.mergeMessagePageCursor(snapshotResponse.messages.nextCursor);
+        params.runtime.mergeMessagePageCursor(snapshotResponse.messages.nextCursor, snapshotResponse.messages.totalCount);
         params.runtime.setSessionQueuedRuns(snapshotResponse.queue.items);
         params.runtime.setSessionRuns(snapshotResponse.runs.items);
         params.runtime.setSelectedRunId(selectedSnapshotRun?.id ?? "");

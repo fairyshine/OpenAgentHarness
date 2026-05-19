@@ -19,6 +19,7 @@ import type {
   RunStep,
   RunStepRepository,
   Session,
+  SessionCurrentStateRepository,
   SessionEvent,
   SessionEventStore,
   SessionPendingRunQueueEntry,
@@ -43,6 +44,7 @@ import {
   runs,
   engineMessages,
   sessionEvents,
+  sessionCurrentState,
   sessionPendingRuns,
   sessions,
   toolCalls,
@@ -76,6 +78,7 @@ import {
   toEngineMessageRecord,
   toRunStep,
   toSession,
+  toSessionCurrentStateRecord,
   toSessionEvent,
   toToolCallAuditRecord,
   toWorkspaceRecord
@@ -260,6 +263,15 @@ export class PostgresSessionRepository implements SessionRepository {
   }
 }
 
+export class PostgresSessionCurrentStateRepository implements SessionCurrentStateRepository {
+  constructor(private readonly db: OahDatabase) {}
+
+  async getBySessionId(sessionId: string) {
+    const [row] = await this.db.select().from(sessionCurrentState).where(eq(sessionCurrentState.sessionId, sessionId)).limit(1);
+    return row ? toSessionCurrentStateRecord(row) : null;
+  }
+}
+
 export class PostgresMessageRepository implements MessageRepository {
   constructor(private readonly db: OahDatabase) {}
 
@@ -341,12 +353,16 @@ export class PostgresMessageRepository implements MessageRepository {
     pageSize: number;
     cursor?: string | undefined;
     direction?: "forward" | "backward" | undefined;
-  }): Promise<{ items: Message[]; hasMore: boolean }> {
+  }): Promise<{ items: Message[]; hasMore: boolean; totalCount: number }> {
     const direction = input.direction ?? "forward";
     const cursor = parseMessagePageCursor(input.cursor);
     const whereClause = cursor
       ? and(eq(messages.sessionId, input.sessionId), this.#buildMessageCursorPredicate(cursor, direction))
       : eq(messages.sessionId, input.sessionId);
+    const [countRow] = await this.db
+      .select({ totalCount: sql<number>`count(*)` })
+      .from(messages)
+      .where(eq(messages.sessionId, input.sessionId));
     const rows = await this.db
       .select()
       .from(messages)
@@ -363,7 +379,8 @@ export class PostgresMessageRepository implements MessageRepository {
 
     return {
       items: orderedRows.map(toMessage),
-      hasMore
+      hasMore,
+      totalCount: Number(countRow?.totalCount ?? 0)
     };
   }
 }

@@ -32,6 +32,7 @@ import type {
   SessionPendingRunQueueRepository,
   EngineMessageRepository,
   SessionEventStore,
+  SessionCurrentStateRepository,
   SessionRepository,
   ToolCallAuditRepository,
   WorkspaceArchiveRepository,
@@ -69,6 +70,7 @@ export interface EngineServiceOptions {
   runRepository: RunRepository;
   runStepRepository: RunStepRepository;
   sessionEventStore: SessionEventStore;
+  sessionCurrentStateRepository?: SessionCurrentStateRepository | undefined;
   sessionPendingRunQueueRepository: SessionPendingRunQueueRepository;
   runQueue?: RunQueue | undefined;
   toolCallAuditRepository?: ToolCallAuditRepository | undefined;
@@ -197,6 +199,7 @@ export type MessagePageDirection = "forward" | "backward";
 export interface MessageListResult {
   items: Message[];
   nextCursor?: string | undefined;
+  totalCount?: number | undefined;
 }
 
 export interface MessageContextResult {

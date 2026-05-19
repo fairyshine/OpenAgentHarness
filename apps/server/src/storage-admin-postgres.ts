@@ -59,6 +59,14 @@ export const POSTGRES_TABLE_CONFIG = {
     keyset: [{ expression: "cursor", field: "cursor", direction: "desc" }],
     description: "SSE/session event log. Transport/event stream only, not the canonical conversation store."
   },
+  session_current_state: {
+    orderBy: "updated_at desc, session_id asc",
+    keyset: [
+      { expression: "updated_at", field: "updated_at", direction: "desc" },
+      { expression: "session_id", field: "session_id", direction: "asc" }
+    ],
+    description: "Session current-state projection for fast WebUI session open and status rendering."
+  },
   tool_calls: {
     orderBy: "started_at desc, id asc",
     keyset: [
@@ -130,6 +138,11 @@ export const POSTGRES_TABLE_FILTER_COLUMNS: Record<
   session_events: {
     sessionId: "session_id",
     runId: "run_id"
+  },
+  session_current_state: {
+    workspaceId: "workspace_id",
+    sessionId: "session_id",
+    runId: "latest_run_id"
   },
   tool_calls: {
     runId: "run_id"

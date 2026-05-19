@@ -507,7 +507,8 @@ function createInMemoryPostgresPersistence(label: string, options?: { supportRou
         const offset = input.cursor ? Number.parseInt(input.cursor, 10) : 0;
         return {
           items: items.slice(offset, offset + input.pageSize),
-          hasMore: offset + input.pageSize < items.length
+          hasMore: offset + input.pageSize < items.length,
+          totalCount: items.length
         };
       }
     },

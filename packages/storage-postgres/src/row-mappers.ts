@@ -13,6 +13,7 @@ import type {
   Run,
   RunStep,
   Session,
+  SessionCurrentStateRecord,
   SessionEvent,
   ToolCallAuditRecord,
   WorkspaceArchiveRecord,
@@ -33,6 +34,7 @@ import {
   runs,
   engineMessages,
   sessionEvents,
+  sessionCurrentState,
   sessions,
   toolCalls,
   workspaces
@@ -385,6 +387,28 @@ export function toSessionEvent(row: typeof sessionEvents.$inferSelect): SessionE
     event: row.event as SessionEvent["event"],
     data: row.data,
     createdAt: normalizeTimestamp(row.createdAt) ?? row.createdAt
+  };
+}
+
+export function toSessionCurrentStateRecord(row: typeof sessionCurrentState.$inferSelect): SessionCurrentStateRecord {
+  return {
+    sessionId: row.sessionId,
+    workspaceId: row.workspaceId,
+    activeAgentName: row.activeAgentName,
+    ...(row.modelRef ? { modelRef: row.modelRef } : {}),
+    ...(row.latestRunId ? { latestRunId: row.latestRunId } : {}),
+    ...(row.latestRunStatus ? { latestRunStatus: row.latestRunStatus } : {}),
+    ...(row.latestRunStartedAt ? { latestRunStartedAt: normalizeTimestamp(row.latestRunStartedAt) ?? row.latestRunStartedAt } : {}),
+    ...(row.latestRunEndedAt ? { latestRunEndedAt: normalizeTimestamp(row.latestRunEndedAt) ?? row.latestRunEndedAt } : {}),
+    ...(row.latestRunCreatedAt ? { latestRunCreatedAt: normalizeTimestamp(row.latestRunCreatedAt) ?? row.latestRunCreatedAt } : {}),
+    ...(row.latestMessageId ? { latestMessageId: row.latestMessageId } : {}),
+    ...(row.latestMessageCreatedAt
+      ? { latestMessageCreatedAt: normalizeTimestamp(row.latestMessageCreatedAt) ?? row.latestMessageCreatedAt }
+      : {}),
+    messageTotalCount: row.messageTotalCount,
+    queueCount: row.queueCount,
+    ...(row.eventCursor !== null ? { eventCursor: String(row.eventCursor) } : {}),
+    updatedAt: normalizeTimestamp(row.updatedAt) ?? row.updatedAt
   };
 }
 

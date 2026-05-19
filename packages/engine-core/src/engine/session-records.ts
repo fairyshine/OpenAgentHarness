@@ -201,7 +201,11 @@ export class SessionRecordService {
           })
         : undefined;
 
-    return nextCursor === undefined ? { items: page.items } : { items: page.items, nextCursor };
+    return {
+      items: page.items,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+      ...(page.totalCount !== undefined ? { totalCount: page.totalCount } : {})
+    };
   }
 
   async getSessionMessage(sessionId: string, messageId: string): Promise<Message> {

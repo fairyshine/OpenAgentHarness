@@ -46,6 +46,8 @@ type ServerEndpoint = {
 
 const DEFAULT_DAEMON_HOST = "127.0.0.1";
 const DEFAULT_DAEMON_PORT = 8787;
+const DEFAULT_DAEMON_START_TIMEOUT_MS = 90_000;
+const DAEMON_READY_PROBE_TIMEOUT_MS = 2_000;
 const HOME_VERSION = "1";
 
 function readBoolEnv(name: string, fallback = false): boolean {
@@ -63,6 +65,15 @@ function readBoolEnv(name: string, fallback = false): boolean {
   }
 
   return fallback;
+}
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function shouldEnableLocalApiAuth(auth?: boolean | undefined): boolean {
@@ -158,7 +169,8 @@ export async function startDaemon(options: DaemonStartOptions = {}): Promise<str
   child.unref();
   await writeFile(paths.pidPath, `${child.pid}\n`, { mode: 0o644 });
 
-  const started = await waitForDaemon(endpoint.baseUrl, child.pid, options.timeoutMs ?? 15_000);
+  const startupTimeoutMs = options.timeoutMs ?? readPositiveIntEnv("OAH_DAEMON_START_TIMEOUT_MS", DEFAULT_DAEMON_START_TIMEOUT_MS);
+  const started = await waitForDaemon(endpoint.baseUrl, child.pid, startupTimeoutMs);
   if (!started.ok) {
     throw new Error(`OAP daemon did not become ready: ${started.reason}. See ${paths.logPath}.`);
   }
@@ -425,36 +437,70 @@ function isProcessRunning(pid: number): boolean {
 }
 
 async function waitForDaemon(baseUrl: string, pid: number | undefined, timeoutMs: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;
-  let lastError = "health check timed out";
+  let lastReason = "daemon did not respond yet";
   while (Date.now() < deadline) {
     if (pid && !isProcessRunning(pid)) {
       return { ok: false, reason: `process ${pid} exited early` };
     }
-    try {
-      if (await fetchHealth(baseUrl)) {
-        return { ok: true };
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const probe = await probeDaemonReady(baseUrl, Math.min(DAEMON_READY_PROBE_TIMEOUT_MS, remainingMs));
+    if (probe.ok) {
+      return { ok: true };
     }
-    await delay(250);
+    lastReason = probe.reason;
+    await delay(Math.min(500, Math.max(100, deadline - Date.now())));
   }
-  return { ok: false, reason: lastError };
+  const elapsedMs = Date.now() - startedAt;
+  const processState = pid && isProcessRunning(pid) ? `; process ${pid} is still running` : "";
+  return { ok: false, reason: `timed out after ${elapsedMs}ms waiting for /readyz (${lastReason}${processState})` };
+}
+
+async function probeDaemonReady(baseUrl: string, timeoutMs: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    const response = await fetchWithTimeout(`${baseUrl.replace(/\/+$/u, "")}/readyz`, timeoutMs);
+    if (response.ok) {
+      return { ok: true };
+    }
+    return { ok: false, reason: `/readyz returned ${response.status} ${response.statusText}` };
+  } catch (error) {
+    return { ok: false, reason: describeFetchError(error) };
+  }
 }
 
 async function fetchHealth(baseUrl: string): Promise<boolean> {
-  const response = await fetch(`${baseUrl.replace(/\/+$/u, "")}/healthz`);
+  const response = await fetchWithTimeout(`${baseUrl.replace(/\/+$/u, "")}/healthz`, DAEMON_READY_PROBE_TIMEOUT_MS);
   return response.ok;
 }
 
 async function fetchSystemProfile(baseUrl: string): Promise<string> {
-  const response = await fetch(`${baseUrl.replace(/\/+$/u, "")}/api/v1/system/profile`);
+  const response = await fetchWithTimeout(`${baseUrl.replace(/\/+$/u, "")}/api/v1/system/profile`, DAEMON_READY_PROBE_TIMEOUT_MS);
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
   const payload = (await response.json()) as { displayName?: string; deploymentKind?: string; runtimeMode?: string };
   return payload.displayName ?? `${payload.deploymentKind ?? "oah"} ${payload.runtimeMode ?? "server"}`;
+}
+
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function describeFetchError(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.name === "AbortError") {
+      return "ready probe timed out";
+    }
+    return error.message;
+  }
+  return String(error);
 }
 
 async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {

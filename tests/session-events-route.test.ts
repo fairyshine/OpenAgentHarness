@@ -97,6 +97,75 @@ async function readSseEvents(
 }
 
 describe("session event SSE route", () => {
+  it("can start at latest without replaying historical backlog", async () => {
+    let listener: ((event: SessionEvent) => void) | undefined;
+    let listSessionEventsCalled = false;
+    const liveEvent: SessionEvent = {
+      id: "evt_after_open",
+      cursor: "42",
+      sessionId: "ses_latest",
+      runId: "run_latest",
+      event: "agent.switched",
+      data: {
+        agentName: "build"
+      },
+      createdAt: "2026-04-10T00:00:02.000Z"
+    };
+
+    const app = createApp({
+      runtimeService: {
+        async getSession(sessionId: string) {
+          return {
+            id: sessionId
+          };
+        },
+        async listSessionEvents() {
+          listSessionEventsCalled = true;
+          return [
+            {
+              id: "evt_old",
+              cursor: "1",
+              sessionId: "ses_latest",
+              runId: "run_old",
+              event: "run.started",
+              data: {
+                runId: "run_old",
+                status: "running"
+              },
+              createdAt: "2026-04-10T00:00:00.000Z"
+            } satisfies SessionEvent
+          ];
+        },
+        subscribeSessionEvents(_sessionId: string, next: (event: SessionEvent) => void) {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        }
+      },
+      modelGateway: {} as AppDependencies["modelGateway"],
+      defaultModel: "test-model",
+      logger: false
+    } as unknown as AppDependencies);
+    activeApps.push(app);
+
+    await app.listen({
+      host: "127.0.0.1",
+      port: 0
+    });
+    const { port } = app.server.address() as AddressInfo;
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/v1/sessions/ses_latest/events?cursor=${encodeURIComponent("$latest")}`);
+    setTimeout(() => {
+      listener?.(liveEvent);
+    }, 0);
+    const events = await readSseEvents(response, (items) => items.length === 1);
+
+    expect(listSessionEventsCalled).toBe(false);
+    expect(events.map((event) => event.event)).toEqual(["agent.switched"]);
+    expect(events.map((event) => event.cursor)).toEqual(["42"]);
+  });
+
   it("does not lose events emitted between subscription setup and backlog delivery", async () => {
     let listener: ((event: SessionEvent) => void) | undefined;
     const backlogEvent: SessionEvent = {

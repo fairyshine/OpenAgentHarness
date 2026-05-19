@@ -212,7 +212,8 @@ export const messageSchema = z.intersection(
 
 export const messagePageSchema = z.object({
   items: z.array(messageSchema),
-  nextCursor: z.string().optional()
+  nextCursor: z.string().optional(),
+  totalCount: z.number().int().min(0).optional()
 });
 
 export const messageListQuerySchema = pageQuerySchema.extend({

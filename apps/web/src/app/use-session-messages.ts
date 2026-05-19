@@ -19,6 +19,7 @@ export function useSessionMessages(input: {
   reportError: (error: unknown) => void;
 }) {
   const [messagesNextCursor, setMessagesNextCursor] = useState<string | null>(null);
+  const [messagesTotalCount, setMessagesTotalCount] = useState<number | null>(null);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const messageRefreshSeqRef = useRef(0);
@@ -38,6 +39,7 @@ export function useSessionMessages(input: {
         startTransition(() => {
           input.setMessages([]);
           setMessagesNextCursor(null);
+          setMessagesTotalCount(null);
         });
         return;
       }
@@ -65,6 +67,13 @@ export function useSessionMessages(input: {
           );
           setMessagesNextCursor((current) =>
             options?.reset ? (messagePage.nextCursor ?? null) : mergeMessageCursor(current, messagePage.nextCursor)
+          );
+          setMessagesTotalCount((current) =>
+            typeof messagePage.totalCount === "number" && Number.isFinite(messagePage.totalCount)
+              ? messagePage.totalCount
+              : options?.reset
+                ? messagePage.items.length
+                : current
           );
           input.setLiveMessagesByKey((current) =>
             Object.fromEntries(
@@ -114,6 +123,9 @@ export function useSessionMessages(input: {
       startTransition(() => {
         input.setMessages((current) => mergeSessionMessages(current, messagePage.items));
         setMessagesNextCursor(messagePage.nextCursor ?? null);
+        if (typeof messagePage.totalCount === "number" && Number.isFinite(messagePage.totalCount)) {
+          setMessagesTotalCount(messagePage.totalCount);
+        }
       });
       input.clearActiveError();
     } catch (error) {
@@ -129,16 +141,21 @@ export function useSessionMessages(input: {
     window.clearTimeout(messageLoadingDelayTimerRef.current);
     setMessagesLoading(false);
     setMessagesNextCursor(null);
+    setMessagesTotalCount(null);
     setLoadingOlderMessages(false);
     olderMessagesSeqRef.current = 0;
   });
 
-  const mergeMessagePageCursor = useEffectEvent((incoming: string | undefined) => {
+  const mergeMessagePageCursor = useEffectEvent((incoming: string | undefined, totalCount?: number | undefined) => {
     setMessagesNextCursor((current) => mergeMessageCursor(current, incoming));
+    if (typeof totalCount === "number" && Number.isFinite(totalCount)) {
+      setMessagesTotalCount(totalCount);
+    }
   });
 
   return {
     messagesNextCursor,
+    messagesTotalCount,
     messagesLoading,
     loadingOlderMessages,
     setMessagesLoading,

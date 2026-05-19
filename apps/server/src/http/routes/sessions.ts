@@ -31,9 +31,10 @@ import { assertWorkspaceAccess, createParamsSchema, toCallerContext, writeSseEve
 import type { AppDependencies } from "../types.js";
 
 const SESSION_EVENT_BACKLOG_PAGE_SIZE = 500;
-const SESSION_SNAPSHOT_MESSAGE_PAGE_SIZE = 24;
+const SESSION_SNAPSHOT_MESSAGE_PAGE_SIZE = 8;
 const SESSION_SNAPSHOT_RUN_PAGE_SIZE = 80;
 const SESSION_SNAPSHOT_RUN_STEP_PAGE_SIZE = 100;
+const SESSION_EVENT_CURSOR_LATEST = "$latest";
 
 function parseEventCursor(value: string | undefined): number {
   if (!value) {
@@ -66,20 +67,31 @@ export async function dispatchRegisteredSessionRoute(
       const rawQuery =
         request.query && typeof request.query === "object" ? (request.query as Record<string, unknown>) : {};
       const requestedRunId = typeof rawQuery.selectedRunId === "string" ? rawQuery.selectedRunId.trim() : "";
-      const session = await dependencies.runtimeService.getSession(params.sessionId);
-      const [messages, runs, queue] = await Promise.all([
+      const [session, currentState, messages, queue] = await Promise.all([
+        dependencies.runtimeService.getSession(params.sessionId),
+        dependencies.runtimeService.getSessionCurrentState(params.sessionId),
         dependencies.runtimeService.listSessionMessages(
           params.sessionId,
           SESSION_SNAPSHOT_MESSAGE_PAGE_SIZE,
           undefined,
           "backward"
         ),
-        dependencies.runtimeService.listSessionRuns(params.sessionId, SESSION_SNAPSHOT_RUN_PAGE_SIZE),
         dependencies.runtimeService.listSessionQueuedRuns(params.sessionId)
       ]);
-      const selectedRun = requestedRunId
-        ? runs.items.find((run) => run.id === requestedRunId)
-        : runs.items[0];
+      const requestedRunCandidate = requestedRunId ? await dependencies.runtimeService.getRun(requestedRunId).catch(() => null) : null;
+      const latestRunCandidate =
+        currentState.latestRunId && currentState.latestRunId !== requestedRunId
+          ? await dependencies.runtimeService.getRun(currentState.latestRunId).catch(() => null)
+          : null;
+      const selectedRun =
+        requestedRunCandidate?.sessionId === session.id
+          ? requestedRunCandidate
+          : latestRunCandidate?.sessionId === session.id
+            ? latestRunCandidate
+            : null;
+      const runs = selectedRun
+        ? { items: [selectedRun] }
+        : await dependencies.runtimeService.listSessionRuns(params.sessionId, SESSION_SNAPSHOT_RUN_PAGE_SIZE);
       const selectedRunSteps = selectedRun
         ? await dependencies.runtimeService.listRunSteps(selectedRun.id, SESSION_SNAPSHOT_RUN_STEP_PAGE_SIZE)
         : undefined;
@@ -217,6 +229,7 @@ export async function dispatchRegisteredSessionRoute(
       const seenOrder: string[] = [];
       const pendingEvents: SessionEvent[] = [];
       const initialCursor = parseEventCursor(query.cursor);
+      const startAtLatest = query.cursor === SESSION_EVENT_CURSOR_LATEST;
       let liveStreaming = false;
 
       const rememberEvent = (eventId: string) => {
@@ -235,7 +248,7 @@ export async function dispatchRegisteredSessionRoute(
           return false;
         }
 
-        if (parseEventCursor(event.cursor) <= initialCursor || seenEventIds.has(event.id)) {
+        if ((!startAtLatest && parseEventCursor(event.cursor) <= initialCursor) || seenEventIds.has(event.id)) {
           return false;
         }
 
@@ -261,25 +274,27 @@ export async function dispatchRegisteredSessionRoute(
       });
 
       let backlogCursor = query.cursor;
-      while (!request.raw.destroyed) {
-        const backlog = await dependencies.runtimeService.listSessionEvents(
-          params.sessionId,
-          backlogCursor,
-          query.runId,
-          SESSION_EVENT_BACKLOG_PAGE_SIZE
-        );
-        if (backlog.length === 0) {
-          break;
-        }
+      if (!startAtLatest) {
+        while (!request.raw.destroyed) {
+          const backlog = await dependencies.runtimeService.listSessionEvents(
+            params.sessionId,
+            backlogCursor,
+            query.runId,
+            SESSION_EVENT_BACKLOG_PAGE_SIZE
+          );
+          if (backlog.length === 0) {
+            break;
+          }
 
-        for (const event of backlog) {
-          forwardEvent(event);
-        }
+          for (const event of backlog) {
+            forwardEvent(event);
+          }
 
-        if (backlog.length < SESSION_EVENT_BACKLOG_PAGE_SIZE) {
-          break;
+          if (backlog.length < SESSION_EVENT_BACKLOG_PAGE_SIZE) {
+            break;
+          }
+          backlogCursor = backlog.at(-1)?.cursor ?? backlogCursor;
         }
-        backlogCursor = backlog.at(-1)?.cursor ?? backlogCursor;
       }
 
       pendingEvents

@@ -36,6 +36,7 @@ type ControlPlaneRuntimeKernel = Pick<
   | "listChildSessions"
   | "triggerActionRun"
   | "getSession"
+  | "getSessionCurrentState"
   | "updateSession"
   | "deleteSession"
   | "listSessionMessages"
@@ -102,6 +103,7 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
   readonly listChildSessions: EngineService["listChildSessions"];
   readonly triggerActionRun: EngineService["triggerActionRun"];
   readonly getSession: EngineService["getSession"];
+  readonly getSessionCurrentState: EngineService["getSessionCurrentState"];
   readonly updateSession: EngineService["updateSession"];
   readonly deleteSession: EngineService["deleteSession"];
   readonly listSessionMessages: EngineService["listSessionMessages"];
@@ -301,6 +303,11 @@ export class ControlPlaneEngineService implements ControlPlaneRuntimeOperations 
       const session = await this.#getSessionRecord(sessionId);
       this.#touchWorkspaceBestEffort(session.workspaceId, "get session");
       return session;
+    };
+    this.getSessionCurrentState = async (sessionId) => {
+      const state = await kernel.getSessionCurrentState(sessionId);
+      this.#touchWorkspaceBestEffort(state.workspaceId, "get session current state");
+      return state;
     };
     this.updateSession = async (input) => {
       const session = await kernel.updateSession(input);

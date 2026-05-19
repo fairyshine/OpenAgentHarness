@@ -250,6 +250,28 @@ export interface SessionPendingRunQueueRepository {
   remove(runId: string): Promise<void>;
 }
 
+export interface SessionCurrentStateRecord {
+  sessionId: string;
+  workspaceId: string;
+  activeAgentName: string;
+  modelRef?: string | undefined;
+  latestRunId?: string | undefined;
+  latestRunStatus?: Run["status"] | undefined;
+  latestRunStartedAt?: string | undefined;
+  latestRunEndedAt?: string | undefined;
+  latestRunCreatedAt?: string | undefined;
+  latestMessageId?: string | undefined;
+  latestMessageCreatedAt?: string | undefined;
+  messageTotalCount: number;
+  queueCount: number;
+  eventCursor?: string | undefined;
+  updatedAt: string;
+}
+
+export interface SessionCurrentStateRepository {
+  getBySessionId(sessionId: string): Promise<SessionCurrentStateRecord | null>;
+}
+
 export interface WorkspaceRepository {
   create(input: WorkspaceRecord): Promise<WorkspaceRecord>;
   upsert(input: WorkspaceRecord): Promise<WorkspaceRecord>;
@@ -280,6 +302,7 @@ export interface MessageRepository {
   }): Promise<{
     items: Message[];
     hasMore: boolean;
+    totalCount?: number | undefined;
   }>;
 }
 

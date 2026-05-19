@@ -71,7 +71,8 @@ import {
   type SessionTerminalSnapshotResult,
   type WorkspaceListResult,
   type RunListResult,
-  type WorkspaceRecord
+  type WorkspaceRecord,
+  type SessionCurrentStateRecord
 } from "./types.js";
 import { createId, nowIso } from "./utils.js";
 import { createLocalWorkspaceCommandExecutor } from "./workspace/workspace-command-executor.js";
@@ -99,6 +100,7 @@ export class EngineService {
   readonly #runRepository: EngineServiceOptions["runRepository"];
   readonly #runStepRepository: EngineServiceOptions["runStepRepository"];
   readonly #sessionEventStore: EngineServiceOptions["sessionEventStore"];
+  readonly #sessionCurrentStateRepository: EngineServiceOptions["sessionCurrentStateRepository"];
   readonly #sessionPendingRunQueueRepository: EngineServiceOptions["sessionPendingRunQueueRepository"];
   readonly #runQueue: EngineServiceOptions["runQueue"];
   readonly #engineMessageRepository: EngineServiceOptions["engineMessageRepository"];
@@ -150,6 +152,7 @@ export class EngineService {
     this.#runRepository = options.runRepository;
     this.#runStepRepository = options.runStepRepository;
     this.#sessionEventStore = options.sessionEventStore;
+    this.#sessionCurrentStateRepository = options.sessionCurrentStateRepository;
     this.#sessionPendingRunQueueRepository = options.sessionPendingRunQueueRepository;
     this.#runQueue = options.runQueue;
     this.#engineMessageRepository = options.engineMessageRepository;
@@ -711,6 +714,47 @@ export class EngineService {
 
   async getSession(sessionId: string): Promise<Session> {
     return this.#sessionRecords.getSession(sessionId);
+  }
+
+  async getSessionCurrentState(sessionId: string): Promise<SessionCurrentStateRecord> {
+    const projected = await this.#sessionCurrentStateRepository?.getBySessionId(sessionId);
+    if (projected) {
+      return projected;
+    }
+
+    const session = await this.getSession(sessionId);
+    const [messagePage, runs, queue] = await Promise.all([
+      this.listSessionMessages(sessionId, 1, undefined, "backward"),
+      this.listSessionRuns(sessionId, 1),
+      this.listSessionQueuedRuns(sessionId)
+    ]);
+    const latestMessage = messagePage.items[0];
+    const latestRun = runs.items[0];
+
+    return {
+      sessionId: session.id,
+      workspaceId: session.workspaceId,
+      activeAgentName: session.activeAgentName,
+      ...(session.modelRef ? { modelRef: session.modelRef } : {}),
+      ...(latestRun
+        ? {
+            latestRunId: latestRun.id,
+            latestRunStatus: latestRun.status,
+            ...(latestRun.startedAt ? { latestRunStartedAt: latestRun.startedAt } : {}),
+            ...(latestRun.endedAt ? { latestRunEndedAt: latestRun.endedAt } : {}),
+            latestRunCreatedAt: latestRun.createdAt
+          }
+        : {}),
+      ...(latestMessage
+        ? {
+            latestMessageId: latestMessage.id,
+            latestMessageCreatedAt: latestMessage.createdAt
+          }
+        : {}),
+      messageTotalCount: messagePage.totalCount ?? messagePage.items.length,
+      queueCount: queue.items.length,
+      updatedAt: nowIso()
+    };
   }
 
   async updateSession({ sessionId, input }: UpdateSessionParams): Promise<Session> {

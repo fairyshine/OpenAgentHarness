@@ -5278,9 +5278,11 @@ Use ripgrep first.
     const newestPage = (await newestPageResponse.json()) as {
       items: Array<{ content: unknown }>;
       nextCursor?: string;
+      totalCount?: number;
     };
     expect(newestPage.items.map((message) => extractMessageText(message.content))).toEqual(["message-4", "message-5"]);
     expect(newestPage.nextCursor).toEqual(expect.any(String));
+    expect(newestPage.totalCount).toBe(5);
 
     const olderPageResponse = await fetch(
       `${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages?pageSize=2&direction=backward&cursor=${encodeURIComponent(newestPage.nextCursor ?? "")}`,
@@ -5294,9 +5296,11 @@ Use ripgrep first.
     const olderPage = (await olderPageResponse.json()) as {
       items: Array<{ content: unknown }>;
       nextCursor?: string;
+      totalCount?: number;
     };
     expect(olderPage.items.map((message) => extractMessageText(message.content))).toEqual(["message-2", "message-3"]);
     expect(olderPage.nextCursor).toEqual(expect.any(String));
+    expect(olderPage.totalCount).toBe(5);
 
     const messageResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages/msg_http_query_3`, {
       headers: {

@@ -13,9 +13,6 @@ import {
   type RuntimeProps
 } from "./conversation-model";
 
-/** Persist scroll positions per session across component re-mounts */
-const scrollPositions = new Map<string, number>();
-
 function summarizeAuxiliaryValue(value: unknown) {
   if (typeof value === "string") {
     return value.length <= 160 ? value : `${value.slice(0, 80)}…${value.slice(-80)}:${value.length}`;
@@ -107,6 +104,7 @@ function buildConversationAuxiliaryStateKey(messages: RuntimeProps["messageFeed"
 
 function ConversationWorkspaceImpl(props: RuntimeProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const conversationContentRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const autoFollowPausedRef = useRef(false);
   const lastScrollTopRef = useRef(0);
@@ -209,27 +207,46 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     cancelPendingFollowFrames();
   }, [cancelPendingFollowFrames, props.shouldAutoFollowConversationRef, sessionId]);
 
-  // Restore saved scroll position once messages are loaded
-  useEffect(() => {
+  // Initial session open should land on the latest visible message block before the feed is revealed.
+  useLayoutEffect(() => {
     if (restoredRef.current) return;
     const el = scrollContainerRef.current;
-    if (!el || messageCount === 0) return;
+    if (!el) return;
+    if (messageCount === 0) {
+      return;
+    }
 
     setViewportHeight(el.clientHeight);
-    const saved = scrollPositions.get(sessionId);
-    if (saved != null) {
-      requestAnimationFrame(() => {
-        el.scrollTop = saved;
-        updateScrollTopState(saved);
-        lastScrollTopRef.current = el.scrollTop;
-        isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= CONVERSATION_BOTTOM_THRESHOLD_PX;
-        autoFollowPausedRef.current = !isNearBottomRef.current;
-        props.shouldAutoFollowConversationRef.current = isNearBottomRef.current;
-      });
-    }
+    isNearBottomRef.current = true;
+    autoFollowPausedRef.current = false;
+    props.shouldAutoFollowConversationRef.current = true;
     restoredRef.current = true;
     prevMessageCountRef.current = messageCount;
-  }, [messageCount, props.shouldAutoFollowConversationRef, sessionId, updateScrollTopState]);
+    let cancelled = false;
+    let frameId: number | undefined;
+    let remainingFrames = 6;
+    const settle = () => {
+      if (cancelled) {
+        return;
+      }
+
+      pinConversationToBottom(0);
+      remainingFrames -= 1;
+      if (remainingFrames <= 0) {
+        return;
+      }
+
+      frameId = window.requestAnimationFrame(settle);
+    };
+
+    settle();
+    return () => {
+      cancelled = true;
+      if (frameId !== undefined) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [messageCount, pinConversationToBottom, props.shouldAutoFollowConversationRef, sessionId]);
 
   // Track scroll position
   const handleScroll = useCallback(() => {
@@ -253,10 +270,7 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
       isNearBottomRef.current = false;
     }
     lastScrollTopRef.current = nextScrollTop;
-    if (sessionId) {
-      scrollPositions.set(sessionId, el.scrollTop);
-    }
-  }, [pauseAutoFollow, props.shouldAutoFollowConversationRef, sessionId, updateScrollTopState]);
+  }, [pauseAutoFollow, props.shouldAutoFollowConversationRef, updateScrollTopState]);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -288,7 +302,7 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     if (isNearBottomRef.current || props.shouldAutoFollowConversationRef.current) {
       pinConversationToBottom(2);
     }
-  });
+  }, [messageCount, pinConversationToBottom, props.messageFeed, props.shouldAutoFollowConversationRef, shouldPinActiveRun]);
 
   useEffect(() => {
     return () => {
@@ -316,6 +330,7 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
 
   useEffect(() => {
     const el = scrollContainerRef.current;
+    const contentEl = conversationContentRef.current;
     if (!el || typeof ResizeObserver === "undefined") {
       return;
     }
@@ -323,12 +338,23 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     setViewportHeight(el.clientHeight);
     const observer = new ResizeObserver(() => {
       setViewportHeight(el.clientHeight);
+      if (
+        restoredRef.current &&
+        !prependSnapshotRef.current &&
+        !autoFollowPausedRef.current &&
+        props.shouldAutoFollowConversationRef.current
+      ) {
+        pinConversationToBottom(1);
+      }
     });
     observer.observe(el);
+    if (contentEl) {
+      observer.observe(contentEl);
+    }
     return () => {
       observer.disconnect();
     };
-  }, []);
+  }, [pinConversationToBottom, props.shouldAutoFollowConversationRef]);
 
   const handleLoadOlderMessages = () => {
     const el = scrollContainerRef.current;
@@ -342,12 +368,13 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     props.loadOlderMessages();
   };
 
+  const totalMessagesCount = Math.max(props.messagesTotalCount ?? 0, props.messageFeed.length);
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <ConversationStatusBar
         hasActiveSession={props.hasActiveSession}
         isRunning={isRunning}
-        messagesCount={props.messageFeed.length}
+        messagesCount={totalMessagesCount}
         storedMessagesCount={
           props.storedMessageCounts.system +
           props.storedMessageCounts.user +
@@ -412,7 +439,10 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
           touchYRef.current = nextY;
         }}
       >
-        <div className="mx-auto flex w-full max-w-4xl flex-col px-4 py-6 md:px-6 md:py-8">
+        <div
+          ref={conversationContentRef}
+          className="mx-auto flex w-full max-w-4xl flex-col px-4 py-6 md:px-6 md:py-8"
+        >
           <ConversationFeed
             hasActiveSession={props.hasActiveSession}
             currentWorkspaceName={props.currentWorkspaceName}

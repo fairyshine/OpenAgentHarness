@@ -16808,10 +16808,12 @@ describe("runtime service", () => {
     const newestPage = await runtimeService.listSessionMessages(session.id, 2, undefined, "backward");
     expect(newestPage.items.map((message) => messageText(message))).toEqual(["message-4", "message-5"]);
     expect(newestPage.nextCursor).toEqual(expect.any(String));
+    expect(newestPage.totalCount).toBe(5);
 
     const olderPage = await runtimeService.listSessionMessages(session.id, 2, newestPage.nextCursor, "backward");
     expect(olderPage.items.map((message) => messageText(message))).toEqual(["message-2", "message-3"]);
     expect(olderPage.nextCursor).toEqual(expect.any(String));
+    expect(olderPage.totalCount).toBe(5);
 
     const oldestPage = await runtimeService.listSessionMessages(session.id, 2, olderPage.nextCursor, "backward");
     expect(oldestPage.items.map((message) => messageText(message))).toEqual(["message-1"]);

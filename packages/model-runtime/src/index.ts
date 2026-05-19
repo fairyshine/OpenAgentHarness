@@ -37,6 +37,14 @@ import {
 import { prepareToolServers } from "./mcp-tools.js";
 import { formatSupportedModelProviders } from "./providers.js";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readStringField(value: unknown, key: string) {
+  return isRecord(value) && typeof value[key] === "string" ? value[key] : undefined;
+}
+
 export { prepareToolServers } from "./mcp-tools.js";
 export {
   SUPPORTED_MODEL_PROVIDERS,
@@ -245,19 +253,22 @@ export class AiSdkModelRuntime implements ModelGateway {
               }
 
               if (chunk.type === "tool-input-start") {
+                const toolCallId = readStringField(chunk, "toolCallId") ?? readStringField(chunk, "id");
                 await options.onChunk?.({
                   type: "tool-input-start",
-                  toolCallId: chunk.id,
+                  toolCallId: toolCallId ?? "",
                   toolName: chunk.toolName
                 });
                 return;
               }
 
               if (chunk.type === "tool-input-delta") {
+                const toolCallId = readStringField(chunk, "toolCallId") ?? readStringField(chunk, "id");
+                const inputTextDelta = readStringField(chunk, "inputTextDelta") ?? readStringField(chunk, "delta");
                 await options.onChunk?.({
                   type: "tool-input-delta",
-                  toolCallId: chunk.id,
-                  inputTextDelta: chunk.delta
+                  toolCallId: toolCallId ?? "",
+                  inputTextDelta: inputTextDelta ?? ""
                 });
                 return;
               }

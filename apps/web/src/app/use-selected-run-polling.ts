@@ -24,7 +24,7 @@ function useSelectedRunPolling(params: {
   streamState: "idle" | "connecting" | "listening" | "open" | "error";
   request: <T>(path: string, init?: RequestInit, options?: { auth?: boolean }) => Promise<T>;
   runPollingTimerRef: MutableRefObject<number | undefined>;
-  mergeMessagePageCursor: (cursor: string | undefined) => void;
+  mergeMessagePageCursor: (cursor: string | undefined, totalCount?: number | undefined) => void;
   reportError: (error: unknown) => void;
   setRun: (value: Run | null | ((current: Run | null) => Run | null)) => void;
   setSessionRuns: (value: Run[] | ((current: Run[]) => Run[])) => void;
@@ -77,7 +77,7 @@ function useSelectedRunPolling(params: {
           });
           params.setRunSteps((current) => mergeRunStepsForRun(current, params.selectedRunIdValue, nextSteps.items));
           params.setMessages((current) => mergeSessionMessages(current, nextMessages.items));
-          params.mergeMessagePageCursor(nextMessages.nextCursor);
+          params.mergeMessagePageCursor(nextMessages.nextCursor, nextMessages.totalCount);
         });
 
         const hasPersistedRunOutput = hasDisplayableRunMessages(nextMessages.items, params.selectedRunIdValue);

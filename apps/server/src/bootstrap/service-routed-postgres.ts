@@ -19,6 +19,7 @@ import type {
   EngineMessage,
   EngineMessageRepository,
   Session,
+  SessionCurrentStateRepository,
   SessionEvent,
   SessionEventStore,
   SessionPendingRunQueueEntry,
@@ -58,6 +59,7 @@ export interface ServiceRoutedPostgresRuntimePersistence {
   runRepository: RunRepository;
   runStepRepository: RunStepRepository;
   sessionEventStore: SessionEventStore;
+  sessionCurrentStateRepository: SessionCurrentStateRepository;
   sessionPendingRunQueueRepository: SessionPendingRunQueueRepository;
   toolCallAuditRepository: ToolCallAuditRepository;
   hookRunAuditRepository: HookRunAuditRepository;
@@ -267,7 +269,7 @@ class RoutedMessageRepository implements MessageRepository {
     pageSize: number;
     cursor?: string | undefined;
     direction?: "forward" | "backward" | undefined;
-  }): Promise<{ items: Message[]; hasMore: boolean }> {
+  }): Promise<{ items: Message[]; hasMore: boolean; totalCount?: number | undefined }> {
     return (await this.router.getBackendForSessionId(input.sessionId)).messageRepository.listPageBySessionId(input);
   }
 }
@@ -373,6 +375,14 @@ class RoutedSessionEventStore implements SessionEventStore {
       unsubscribed = true;
       unsubscribe();
     };
+  }
+}
+
+class RoutedSessionCurrentStateRepository implements SessionCurrentStateRepository {
+  constructor(private readonly router: ServiceBackendRouter) {}
+
+  async getBySessionId(sessionId: string) {
+    return (await this.router.getBackendForSessionId(sessionId)).sessionCurrentStateRepository.getBySessionId(sessionId);
   }
 }
 
@@ -623,6 +633,7 @@ export async function createServiceRoutedPostgresRuntimePersistence(
     runRepository: new RoutedRunRepository(router),
     runStepRepository: new RoutedRunStepRepository(router),
     sessionEventStore: new RoutedSessionEventStore(router),
+    sessionCurrentStateRepository: new RoutedSessionCurrentStateRepository(router),
     sessionPendingRunQueueRepository: new RoutedSessionPendingRunQueueRepository(router),
     toolCallAuditRepository: new RoutedToolCallAuditRepository(router),
     hookRunAuditRepository: new RoutedHookRunAuditRepository(router),

@@ -7,6 +7,7 @@ const storagePostgresTables: StoragePostgresTableName[] = [
   "messages",
   "run_steps",
   "session_events",
+  "session_current_state",
   "tool_calls",
   "hook_runs",
   "artifacts",

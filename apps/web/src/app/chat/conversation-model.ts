@@ -1,11 +1,81 @@
-import type { Message, MessagePart } from "@oah/api-contracts";
+import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 
-import type { useAppController } from "../use-app-controller";
+import type {
+  Message,
+  MessagePart,
+  Run,
+  Session,
+  SessionEventContract,
+  SessionQueuedRun,
+  SessionTerminalInputAccepted,
+  SessionTerminalSnapshot,
+  Workspace,
+  WorkspaceCatalog
+} from "@oah/api-contracts";
+
+import type { RuntimeViewModel } from "../engine-view-model";
+import type { MainViewMode, SurfaceMode } from "../support";
+import type { WorkspaceFileManagerParams } from "../use-workspace-file-manager";
+import type { WorkspaceMemoryController } from "../use-workspace-memory";
 import type { DraftImageAttachment } from "./composer-content";
 import { createClientId } from "../client-id";
 import { toneBadgeClass } from "../support";
 
-export type RuntimeProps = ReturnType<typeof useAppController>["runtimeDetailSurfaceProps"];
+export type RuntimeProps = RuntimeViewModel & {
+  mainViewMode: MainViewMode;
+  setMainViewMode: Dispatch<SetStateAction<MainViewMode>>;
+  setSurfaceMode: Dispatch<SetStateAction<SurfaceMode>>;
+  hasActiveSession: boolean;
+  currentSessionName: string;
+  currentWorkspaceName: string;
+  inspectorSubtitle: string;
+  latestEvent: SessionEventContract | null;
+  session: Session | null;
+  workspace: Workspace | null;
+  workspaceId: string;
+  sessionRuns: Run[];
+  refreshSessionRuns: () => void;
+  sessionEvents: SessionEventContract[];
+  deferredEvents: SessionEventContract[];
+  refreshRunById: (runId: string) => void;
+  refreshRunStepsById: (runId: string) => void;
+  openSessionById: (sessionId: string, quiet?: boolean) => Promise<unknown> | void;
+  conversationThreadRef: RefObject<HTMLDivElement | null>;
+  conversationTailRef: RefObject<HTMLDivElement | null>;
+  shouldAutoFollowConversationRef: MutableRefObject<boolean>;
+  hasMoreMessages: boolean;
+  messagesTotalCount: number | undefined;
+  messagesLoading: boolean;
+  loadingOlderMessages: boolean;
+  queuedSessionRuns: SessionQueuedRun[];
+  loadOlderMessages: () => void;
+  refreshMessages: () => void;
+  sendMessage: (draftOverride?: { message: string; attachments: DraftImageAttachment[] }) => void;
+  answerAskUserQuestion: (answer: string) => void;
+  guideMessage: (draftOverride?: { text?: string; mode?: "append" | "replace" | "prefix" }) => void;
+  guideQueuedSessionInput: (runId: string) => void;
+  guideMessageSupported: boolean;
+  refreshRun: () => void;
+  refreshRunSteps: () => void;
+  cancelCurrentRun: () => void;
+  refreshSessionTerminal: (sessionId: string, terminalId: string) => Promise<SessionTerminalSnapshot | null>;
+  sendSessionTerminalInput: (params: {
+    sessionId: string;
+    terminalId: string;
+    input: string;
+    appendNewline?: boolean | undefined;
+  }) => Promise<SessionTerminalInputAccepted | null>;
+  catalog: WorkspaceCatalog | null;
+  isSwitchingSessionAgent: boolean;
+  switchSessionAgent: (sessionId: string, activeAgentName: string) => void;
+  isSwitchingSessionModel: boolean;
+  updateSessionModel: (sessionId: string, modelRef: string | null) => void;
+  triggerWorkspaceAction: (input: { workspaceId: string; actionName: string; input?: unknown }) => Promise<boolean>;
+  refreshWorkspace: (workspaceId: string) => void;
+  isRunning: boolean;
+  fileManager: WorkspaceFileManagerParams;
+  workspaceMemory: WorkspaceMemoryController;
+};
 export type ToolResultOutput = { type: string; value?: unknown; reason?: string };
 
 const MAX_RESOLVED_TOOL_RESULT_CONTENT_CHARS = 64000;

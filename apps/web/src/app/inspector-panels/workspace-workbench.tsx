@@ -13,7 +13,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { cn } from "../../lib/utils";
 
 import { formatTimestamp, type ModelCallTraceEngineTool, type ModelCallTraceToolServer } from "../support";
-import { CatalogLine, EmptyState, EntityPreview, InsightRow } from "../primitives";
+import { CatalogLine, EmptyState, EntityPreview, InsightRow, InspectorTabButton, JsonBlock } from "../primitives";
 import type { WorkspaceMemoryController } from "../use-workspace-memory";
 import {
   buildStructuredActionInput,
@@ -165,7 +165,9 @@ function MemoryWorkbench(props: {
                     <Badge variant="outline">{item.corpus}</Badge>
                   </div>
                   {item.description ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{item.description}</p> : null}
-                  {"snippet" in item && item.snippet ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-foreground/75">{item.snippet}</p> : null}
+                  {"snippet" in item && typeof item.snippet === "string" && item.snippet ? (
+                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-foreground/75">{item.snippet}</p>
+                  ) : null}
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <span>{formatBytes(item.sizeBytes)}</span>
                     <span>{formatTimestamp(item.updatedAt)}</span>

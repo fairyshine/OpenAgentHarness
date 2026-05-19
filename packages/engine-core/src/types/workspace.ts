@@ -211,6 +211,10 @@ export interface WorkspaceDeletionHandler {
   deleteWorkspace(workspace: WorkspaceRecord): Promise<void>;
 }
 
+export interface DeleteWorkspaceOptions {
+  cleanupMode?: "sync" | "background" | undefined;
+}
+
 export interface WorkspaceExecutionLease {
   workspace: WorkspaceRecord;
   release(options?: { dirty?: boolean | undefined }): Promise<void> | void;

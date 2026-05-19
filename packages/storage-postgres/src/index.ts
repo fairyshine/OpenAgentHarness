@@ -14,6 +14,7 @@ import {
   PostgresHistoryEventRepository,
   PostgresHookRunAuditRepository,
   PostgresMessageRepository,
+  PostgresSessionCurrentStateRepository,
   PostgresRunRepository,
   PostgresRunStepRepository,
   PostgresEngineMessageRepository,
@@ -36,6 +37,7 @@ export interface PostgresRuntimePersistence {
   runRepository: PostgresRunRepository;
   runStepRepository: PostgresRunStepRepository;
   sessionEventStore: PostgresSessionEventStore;
+  sessionCurrentStateRepository: PostgresSessionCurrentStateRepository;
   sessionPendingRunQueueRepository: PostgresSessionPendingRunQueueRepository;
   toolCallAuditRepository: PostgresToolCallAuditRepository;
   hookRunAuditRepository: PostgresHookRunAuditRepository;
@@ -87,6 +89,7 @@ export async function createPostgresRuntimePersistence(
     runRepository: new PostgresRunRepository(db),
     runStepRepository: new PostgresRunStepRepository(db),
     sessionEventStore: new PostgresSessionEventStore(db),
+    sessionCurrentStateRepository: new PostgresSessionCurrentStateRepository(db),
     sessionPendingRunQueueRepository: new PostgresSessionPendingRunQueueRepository(db),
     toolCallAuditRepository: new PostgresToolCallAuditRepository(db),
     hookRunAuditRepository: new PostgresHookRunAuditRepository(db),
@@ -135,6 +138,7 @@ export {
   PostgresRunRepository,
   PostgresRunStepRepository,
   PostgresEngineMessageRepository,
+  PostgresSessionCurrentStateRepository,
   PostgresSessionPendingRunQueueRepository,
   PostgresSessionEventStore,
   PostgresSessionRepository,

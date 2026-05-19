@@ -164,7 +164,7 @@ export class InMemoryMessageRepository implements MessageRepository {
     pageSize: number;
     cursor?: string | undefined;
     direction?: "forward" | "backward" | undefined;
-  }): Promise<{ items: Message[]; hasMore: boolean }> {
+  }): Promise<{ items: Message[]; hasMore: boolean; totalCount: number }> {
     const direction = input.direction ?? "forward";
     const items = this.#listSortedSessionMessages(input.sessionId);
     const cursor = parseMessagePageCursor(input.cursor);
@@ -181,13 +181,13 @@ export class InMemoryMessageRepository implements MessageRepository {
       const page = filtered.slice(Math.max(0, filtered.length - (input.pageSize + 1)));
       const hasMore = page.length > input.pageSize;
       const visibleItems = hasMore ? page.slice(1) : page;
-      return { items: visibleItems, hasMore };
+      return { items: visibleItems, hasMore, totalCount: items.length };
     }
 
     const page = filtered.slice(0, input.pageSize + 1);
     const hasMore = page.length > input.pageSize;
     const visibleItems = hasMore ? page.slice(0, input.pageSize) : page;
-    return { items: visibleItems, hasMore };
+    return { items: visibleItems, hasMore, totalCount: items.length };
   }
 
   deleteBySessionIds(sessionIds: string[]): void {

@@ -271,7 +271,7 @@ export class SQLiteMessageRepository implements MessageRepository {
     pageSize: number;
     cursor?: string | undefined;
     direction?: "forward" | "backward" | undefined;
-  }): Promise<{ items: Message[]; hasMore: boolean }> {
+  }): Promise<{ items: Message[]; hasMore: boolean; totalCount: number }> {
     const handle = await this.#coordinator.getSessionHandle(input.sessionId);
     const direction = input.direction ?? "forward";
     const cursor = parseMessagePageCursor(input.cursor);
@@ -279,6 +279,9 @@ export class SQLiteMessageRepository implements MessageRepository {
     const orderDirection = direction === "backward" ? "desc" : "asc";
     const params: Array<string | number> = [input.sessionId];
     let predicate = "where session_id = ?";
+    const [{ count: totalCount } = { count: 0 }] = coerceRows<{ count: number }>(
+      handle.db.prepare("select count(*) as count from messages where session_id = ?").all(input.sessionId)
+    );
 
     if (cursor) {
       predicate += ` and (created_at ${comparisonOperator} ? or (created_at = ? and id ${comparisonOperator} ?))`;
@@ -304,7 +307,8 @@ export class SQLiteMessageRepository implements MessageRepository {
 
     return {
       items: orderedRows.map((row) => hydrateMessageRuntimeFields(parseJson<Message>(row.payload))),
-      hasMore
+      hasMore,
+      totalCount
     };
   }
 
