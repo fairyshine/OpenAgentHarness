@@ -37,13 +37,18 @@ export class RedisSessionEventBus implements SessionEventBus {
     const eventsKey = this.#eventsKey(event.sessionId);
     const channel = this.#channel(event.sessionId);
 
-    await this.#publisher
+    const transaction = this.#publisher
       .multi()
       .rPush(eventsKey, payload)
-      .lTrim(eventsKey, -this.#eventBufferSize, -1)
-      .pExpire(eventsKey, this.#eventBufferTtlMs)
-      .publish(channel, payload)
-      .exec();
+      .lTrim(eventsKey, -this.#eventBufferSize, -1);
+
+    if (shouldDeleteEventBufferAfterPublish(event)) {
+      transaction.del(eventsKey);
+    } else {
+      transaction.pExpire(eventsKey, this.#eventBufferTtlMs);
+    }
+
+    await transaction.publish(channel, payload).exec();
   }
 
   async subscribe(sessionId: string, listener: (event: SessionEvent) => void): Promise<() => Promise<void>> {
@@ -86,6 +91,10 @@ export class RedisSessionEventBus implements SessionEventBus {
   #channel(sessionId: string): string {
     return `${this.#keyPrefix}:session:${sessionId}:events:pubsub`;
   }
+}
+
+function shouldDeleteEventBufferAfterPublish(event: SessionEvent): boolean {
+  return event.event === "run.completed" || event.event === "run.failed" || event.event === "run.cancelled";
 }
 
 function resolveEventBufferTtlMs(configuredTtlMs: number | undefined): number {
