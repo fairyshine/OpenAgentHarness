@@ -1,0 +1,88 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: open-agent-harness
+resources:
+  - ../kubernetes/namespace.yaml
+  - ../kubernetes/controller-rbac.yaml
+  - infra.yaml
+  - storage-secret.yaml
+  - configmap.yaml
+  - ../kubernetes/api-server.yaml
+  - ../kubernetes/worker.yaml
+  - ../kubernetes/controller.yaml
+patches:
+  - target:
+      kind: Deployment
+      name: oah-api
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: oah-api
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: api
+                image: openagentharness-oah-api:latest
+                envFrom:
+                  - secretRef:
+                      name: oah-storage
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 256Mi
+                  limits:
+                    cpu: "1"
+                    memory: 1Gi
+  - target:
+      kind: Deployment
+      name: oah-sandbox
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: oah-sandbox
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: sandbox
+                image: openagentharness-oah-sandbox:latest
+                envFrom:
+                  - secretRef:
+                      name: oah-storage
+                resources:
+                  requests:
+                    cpu: 250m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: 2Gi
+  - target:
+      kind: Deployment
+      name: oah-controller
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: oah-controller
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: controller
+                image: openagentharness-oah-controller:latest
+                envFrom:
+                  - secretRef:
+                      name: oah-storage
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 192Mi
+                  limits:
+                    cpu: "1"
+                    memory: 512Mi

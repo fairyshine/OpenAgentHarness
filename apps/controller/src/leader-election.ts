@@ -375,11 +375,12 @@ class KubernetesControllerLeaderElector implements ControllerLeaderElector {
     }
 
     const attemptAt = new Date().toISOString();
+    const leaseAttemptAt = toKubernetesMicroTime(new Date(attemptAt));
     let leader = false;
     let lastError: string | undefined;
 
     try {
-      leader = await this.#acquireOrRenewLeadership(attemptAt);
+      leader = await this.#acquireOrRenewLeadership(leaseAttemptAt);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
       this.#logger?.warn("[controller] leader election attempt failed", error);
@@ -529,6 +530,10 @@ class KubernetesControllerLeaderElector implements ControllerLeaderElector {
     };
     return true;
   }
+}
+
+function toKubernetesMicroTime(date: Date): string {
+  return date.toISOString().replace(/(\.\d{3})Z$/u, "$1000Z");
 }
 
 function isLeaseExpired(lease: ParsedLease, nowMs: number): boolean {

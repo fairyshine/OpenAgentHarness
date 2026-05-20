@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oah-config
+data:
+  server.yaml: |
+    server:
+      host: 0.0.0.0
+      port: 8787
+
+    storage:
+      postgres_url: ${env.DATABASE_URL}
+      redis_url: ${env.REDIS_URL}
+
+    paths:
+      workspace_dir: /var/lib/oah/workspaces
+      runtime_state_dir: /var/lib/oah/workspaces/.openharness-state
+      runtime_dir: /var/lib/oah/runtimes
+      model_dir: /var/lib/oah/models
+      tool_dir: /var/lib/oah/tools
+      skill_dir: /var/lib/oah/skills
+
+    object_storage:
+      provider: s3
+      bucket: oah-dev
+      region: us-east-1
+      endpoint: http://minio.open-agent-harness.svc.cluster.local:9000
+      access_key: ${env.AWS_ACCESS_KEY_ID}
+      secret_key: ${env.AWS_SECRET_ACCESS_KEY}
+      force_path_style: true
+      workspace_backing_store:
+        enabled: true
+        key_prefix: workspaces
+
+    sandbox:
+      provider: self_hosted
+      self_hosted:
+        base_url: http://oah-sandbox-internal.open-agent-harness.svc.cluster.local:8787/internal/v1
+      fleet:
+        min_count: 1
+        max_count: 4
+        warm_empty_count: 1
+        resource_cpu_pressure_threshold: 0.8
+        resource_memory_pressure_threshold: 0.8
+        max_workspaces_per_sandbox: 32
+        ownerless_pool: shared
+
+    workspace:
+      materialization:
+        idle_ttl_ms: 900000
+        maintenance_interval_ms: 15000
+
+    workers:
+      embedded:
+        min_count: 1
+        max_count: 2
+        scale_interval_ms: 3000
+        scale_up_window: 2
+        scale_down_window: 3
+        cooldown_ms: 4000
+        reserved_capacity_for_subagent: 1
+      standalone:
+        min_replicas: 1
+        max_replicas: 4
+        slots_per_pod: 4
+        ready_sessions_per_capacity_unit: 1
+        reserved_capacity_for_subagent: 1
+      controller:
+        scale_interval_ms: 5000
+        scale_up_window: 2
+        scale_down_window: 4
+        cooldown_ms: 10000
+        scale_up_busy_ratio_threshold: 0.75
+        scale_up_max_ready_age_ms: 5000
+        leader_election:
+          type: kubernetes
+          kubernetes:
+            namespace: open-agent-harness
+            lease_name: oah-controller
+        scale_target:
+          type: kubernetes
+          allow_scale_down: true
+          kubernetes:
+            namespace: open-agent-harness
+            label_selector: app.kubernetes.io/component=sandbox
+
+    llm:
+      default_model: openai-default

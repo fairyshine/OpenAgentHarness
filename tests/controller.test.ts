@@ -2785,6 +2785,18 @@ describe("controller", () => {
     expect(gained.length).toBeGreaterThan(0);
     expect(lost).toHaveLength(1);
     expect(requests.some((request) => request.method === "PATCH")).toBe(true);
+    expect(
+      requests
+        .filter((request) => request.method === "POST" || request.method === "PATCH")
+        .map((request) => JSON.parse(request.body ?? "{}") as { spec?: { renewTime?: string; acquireTime?: string } })
+        .every(
+          (body) =>
+            typeof body.spec?.renewTime === "string" &&
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/u.test(body.spec.renewTime) &&
+            (body.spec.acquireTime === undefined ||
+              /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/u.test(body.spec.acquireTime))
+        )
+    ).toBe(true);
   });
 
   it("clears stale leader-election errors after leadership recovers", async () => {
