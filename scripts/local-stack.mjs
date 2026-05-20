@@ -231,8 +231,16 @@ function directoryHasSubdirectories(directoryPath) {
 function copyDirectoryChildren(sourceRoot, targetRoot) {
   mkdirSync(targetRoot, { recursive: true });
   for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
-    cpSync(path.join(sourceRoot, entry.name), path.join(targetRoot, entry.name), {
-      recursive: true,
+    if (entry.name === "README.md") {
+      continue;
+    }
+    const sourcePath = path.join(sourceRoot, entry.name);
+    const targetPath = path.join(targetRoot, entry.name);
+    if (entry.isDirectory()) {
+      copyDirectoryChildren(sourcePath, targetPath);
+      continue;
+    }
+    cpSync(sourcePath, targetPath, {
       force: false,
       errorOnExist: false
     });

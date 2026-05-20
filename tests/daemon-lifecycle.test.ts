@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -58,7 +58,9 @@ describe("OAP daemon lifecycle helpers", () => {
     const templateRoot = path.join(tempDir, "deploy-root");
     const home = path.join(tempDir, "home");
     await mkdir(path.join(templateRoot, "config"), { recursive: true });
+    await mkdir(path.join(templateRoot, "skills"), { recursive: true });
     await writeFile(path.join(templateRoot, "README.md"), "packaged template\n", "utf8");
+    await writeFile(path.join(templateRoot, "skills", "README.md"), "skills template\n", "utf8");
     await writeFile(path.join(templateRoot, "config", "daemon.yaml"), "server:\n  host: 127.0.0.1\n  port: 18799\n", "utf8");
 
     const previousTemplate = process.env.OAH_DEPLOY_ROOT_TEMPLATE;
@@ -73,8 +75,42 @@ describe("OAP daemon lifecycle helpers", () => {
       }
     }
 
-    expect(await readFile(path.join(home, "README.md"), "utf8")).toBe("packaged template\n");
+    await expect(access(path.join(home, "README.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(path.join(home, "skills", "README.md"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(path.join(home, "config", "daemon.yaml"), "utf8")).toContain("18799");
+  });
+
+  it("removes previously copied template README files without deleting user README content", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-daemon-readmes-"));
+    tempDirs.push(tempDir);
+    const templateRoot = path.join(tempDir, "deploy-root");
+    const home = path.join(tempDir, "home");
+    await mkdir(path.join(templateRoot, "config"), { recursive: true });
+    await mkdir(path.join(templateRoot, "tools"), { recursive: true });
+    await mkdir(path.join(home, "tools"), { recursive: true });
+    await mkdir(path.join(home, "skills"), { recursive: true });
+    await writeFile(path.join(templateRoot, "README.md"), "root template\n", "utf8");
+    await writeFile(path.join(templateRoot, "tools", "README.md"), "tools template\n", "utf8");
+    await writeFile(path.join(templateRoot, "config", "daemon.yaml"), "server:\n  host: 127.0.0.1\n  port: 18799\n", "utf8");
+    await writeFile(path.join(home, "README.md"), "root template\n", "utf8");
+    await writeFile(path.join(home, "tools", "README.md"), "tools template\n", "utf8");
+    await writeFile(path.join(home, "skills", "README.md"), "custom user notes\n", "utf8");
+
+    const previousTemplate = process.env.OAH_DEPLOY_ROOT_TEMPLATE;
+    process.env.OAH_DEPLOY_ROOT_TEMPLATE = templateRoot;
+    try {
+      await initDaemonHome({ home });
+    } finally {
+      if (previousTemplate === undefined) {
+        delete process.env.OAH_DEPLOY_ROOT_TEMPLATE;
+      } else {
+        process.env.OAH_DEPLOY_ROOT_TEMPLATE = previousTemplate;
+      }
+    }
+
+    await expect(access(path.join(home, "README.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(path.join(home, "tools", "README.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(home, "skills", "README.md"), "utf8")).toBe("custom user notes\n");
   });
 
   it("reports stale PID files without probing the server endpoint", async () => {

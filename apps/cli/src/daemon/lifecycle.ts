@@ -111,6 +111,7 @@ export async function initDaemonHome(options: DaemonCommandOptions = {}): Promis
   await assertExists(templateRoot, `template deploy root not found: ${templateRoot}`);
   await mkdir(paths.home, { recursive: true });
   await copyMissingTree(templateRoot, paths.home);
+  await removeTemplateReadmes(templateRoot, paths.home);
   await Promise.all([mkdir(paths.runDir, { recursive: true }), mkdir(paths.logDir, { recursive: true })]);
   if (!(await pathExists(paths.versionPath))) {
     await writeFile(paths.versionPath, `${HOME_VERSION}\n`, { mode: 0o644 });
@@ -345,6 +346,9 @@ async function resolvePackageEntrypoint(specifier: string): Promise<string | und
 }
 
 async function copyMissingTree(source: string, target: string): Promise<void> {
+  if (path.basename(source) === "README.md") {
+    return;
+  }
   const sourceInfo = await stat(source);
   if (sourceInfo.isDirectory()) {
     await mkdir(target, { recursive: true });
@@ -356,6 +360,29 @@ async function copyMissingTree(source: string, target: string): Promise<void> {
   }
   if (!(await pathExists(target))) {
     await cp(source, target, { force: false, errorOnExist: true });
+  }
+}
+
+async function removeTemplateReadmes(templateRoot: string, homeRoot: string): Promise<void> {
+  const entries = await readdir(templateRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const sourcePath = path.join(templateRoot, entry.name);
+    const targetPath = path.join(homeRoot, entry.name);
+    if (entry.isDirectory()) {
+      await removeTemplateReadmes(sourcePath, targetPath);
+      continue;
+    }
+    if (entry.name !== "README.md") {
+      continue;
+    }
+
+    const [templateContent, homeContent] = await Promise.all([
+      readFile(sourcePath, "utf8").catch(() => undefined),
+      readFile(targetPath, "utf8").catch(() => undefined)
+    ]);
+    if (templateContent !== undefined && homeContent === templateContent) {
+      await rm(targetPath, { force: true });
+    }
   }
 }
 
