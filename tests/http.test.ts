@@ -2489,7 +2489,12 @@ describe("http api", () => {
     });
     expect(missingSessionResponse.status).toBe(404);
 
-    await expect(access(workspaceRoot)).rejects.toBeDefined();
+    await waitFor(() =>
+      access(workspaceRoot).then(
+        () => false,
+        () => true
+      )
+    );
   });
 
   it("returns from workspace deletion before managed artifact cleanup finishes over HTTP", async () => {

@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { POSTGRES_TABLE_CONFIG } from "../apps/server/src/storage-admin-postgres.ts";
 import { createStorageAdmin } from "../apps/server/src/storage-admin.ts";
 
 const tempDirs: string[] = [];
@@ -400,7 +401,7 @@ describe("storage admin", () => {
 
       expect(first.postgres.tables[0]?.rowCountStatus).toBe("exact");
       expect(second.postgres.tables[0]?.rowCountStatus).toBe("cached");
-      expect(tableCountQueries).toBe(11);
+      expect(tableCountQueries).toBe(Object.keys(POSTGRES_TABLE_CONFIG).length);
       await storageAdmin.close();
     } finally {
       if (previousMode === undefined) {

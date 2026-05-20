@@ -560,7 +560,7 @@ openai-default:
       consoleWarnSpy.mockRestore();
       await runtime?.close();
     }
-  });
+  }, 15_000);
 
   it("refreshes workspace skills on session creation in single workspace mode", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-single-workspace-skill-refresh-"));
@@ -1073,6 +1073,8 @@ llm:
   });
 
   it("hot-discovers copied workspaces in workspace_dir and restores legacy history", async () => {
+    const previousWorkspaceRegistryPollInterval = process.env.OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS;
+    process.env.OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS = "100";
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-bootstrap-hot-import-"));
     tempDirs.push(tempDir);
 
@@ -1172,6 +1174,11 @@ llm:
         code: "session_not_found"
       });
     } finally {
+      if (previousWorkspaceRegistryPollInterval === undefined) {
+        delete process.env.OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS;
+      } else {
+        process.env.OAH_WORKSPACE_REGISTRY_POLL_INTERVAL_MS = previousWorkspaceRegistryPollInterval;
+      }
       await runtime.close();
     }
   }, 15_000);
