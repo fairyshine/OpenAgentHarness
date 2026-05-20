@@ -541,7 +541,11 @@ export async function listRuntimeNamesFromObjectStore(
       const relativeKey = prefixWithSlash && entry.key.startsWith(prefixWithSlash)
         ? entry.key.slice(prefixWithSlash.length)
         : entry.key;
-      const runtimeName = relativeKey.split("/")[0]?.trim() ?? "";
+      const separatorIndex = relativeKey.indexOf("/");
+      if (separatorIndex <= 0) {
+        continue;
+      }
+      const runtimeName = relativeKey.slice(0, separatorIndex).trim();
       if (runtimeName && !runtimeName.startsWith(".")) {
         names.add(runtimeName);
       }

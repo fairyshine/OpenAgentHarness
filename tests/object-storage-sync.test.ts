@@ -1219,6 +1219,7 @@ describe("object storage sync", () => {
     const store = new FakeDirectoryObjectStore();
     await store.putObject("runtime/alpha/.openharness/settings.yaml", Buffer.from("default_agent: builder\n"));
     await store.putObject("runtime/beta/README.md", Buffer.from("# beta\n"));
+    await store.putObject("runtime/README.md", Buffer.from("# runtime root notes\n"));
     await store.putObject("runtime/.hidden/README.md", Buffer.from("# hidden\n"));
     await store.putObject("workspace/alpha/README.md", Buffer.from("# workspace\n"));
 

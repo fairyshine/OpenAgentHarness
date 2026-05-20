@@ -256,6 +256,8 @@ export function createHttpE2BCompatibleSandboxService(
     });
     if (sandbox.ownerBaseUrl?.trim()) {
       clientBySandboxId.set(sandbox.id, createClient(sandbox.ownerBaseUrl));
+    } else if (targetBaseUrl.trim()) {
+      clientBySandboxId.set(sandbox.id, createClientForWorkspace);
     }
     return sandbox;
   }

@@ -170,6 +170,10 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               : path.resolve(process.cwd(), "server.example.yaml")
         );
   const remoteSandboxProvider = isRemoteSandboxProvider(config);
+  const selfHostedWorkerProcess =
+    processKind === "worker" &&
+    (config.sandbox?.provider === "self_hosted" ||
+      (!config.sandbox?.provider && Boolean(config.sandbox?.self_hosted?.base_url?.trim())));
   const assemblyProfile = resolveRuntimeAssemblyProfile({
     processKind,
     startWorker,
@@ -436,9 +440,11 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     processKind === "api" &&
     !startWorker &&
     !options.sandboxHostFactory;
+  const shouldUseWorkspaceMaterialization =
+    Boolean(config.object_storage) && (!remoteSandboxProvider || selfHostedWorkerProcess);
   workspaceMaterializationManager = canDeferEmbeddedSandboxMaterialization
     ? undefined
-    : !remoteSandboxProvider && config.object_storage
+    : shouldUseWorkspaceMaterialization && config.object_storage
       ? new (await loadWorkspaceMaterializationModule()).WorkspaceMaterializationManager({
           cacheRoot: resolveWorkspaceMaterializationCacheRoot(config.paths),
           workspaceRoot: config.paths.workspace_dir,
@@ -492,12 +498,25 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         })
       });
     } else {
-      sandboxHost = await (await loadConfiguredSandboxHostModule()).createConfiguredSandboxHost({
-        config,
-        ...(workspaceMaterializationManager ? { workspaceMaterializationManager } : {}),
-        ...(redisWorkspacePlacementRegistry ? { workspacePlacementRegistry: redisWorkspacePlacementRegistry } : {}),
-        ...(redisWorkerRegistry ? { workerRegistry: redisWorkerRegistry } : {})
-      });
+      if (selfHostedWorkerProcess && workspaceMaterializationManager) {
+        const { createMaterializationSandboxHost } = await loadSandboxHostModule();
+        sandboxHost = createMaterializationSandboxHost({
+          materializationManager: workspaceMaterializationManager,
+          providerKind: "self_hosted",
+          diagnostics: {
+            provider: "self_hosted",
+            executionModel: "sandbox_hosted",
+            workerPlacement: "inside_sandbox"
+          }
+        });
+      } else {
+        sandboxHost = await (await loadConfiguredSandboxHostModule()).createConfiguredSandboxHost({
+          config,
+          ...(workspaceMaterializationManager ? { workspaceMaterializationManager } : {}),
+          ...(redisWorkspacePlacementRegistry ? { workspacePlacementRegistry: redisWorkspacePlacementRegistry } : {}),
+          ...(redisWorkerRegistry ? { workerRegistry: redisWorkerRegistry } : {})
+        });
+      }
     }
   }
   const selfHostedSandboxOptions =

@@ -129,6 +129,23 @@ WebUI 和 TUI 都只通过 `oah-api` 访问系统能力；TUI 更适合在服务
 
 使用方式：
 
+如果是在本地或轻量 Kubernetes 集群里先跑完整依赖栈，可以直接使用通用本地 K8S overlay：
+
+```bash
+scripts/deploy-local-kubernetes.sh apply
+scripts/deploy-local-kubernetes.sh port-forward
+```
+
+这会应用 [`deploy/local-kubernetes`](/Users/wumengsong/Code/OpenAgentHarness/deploy/local-kubernetes) 下的 Kustomize overlay，包含 PostgreSQL、Redis、MinIO、`oah-api`、`oah-controller` 和 `oah-sandbox`。它不依赖 OrbStack 专属能力；kind、minikube、OrbStack 等本地集群只要能访问这些镜像即可使用。
+
+清理：
+
+```bash
+scripts/deploy-local-kubernetes.sh delete
+```
+
+如果你已经有外部 PostgreSQL / Redis / 对象存储，只想套用基础 split deployment，则使用基础 manifests：
+
 ```bash
 kubectl apply -f ./deploy/kubernetes/namespace.yaml
 kubectl apply -f ./deploy/kubernetes/storage-secret.example.yaml
@@ -199,6 +216,7 @@ git push origin master
 - `controller` 通过 Kubernetes workload `/scale` 子资源改写 `oah-sandbox` 副本数，并已支持通过 `label_selector` 自动发现目标 Deployment / StatefulSet
 - `server.yaml` 示例已把 `sandbox.provider` 设为 `self_hosted`，并通过 `oah-sandbox-internal` headless service 路由到 sandbox 内 worker
 - 默认 sandbox fleet 保留 `warm_empty_count: 1` 个空 sandbox；ownerless workspace 会先复用 CPU、内存和磁盘均低于阈值的已有 sandbox，任一资源超过阈值后才落到空 sandbox
+- K8S 默认不再使用小规模演示上限；`sandbox.fleet.max_count` 和 `workers.standalone.max_replicas` 设为 `10000`，实际扩容边界交给集群资源、quota、HPA/Cluster Autoscaler 和你自己的容量策略控制
 - `controller-rbac.yaml` 当前已包含 `leases`、`deployments`、`deployments/scale`、`statefulsets` 和 `statefulsets/scale` 所需权限，能够覆盖 leader election、label selector 发现和副本数改写
 - 默认已经允许在安全前提满足时自动缩容；真正的缩容护栏由 controller 对 standalone worker `/healthz` 的动态探测决定
 - standalone worker 收到退出信号后会先进入 drain，使 readiness 先摘除，再等待当前 run 自然结束

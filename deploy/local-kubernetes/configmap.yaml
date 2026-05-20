@@ -24,10 +24,24 @@ data:
       provider: s3
       bucket: oah-dev
       region: us-east-1
-      endpoint: http://minio.open-agent-harness.svc.cluster.local:9000
+      endpoint: http://minio:9000
       access_key: ${env.AWS_ACCESS_KEY_ID}
       secret_key: ${env.AWS_SECRET_ACCESS_KEY}
       force_path_style: true
+      mirrors:
+        paths:
+          - runtime
+          - model
+          - tool
+          - skill
+        sync_on_boot: true
+        sync_on_change: true
+        poll_interval_ms: 5000
+        key_prefixes:
+          runtime: runtime
+          model: model
+          tool: tool
+          skill: skill
       workspace_backing_store:
         enabled: true
         key_prefix: workspaces
@@ -35,10 +49,10 @@ data:
     sandbox:
       provider: self_hosted
       self_hosted:
-        base_url: http://oah-sandbox-internal.open-agent-harness.svc.cluster.local:8787/internal/v1
+        base_url: http://oah-sandbox-internal:8787/internal/v1
       fleet:
         min_count: 1
-        max_count: 4
+        max_count: 10000
         warm_empty_count: 1
         resource_cpu_pressure_threshold: 0.8
         resource_memory_pressure_threshold: 0.8
@@ -53,7 +67,7 @@ data:
     workers:
       embedded:
         min_count: 1
-        max_count: 2
+        max_count: 10000
         scale_interval_ms: 3000
         scale_up_window: 2
         scale_down_window: 3
@@ -61,15 +75,14 @@ data:
         reserved_capacity_for_subagent: 1
       standalone:
         min_replicas: 1
-        max_replicas: 4
-        slots_per_pod: 4
+        max_replicas: 10000
         ready_sessions_per_capacity_unit: 1
-        reserved_capacity_for_subagent: 1
+        reserved_capacity_for_subagent: 0
       controller:
         scale_interval_ms: 5000
-        scale_up_window: 2
+        scale_up_window: 1
         scale_down_window: 4
-        cooldown_ms: 10000
+        cooldown_ms: 250
         scale_up_busy_ratio_threshold: 0.75
         scale_up_max_ready_age_ms: 5000
         leader_election:
@@ -85,4 +98,4 @@ data:
             label_selector: app.kubernetes.io/component=sandbox
 
     llm:
-      default_model: openai-default
+      default_model: ${env.OAH_DEFAULT_MODEL}

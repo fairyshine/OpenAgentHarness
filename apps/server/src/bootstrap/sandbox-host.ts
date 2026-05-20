@@ -207,10 +207,13 @@ async function materializedFileAccessLease(
 
 export function createMaterializationSandboxHost(options: {
   materializationManager: WorkspaceMaterializationManager;
+  providerKind?: SandboxHost["providerKind"] | undefined;
+  diagnostics?: Partial<SandboxHostDiagnostics> | undefined;
 }): SandboxHost {
   const manager = options.materializationManager;
+  const providerKind = options.providerKind ?? "embedded";
   return {
-    providerKind: "embedded",
+    providerKind,
     workspaceCommandExecutor: createLocalWorkspaceCommandExecutor(),
     workspaceFileSystem: createLocalWorkspaceFileSystem(),
     workspaceExecutionProvider: {
@@ -231,10 +234,11 @@ export function createMaterializationSandboxHost(options: {
     },
     diagnostics() {
       return {
-        provider: "embedded",
+        provider: providerKind,
         executionModel: "local_embedded",
         workerPlacement: "api_process",
-        materialization: manager.diagnostics()
+        materialization: manager.diagnostics(),
+        ...(options.diagnostics ?? {})
       } satisfies SandboxHostDiagnostics;
     },
     async maintain({ idleBefore }: { idleBefore: string }) {

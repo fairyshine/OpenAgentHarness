@@ -46,11 +46,23 @@ patches:
         name: oah-sandbox
       spec:
         replicas: 1
+        strategy:
+          type: RollingUpdate
+          rollingUpdate:
+            maxSurge: 0
+            maxUnavailable: 1
         template:
           spec:
             containers:
               - name: sandbox
                 image: openagentharness-oah-sandbox:latest
+                env:
+                  - name: POD_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.podIP
+                  - name: OAH_INTERNAL_BASE_URL
+                    value: http://$(POD_IP):8787
                 envFrom:
                   - secretRef:
                       name: oah-storage

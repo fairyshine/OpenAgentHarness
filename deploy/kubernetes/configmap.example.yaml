@@ -26,7 +26,7 @@ data:
         base_url: http://oah-sandbox-internal.open-agent-harness.svc.cluster.local:8787/internal/v1
       fleet:
         min_count: 2
-        max_count: 16
+        max_count: 10000
         warm_empty_count: 1
         resource_cpu_pressure_threshold: 0.8
         resource_memory_pressure_threshold: 0.8
@@ -41,7 +41,7 @@ data:
     workers:
       embedded:
         min_count: 2
-        max_count: 4
+        max_count: 10000
         scale_interval_ms: 3000
         scale_up_window: 2
         scale_down_window: 3
@@ -49,8 +49,7 @@ data:
         reserved_capacity_for_subagent: 1
       standalone:
         min_replicas: 2
-        max_replicas: 16
-        slots_per_pod: 4
+        max_replicas: 10000
         ready_sessions_per_capacity_unit: 1
         reserved_capacity_for_subagent: 1
       controller:

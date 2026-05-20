@@ -24,7 +24,7 @@ config:
         base_url: http://{{ include "open-agent-harness.workerInternalServiceName" . }}.{{ .Release.Namespace }}.svc.{{ .Values.global.clusterDomain }}:{{ .Values.worker.service.port }}/internal/v1
       fleet:
         min_count: {{ .Values.worker.replicaCount }}
-        max_count: 4
+        max_count: 10000
         warm_empty_count: 1
         resource_cpu_pressure_threshold: 0.8
         resource_memory_pressure_threshold: 0.8
@@ -39,8 +39,7 @@ config:
     workers:
       standalone:
         min_replicas: {{ .Values.worker.replicaCount }}
-        max_replicas: 4
-        slots_per_pod: 1
+        max_replicas: 10000
         ready_sessions_per_capacity_unit: 1
         reserved_capacity_for_subagent: 0
       controller:

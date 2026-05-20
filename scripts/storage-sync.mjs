@@ -164,6 +164,10 @@ function buildAwsDockerCommand(awsArgs, options, mountDir = null) {
     command.push("-v", `${mountDir}:/sync-source:ro`);
   }
 
+  if (process.env.OAH_STORAGE_SYNC_DOCKER_NETWORK) {
+    command.push("--network", process.env.OAH_STORAGE_SYNC_DOCKER_NETWORK);
+  }
+
   command.push(awsCliImage, "--endpoint-url", options.awsEndpointUrl, ...awsArgs);
   return command;
 }
