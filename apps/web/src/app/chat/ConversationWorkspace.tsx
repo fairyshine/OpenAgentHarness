@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { ArrowDown } from "lucide-react";
 
 import { WorkspaceFileManagerContainer } from "./WorkspaceFileManagerPanel";
 import { ConversationComposer } from "./ConversationComposer";
@@ -115,10 +116,12 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
   const touchYRef = useRef<number | undefined>(undefined);
   const prevMessageCountRef = useRef(0);
   const restoredRef = useRef(false);
+  const showScrollToBottomButtonRef = useRef(false);
   const prependSnapshotRef = useRef<{ messageCount: number; scrollHeight: number; scrollTop: number } | null>(null);
   const messageFeedRef = useRef(props.messageFeed);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
+  const [showScrollToBottomButton, setShowScrollToBottomButton] = useState(false);
   const [terminalDialogOpen, setTerminalDialogOpen] = useState(false);
   const [selectedTerminalId, setSelectedTerminalId] = useState<string | undefined>(undefined);
 
@@ -143,6 +146,24 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
       setScrollTop(nextScrollTop);
     }
   }, []);
+  const setScrollToBottomButtonVisible = useCallback((visible: boolean) => {
+    if (showScrollToBottomButtonRef.current === visible) {
+      return;
+    }
+
+    showScrollToBottomButtonRef.current = visible;
+    setShowScrollToBottomButton(visible);
+  }, []);
+  const updateBottomAffordance = useCallback(
+    (el: HTMLDivElement) => {
+      const bottomDistance = Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight);
+      const isNearBottom = bottomDistance <= CONVERSATION_BOTTOM_THRESHOLD_PX;
+      const isProgrammaticScroll = Date.now() < programmaticScrollUntilRef.current;
+      setScrollToBottomButtonVisible(props.hasActiveSession && messageCount > 0 && !isNearBottom && !isProgrammaticScroll);
+      return isNearBottom;
+    },
+    [messageCount, props.hasActiveSession, setScrollToBottomButtonVisible]
+  );
   const cancelPendingFollowFrames = useCallback(() => {
     if (followAnimationFrameRef.current !== undefined) {
       window.cancelAnimationFrame(followAnimationFrameRef.current);
@@ -176,6 +197,7 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     }
     lastScrollTopRef.current = el.scrollTop;
     updateScrollTopState(el.scrollTop);
+    updateBottomAffordance(el);
 
     if (followAnimationFrameRef.current !== undefined) {
       cancelPendingFollowFrames();
@@ -201,11 +223,12 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     props.shouldAutoFollowConversationRef.current = true;
     lastScrollTopRef.current = 0;
     scrollTopValueRef.current = 0;
+    setScrollToBottomButtonVisible(false);
     userScrollIntentUntilRef.current = 0;
     programmaticScrollUntilRef.current = 0;
     touchYRef.current = undefined;
     cancelPendingFollowFrames();
-  }, [cancelPendingFollowFrames, props.shouldAutoFollowConversationRef, sessionId]);
+  }, [cancelPendingFollowFrames, props.shouldAutoFollowConversationRef, sessionId, setScrollToBottomButtonVisible]);
 
   // Initial session open should land on the latest visible message block before the feed is revealed.
   useLayoutEffect(() => {
@@ -260,6 +283,8 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     const isNearBottom = bottomDistance <= CONVERSATION_BOTTOM_THRESHOLD_PX;
     updateScrollTopState(el.scrollTop);
     setViewportHeight(el.clientHeight);
+    const isProgrammaticScroll = now < programmaticScrollUntilRef.current;
+    setScrollToBottomButtonVisible(props.hasActiveSession && messageCount > 0 && !isNearBottom && !isProgrammaticScroll);
     if (isNearBottom) {
       isNearBottomRef.current = true;
       autoFollowPausedRef.current = false;
@@ -270,7 +295,7 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
       isNearBottomRef.current = false;
     }
     lastScrollTopRef.current = nextScrollTop;
-  }, [pauseAutoFollow, props.shouldAutoFollowConversationRef, updateScrollTopState]);
+  }, [messageCount, pauseAutoFollow, props.hasActiveSession, props.shouldAutoFollowConversationRef, setScrollToBottomButtonVisible, updateScrollTopState]);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -324,9 +349,10 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     const heightDelta = el.scrollHeight - snapshot.scrollHeight;
     el.scrollTop = snapshot.scrollTop + Math.max(0, heightDelta);
     updateScrollTopState(el.scrollTop);
+    updateBottomAffordance(el);
     prevMessageCountRef.current = messageCount;
     prependSnapshotRef.current = null;
-  }, [messageCount, props.loadingOlderMessages, updateScrollTopState]);
+  }, [messageCount, props.loadingOlderMessages, updateBottomAffordance, updateScrollTopState]);
 
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -338,6 +364,7 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     setViewportHeight(el.clientHeight);
     const observer = new ResizeObserver(() => {
       setViewportHeight(el.clientHeight);
+      updateBottomAffordance(el);
       if (
         restoredRef.current &&
         !prependSnapshotRef.current &&
@@ -354,7 +381,30 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
     return () => {
       observer.disconnect();
     };
-  }, [pinConversationToBottom, props.shouldAutoFollowConversationRef]);
+  }, [pinConversationToBottom, props.shouldAutoFollowConversationRef, updateBottomAffordance]);
+
+  const handleScrollToBottom = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) {
+      return;
+    }
+
+    cancelPendingFollowFrames();
+    userScrollIntentUntilRef.current = 0;
+    programmaticScrollUntilRef.current = Date.now() + 1_200;
+    autoFollowPausedRef.current = false;
+    isNearBottomRef.current = true;
+    props.shouldAutoFollowConversationRef.current = true;
+    setScrollToBottomButtonVisible(false);
+
+    const nextScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTo({
+      top: nextScrollTop,
+      behavior: "smooth"
+    });
+    lastScrollTopRef.current = nextScrollTop;
+    updateScrollTopState(nextScrollTop);
+  }, [cancelPendingFollowFrames, props.shouldAutoFollowConversationRef, setScrollToBottomButtonVisible, updateScrollTopState]);
 
   const handleLoadOlderMessages = () => {
     const el = scrollContainerRef.current;
@@ -470,6 +520,19 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
           <div className="p-4 md:p-6">
             <div className="max-w-4xl mx-auto">
+              {showScrollToBottomButton ? (
+                <div className="mb-3 flex justify-center">
+                  <button
+                    type="button"
+                    className="pointer-events-auto inline-flex h-11 w-11 items-center justify-center rounded-full border border-border/70 bg-background/92 text-foreground shadow-[0_18px_44px_-24px_rgba(15,23,42,0.9)] backdrop-blur transition hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label="返回最新消息"
+                    title="返回最新消息"
+                    onClick={handleScrollToBottom}
+                  >
+                    <ArrowDown className="h-5 w-5" />
+                  </button>
+                </div>
+              ) : null}
               <QueuedRunsPanel
                 items={queuedSessionRuns}
                 guideQueuedSessionInput={props.guideQueuedSessionInput}

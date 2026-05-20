@@ -37,12 +37,18 @@ import {
 import { prepareToolServers } from "./mcp-tools.js";
 import { formatSupportedModelProviders } from "./providers.js";
 
+const DEFAULT_MAX_TOOL_STEPS = 20;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readStringField(value: unknown, key: string) {
   return isRecord(value) && typeof value[key] === "string" ? value[key] : undefined;
+}
+
+function toEngineMessages(messages: import("ai").ModelMessage[]): GenerateModelInput["messages"] {
+  return messages as GenerateModelInput["messages"];
 }
 
 export { prepareToolServers } from "./mcp-tools.js";
@@ -137,12 +143,11 @@ export class AiSdkModelRuntime implements ModelGateway {
       parallelToolCalls: options?.parallelToolCalls
     });
 
-    const maxSteps = options?.maxSteps !== undefined ? Math.max(2, options.maxSteps) : undefined;
-    const maxStepsStopCondition = maxSteps !== undefined ? stepCountIs(maxSteps) : undefined;
-    const continueUntilModelStops: StopCondition<ToolSet> = () => false;
+    const maxSteps = Math.max(2, options?.maxSteps ?? DEFAULT_MAX_TOOL_STEPS);
+    const maxStepsStopCondition = stepCountIs(maxSteps);
     let maxStepsReached = false;
     const trackMaxStepsStop: StopCondition<ToolSet> = async (event) => {
-      const shouldStop = (await maxStepsStopCondition?.(event)) ?? false;
+      const shouldStop = await maxStepsStopCondition(event);
       if (shouldStop) {
         maxStepsReached = true;
       }
@@ -166,14 +171,14 @@ export class AiSdkModelRuntime implements ModelGateway {
       ...(aiTools
         ? {
             tools: aiTools,
-            stopWhen: maxStepsStopCondition ? trackMaxStepsStop : continueUntilModelStops
+            stopWhen: trackMaxStepsStop
           }
         : {}),
       ...(options?.prepareStep
         ? {
             prepareStep: async ({ stepNumber, messages, model: currentModel }) =>
               toStepPreparation(
-                (await options.prepareStep?.(stepNumber)),
+                (await options.prepareStep?.(stepNumber, { messages: toEngineMessages(messages) })),
                 messages,
                 currentModel,
                 (nextModelName, modelDefinition) => this.#resolveModel(nextModelName, modelDefinition)
@@ -289,23 +294,36 @@ export class AiSdkModelRuntime implements ModelGateway {
     return {
       chunks: (async function* () {
         try {
-          for await (const chunk of result.textStream) {
-            yield chunk;
+          for await (const chunk of result.fullStream) {
+            if (chunk.type === "error") {
+              observedStreamError ??= toError(chunk.error);
+              continue;
+            }
+
+            if (chunk.type === "text-delta") {
+              yield chunk.text;
+            }
           }
         } finally {
           await cleanup();
         }
       })(),
       completed: Promise.all([result.text, result.finishReason, result.usage, result.content, result.reasoning, result.steps])
-        .then(([text, finishReason, usage, content, reasoning, steps]) => ({
-          model: modelName,
-          text,
-          ...(Array.isArray(content) ? { content } : {}),
-          ...(Array.isArray(reasoning) ? { reasoning } : {}),
-          finishReason,
-          ...(maxStepsReached ? { stopReason: "max_steps", stepCount: steps.length, maxSteps } : {}),
-          usage: toUsage(usage)
-        }))
+        .then(([text, finishReason, usage, content, reasoning, steps]) => {
+          if (observedStreamError) {
+            throw observedStreamError;
+          }
+
+          return {
+            model: modelName,
+            text,
+            ...(Array.isArray(content) ? { content } : {}),
+            ...(Array.isArray(reasoning) ? { reasoning } : {}),
+            finishReason,
+            ...(maxStepsReached ? { stopReason: "max_steps", stepCount: steps.length, maxSteps } : {}),
+            usage: toUsage(usage)
+          };
+        })
         .catch((error) => {
           throw observedStreamError ?? error;
         })

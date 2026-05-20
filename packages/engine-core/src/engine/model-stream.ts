@@ -366,9 +366,13 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
     return this.#modelCallSteps;
   }
 
+  get pendingModelStepCount(): number {
+    return this.#modelCallSteps.size;
+  }
+
   buildStreamOptions(): Pick<ModelStreamOptions, "prepareStep" | "onToolCallStart" | "onToolCallFinish" | "onStepFinish" | "onChunk"> {
     return {
-      prepareStep: async (stepNumber) => {
+      prepareStep: async (stepNumber, context) => {
         const activeToolNames = this.#planning.getActiveToolNames(this.#executionContext.currentAgentName);
         if (stepNumber === 0) {
           const initialModelCallStep = await this.#steps.startRunStep({
@@ -408,14 +412,20 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
         }
 
         const latestRun = await this.#planning.getRun(this.#run.id);
-        const nextInput = await this.#planning.buildModelInput(
-          this.#workspace,
-          this.#session,
-          latestRun,
-          this.#allMessages,
-          this.#executionContext.currentAgentName,
-          this.#executionContext.injectSystemReminder
-        );
+        const nextInput =
+          context?.messages && context.messages.length > 0
+            ? {
+                ...this.#latestHookedModelInput,
+                messages: context.messages
+              }
+            : await this.#planning.buildModelInput(
+                this.#workspace,
+                this.#session,
+                latestRun,
+                this.#allMessages,
+                this.#executionContext.currentAgentName,
+                this.#executionContext.injectSystemReminder
+              );
         const pendingModelContextMessages = drainPendingModelContextMessages(this.#executionContext);
         const nextInputWithInjectedContext =
           pendingModelContextMessages.length > 0

@@ -491,6 +491,13 @@ export class ModelRunExecutor {
       if (shouldSkipCompletion?.(run.id)) {
         return;
       }
+      if (streamCoordinator.pendingModelStepCount > 0) {
+        throw new AppError(
+          502,
+          "model_stream_incomplete",
+          `Model stream completed while ${streamCoordinator.pendingModelStepCount} model step(s) were still running.`
+        );
+      }
 
       const latestRun = await this.#getRun(run.id);
       await execution.agentCoordination.persistUnreportedTerminalDelegatedRuns({

@@ -419,6 +419,59 @@ describe("controller", () => {
     });
   });
 
+  it("does not reserve extra sandboxes for pressured workers without placement load", () => {
+    const fleet = summarizeSandboxFleet({
+      config: {
+        providerKind: "self_hosted",
+        managedByController: true,
+        minCount: 1,
+        maxCount: 8,
+        maxWorkspacesPerSandbox: 4,
+        ownerlessPool: "shared",
+        warmEmptyCount: 1,
+        resourceCpuPressureThreshold: 0.8,
+        resourceMemoryPressureThreshold: 0.8,
+        resourceDiskPressureThreshold: 0.85
+      },
+      placements: [],
+      activeWorkers: [
+        {
+          workerId: "worker-a-1",
+          runtimeInstanceId: "sandbox-a",
+          processKind: "standalone",
+          state: "idle",
+          health: "healthy",
+          resourceDiskUsedRatio: 0.9,
+          lastSeenAt: "2026-04-15T00:00:00.000Z",
+          leaseTtlMs: 5_000,
+          expiresAt: "2026-04-15T00:00:05.000Z",
+          lastSeenAgeMs: 0
+        },
+        {
+          workerId: "worker-b-1",
+          runtimeInstanceId: "sandbox-b",
+          processKind: "standalone",
+          state: "idle",
+          health: "healthy",
+          resourceDiskUsedRatio: 0.95,
+          lastSeenAt: "2026-04-15T00:00:00.000Z",
+          leaseTtlMs: 5_000,
+          expiresAt: "2026-04-15T00:00:05.000Z",
+          lastSeenAgeMs: 0
+        }
+      ] satisfies RedisWorkerRegistryEntry[]
+    });
+
+    expect(fleet).toMatchObject({
+      pressuredSandboxes: 2,
+      emptySandboxes: 2,
+      pressureReserveSandboxes: 0,
+      logicalSandboxes: 0,
+      warmEmptySandboxes: 1,
+      desiredSandboxes: 1
+    });
+  });
+
   it("summarizes first-class workspace placement state for controller snapshots", () => {
     const summary = summarizeWorkspacePlacements([
       {

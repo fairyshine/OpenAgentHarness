@@ -293,7 +293,10 @@ export function summarizeSandboxFleet(input: {
         : Math.ceil(ownerlessWorkspaces / input.config.maxWorkspacesPerSandbox);
   const logicalSandboxes = ownerScopedSandboxes + ownerlessSandboxes;
   const warmEmptySandboxes = input.config.managedByController ? Math.max(0, input.config.warmEmptyCount ?? 0) : 0;
-  const pressureReserveSandboxes = input.config.managedByController ? pressuredSandboxRefs.size : 0;
+  const loadedPressuredSandboxRefs = [...pressuredSandboxRefs].filter(
+    (ref) => (workerRefLoads.get(ref) ?? 0) > 0
+  );
+  const pressureReserveSandboxes = input.config.managedByController ? loadedPressuredSandboxRefs.length : 0;
   const targetSandboxes = logicalSandboxes + warmEmptySandboxes + pressureReserveSandboxes;
   const desiredSandboxes = input.config.managedByController
     ? Math.max(input.config.minCount, Math.min(input.config.maxCount, targetSandboxes))

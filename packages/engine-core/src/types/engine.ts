@@ -160,7 +160,10 @@ export interface ModelStreamOptions {
   maxSteps?: number | undefined;
   parallelToolCalls?: boolean | undefined;
   prepareStep?:
-    | ((stepNumber: number) => Promise<ModelStepPreparation | undefined> | ModelStepPreparation | undefined)
+    | ((
+        stepNumber: number,
+        context?: { messages?: ChatMessage[] | undefined } | undefined
+      ) => Promise<ModelStepPreparation | undefined> | ModelStepPreparation | undefined)
     | undefined;
   onToolCallStart?: ((toolCall: ModelToolCall) => Promise<void> | void) | undefined;
   onToolCallFinish?: ((toolResult: ModelToolResult) => Promise<void> | void) | undefined;

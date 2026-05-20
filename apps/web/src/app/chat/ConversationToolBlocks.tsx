@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronRight, CornerDownRight, Loader2, MessageSquare, Send, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -115,6 +115,59 @@ function TruncationNotice({ truncatedChars, prefix = "Showing preview" }: { trun
   );
 }
 
+function AutoFollowPre({
+  className,
+  text,
+  placeholder
+}: {
+  className: string;
+  text: string;
+  placeholder: string;
+}) {
+  const preRef = useRef<HTMLPreElement | null>(null);
+  const shouldFollowRef = useRef(true);
+
+  const scrollToBottom = useCallback(() => {
+    const el = preRef.current;
+    if (!el) {
+      return;
+    }
+
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!shouldFollowRef.current) {
+      return;
+    }
+
+    scrollToBottom();
+    const frameId = window.requestAnimationFrame(scrollToBottom);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [scrollToBottom, text]);
+
+  const handleScroll = useCallback(() => {
+    const el = preRef.current;
+    if (!el) {
+      return;
+    }
+
+    shouldFollowRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 24;
+  }, []);
+
+  return (
+    <pre
+      ref={preRef}
+      className={className}
+      onScroll={handleScroll}
+    >
+      {text || placeholder}
+    </pre>
+  );
+}
+
 export function ToolCallBlock({
   part,
   messageMetadata
@@ -208,9 +261,11 @@ export function ToolCallBlock({
                       <Loader2 className="h-3 w-3 animate-spin text-muted-foreground/60" />
                     </div>
                     <TruncationNotice truncatedChars={streamingInputPreview.truncatedChars} prefix="Showing latest parameters" />
-                    <pre className="code-panel max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-lg px-3 py-2 text-xs font-mono">
-                      {streamingInputPreview.text || "Waiting for parameters..."}
-                    </pre>
+                    <AutoFollowPre
+                      className="code-panel max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-lg px-3 py-2 text-xs font-mono"
+                      text={streamingInputPreview.text}
+                      placeholder="Waiting for parameters..."
+                    />
                   </div>
                 ) : null}
                 {paramEntries.map(([key, value]) => {

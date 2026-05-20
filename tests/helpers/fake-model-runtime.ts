@@ -85,6 +85,7 @@ export class FakeModelGateway implements ModelGateway {
             stopReason?: string | undefined;
             stepCount?: number | undefined;
             maxSteps?: number | undefined;
+            skipFinalStepFinish?: boolean | undefined;
             preToolText?: string | undefined;
             preToolContent?: unknown[] | undefined;
             preToolReasoning?: unknown[] | undefined;
@@ -151,7 +152,9 @@ export class FakeModelGateway implements ModelGateway {
     let currentInput = { ...input };
     let currentModelName = modelName;
     const applyPreparation = async (stepNumber: number) => {
-      const preparation = (await options?.prepareStep?.(stepNumber)) as ModelStepPreparation | undefined;
+      const preparation = (await options?.prepareStep?.(stepNumber, {
+        ...(currentInput.messages ? { messages: currentInput.messages } : {})
+      })) as ModelStepPreparation | undefined;
       if (!preparation) {
         return;
       }
@@ -422,22 +425,24 @@ export class FakeModelGateway implements ModelGateway {
           yield chunk;
         }
 
-        await options?.onStepFinish?.({
-          text: emitted,
-          usage: {
-            inputTokens: 10,
-            outputTokens: emitted.length,
-            totalTokens: emitted.length + 10
-          },
-          ...(Array.isArray(scenario?.content) ? { content: scenario.content } : {}),
-          ...(Array.isArray(scenario?.reasoning) ? { reasoning: scenario.reasoning } : {}),
-          ...(scenario?.stepRequest ? { request: scenario.stepRequest } : {}),
-          ...(scenario?.stepResponse ? { response: scenario.stepResponse } : {}),
-          ...(scenario?.stepProviderMetadata ? { providerMetadata: scenario.stepProviderMetadata } : {}),
-          finishReason: "stop",
-          toolCalls: [],
-          toolResults: []
-        });
+        if (scenario?.skipFinalStepFinish !== true) {
+          await options?.onStepFinish?.({
+            text: emitted,
+            usage: {
+              inputTokens: 10,
+              outputTokens: emitted.length,
+              totalTokens: emitted.length + 10
+            },
+            ...(Array.isArray(scenario?.content) ? { content: scenario.content } : {}),
+            ...(Array.isArray(scenario?.reasoning) ? { reasoning: scenario.reasoning } : {}),
+            ...(scenario?.stepRequest ? { request: scenario.stepRequest } : {}),
+            ...(scenario?.stepResponse ? { response: scenario.stepResponse } : {}),
+            ...(scenario?.stepProviderMetadata ? { providerMetadata: scenario.stepProviderMetadata } : {}),
+            finishReason: "stop",
+            toolCalls: [],
+            toolResults: []
+          });
+        }
 
         resolveCompleted({
           model: modelName,

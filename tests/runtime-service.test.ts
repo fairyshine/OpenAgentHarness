@@ -13611,7 +13611,88 @@ describe("runtime service", () => {
     expect(run.errorMessage).toContain("max model steps (2)");
   });
 
-  it("does not impose a default max steps limit when the agent does not configure one", async () => {
+  it("fails instead of completing when a model stream leaves a model step running", async () => {
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      workspaceSettings: {
+        defaultAgent: "researcher"
+      },
+      agents: {
+        researcher: {
+          name: "researcher",
+          mode: "primary",
+          prompt: "Use WebFetch when research needs source material.",
+          tools: {
+            native: ["WebFetch"]
+          },
+          actions: [],
+          skills: [],
+          switch: [],
+          subagents: [],
+          policy: {}
+        }
+      }
+    });
+
+    gateway.streamScenarioFactory = () => ({
+      text: "This answer streamed but the final step never finished.",
+      skipFinalStepFinish: true,
+      toolSteps: [
+        {
+          toolName: "WebFetch",
+          input: {
+            url: "https://example.com/source",
+            prompt: "Extract the useful detail."
+          },
+          toolCallId: "call_fetch",
+          output: "Fetched source notes."
+        }
+      ]
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {
+        agentName: "researcher"
+      }
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Research this source." }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "failed";
+    });
+
+    const run = await runtimeService.getRun(accepted.runId);
+    expect(run.errorCode).toBe("model_stream_incomplete");
+    expect(run.errorMessage).toContain("model step(s) were still running");
+
+    const runSteps = await runtimeService.listRunSteps(accepted.runId);
+    const modelCallSteps = runSteps.items.filter((step) => step.stepType === "model_call");
+    expect(modelCallSteps).toHaveLength(2);
+    expect(modelCallSteps.some((step) => step.status === "running")).toBe(false);
+    expect(modelCallSteps.some((step) => step.status === "failed")).toBe(true);
+
+    const events = await runtimeService.listSessionEvents(session.id, undefined, accepted.runId);
+    expect(events.some((event) => event.event === "run.completed")).toBe(false);
+    expect(events.find((event) => event.event === "run.failed")?.data).toMatchObject({
+      errorCode: "model_stream_incomplete"
+    });
+  });
+
+  it("allows many tool steps when the agent does not configure a tighter limit", async () => {
     const { gateway, runtimeService, workspace } = await createRuntime(0, {
       workspaceSettings: {
         defaultAgent: "researcher"
