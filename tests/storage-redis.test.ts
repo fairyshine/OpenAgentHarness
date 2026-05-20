@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   FanoutSessionEventStore,
+  RedisSessionEventBus,
   RedisRunWorker,
   RedisRunWorkerPool,
   RedisWorkspaceLeaseRegistry,
@@ -416,6 +417,72 @@ async function waitForCondition(condition: () => boolean, timeoutMs = 1_500) {
 }
 
 describe("storage redis", () => {
+  it("sets an expiry on Redis session event buffers", async () => {
+    const calls: Array<{ op: string; key?: string; value?: string | number }> = [];
+    const transaction = {
+      rPush(key: string, value: string) {
+        calls.push({ op: "rPush", key, value });
+        return transaction;
+      },
+      lTrim(key: string) {
+        calls.push({ op: "lTrim", key });
+        return transaction;
+      },
+      pExpire(key: string, value: number) {
+        calls.push({ op: "pExpire", key, value });
+        return transaction;
+      },
+      publish(key: string) {
+        calls.push({ op: "publish", key });
+        return transaction;
+      },
+      async exec() {
+        return [];
+      }
+    };
+    const publisher = {
+      isOpen: true,
+      multi() {
+        return transaction;
+      },
+      async quit() {
+        return undefined;
+      },
+      async ping() {
+        return "PONG";
+      }
+    };
+    const subscriber = {
+      isOpen: true,
+      async subscribe() {
+        return undefined;
+      },
+      async unsubscribe() {
+        return undefined;
+      },
+      async quit() {
+        return undefined;
+      }
+    };
+    const bus = new RedisSessionEventBus({
+      url: "redis://unused",
+      eventBufferTtlMs: 12_345,
+      publisher: publisher as never,
+      subscriber: subscriber as never
+    });
+
+    await bus.publish({
+      id: "evt_1",
+      cursor: "0",
+      sessionId: "ses_1",
+      event: "run.queued",
+      data: { status: "queued" },
+      createdAt: "2026-04-01T00:00:00.000Z"
+    });
+
+    expect(calls).toContainEqual({ op: "pExpire", key: "oah:session:ses_1:events", value: 12_345 });
+  });
+
   it("publishes persisted events to the secondary bus", async () => {
     const published: Array<{ id: string }> = [];
     const primary = {

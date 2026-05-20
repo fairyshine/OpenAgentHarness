@@ -10,6 +10,7 @@ export class RedisSessionEventBus implements SessionEventBus {
   readonly #ownsSubscriber: boolean;
   readonly #keyPrefix: string;
   readonly #eventBufferSize: number;
+  readonly #eventBufferTtlMs: number;
 
   constructor(options: CreateRedisSessionEventBusOptions) {
     this.#publisher = options.publisher ?? createClient({ url: options.url });
@@ -18,6 +19,7 @@ export class RedisSessionEventBus implements SessionEventBus {
     this.#ownsSubscriber = !options.subscriber;
     this.#keyPrefix = options.keyPrefix ?? "oah";
     this.#eventBufferSize = Math.max(1, options.eventBufferSize ?? 200);
+    this.#eventBufferTtlMs = resolveEventBufferTtlMs(options.eventBufferTtlMs);
   }
 
   async connect(): Promise<void> {
@@ -39,6 +41,7 @@ export class RedisSessionEventBus implements SessionEventBus {
       .multi()
       .rPush(eventsKey, payload)
       .lTrim(eventsKey, -this.#eventBufferSize, -1)
+      .pExpire(eventsKey, this.#eventBufferTtlMs)
       .publish(channel, payload)
       .exec();
   }
@@ -83,6 +86,20 @@ export class RedisSessionEventBus implements SessionEventBus {
   #channel(sessionId: string): string {
     return `${this.#keyPrefix}:session:${sessionId}:events:pubsub`;
   }
+}
+
+function resolveEventBufferTtlMs(configuredTtlMs: number | undefined): number {
+  if (typeof configuredTtlMs === "number" && Number.isFinite(configuredTtlMs) && configuredTtlMs > 0) {
+    return Math.floor(configuredTtlMs);
+  }
+
+  const raw = process.env.OAH_REDIS_SESSION_EVENT_BUFFER_TTL_MS?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+
+  return 7 * 24 * 60 * 60 * 1_000;
 }
 
 export async function createRedisSessionEventBus(
