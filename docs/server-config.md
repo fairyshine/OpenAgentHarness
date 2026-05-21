@@ -173,7 +173,7 @@ llm:
 | `tool_dir` | string | 平台级 tool 源目录，主要用于 runtime 初始化导入与单 workspace 模式下的共享来源 |
 | `skill_dir` | string | 平台级 skill 源目录，主要用于 runtime 初始化导入与单 workspace 模式下的共享来源 |
 
-### `workspace`
+### Runtime materialization（`workspace`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -307,7 +307,7 @@ llm:
 
 ---
 
-## 目录说明
+## Runtime 与目录说明
 
 ### 路径与层级边界
 
@@ -343,13 +343,17 @@ llm:
 
 ### `runtime_dir`
 
-存放 workspace runtime。通过 `POST /workspaces` 创建新 workspace 时，从此目录选择 runtime 作为初始化源。运行时不会把 runtime 当作活跃 workspace 加载。
+存放 workspace runtime 模板。通过 `POST /workspaces` 创建新 workspace 时，从此目录选择 runtime 作为初始化源。运行时不会把 runtime 当作活跃 workspace 加载。
 
 `runtime_dir` 不参与 run 执行，也不承载活跃 workspace 副本。它只回答“如何初始化一个 workspace”，不回答“当前在哪里运行”。
+
+Runtime 模板内部的 `.openharness/settings.yaml`、`prompts.yaml`、`agents/*.md` 等文件如何编写，请看 [Runtime 配置教程](./runtime/README.md)。本页只说明服务端从哪里读取这些模板，以及它们和 workspace / sandbox / runtime state 的边界。
 
 ### `model_dir`
 
 递归扫描目录下的 `*.yaml` 文件。文件格式与 workspace 内 `.openharness/models/*.yaml` 一致。加载后以 `platform/<name>` 进入模型目录。
+
+`OAH_HOME` 首次初始化时会带上 `models/openai-default.yaml`，与默认 `llm.default_model: openai-default` 对齐。该文件默认不保存密钥；本地使用通常只需要在启动前设置 `OPENAI_API_KEY`，也可以在 YAML 中显式写入 `key: ${env.OPENAI_API_KEY}`。
 
 示例（`model_dir/openai-default.yaml`）：
 

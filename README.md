@@ -253,7 +253,7 @@ The packaged daemon command is the intended product shape. A release install sho
 curl -fsSL https://raw.githubusercontent.com/fairyshine/OpenAgentHarness/master/scripts/install.sh | sh
 export OAH_HOME="$HOME/.openagentharness"
 export PATH="$OAH_HOME/bin:$PATH"
-oah daemon init
+export OPENAI_API_KEY=sk-...
 oah daemon start
 cd /path/to/repo
 oah tui
@@ -276,13 +276,13 @@ oah update
 oah rollback
 ```
 
-The CLI package carries the OAP deploy-root assets used by `oah daemon init` and starts the daemon through the packaged server entrypoint when a source checkout is not present. In a release tarball, `bin/oah` launches the packaged CLI from `lib/node_modules/@oah/cli`, optionally using a bundled Node runtime when the bundle includes one. In a monorepo checkout, the same commands prefer local source/dist paths so development and packaged installs follow the same lifecycle.
+The CLI package carries the OAP deploy-root assets used by `oah daemon init` and by first `oah daemon start`. When `config/daemon.yaml` is missing, local commands seed `OAH_HOME` with `config/`, starter `runtimes/`, `models/openai-default.yaml`, `tools/`, `skills/`, and `workspaces/` without overwriting existing user files. In a release tarball, `bin/oah` launches the packaged CLI from `lib/node_modules/@oah/cli`, optionally using a bundled Node runtime when the bundle includes one. In a monorepo checkout, the same commands prefer local source/dist paths so development and packaged installs follow the same lifecycle.
 
 In this repository, the development equivalent is:
 
 ```bash
 pnpm install
-pnpm dev:cli -- daemon init
+export OPENAI_API_KEY=sk-...
 pnpm dev:cli -- daemon start
 pnpm dev:cli -- daemon status
 pnpm dev:cli -- daemon state
@@ -353,21 +353,12 @@ export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
 
 For local development you can omit `OAH_DEPLOY_ROOT`; `pnpm local:up` and `pnpm storage:sync` default to `OAH_HOME` (or `~/.openagentharness`). Set `OAH_DEPLOY_ROOT` only when you want a separate deploy asset root.
 
-Then add at least one platform model YAML under:
-
-```text
-$OAH_DEPLOY_ROOT/models/
-```
-
-For the bundled starter runtimes, the expected default model name is:
-
-```text
-openai-default
-```
+The template already includes `models/openai-default.yaml`. Before startup, make sure `OPENAI_API_KEY` is visible to OAH processes, or edit that model file to use the provider/key you want.
 
 #### 3. Start the local stack
 
 ```bash
+export OPENAI_API_KEY=sk-...
 pnpm local:up
 ```
 

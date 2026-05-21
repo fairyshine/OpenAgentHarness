@@ -244,27 +244,25 @@ docs/
 最终产品形态建议是：
 
 ```bash
+export OPENAI_API_KEY=sk-...
 oah daemon start
 oah tui --workspace /path/to/repo
 ```
 
-在这个命令正式接入 CLI 之前，当前开发期等价命令是：
+`oah daemon start` 会在 `~/.openagentharness/config/daemon.yaml` 缺失时自动从内置模板初始化 `config/`、`runtimes/`、`models/openai-default.yaml`、`tools/`、`skills/` 和 `workspaces/`，且不会覆盖已有用户文件。如果只想初始化目录，可以运行 `oah daemon init`。
+
+当前开发期等价命令是：
 
 ```bash
 pnpm install
-
-export OAH_HOME="${OAH_HOME:-$HOME/.openagentharness}"
-test -f "$OAH_HOME/config/daemon.yaml" || mkdir -p "$OAH_HOME"
-test -f "$OAH_HOME/config/daemon.yaml" || cp -R ./template/deploy-root/. "$OAH_HOME"/
-
-pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts -- \
-  --config "$OAH_HOME/config/daemon.yaml"
+export OPENAI_API_KEY=sk-...
+pnpm dev:cli -- daemon start
 ```
 
 然后让客户端连接这个本地 daemon：
 
 ```bash
-pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
+pnpm dev:cli -- tui
 pnpm dev:web
 ```
 
@@ -288,21 +286,12 @@ export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
 
 本地开发可以省略 `OAH_DEPLOY_ROOT`；`pnpm local:up` 和 `pnpm storage:sync` 默认使用 `OAH_HOME`（或 `~/.openagentharness`）。只有想把部署资产根目录和个人 home 分开时再显式设置 `OAH_DEPLOY_ROOT`。
 
-然后至少在下面目录中放入一个平台模型 YAML：
-
-```text
-$OAH_DEPLOY_ROOT/models/
-```
-
-对于仓库自带的 starter runtimes，默认期望的平台模型名是：
-
-```text
-openai-default
-```
+模板已经包含 `models/openai-default.yaml`。启动前确保 `OPENAI_API_KEY` 对 OAH 进程可见，或按需编辑该模型文件替换 provider / key。
 
 #### 3. 启动本地整套服务
 
 ```bash
+export OPENAI_API_KEY=sk-...
 pnpm local:up
 ```
 

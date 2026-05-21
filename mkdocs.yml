@@ -34,6 +34,7 @@ theme:
         name: 切换到浅色模式
   features:
     - navigation.tabs
+    - navigation.indexes
     - navigation.sections
     - navigation.top
     - toc.follow
@@ -66,9 +67,14 @@ plugins:
             language: en
           nav_translations:
             首页: Home
+            使用指南: Guides
             快速开始: Quick Start
             部署与运行: Deploy and Run
+            配置与 Runtime: Configuration
             服务端配置: Server Config
+            Runtime 配置: Runtime Config
+            配置文件详解: Config Files
+            配置文件参考: Config Reference
             TUI: TUI
             设计总览: Overview
             术语约定: Terminology
@@ -89,7 +95,9 @@ plugins:
             Queue 与可靠性: Queue and Reliability
             事件与审计: Events and Audit
             Worker 成熟化路线图: Worker Maturity Roadmap
+            API 与 Schema: API & Schema
             API 参考: API Reference
+            Schemas: Schemas
   - search
 
 markdown_extensions:
@@ -123,20 +131,16 @@ extra_css:
 
 nav:
   - 首页: index.md
-  - 快速开始: getting-started.md
-  - 部署与运行: deploy.md
-  - 服务端配置: server-config.md
-  - TUI: tui.md
-  - 设计总览: design-overview.md
-  - 术语约定: terminology.md
-  - 概念关系: concept-relationships.md
-  - 架构与设计:
-      - 架构总览: architecture-overview.md
-      - 领域模型: domain-model.md
-      - 存储设计: storage-design.md
+  - 使用指南:
+      - 快速开始: getting-started.md
+      - 部署与运行: deploy.md
+      - TUI: tui.md
       - 当前进度: project-roadmap.md
-  - Workspace:
-      - 导航: workspace/README.md
+  - 配置与 Runtime:
+      - 服务端配置: server-config.md
+      - Runtime 配置: runtime/README.md
+      - 配置文件详解: runtime/config-files.md
+      - 配置文件总览: workspace/README.md
       - Settings: workspace/settings.md
       - Prompts: workspace/prompts.md
       - Agents: workspace/agents.md
@@ -147,31 +151,40 @@ nav:
       - Hooks: workspace/hooks.md
       - MCP: workspace/mcp.md
       - 加载与校验: workspace/loading-and-validation.md
-  - Engine:
-      - 导航: engine/README.md
-      - 生命周期: engine/lifecycle.md
-      - 上下文引擎: engine/context-engine.md
-      - 消息投影:
-          - 总览: engine/message-projections/README.md
-          - Message 与 EngineMessage: engine/message-projections/message-and-engine-message.md
-          - Projection 实现细节: engine/message-projections/projection-implementations.md
-          - 模型输入与 UI 展示: engine/message-projections/model-and-ui-mapping.md
-      - 模型运行时: engine/model-runtime.md
-      - Projection 与 Executors: engine/projection-and-executors.md
-      - 执行后端: engine/execution-backend.md
-      - Hook Runtime: engine/hook-runtime.md
-      - Queue 与可靠性: engine/queue-and-reliability.md
-      - Worker 成熟化路线图: engine/worker-scaling-roadmap.md
-      - 事件与审计: engine/events-and-audit.md
-  - API 参考:
-      - 导航: openapi/README.md
-      - Workspaces: openapi/workspaces.md
-      - Sessions: openapi/sessions.md
-      - Runs: openapi/runs.md
-      - Actions: openapi/actions.md
-      - Files: openapi/files.md
-      - Models: openapi/models.md
-      - Streaming: openapi/streaming.md
-      - Components: openapi/components.md
-  - Schemas:
-      - 导航: schemas/README.md
+  - 架构与设计:
+      - 设计总览: design-overview.md
+      - 术语约定: terminology.md
+      - 概念关系: concept-relationships.md
+      - 架构总览: architecture-overview.md
+      - 领域模型: domain-model.md
+      - 存储设计: storage-design.md
+      - Engine:
+          - 导航: engine/README.md
+          - 生命周期: engine/lifecycle.md
+          - 上下文引擎: engine/context-engine.md
+          - 消息投影:
+              - 总览: engine/message-projections/README.md
+              - Message 与 EngineMessage: engine/message-projections/message-and-engine-message.md
+              - Projection 实现细节: engine/message-projections/projection-implementations.md
+              - 模型输入与 UI 展示: engine/message-projections/model-and-ui-mapping.md
+          - 模型运行时: engine/model-runtime.md
+          - Projection 与 Executors: engine/projection-and-executors.md
+          - 执行后端: engine/execution-backend.md
+          - Hook Runtime: engine/hook-runtime.md
+          - Queue 与可靠性: engine/queue-and-reliability.md
+          - Worker 成熟化路线图: engine/worker-scaling-roadmap.md
+          - 事件与审计: engine/events-and-audit.md
+  - API 与 Schema:
+      - API 参考:
+          - 导航: openapi/README.md
+          - Workspaces: openapi/workspaces.md
+          - Sessions: openapi/sessions.md
+          - Runs: openapi/runs.md
+          - Actions: openapi/actions.md
+          - Files: openapi/files.md
+          - Storage: openapi/storage.md
+          - Models: openapi/models.md
+          - Streaming: openapi/streaming.md
+          - Components: openapi/components.md
+      - Schemas:
+          - 导航: schemas/README.md

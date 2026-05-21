@@ -10,6 +10,36 @@
 
 ## Installation and Startup
 
+### Shortest Path After Install: Local Daemon
+
+If the `oah` command is already installed, first start does not require manually copying the template. When `~/.openagentharness/config/daemon.yaml` is missing, `oah daemon start` seeds `OAH_HOME` from the bundled template:
+
+```text
+~/.openagentharness/
+  config/daemon.yaml
+  runtimes/
+  models/openai-default.yaml
+  tools/
+  skills/
+  workspaces/
+```
+
+Add your model API key, then start the daemon:
+
+```bash
+export OPENAI_API_KEY=sk-...
+oah daemon start
+oah tui
+```
+
+To initialize the directory without starting the daemon, run:
+
+```bash
+oah daemon init
+```
+
+Initialization only fills missing files; it does not overwrite an existing `config/daemon.yaml`, runtime, or model config. Source checkouts use `template/deploy-root`; release installs use the deploy-root assets bundled into the CLI package.
+
 ### Step 1: Install dependencies
 
 ```bash
@@ -19,14 +49,17 @@ pnpm install
 ### Step 2: Start the full local stack
 
 ```bash
-mkdir -p /absolute/path/to/oah-deploy-root
-cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
-export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
-# Add at least one model YAML under $OAH_DEPLOY_ROOT/models/
+export OPENAI_API_KEY=sk-...
 pnpm local:up
 ```
 
-For local development, you can also set only `OAH_HOME`, or set no environment variable at all; `pnpm local:up` defaults to `OAH_HOME`, then `~/.openagentharness`. Use an explicit `OAH_DEPLOY_ROOT` mainly when a team/deployment asset root should be managed separately.
+For local development, you can set only `OAH_HOME`, or set no environment variable at all; `pnpm local:up` defaults to `OAH_HOME`, then `~/.openagentharness`, and uses the template's `config/server.docker.yaml`, `runtimes`, `models`, and related assets. Use an explicit `OAH_DEPLOY_ROOT` mainly when a team/deployment asset root should be managed separately:
+
+```bash
+mkdir -p /absolute/path/to/oah-deploy-root
+cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
+export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
+```
 
 This single command starts the full local stack: `PostgreSQL`, `Redis`, `MinIO`, `oah-api`, `oah-controller`, `oah-compose-scaler`, and `oah-sandbox`. `oah-api` listens on `http://127.0.0.1:8787`, `oah-sandbox` hosts the standalone worker in the local topology, `oah-compose-scaler` applies controller-driven `oah-sandbox` replica changes, and the startup flow also runs one storage sync automatically.
 

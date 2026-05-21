@@ -25,13 +25,23 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | --- | --- | --- |
 | GET | `/runtimes` | 列出 workspace runtimes |
 | POST | `/runtimes/upload` | 上传 workspace runtime |
+| PUT | `/runtimes/{name}` | 覆盖更新 workspace runtime |
 | DELETE | `/runtimes/{name}` | 删除 workspace runtime |
 | GET | `/workspaces` | 列出 workspace |
 | POST | `/workspaces` | 创建 workspace |
 | POST | `/workspaces/import` | 导入 workspace |
+| POST | `/local/workspaces/register` | 注册本机 workspace 路径 |
+| POST | `/local/workspaces/{id}/repair` | 修复本机 workspace 路径绑定 |
 | GET | `/workspaces/{id}` | 获取详情 |
 | DELETE | `/workspaces/{id}` | 删除 |
 | GET | `/workspaces/{id}/catalog` | 获取能力目录 |
+| GET | `/workspaces/{id}/memory/status` | 获取 workspace memory 状态 |
+| GET | `/workspaces/{id}/memory` | 列出 workspace memory index |
+| GET | `/workspaces/{id}/memory/search` | 搜索 workspace memory |
+| GET | `/workspaces/{id}/memory/read` | 读取 workspace memory 文件片段 |
+| GET | `/workspaces/{id}/memory/proposals` | 列出 memory proposals |
+| POST | `/workspaces/{id}/memory/proposals/apply` | 应用 memory proposal |
+| POST | `/workspaces/{id}/memory/proposals/reject` | 拒绝 memory proposal |
 
 ### Sandboxes & Files
 
@@ -64,10 +74,19 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | GET | `/workspaces/{id}/sessions` | 列出 session |
 | POST | `/workspaces/{id}/sessions` | 创建 session |
 | GET | `/sessions/{id}` | 获取详情 |
+| GET | `/sessions/{id}/snapshot` | 获取控制台初始化快照 |
+| PATCH | `/sessions/{id}` | 更新会话设置 |
+| DELETE | `/sessions/{id}` | 删除会话 |
 | GET | `/sessions/{id}/children` | 列出直接子 session / subagent session |
 | GET | `/sessions/{id}/messages` | 列出消息 |
 | POST | `/sessions/{id}/messages` | 发送消息（202） |
+| GET | `/sessions/{id}/messages/{messageId}` | 获取单条消息 |
+| GET | `/sessions/{id}/messages/{messageId}/context` | 获取锚点消息上下文 |
 | GET | `/sessions/{id}/queue` | 读取服务端后续消息队列 |
+| GET | `/sessions/{id}/runs` | 列出当前 session 的 runs |
+| GET | `/sessions/{id}/terminals/{terminalId}` | 读取 session terminal 输出 |
+| POST | `/sessions/{id}/terminals/{terminalId}/input` | 写入 session terminal 输入 |
+| POST | `/sessions/{id}/compact` | 手动 compact |
 | GET | `/sessions/{id}/events` | SSE 事件流 |
 
 ### Runs
@@ -78,6 +97,8 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | GET | `/runs/{id}/steps` | 列出步骤 |
 | POST | `/runs/{id}/cancel` | 取消（202） |
 | POST | `/runs/{id}/guide` | 将已排队消息提升为引导（202） |
+| POST | `/runs/{id}/requeue` | 手动重新入队 recovery run |
+| POST | `/runs/requeue` | 批量重新入队 recovery runs |
 
 ### Actions
 
@@ -90,8 +111,27 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/model-providers` | 列出 provider |
+| GET | `/platform-models` | 列出平台模型 |
+| POST | `/platform-models/refresh` | 刷新平台模型 |
+| POST | `/platform-models/refresh/distributed` | 分布式刷新平台模型 |
+| GET | `/platform-models/events` | 平台模型 SSE 更新 |
 | POST | `/internal/v1/models/generate` | 同步生成 |
 | POST | `/internal/v1/models/stream` | 流式生成 |
+
+### Storage
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/storage/overview` | 存储总览 |
+| GET | `/storage/postgres/tables/{table}` | 检查 PostgreSQL 表 |
+| GET | `/storage/redis/keys` | 扫描 Redis keys |
+| GET | `/storage/redis/key` | 读取 Redis key |
+| DELETE | `/storage/redis/key` | 删除 Redis key |
+| POST | `/storage/redis/keys/delete` | 批量删除 Redis keys |
+| GET | `/storage/redis/worker-affinity` | 检查 worker affinity |
+| GET | `/storage/redis/workspace-placements` | 列出 workspace placements |
+| POST | `/storage/redis/session-queue/clear` | 清理 session queue |
+| POST | `/storage/redis/session-lock/release` | 释放 session lock |
 
 ## 模块文档
 
@@ -103,6 +143,7 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | [runs.md](./runs.md) | run 查询与取消 |
 | [actions.md](./actions.md) | action 手动触发 |
 | [files.md](./files.md) | sandbox 文件与命令接口 |
+| [storage.md](./storage.md) | 存储检查与维护接口 |
 | [models.md](./models.md) | 模型运行时 |
 | [streaming.md](./streaming.md) | SSE 事件流 |
 | [components.md](./components.md) | 通用 schema 与错误模型 |

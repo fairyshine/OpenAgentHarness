@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Bot, Folder, Loader2 } from "lucide-react";
+import { CircleCheck, Database, Folder, Loader2, MessageSquareText, Radio, SendHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { Message } from "@oah/api-contracts";
@@ -14,7 +14,10 @@ import { ConversationMessageRow, type ConversationMessageRowProps } from "./Conv
 type ConversationFeedProps = Pick<
   RuntimeProps,
   | "hasActiveSession"
+  | "sessionId"
+  | "currentSessionName"
   | "currentWorkspaceName"
+  | "messagesTotalCount"
   | "messagesLoading"
   | "messageFeed"
   | "conversationTailRef"
@@ -36,6 +39,13 @@ type ConversationFeedProps = Pick<
 
 type ConversationVirtualMessageRowProps = ConversationMessageRowProps & {
   onHeightChange: (messageId: string, height: number) => void;
+};
+
+type LoadingStepProps = {
+  icon: typeof Database;
+  label: string;
+  detail: string;
+  active?: boolean;
 };
 
 function estimateConversationMessageHeight(message: Message) {
@@ -143,6 +153,176 @@ const ConversationVirtualMessageRow = memo(function ConversationVirtualMessageRo
     </div>
   );
 });
+
+function LoadingStep(props: LoadingStepProps) {
+  const Icon = props.icon;
+
+  return (
+    <div className="flex items-start gap-3">
+      <div
+        className={[
+          "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border",
+          props.active
+            ? "border-primary/25 bg-primary/10 text-primary"
+            : "border-border/70 bg-background/90 text-muted-foreground"
+        ].join(" ")}
+      >
+        {props.active ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+      </div>
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-foreground">{props.label}</p>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">{props.detail}</p>
+      </div>
+    </div>
+  );
+}
+
+function SessionLoadingState(props: {
+  sessionId: string;
+  currentSessionName: string;
+  currentWorkspaceName: string;
+  messagesTotalCount?: number | undefined;
+}) {
+  const sessionLabel = props.currentSessionName === "No session" ? props.sessionId : props.currentSessionName;
+  const messageCountLabel =
+    typeof props.messagesTotalCount === "number" && props.messagesTotalCount > 0
+      ? `已索引 ${props.messagesTotalCount.toLocaleString()} 条消息`
+      : "正在读取最新消息块";
+
+  return (
+    <div className="flex min-h-[58vh] items-center justify-center py-10">
+      <div className="w-full max-w-2xl">
+        <div className="mb-6 flex items-center gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-primary/20 bg-primary/10 text-primary shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-muted-foreground">会话加载中</p>
+            <h2 className="mt-1 truncate text-xl font-semibold text-foreground">正在打开 {sessionLabel}</h2>
+            <p className="mt-2 truncate text-sm text-muted-foreground">{props.currentWorkspaceName}</p>
+          </div>
+        </div>
+
+        <div className="grid gap-5 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="space-y-4 rounded-md border border-border/70 bg-background/80 p-4 shadow-sm">
+            <LoadingStep
+              icon={Database}
+              label="读取会话快照"
+              detail="优先读取已经整理好的最新状态，不回放完整历史。"
+            />
+            <LoadingStep
+              icon={MessageSquareText}
+              label="恢复最新消息"
+              detail={messageCountLabel}
+              active
+            />
+            <LoadingStep
+              icon={Radio}
+              label="连接实时更新"
+              detail="事件流会从最新游标开始，只接收后续变更。"
+            />
+          </div>
+
+          <div className="rounded-md border border-border/70 bg-muted/25 p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">最新对话预览</p>
+                <p className="mt-1 text-xs text-muted-foreground">加载完成后会直接停在当前状态</p>
+              </div>
+              <CircleCheck className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div className="space-y-3">
+              <div className="h-16 rounded-md border border-border/60 bg-background/80 p-3">
+                <div className="h-2.5 w-24 rounded-full bg-muted-foreground/20" />
+                <div className="mt-3 h-2.5 w-4/5 rounded-full bg-muted-foreground/15" />
+                <div className="mt-2 h-2.5 w-3/5 rounded-full bg-muted-foreground/15" />
+              </div>
+              <div className="ml-auto h-14 w-4/5 rounded-md border border-border/60 bg-background/80 p-3">
+                <div className="h-2.5 w-20 rounded-full bg-primary/20" />
+                <div className="mt-3 h-2.5 w-3/4 rounded-full bg-muted-foreground/15" />
+              </div>
+              <div className="h-20 rounded-md border border-border/60 bg-background/80 p-3">
+                <div className="h-2.5 w-28 rounded-full bg-muted-foreground/20" />
+                <div className="mt-3 h-2.5 w-11/12 rounded-full bg-muted-foreground/15" />
+                <div className="mt-2 h-2.5 w-2/3 rounded-full bg-muted-foreground/15" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SessionReadyEmptyState(props: {
+  sessionId: string;
+  currentSessionName: string;
+  currentWorkspaceName: string;
+}) {
+  const sessionLabel = props.currentSessionName === "No session" ? props.sessionId : props.currentSessionName;
+
+  return (
+    <div className="flex min-h-[58vh] items-center justify-center py-10">
+      <div className="w-full max-w-2xl">
+        <div className="mb-6 flex items-center gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 shadow-sm">
+            <CircleCheck className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-muted-foreground">会话已就绪</p>
+            <h2 className="mt-1 truncate text-xl font-semibold text-foreground">{sessionLabel}</h2>
+            <p className="mt-2 truncate text-sm text-muted-foreground">{props.currentWorkspaceName}</p>
+          </div>
+        </div>
+
+        <div className="grid gap-5 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="space-y-4 rounded-md border border-border/70 bg-background/80 p-4 shadow-sm">
+            <LoadingStep
+              icon={CircleCheck}
+              label="会话状态"
+              detail="已读取最新快照，当前没有历史消息。"
+            />
+            <LoadingStep
+              icon={Radio}
+              label="实时更新"
+              detail="事件流已按最新游标连接，后续变化会直接显示。"
+            />
+            <LoadingStep
+              icon={SendHorizontal}
+              label="下一步"
+              detail="在底部输入框发送第一条消息。"
+              active
+            />
+          </div>
+
+          <div className="rounded-md border border-border/70 bg-muted/25 p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">空会话</p>
+                <p className="mt-1 text-xs text-muted-foreground">新消息会从这里开始形成时间线</p>
+              </div>
+              <MessageSquareText className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div className="space-y-3">
+              <div className="h-16 rounded-md border border-dashed border-border/70 bg-background/60 p-3">
+                <div className="h-2.5 w-24 rounded-full bg-muted-foreground/20" />
+                <div className="mt-3 h-2.5 w-4/5 rounded-full bg-muted-foreground/12" />
+                <div className="mt-2 h-2.5 w-3/5 rounded-full bg-muted-foreground/12" />
+              </div>
+              <div className="ml-auto h-14 w-4/5 rounded-md border border-dashed border-border/70 bg-background/60 p-3">
+                <div className="h-2.5 w-20 rounded-full bg-primary/20" />
+                <div className="mt-3 h-2.5 w-3/4 rounded-full bg-muted-foreground/12" />
+              </div>
+              <div className="flex h-16 items-center justify-center rounded-md border border-border/60 bg-background/80 text-xs text-muted-foreground">
+                等待第一条消息
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export const ConversationFeed = memo(function ConversationFeed(props: ConversationFeedProps) {
   const run = useStreamStore((state) => state.run);
@@ -278,6 +458,17 @@ export const ConversationFeed = memo(function ConversationFeed(props: Conversati
     [messagesForAgentInfo, props.catalog, props.session, props.sessionEvents, run, runSteps]
   );
 
+  if (props.messagesLoading && props.messageFeed.length === 0) {
+    return (
+      <SessionLoadingState
+        sessionId={props.sessionId}
+        currentSessionName={props.currentSessionName}
+        currentWorkspaceName={props.currentWorkspaceName}
+        messagesTotalCount={props.messagesTotalCount}
+      />
+    );
+  }
+
   if (!props.hasActiveSession) {
     return (
       <div className="flex min-h-[52vh] items-center justify-center py-10">
@@ -292,31 +483,13 @@ export const ConversationFeed = memo(function ConversationFeed(props: Conversati
     );
   }
 
-  if (props.messagesLoading && props.messageFeed.length === 0) {
-    return (
-      <div className="flex min-h-[52vh] items-center justify-center py-10">
-        <div className="max-w-md text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-border/70 bg-background/85 text-muted-foreground shadow-sm">
-            <Loader2 className="h-5 w-5 animate-spin" />
-          </div>
-          <h2 className="text-xl font-semibold tracking-tight text-foreground">Loading Conversation</h2>
-          <p className="mt-3 text-sm leading-7 text-muted-foreground">Fetching the latest message block for this session.</p>
-        </div>
-      </div>
-    );
-  }
-
   if (props.messageFeed.length === 0) {
     return (
-      <div className="flex min-h-[52vh] items-center justify-center py-10">
-        <div className="max-w-md text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-foreground text-background shadow-lg">
-            <Bot className="h-5 w-5" />
-          </div>
-          <h2 className="text-xl font-semibold tracking-tight text-foreground">OpenAgentHarness</h2>
-          <p className="mt-3 text-sm leading-7 text-muted-foreground">Send a message to start this session. Tool calls, traces, and engine output will appear as the conversation unfolds.</p>
-        </div>
-      </div>
+      <SessionReadyEmptyState
+        sessionId={props.sessionId}
+        currentSessionName={props.currentSessionName}
+        currentWorkspaceName={props.currentWorkspaceName}
+      />
     );
   }
 

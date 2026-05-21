@@ -173,7 +173,7 @@ Production workers should also set:
 | `tool_dir` | string | Platform tool source directory, primarily used for runtime imports and shared single-workspace sources |
 | `skill_dir` | string | Platform skill source directory, primarily used for runtime imports and shared single-workspace sources |
 
-### `workspace`
+### Runtime Materialization (`workspace`)
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -224,7 +224,7 @@ Production workers should also set:
 
 ---
 
-## Directory Reference
+## Runtime and Directory Reference
 
 ### Path and Layer Boundaries
 
@@ -260,13 +260,17 @@ The default is `dirname(workspace_dir)/.openharness`, which keeps the live works
 
 ### `runtime_dir`
 
-Stores workspace runtimes. When creating a new workspace via `POST /workspaces`, a runtime from this directory is used as the initialization source. Runtimes are never loaded as active workspaces at runtime.
+Stores workspace runtime templates. When creating a new workspace via `POST /workspaces`, a runtime from this directory is used as the initialization source. Runtimes are never loaded as active workspaces at runtime.
 
 `runtime_dir` does not participate in run execution and never holds the active execution copy of a workspace. It only answers “how do we initialize a workspace?”, not “where is it currently running?”
+
+For the files inside a runtime template, such as `.openharness/settings.yaml`, `prompts.yaml`, and `agents/*.md`, see the [Runtime configuration guide](./runtime/README.md). This page only describes where the server reads templates from and how they relate to workspace roots, sandboxes, and runtime state.
 
 ### `model_dir`
 
 Recursively scans `*.yaml` files in the directory. File format matches workspace `.openharness/models/*.yaml`. Loaded models appear as `platform/<name>` in the model catalog.
+
+First-time `OAH_HOME` initialization includes `models/openai-default.yaml`, matching the default `llm.default_model: openai-default`. The template file does not store a key; local usage usually only needs `OPENAI_API_KEY` in the daemon environment, or you can add `key: ${env.OPENAI_API_KEY}` explicitly.
 
 Example (`model_dir/openai-default.yaml`):
 

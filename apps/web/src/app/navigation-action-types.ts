@@ -67,6 +67,7 @@ interface NavigationActionParams {
     setSessionQueuedRuns: Dispatch<SetStateAction<SessionQueuedRun[]>>;
     setLiveMessagesByKey: Dispatch<SetStateAction<Record<string, LiveConversationMessageRecord>>>;
     setStreamState: Dispatch<SetStateAction<"idle" | "connecting" | "listening" | "open" | "error">>;
+    setMessagesLoading: Dispatch<SetStateAction<boolean>>;
     streamAbortRef: MutableRefObject<AbortController | null>;
     activeSessionIdRef: MutableRefObject<string>;
     lastCursorRef: MutableRefObject<string | undefined>;

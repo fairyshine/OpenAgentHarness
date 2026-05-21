@@ -57,6 +57,7 @@ Desktop   ┘          └── OAP local daemon
       node/
       native/
   models/
+    openai-default.yaml
   runtimes/
   tools/
   skills/
@@ -116,7 +117,7 @@ export OAH_DEPLOY_ROOT=/srv/oah-deploy-root
 
 | 目录 | 本地 daemon | Compose / MinIO | K8S / 对象存储 |
 | --- | --- | --- | --- |
-| `models` | 直接作为 `paths.model_dir` | 同步到 `model/` prefix | 同步到 `model/` prefix |
+| `models` | 直接作为 `paths.model_dir`，模板内置 `openai-default.yaml` | 同步到 `model/` prefix | 同步到 `model/` prefix |
 | `runtimes` | 直接作为 `paths.runtime_dir` | 同步到 `runtime/` prefix | 同步到 `runtime/` prefix |
 | `tools` | 直接作为 `paths.tool_dir` | 同步到 `tool/` prefix | 同步到 `tool/` prefix |
 | `skills` | 直接作为 `paths.skill_dir` | 同步到 `skill/` prefix | 同步到 `skill/` prefix |
@@ -223,7 +224,14 @@ oah workspace migrate-history --workspace /path/to/repo --dry-run
 
 发布包安装时，`scripts/install.sh` 会把 release tarball 展开到 `OAH_HOME/versions/<version>`，再把 `OAH_HOME/current` 指向该版本，并写入 `OAH_HOME/bin/oah` 稳定 shim。`oah update` 下载新的 GitHub Release tarball、校验 `.sha256`、安装到新的 `versions/<version>` 并切换 `current`；`oah rollback` 可以切回已有版本。`config/`、`state/`、`logs/`、`models/`、`tools/`、`skills/` 和 `workspaces/` 不属于程序版本目录，升级时不应被覆盖。
 
-`oah daemon init` 会从 CLI 包内置的 deploy-root assets 初始化 `OAH_HOME`，其中包含默认的 `config/daemon.yaml`、`server.docker.yaml`、runtimes、models、tools、skills 目录样例。源码 checkout 中同一命令优先使用仓库里的 `template/deploy-root`，因此开发模式和 packaged install 模式共享同一套目录语义。
+`oah daemon init` 会从 CLI 包内置的 deploy-root assets 初始化 `OAH_HOME`，其中包含默认的 `config/daemon.yaml`、`server.docker.yaml`、starter runtimes、`models/openai-default.yaml`、tools、skills 目录样例。源码 checkout 中同一命令优先使用仓库里的 `template/deploy-root`，因此开发模式和 packaged install 模式共享同一套目录语义。`oah daemon start`、`oah models list`、`oah runtimes list` 等本地命令也会先走同一套初始化逻辑：如果 `config/daemon.yaml` 缺失就补齐模板文件，如果文件已存在则不覆盖。
+
+默认模型文件只声明 provider 和模型名，不把 API key 写入磁盘。个人本地使用时通常只需要在启动前设置：
+
+```bash
+export OPENAI_API_KEY=sk-...
+oah daemon start
+```
 
 这些本地资产命令默认读写 `OAH_HOME`。`models add` 会校验 model YAML schema 后复制到 `OAH_HOME/models`，`models default` 只修改 `config/daemon.yaml` 的 `llm.default_model`。`tools list` 和 `skills list` 读取的是 `OAH_HOME/tools` / `OAH_HOME/skills` 全局 catalog；`tools enable <name>` 和 `skills enable <name>` 才会把选中的能力写入当前 repo 的 `.openharness/tools` / `.openharness/skills`。需要作用到其他 repo 时使用 `--workspace /path/to/repo`，预览写入用 `--dry-run`，覆盖已有 workspace asset 用 `--overwrite`。
 

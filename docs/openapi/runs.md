@@ -28,6 +28,25 @@
 1. 先用 `GET /sessions/{sessionId}/queue` 找到目标 `runId`
 2. 再调用 `POST /runs/{runId}/guide`
 
+### `POST /runs/{runId}/requeue`
+
+手动重新入队一个处于恢复隔离状态的 run。仅适用于 `failed` 或 `timed_out` 的 recovery run。
+
+返回：`runId`、`status=queued`、`previousStatus`、`source=manual_requeue`。
+
+### `POST /runs/requeue`
+
+批量重新入队 recovery runs。请求体：
+
+- `runIds`：1 到 200 个 run id
+
+返回 `items[]`，每项要么是成功入队结果，要么是：
+
+- `runId`
+- `status=error`
+- `errorCode`
+- `errorMessage`
+
 ### `GET /runs/{runId}/steps`
 
 查询步骤级审计：`model_call`、`tool_call`、`agent_switch`、`agent_delegate`、`hook`。返回 `items`、`nextCursor`。

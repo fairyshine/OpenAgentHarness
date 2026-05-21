@@ -1,0 +1,3 @@
+openai-default:
+  provider: openai
+  name: gpt-5

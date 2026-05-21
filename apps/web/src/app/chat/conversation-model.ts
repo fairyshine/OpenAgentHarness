@@ -26,6 +26,7 @@ export type RuntimeProps = RuntimeViewModel & {
   setMainViewMode: Dispatch<SetStateAction<MainViewMode>>;
   setSurfaceMode: Dispatch<SetStateAction<SurfaceMode>>;
   hasActiveSession: boolean;
+  sessionId: string;
   currentSessionName: string;
   currentWorkspaceName: string;
   inspectorSubtitle: string;

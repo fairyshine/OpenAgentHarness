@@ -10,6 +10,36 @@
 
 ## 安装与启动
 
+### 安装后的最短路径：本地 daemon
+
+如果你已经安装了 `oah` 命令，首次启动不需要手动复制模板。`oah daemon start` 会在发现 `~/.openagentharness/config/daemon.yaml` 不存在时，自动从内置模板初始化：
+
+```text
+~/.openagentharness/
+  config/daemon.yaml
+  runtimes/
+  models/openai-default.yaml
+  tools/
+  skills/
+  workspaces/
+```
+
+你只需要提供模型 API key，然后启动 daemon：
+
+```bash
+export OPENAI_API_KEY=sk-...
+oah daemon start
+oah tui
+```
+
+如果想只初始化目录、不启动服务，可以运行：
+
+```bash
+oah daemon init
+```
+
+初始化过程只补齐缺失文件，不会覆盖已有的 `config/daemon.yaml`、runtime 或模型配置。模板来源在源码模式下是 `template/deploy-root`，在 release 安装包中是 CLI 内置的 deploy-root assets。
+
 ### 第 1 步：安装依赖
 
 ```bash
@@ -19,14 +49,17 @@ pnpm install
 ### 第 2 步：启动本地整套服务
 
 ```bash
-mkdir -p /absolute/path/to/oah-deploy-root
-cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
-export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
-# 在 $OAH_DEPLOY_ROOT/models/ 下添加至少一个模型 YAML
+export OPENAI_API_KEY=sk-...
 pnpm local:up
 ```
 
-本地开发也可以只设置 `OAH_HOME`，或完全不设置环境变量；`pnpm local:up` 会默认使用 `OAH_HOME`（再 fallback 到 `~/.openagentharness`）。显式 `OAH_DEPLOY_ROOT` 主要用于团队/部署资产根目录需要独立管理的场景。
+本地开发可以只设置 `OAH_HOME`，或完全不设置环境变量；`pnpm local:up` 会默认使用 `OAH_HOME`（再 fallback 到 `~/.openagentharness`），并使用模板中的 `config/server.docker.yaml`、`runtimes`、`models` 等资产。显式 `OAH_DEPLOY_ROOT` 主要用于团队/部署资产根目录需要独立管理的场景：
+
+```bash
+mkdir -p /absolute/path/to/oah-deploy-root
+cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
+export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
+```
 
 这条命令会一次性启动本地整套 stack：`PostgreSQL`、`Redis`、`MinIO`、`oah-api`、`oah-controller`、`oah-compose-scaler`、`oah-sandbox`。其中 `oah-api` 对外监听 `http://127.0.0.1:8787`，`oah-sandbox` 在本地栈中承载 standalone worker，`oah-compose-scaler` 负责按 controller 目标副本数动态扩缩 `oah-sandbox`，并会在启动阶段自动执行一次 storage sync。
 
@@ -104,7 +137,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 ## 接下来
 
 - [架构总览](./architecture-overview.md) — 理解系统整体结构
-- [Workspace 配置](./workspace/README.md) — 配置 Agent、Skill、Tool
+- [Runtime 配置](./runtime/README.md) — 编写 runtime 模板并配置 Agent、Skill、Tool
 - [部署与运行](./deploy.md) — 本地一体 vs 生产拆分部署
 - [TUI](./tui.md) — 了解终端入口
 - [设计总览](./design-overview.md) — 理解核心设计决策

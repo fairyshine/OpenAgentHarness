@@ -4,7 +4,13 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { daemonStatus, initDaemonHome, readDaemonLogs, resolveOahHome } from "../apps/cli/src/daemon/lifecycle.js";
+import {
+  daemonStatus,
+  initDaemonHome,
+  readDaemonLogs,
+  readDaemonModelConfigWarning,
+  resolveOahHome
+} from "../apps/cli/src/daemon/lifecycle.js";
 
 const tempDirs: string[] = [];
 
@@ -48,6 +54,10 @@ describe("OAP daemon lifecycle helpers", () => {
 
     expect(second.home).toBe(home);
     expect(await readFile(second.configPath, "utf8")).toBe("server:\n  host: 127.0.0.1\n  port: 18788\n");
+    expect(await readFile(path.join(home, "models", "openai-default.yaml"), "utf8")).toContain("openai-default:");
+    expect(await readFile(path.join(home, "runtimes", "vibe-coding", ".openharness", "settings.yaml"), "utf8")).toContain(
+      "default_agent: build"
+    );
     expect(await readFile(second.tokenPath, "utf8")).toBe(initialToken);
     expect(await readFile(path.join(home, ".oah-home-version"), "utf8")).toBe("1\n");
   });
@@ -78,6 +88,29 @@ describe("OAP daemon lifecycle helpers", () => {
     await expect(access(path.join(home, "README.md"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access(path.join(home, "skills", "README.md"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(path.join(home, "config", "daemon.yaml"), "utf8")).toContain("18799");
+  });
+
+  it("warns when the configured default model is missing", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "oah-daemon-model-warning-"));
+    tempDirs.push(home);
+
+    const paths = await initDaemonHome({ home });
+    const config = await readFile(paths.configPath, "utf8");
+    await writeFile(paths.configPath, config.replace("default_model: openai-default", "default_model: missing-model"), "utf8");
+
+    await expect(readDaemonModelConfigWarning({ home })).resolves.toContain('Default model "missing-model" was not found');
+  });
+
+  it("warns when no platform models can be loaded", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "oah-daemon-no-models-"));
+    tempDirs.push(home);
+
+    const paths = await initDaemonHome({ home });
+    const config = await readFile(paths.configPath, "utf8");
+    await mkdir(path.join(home, "empty-models"), { recursive: true });
+    await writeFile(paths.configPath, config.replace("model_dir: ../models", "model_dir: ../empty-models"), "utf8");
+
+    await expect(readDaemonModelConfigWarning({ home })).resolves.toContain("No platform models were loaded");
   });
 
   it("removes previously copied template README files without deleting user README content", async () => {

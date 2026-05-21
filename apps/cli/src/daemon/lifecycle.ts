@@ -6,6 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 
+import { loadPlatformModels, loadServerConfig } from "@oah/config";
+
 export type DaemonCommandOptions = {
   home?: string | undefined;
 };
@@ -130,13 +132,22 @@ export async function resolveDaemonApiConnection(options: DaemonCommandOptions =
   };
 }
 
+export async function readDaemonModelConfigWarning(options: DaemonCommandOptions = {}): Promise<string | undefined> {
+  const paths = await initDaemonHome(options);
+  return describeDaemonModelConfigWarning(paths);
+}
+
 export async function startDaemon(options: DaemonStartOptions = {}): Promise<string> {
   const paths = await initDaemonHome(options);
   const endpoint = await readDaemonEndpoint(paths.configPath);
+  const modelConfigWarning = await describeDaemonModelConfigWarning(paths);
   const current = await readPidStatus(paths.pidPath);
   if (current.kind === "running") {
     const profile = await fetchSystemProfile(endpoint.baseUrl).catch(() => null);
-    return `OAP daemon is already running (pid ${current.pid}) at ${endpoint.baseUrl}${profile ? ` as ${profile}` : ""}.`;
+    return appendOptionalWarning(
+      `OAP daemon is already running (pid ${current.pid}) at ${endpoint.baseUrl}${profile ? ` as ${profile}` : ""}.`,
+      modelConfigWarning
+    );
   }
   if (current.kind === "stale") {
     await rm(paths.pidPath, { force: true });
@@ -176,7 +187,7 @@ export async function startDaemon(options: DaemonStartOptions = {}): Promise<str
     throw new Error(`OAP daemon did not become ready: ${started.reason}. See ${paths.logPath}.`);
   }
 
-  return `OAP daemon started (pid ${child.pid}) at ${endpoint.baseUrl}. Logs: ${paths.logPath}`;
+  return appendOptionalWarning(`OAP daemon started (pid ${child.pid}) at ${endpoint.baseUrl}. Logs: ${paths.logPath}`, modelConfigWarning);
 }
 
 export async function daemonStatus(options: DaemonCommandOptions = {}): Promise<string> {
@@ -303,6 +314,47 @@ function assertCommandAvailable(command: string, message: string): void {
   if (result.error && "code" in result.error && result.error.code === "ENOENT") {
     throw new Error(message);
   }
+}
+
+async function describeDaemonModelConfigWarning(paths: DaemonPaths): Promise<string | undefined> {
+  const config = await loadServerConfig(paths.configPath);
+  const modelLoadErrors: string[] = [];
+  const models = await loadPlatformModels(config.paths.model_dir, {
+    onError: ({ filePath, error }) => {
+      modelLoadErrors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+  const modelNames = Object.keys(models).sort();
+  const warnings: string[] = [];
+
+  if (modelNames.length === 0) {
+    warnings.push(
+      [
+        `No platform models were loaded from ${config.paths.model_dir}.`,
+        `Add a model YAML there, or use the bundled ${path.join(config.paths.model_dir, "openai-default.yaml")} with OPENAI_API_KEY.`
+      ].join(" ")
+    );
+  } else if (!models[config.llm.default_model]) {
+    warnings.push(
+      [
+        `Default model "${config.llm.default_model}" was not found in ${config.paths.model_dir}.`,
+        `Add a matching YAML file or run "oah models default <name>" to select one of: ${modelNames.join(", ")}.`
+      ].join(" ")
+    );
+  }
+
+  if (modelLoadErrors.length > 0) {
+    warnings.push(`Some model files could not be loaded:\n${modelLoadErrors.map((message) => `  - ${message}`).join("\n")}`);
+  }
+
+  if (warnings.length === 0) {
+    return undefined;
+  }
+  return `Warning: model configuration needs attention.\n${warnings.join("\n")}`;
+}
+
+function appendOptionalWarning(message: string, warning: string | undefined): string {
+  return warning ? `${message}\n\n${warning}` : message;
 }
 
 function resolveSourceRepoRoot(packageRoot: string): string | undefined {

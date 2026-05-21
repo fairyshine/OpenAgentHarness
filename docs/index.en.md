@@ -30,18 +30,16 @@ Client surfaces are converging on WebUI, TUI, and Desktop. This repository curre
 
 ```bash
 pnpm install                                        # Install dependencies
-mkdir -p /absolute/path/to/oah-deploy-root
-cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
-export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
-pnpm local:up                                       # Start PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox, then auto-sync once
+export OPENAI_API_KEY=sk-...                       # Model API key
+pnpm dev:cli -- daemon start                       # First run seeds ~/.openagentharness
 pnpm dev:web                                        # Start WebUI
-pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui # Start terminal TUI
+pnpm dev:cli -- tui                                # Start terminal TUI
 ```
 
 After startup:
 
 - :material-monitor-dashboard: **WebUI** — [http://localhost:5174](http://localhost:5174)
-- :material-console: **Terminal TUI** — `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui`
+- :material-console: **Terminal TUI** — `pnpm dev:cli -- tui`
 - :material-api: **oah-api** — [http://localhost:8787](http://localhost:8787)
 
 [:octicons-arrow-right-24: Full guide](./getting-started.md){ .md-button .md-button--primary }
@@ -74,13 +72,21 @@ After startup:
 
     [:octicons-arrow-right-24: View](./terminology.en.md)
 
--   :material-folder-cog-outline:{ .lg .middle } **Workspace Config**
+-   :material-folder-cog-outline:{ .lg .middle } **Config Reference**
 
     ---
 
-    Agents, models, skills, actions, hooks
+    Settings, agents, models, skills, actions, hooks
 
-    [:octicons-arrow-right-24: Configure](./workspace/README.md)
+    [:octicons-arrow-right-24: View reference](./workspace/README.md)
+
+-   :material-cube-outline:{ .lg .middle } **Runtime Config**
+
+    ---
+
+    Build, publish, and maintain reusable runtime templates
+
+    [:octicons-arrow-right-24: Build a Runtime](./runtime/README.md)
 
 -   :material-server-outline:{ .lg .middle } **Deploy and Run**
 

@@ -495,7 +495,10 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
         >
           <ConversationFeed
             hasActiveSession={props.hasActiveSession}
+            sessionId={props.sessionId}
+            currentSessionName={props.currentSessionName}
             currentWorkspaceName={props.currentWorkspaceName}
+            messagesTotalCount={props.messagesTotalCount}
             messagesLoading={props.messagesLoading}
             messageFeed={props.messageFeed}
             conversationTailRef={props.conversationTailRef}

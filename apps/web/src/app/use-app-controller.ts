@@ -486,6 +486,7 @@ export function useAppController() {
       setSessionQueuedRuns,
       setLiveMessagesByKey,
       setStreamState,
+      setMessagesLoading,
       streamAbortRef,
       activeSessionIdRef,
       lastCursorRef,

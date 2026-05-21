@@ -29,9 +29,7 @@
 
 ```bash
 # 终端 1 — 本地整套服务（PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-compose-scaler + oah-sandbox）
-mkdir -p /absolute/path/to/oah-deploy-root
-cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
-export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
+export OPENAI_API_KEY=sk-...
 pnpm local:up
 
 # 终端 3 — WebUI
@@ -40,6 +38,8 @@ pnpm dev:web
 # 可选 — 终端 TUI
 pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
 ```
+
+`pnpm local:up` 默认使用 `OAH_HOME`（再 fallback 到 `~/.openagentharness`），缺少配置时会从 `template/deploy-root` 初始化 `config/server.docker.yaml`、runtime 和默认模型文件。只有需要独立管理团队/部署资产根目录时，再设置 `OAH_DEPLOY_ROOT` 并复制模板。
 
 WebUI 默认地址：`http://localhost:5174`
 

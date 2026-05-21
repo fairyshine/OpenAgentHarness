@@ -342,7 +342,7 @@ function prepareDockerServerConfigs() {
       );
     } else if (seededFromTemplate) {
       console.log(
-        `Using bundled deploy template at ${sourceConfigPath}. Add your model YAML files under ${path.join(resolveDeployAssetRoot(deployRoot), "models")} before deploying.`
+        `Using bundled deploy template at ${sourceConfigPath}. The default model file is ${path.join(resolveDeployAssetRoot(deployRoot), "models", "openai-default.yaml")}; set OPENAI_API_KEY or edit that file before running model calls.`
       );
     }
   }

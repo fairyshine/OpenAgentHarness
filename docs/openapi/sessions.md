@@ -14,6 +14,33 @@
 
 获取会话元数据。
 
+### `GET /sessions/{sessionId}/snapshot`
+
+一次性读取会话首屏快照，供 Web / 外部控制台初始化使用。返回：
+
+- `session`：会话元数据
+- `messages`：最近的 transcript 视图消息页
+- `runs`：当前选中 run 或最近 run 列表
+- `selectedRunId` / `selectedRunSteps`：传入 `selectedRunId` 且属于当前 session 时返回
+- `queue`：当前服务端后续消息队列
+
+参数：
+
+- `selectedRunId`：可选。请求在快照里选中某个 run，并返回其步骤页。
+
+### `PATCH /sessions/{sessionId}`
+
+更新会话可变设置。请求体至少包含一个字段：
+
+- `title`：会话标题
+- `activeAgentName`：当前活跃 agent 名称
+- `modelRef`：当前会话模型引用；传 `null` 表示清除覆盖
+- `workspaceMemory`：workspace memory 覆盖；传 `null` 表示清除覆盖
+
+### `DELETE /sessions/{sessionId}`
+
+删除会话记录及其关联运行时数据。成功返回 `204`。
+
 ### `GET /sessions/{sessionId}/children`
 
 分页读取当前 session 的直接子 session，主要用于查看 subagent 会话。参数：`pageSize`、`cursor`。
@@ -25,11 +52,22 @@
 
 ### `GET /sessions/{sessionId}/messages`
 
-分页读取历史消息。参数：`pageSize`、`cursor`、`direction`。
+分页读取历史消息。参数：`pageSize`、`cursor`、`direction`、`view`。
 
 - `direction=forward`：从最旧消息向后翻页
 - `direction=backward`：从最新消息向前翻页，适合聊天窗口“加载更早消息”
 - `cursor` 是 opaque keyset cursor，不再是 offset
+- `view=stored`：返回持久化原始 `Message`，这是默认值
+- `view=transcript`：返回经过 transcript projection 映射后的 API `Message`
+
+`view=transcript` 会走 `EngineMessage[] -> projectToTranscript() -> TranscriptMessage[] -> Message[]`。返回的 `Message.metadata` 会补充 projection 追踪字段：
+
+- `projectedView`
+- `projectedSemanticType`
+- `projectedSourceMessageIds`
+- `projectionMetadata`
+
+当前公开消息列表 API 只支持 `stored` 和 `transcript` 两种视图；`model`、`compact`、`debug` projection 是 engine 内部消费侧视图，不通过此接口直接返回。
 
 `Message.content` 采用 AI SDK 风格 role-aware 结构：
 
@@ -84,6 +122,27 @@
 - `content`：用户输入文本
 - `createdAt`：进入服务端队列的时间
 - `position`：当前队列顺序（从 1 开始）
+
+### `GET /sessions/{sessionId}/runs`
+
+分页读取当前 session 下的 runs。参数：`pageSize`、`cursor`。返回 `RunPage`。
+
+### `GET /sessions/{sessionId}/terminals/{terminalId}`
+
+读取某个 session terminal 的输出快照。参数：
+
+- `maxBytes`：可选，返回输出的最大字节数，范围 `1024` 到 `1048576`，默认 `262144`
+
+返回字段包括 `status`、`outputPath`、`output`、`encoding`、`truncated`、`inputWritable`、`terminalKind`、`pid`、`command`、`exitCode`、`signal`、`createdAt`、`updatedAt`、`endedAt`。
+
+### `POST /sessions/{sessionId}/terminals/{terminalId}/input`
+
+向可写 session terminal 写入输入。请求体：
+
+- `input`：要写入的文本
+- `appendNewline`：可选，是否追加换行
+
+返回 `sessionId`、`terminalId`、`status`、`inputWritten=true`、`appendNewline`、`inputWritable`、`updatedAt`。
 
 ### `POST /sessions/{sessionId}/compact`
 

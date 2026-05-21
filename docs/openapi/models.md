@@ -8,6 +8,24 @@
 
 返回已支持的 provider 类型。字段：`id`、`packageName`、`description`、`requiresUrl`、`useCases`。
 
+### `GET /platform-models`
+
+列出平台已发现的模型入口。返回 `items[]`，每项包含 provider、model id、显示名、能力与发现来源等元数据。
+
+### `POST /platform-models/refresh`
+
+同步刷新当前 API server 可见的 platform model snapshot。
+
+内部 worker / loopback 场景也可调用 `POST /internal/v1/platform-models/refresh`，语义相同。
+
+### `POST /platform-models/refresh/distributed`
+
+触发分布式 platform model 刷新，适用于有多个 worker / placement 的部署。
+
+### `GET /platform-models/events`
+
+订阅 platform model snapshot 的 SSE 更新。连接建立后先发送 `platform-models.snapshot`，之后模型列表变化时发送 `platform-models.updated`。
+
 ### `POST /internal/v1/models/generate`
 
 一次性生成。请求：`model`、`prompt`、`messages`、`temperature`、`maxTokens`。返回：`model`、`text`、`finishReason`、`usage`。

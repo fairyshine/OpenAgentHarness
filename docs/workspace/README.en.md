@@ -1,34 +1,34 @@
-# Workspace
+# Runtime Configuration Overview
 
-The workspace is the primary capability boundary. When a user opens a project, the runtime auto-discovers all capabilities from the project root -- no global configuration required.
+Runtime configuration is the set of files that is copied into a workspace and then used for capability discovery at execution time. You can author these files in a `paths.runtime_dir/<runtime>` template; after workspace creation, they live in the project root and define that workspace's agents, models, tools, skills, hooks, and related behavior.
 
-## Workspace Is Not Sandbox
+## Runtime Configuration Is Not Sandbox
 
-These two concepts are easy to conflate, but they live at different layers:
+Runtime configuration describes what capabilities a project has and how it should behave by default; a sandbox describes where those capabilities execute. These concepts are easy to conflate, but they live at different layers:
 
 | Concept | Boundary | Meaning |
 | --- | --- | --- |
-| `Workspace` | Logical / project / capability boundary | Which project the agent is working on, and which agents, models, tools, skills, and hooks it declares |
+| `Runtime configuration` | Logical / project / capability boundary | Which project the agent is working on, and which agents, models, tools, skills, and hooks it declares |
 | `Sandbox` | Execution host boundary | Which local filesystem and process environment the active copy runs inside |
 
 So:
 
-- `workspace` defines what the project is and what capabilities it declares
+- runtime configuration defines what the project is and what capabilities it declares
 - `sandbox` defines where execution happens
 - an active workspace is materialized into an `Active Workspace Copy` owned by the owner worker
 - in `embedded` mode, that copy is usually the local filesystem
 - in `self_hosted / e2b`, that copy usually lives inside a remote sandbox
 
-## Workspace Kind
+## Configuration Shape
 
-There is one standard workspace shape. A workspace declares agents, models, actions, skills, tools, and hooks in one consistent directory structure, and the runtime discovers and executes them uniformly.
+There is one standard configuration shape. Agents, models, actions, skills, tools, and hooks are declared in one consistent directory structure, and the runtime discovers and executes them uniformly.
 
 ## Directory Structure
 
 Full structure:
 
 ```text
-workspace/
+runtime-or-workspace/
   AGENTS.md
   .openharness/
     settings.yaml
@@ -70,7 +70,7 @@ workspace/
 Minimal viable structure:
 
 ```text
-workspace/
+runtime-or-workspace/
   AGENTS.md
   .openharness/
     settings.yaml
@@ -83,13 +83,13 @@ workspace/
 
 ## Auto-Discovery
 
-The workspace parser resolves these paths when a workspace is loaded, created, or refreshed; individual runs then execute against that resolved workspace definition and active copy:
+After a runtime template creates a workspace, or when a workspace is loaded or refreshed, the runtime parser resolves these paths. Individual runs then execute against the resolved capability definition and active copy:
 
 | Path | Purpose |
 | --- | --- |
 | `AGENTS.md` | Project description, injected into system prompt |
 | `.openharness/settings.yaml` | Main config entry point |
-| `.openharness/prompts.yaml` | Workspace prompt configuration |
+| `.openharness/prompts.yaml` | Runtime prompt configuration |
 | `.openharness/agents/*.md` | Agent definitions |
 | `.openharness/models/*.yaml` | Model entries |
 | `.openharness/actions/*/ACTION.yaml` | Action definitions |
@@ -104,7 +104,7 @@ The workspace parser resolves these paths when a workspace is loaded, created, o
 
 !!! info
 
-    `AGENTS.md`, `.openharness/agents`, `.openharness/models`, and similar files describe the workspace itself, not the sandbox. Even when a workspace is materialized into another host for execution, those definitions still belong to the same workspace.
+    `AGENTS.md`, `.openharness/agents`, `.openharness/models`, and similar files describe the runtime configuration itself, not the sandbox. Even when a workspace is materialized into another host for execution, those definitions still belong to the same capability definition.
 
 **Merge rules:**
 

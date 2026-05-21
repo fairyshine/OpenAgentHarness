@@ -13,9 +13,17 @@
 - Query: `name`、`overwrite`
 - Body: `application/octet-stream`
 
+### `PUT /runtimes/{runtimeName}`
+
+覆盖更新一个已有 workspace runtime。Body: `application/octet-stream`。该接口要求目标 runtime 已存在。
+
 ### `DELETE /runtimes/{runtimeName}`
 
 删除一个已有 runtime。
+
+### Legacy runtime aliases
+
+`/blueprints`、`/blueprints/upload`、`/blueprints/{runtimeName}` 是 runtime API rename 期间保留的兼容别名，行为分别等同于 `/runtimes`、`/runtimes/upload`、`/runtimes/{runtimeName}`。新客户端应使用 `/runtimes*`。
 
 ### `POST /workspaces`
 
@@ -65,6 +73,31 @@ OAP personal local daemon 专用接口。repo 移动或重命名后，用新的 
 返回自动发现的能力清单：agents、models、actions、skills、tools、hooks、nativeTools。
 
 `kind` 当前固定为 `project`，catalog 由 workspace 自身声明决定。
+
+### Workspace Memory API
+
+以下接口只在当前 server 支持 workspace memory 且 workspace owner 可达时可用：
+
+- `GET /workspaces/{workspaceId}/memory/status`：读取 memory 根目录、索引、文件数量、待处理 proposal 等状态
+- `GET /workspaces/{workspaceId}/memory`：列出 memory index
+- `GET /workspaces/{workspaceId}/memory/search`：搜索 memory。参数：`query`、`corpus`（`all / index / topics / sessions / daily / dreams`）、`maxResults`
+- `GET /workspaces/{workspaceId}/memory/read`：读取 memory 文件片段。参数：`path`、`from`、`lines`
+- `GET /workspaces/{workspaceId}/memory/proposals`：列出待确认的 memory proposals
+- `POST /workspaces/{workspaceId}/memory/proposals/apply`：应用 proposal。请求体：`path`
+- `POST /workspaces/{workspaceId}/memory/proposals/reject`：拒绝 proposal。请求体：`path`、可选 `reason`
+
+### Workspace-Scoped File API
+
+这些接口用于 local / owner worker 可达场景下直接操作 workspace 文件，与 sandbox 文件 API 的请求字段保持一致：
+
+- `GET /workspaces/{workspaceId}/entries`
+- `GET /workspaces/{workspaceId}/files/content`
+- `PUT /workspaces/{workspaceId}/files/content`
+- `PUT /workspaces/{workspaceId}/files/upload`
+- `GET /workspaces/{workspaceId}/files/download`
+- `POST /workspaces/{workspaceId}/directories`
+- `DELETE /workspaces/{workspaceId}/entries`
+- `PATCH /workspaces/{workspaceId}/entries/move`
 
 ## 与 Sandbox API 的关系
 

@@ -877,6 +877,7 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.runtime.setRunSteps([]);
         params.runtime.setLiveMessagesByKey({});
       });
+      params.runtime.setMessagesLoading(true);
     } else if (!quiet) {
       params.runtime.lastExplicitSessionRefreshRef.current = { sessionId: nextSessionId, at: Date.now() };
       params.runtime.sessionSnapshotHydrationRef.current = { sessionId: nextSessionId, at: Date.now() };
@@ -885,6 +886,7 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.runtime.setEvents([]);
         params.runtime.setLiveMessagesByKey({});
       });
+      params.runtime.setMessagesLoading(true);
     }
 
     try {
@@ -914,6 +916,7 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.runtime.setSelectedRunId(selectedSnapshotRun?.id ?? "");
         params.runtime.setRun(selectedSnapshotRun);
         params.runtime.setRunSteps(snapshotResponse.selectedRunSteps?.items ?? []);
+        params.runtime.setMessagesLoading(false);
         params.navigation.setRecentSessions((current) => addRecentId(current, nextSessionId));
         if (workspaceChanged) {
           params.navigation.setWorkspace(null);
@@ -945,6 +948,7 @@ export function useNavigationActions(params: NavigationActionParams) {
             params.navigation.setSession(sessionResponse);
             params.navigation.setSessionId(nextSessionId);
             params.navigation.setWorkspaceId(nextWorkspaceId);
+            params.runtime.setMessagesLoading(false);
             params.navigation.setRecentSessions((current) => addRecentId(current, nextSessionId));
             if (workspaceChanged) {
               params.navigation.setWorkspace(null);
@@ -970,6 +974,7 @@ export function useNavigationActions(params: NavigationActionParams) {
         } catch (fallbackError) {
           params.navigation.setSession(null);
           params.runtime.setMessages([]);
+          params.runtime.setMessagesLoading(false);
           if (isNotFoundError(fallbackError)) {
             clearSessionSelection(nextSessionId, { forgetSession: true });
           }
@@ -983,6 +988,7 @@ export function useNavigationActions(params: NavigationActionParams) {
       params.runtime.sessionSnapshotHydrationRef.current = null;
       params.navigation.setSession(null);
       params.runtime.setMessages([]);
+      params.runtime.setMessagesLoading(false);
       if (!quiet) {
         params.setErrorMessage(toErrorMessage(error));
       }

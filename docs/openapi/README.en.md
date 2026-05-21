@@ -34,6 +34,7 @@ File and command endpoints intentionally keep [E2B](https://github.com/e2b-dev/E
 | [runs.md](./runs.md) | Run lookup, cancellation, and queued-run guide |
 | [actions.md](./actions.md) | Manual action triggering |
 | [files.md](./files.md) | Sandbox file management and commands |
+| [storage.md](./storage.md) | Storage inspection and maintenance endpoints |
 | [models.md](./models.md) | Model runtime |
 | [streaming.md](./streaming.md) | SSE event streaming |
 | [components.md](./components.md) | Shared schemas and error models |

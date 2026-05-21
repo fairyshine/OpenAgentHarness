@@ -1,34 +1,34 @@
-# Workspace
+# Runtime 配置总览
 
-Workspace 是能力发现的主边界。用户打开项目后，运行时从项目根目录自动发现全部能力，无需全局配置。
+Runtime 配置是一组会被复制到 workspace 并在执行时参与能力发现的文件。你可以在 `paths.runtime_dir/<runtime>` 模板里编写这些文件；创建 workspace 后，它们会进入项目根目录并成为该 workspace 的 agent、model、tool、skill、hook 等能力定义。
 
-## Workspace 不是 Sandbox
+## Runtime 配置不是 Sandbox
 
-这两个概念很容易混，但边界不同：
+Runtime 配置描述“这个项目有哪些能力、默认怎么运行”；sandbox 描述“这些能力最终在哪个宿主里执行”。这两个概念很容易混，但边界不同：
 
 | 概念 | 边界 | 说明 |
 | --- | --- | --- |
-| `Workspace` | 逻辑 / 项目 / 能力边界 | 描述 agent 正在处理哪个项目，以及该项目声明了哪些 agent、model、tool、skill、hook |
+| `Runtime 配置` | 逻辑 / 项目 / 能力边界 | 描述 agent 正在处理哪个项目，以及该项目声明了哪些 agent、model、tool、skill、hook |
 | `Sandbox` | 执行宿主边界 | 描述这些能力最终在哪个本地文件系统与进程环境里执行 |
 
 因此：
 
-- `workspace` 负责定义“是什么项目、有哪些能力”
+- runtime 配置负责定义“是什么项目、有哪些能力”
 - `sandbox` 负责定义“在哪个宿主里执行”
 - 活跃 workspace 会被 materialize 成 owner worker 持有的 `Active Workspace Copy`
 - 在 `embedded` 模式下，这个副本通常就是本机目录
 - 在 `self_hosted / e2b` 模式下，这个副本通常位于远端 sandbox 内
 
-## Workspace 类型
+## 配置形态
 
-当前只保留一种标准 workspace 形态：在同一目录结构内声明 agents、models、actions、skills、tools、hooks，并由运行时统一发现与执行。
+当前只保留一种标准配置形态：在同一目录结构内声明 agents、models、actions、skills、tools、hooks，并由运行时统一发现与执行。
 
 ## 目录结构
 
 完整结构：
 
 ```text
-workspace/
+runtime-or-workspace/
   AGENTS.md
   .openharness/
     settings.yaml
@@ -70,7 +70,7 @@ workspace/
 最小可用结构：
 
 ```text
-workspace/
+runtime-or-workspace/
   AGENTS.md
   .openharness/
     settings.yaml
@@ -83,13 +83,13 @@ workspace/
 
 ## 自动发现规则
 
-workspace 在加载、创建和刷新时会解析以下路径；run 执行时使用的是已经解析好的 workspace 定义与活跃副本：
+runtime 模板创建 workspace 后，或 workspace 被加载和刷新时，运行时会解析以下路径；run 执行时使用的是已经解析好的能力定义与活跃副本：
 
 | 路径 | 用途 |
 | --- | --- |
 | `AGENTS.md` | 项目说明文档，注入 system prompt |
 | `.openharness/settings.yaml` | 总配置入口 |
-| `.openharness/prompts.yaml` | Workspace prompt 配置 |
+| `.openharness/prompts.yaml` | Runtime prompt 配置 |
 | `.openharness/agents/*.md` | Agent 定义 |
 | `.openharness/models/*.yaml` | 模型入口 |
 | `.openharness/actions/*/ACTION.yaml` | Action 定义 |
@@ -104,7 +104,7 @@ workspace 在加载、创建和刷新时会解析以下路径；run 执行时使
 
 !!! info
 
-    `AGENTS.md`、`.openharness/agents`、`.openharness/models` 等描述的是 workspace 本身，不描述 sandbox。即使 workspace 被 materialize 到别的宿主中执行，这些定义仍然属于同一个 workspace。
+    `AGENTS.md`、`.openharness/agents`、`.openharness/models` 等描述的是 runtime 配置本身，不描述 sandbox。即使 workspace 被 materialize 到别的宿主中执行，这些定义仍然属于同一套能力定义。
 
 **合并规则：**
 

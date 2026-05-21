@@ -19,9 +19,7 @@ Three terminals, simplest path:
 
 ```bash
 # Terminal 1 — Full local stack (PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-compose-scaler + oah-sandbox)
-mkdir -p /absolute/path/to/oah-deploy-root
-cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
-export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
+export OPENAI_API_KEY=sk-...
 pnpm local:up
 
 # Terminal 3 — WebUI
@@ -30,6 +28,8 @@ pnpm dev:web
 # Optional — terminal TUI
 pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui
 ```
+
+`pnpm local:up` defaults to `OAH_HOME`, then `~/.openagentharness`; when config is missing it seeds `config/server.docker.yaml`, runtimes, and the default model file from `template/deploy-root`. Set `OAH_DEPLOY_ROOT` and copy the template only when you want a separately managed team/deployment asset root.
 
 WebUI default address: `http://localhost:5174`
 

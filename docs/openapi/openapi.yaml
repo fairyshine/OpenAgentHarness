@@ -41,6 +41,7 @@ tags:
   - name: Runs
   - name: Actions
   - name: Events
+  - name: Storage
 paths:
   /healthz:
     get:
@@ -179,6 +180,101 @@ paths:
           description: Workspace runtime deleted
         default:
           $ref: '#/components/responses/ErrorResponse'
+  /blueprints:
+    get:
+      tags: [Workspaces]
+      summary: List workspace runtimes (legacy alias)
+      operationId: listWorkspaceBlueprints
+      deprecated: true
+      responses:
+        '200':
+          description: Workspace runtime list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRuntimeList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /blueprints/upload:
+    post:
+      tags: [Workspaces]
+      summary: Upload workspace runtime (legacy alias)
+      operationId: uploadWorkspaceBlueprint
+      deprecated: true
+      parameters:
+        - in: query
+          name: name
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - in: query
+          name: overwrite
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Workspace runtime uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRuntimeUploadResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /blueprints/{runtimeName}:
+    put:
+      tags: [Workspaces]
+      summary: Update workspace runtime (legacy alias)
+      operationId: updateWorkspaceBlueprint
+      deprecated: true
+      parameters:
+        - name: runtimeName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Workspace runtime updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRuntimeUploadResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Workspaces]
+      summary: Delete workspace runtime (legacy alias)
+      operationId: deleteWorkspaceBlueprint
+      deprecated: true
+      parameters:
+        - name: runtimeName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Workspace runtime deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /model-providers:
     get:
       tags: [Models]
@@ -191,6 +287,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ModelProviderList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /platform-models:
+    get:
+      tags: [Models]
+      summary: List discovered platform models
+      operationId: listPlatformModels
+      responses:
+        '200':
+          description: Platform model list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /platform-models/refresh:
+    post:
+      tags: [Models]
+      summary: Refresh platform model metadata
+      operationId: refreshPlatformModels
+      responses:
+        '200':
+          description: Platform model snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /platform-models/refresh/distributed:
+    post:
+      tags: [Models]
+      summary: Refresh platform model metadata across workers
+      operationId: refreshPlatformModelsDistributed
+      responses:
+        '200':
+          description: Distributed refresh result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /platform-models/events:
+    get:
+      tags: [Models, Events]
+      summary: Subscribe to platform model metadata updates
+      operationId: streamPlatformModelEvents
+      responses:
+        '200':
+          description: Server-Sent Events stream of platform model snapshots
+          content:
+            text/event-stream:
+              schema:
+                type: string
         default:
           $ref: '#/components/responses/ErrorResponse'
   /workspaces:
@@ -346,6 +498,348 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceCatalog'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/status:
+    get:
+      tags: [Workspaces]
+      summary: Get workspace memory status
+      operationId: getWorkspaceMemoryStatus
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '200':
+          description: Workspace memory status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory:
+    get:
+      tags: [Workspaces]
+      summary: List workspace memory index
+      operationId: listWorkspaceMemory
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '200':
+          description: Workspace memory index
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/search:
+    get:
+      tags: [Workspaces]
+      summary: Search workspace memory
+      operationId: searchWorkspaceMemory
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: corpus
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all, index, topics, sessions, daily, dreams]
+            default: all
+        - name: maxResults
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        '200':
+          description: Workspace memory search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/read:
+    get:
+      tags: [Workspaces]
+      summary: Read a workspace memory file slice
+      operationId: readWorkspaceMemory
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: lines
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        '200':
+          description: Workspace memory file content slice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/proposals:
+    get:
+      tags: [Workspaces]
+      summary: List workspace memory proposals
+      operationId: listWorkspaceMemoryProposals
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '200':
+          description: Workspace memory proposal page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/proposals/apply:
+    post:
+      tags: [Workspaces]
+      summary: Apply a workspace memory proposal
+      operationId: applyWorkspaceMemoryProposal
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                  minLength: 1
+      responses:
+        '200':
+          description: Proposal action result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/proposals/reject:
+    post:
+      tags: [Workspaces]
+      summary: Reject a workspace memory proposal
+      operationId: rejectWorkspaceMemoryProposal
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                  minLength: 1
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 220
+      responses:
+        '200':
+          description: Proposal action result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/entries:
+    get:
+      tags: [Files]
+      summary: List workspace directory entries
+      operationId: listWorkspaceEntries
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/DirectoryPathQuery'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/EntrySortBy'
+        - $ref: '#/components/parameters/SortOrder'
+      responses:
+        '200':
+          description: Workspace entry page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntryPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Files]
+      summary: Delete a workspace file or directory
+      operationId: deleteWorkspaceEntry
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - $ref: '#/components/parameters/Recursive'
+      responses:
+        '200':
+          description: Workspace entry deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDeleteResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/entries/move:
+    patch:
+      tags: [Files]
+      summary: Move or rename a workspace entry
+      operationId: moveWorkspaceEntry
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveWorkspaceEntryRequest'
+      responses:
+        '200':
+          description: Entry moved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/files/content:
+    get:
+      tags: [Files]
+      summary: Read workspace file content
+      operationId: getWorkspaceFileContent
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - $ref: '#/components/parameters/FileEncoding'
+        - $ref: '#/components/parameters/MaxBytes'
+      responses:
+        '200':
+          description: Workspace file content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceFileContent'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    put:
+      tags: [Files]
+      summary: Write workspace file content
+      operationId: putWorkspaceFileContent
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutWorkspaceFileRequest'
+      responses:
+        '200':
+          description: Workspace file written
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/files/upload:
+    put:
+      tags: [Files]
+      summary: Upload raw bytes to a workspace file
+      operationId: uploadWorkspaceFile
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - $ref: '#/components/parameters/UploadOverwrite'
+        - $ref: '#/components/parameters/UploadIfMatch'
+        - $ref: '#/components/parameters/UploadMtimeMs'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Workspace file uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/files/download:
+    get:
+      tags: [Files]
+      summary: Download raw workspace file bytes
+      operationId: downloadWorkspaceFile
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+      responses:
+        '200':
+          description: Raw file bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/directories:
+    post:
+      tags: [Files]
+      summary: Create a workspace directory
+      operationId: createWorkspaceDirectory
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspaceDirectoryRequest'
+      responses:
+        '200':
+          description: Directory created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /sandboxes:
@@ -727,6 +1221,23 @@ paths:
                 $ref: '#/components/schemas/ModelGenerateResponse'
         default:
           $ref: '#/components/responses/ErrorResponse'
+  /internal/v1/platform-models/refresh:
+    post:
+      tags: [Models]
+      summary: Refresh platform model metadata from the internal worker API
+      operationId: internalRefreshPlatformModels
+      description: >
+        Internal local-only alias for platform model refresh used by workers
+        and loopback callers.
+      responses:
+        '200':
+          description: Platform model snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /internal/v1/models/stream:
     post:
       tags: [Models]
@@ -784,20 +1295,71 @@ paths:
                 $ref: '#/components/schemas/Session'
         default:
           $ref: '#/components/responses/ErrorResponse'
+    patch:
+      tags: [Sessions]
+      summary: Update session settings
+      operationId: updateSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionRequest'
+      responses:
+        '200':
+          description: Updated session metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Sessions]
+      summary: Delete session
+      operationId: deleteSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '204':
+          description: Session deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/snapshot:
+    get:
+      tags: [Sessions]
+      summary: Get session UI snapshot
+      operationId: getSessionSnapshot
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/SelectedRunId'
+      responses:
+        '200':
+          description: Session snapshot containing session, recent transcript messages, runs, selected run steps, and queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSnapshot'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
   /sessions/{sessionId}/messages:
     get:
       tags: [Messages]
       summary: List session messages
       operationId: listSessionMessages
       description: |
-        Lists persisted session messages in chronological order.
+        Lists session messages in chronological order.
         Use `direction=backward` to page from the latest message toward older history.
         `cursor` is an opaque keyset cursor derived from message position.
+        Use `view=transcript` to return API Message objects after transcript projection.
       parameters:
         - $ref: '#/components/parameters/SessionId'
         - $ref: '#/components/parameters/PageSize'
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/MessageDirection'
+        - $ref: '#/components/parameters/MessageView'
       responses:
         '200':
           description: Message page
@@ -832,6 +1394,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MessageAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/children:
+    get:
+      tags: [Sessions]
+      summary: List direct child sessions
+      operationId: listChildSessions
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Child session page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionPage'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /sessions/{sessionId}/messages/{messageId}:
@@ -871,6 +1451,65 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MessageContext'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/runs:
+    get:
+      tags: [Runs]
+      summary: List runs for a session
+      operationId: listSessionRuns
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Run page for a session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/terminals/{terminalId}:
+    get:
+      tags: [Sessions]
+      summary: Get a session terminal output snapshot
+      operationId: getSessionTerminalSnapshot
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/TerminalId'
+        - $ref: '#/components/parameters/MaxTerminalBytes'
+      responses:
+        '200':
+          description: Terminal output snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTerminalSnapshot'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/terminals/{terminalId}/input:
+    post:
+      tags: [Sessions]
+      summary: Write input to a session terminal
+      operationId: writeSessionTerminalInput
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/TerminalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionTerminalInputRequest'
+      responses:
+        '202':
+          description: Terminal input accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTerminalInputAccepted'
         default:
           $ref: '#/components/responses/ErrorResponse'
   /sessions/{sessionId}/queue:
@@ -1017,6 +1656,361 @@ paths:
                 $ref: '#/components/schemas/GuideQueuedRunAccepted'
         default:
           $ref: '#/components/responses/ErrorResponse'
+  /runs/{runId}/requeue:
+    post:
+      tags: [Runs]
+      summary: Manually requeue a recovery run
+      operationId: requeueRun
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: Run requeued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequeueRunAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runs/requeue:
+    post:
+      tags: [Runs]
+      summary: Batch requeue recovery runs
+      operationId: batchRequeueRuns
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchRequeueRunsRequest'
+      responses:
+        '200':
+          description: Per-run requeue results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchRequeueRunsResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/overview:
+    get:
+      tags: [Storage]
+      summary: Get storage overview
+      operationId: getStorageOverview
+      parameters:
+        - name: serviceName
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Storage overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/postgres/tables/{table}:
+    get:
+      tags: [Storage]
+      summary: Inspect a PostgreSQL table
+      operationId: getStoragePostgresTable
+      parameters:
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [workspaces, sessions, runs, messages, run_steps, session_events, session_current_state, tool_calls, hook_runs, artifacts, history_events, archives]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - $ref: '#/components/parameters/Cursor'
+        - name: serviceName
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: searchMode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [full_row]
+        - name: includeRowCount
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: workspaceId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: sessionId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: runId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: errorCode
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: recoveryState
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: PostgreSQL table page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/keys:
+    get:
+      tags: [Storage]
+      summary: Scan Redis keys
+      operationId: listStorageRedisKeys
+      parameters:
+        - name: pattern
+          in: query
+          required: false
+          schema:
+            type: string
+            default: oah:*
+        - $ref: '#/components/parameters/Cursor'
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: Redis key page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/key:
+    get:
+      tags: [Storage]
+      summary: Get Redis key detail
+      operationId: getStorageRedisKey
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Redis key detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Storage]
+      summary: Delete Redis key
+      operationId: deleteStorageRedisKey
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Redis key deletion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/keys/delete:
+    post:
+      tags: [Storage]
+      summary: Delete multiple Redis keys
+      operationId: deleteStorageRedisKeys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [keys]
+              properties:
+                keys:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    type: string
+                    minLength: 1
+      responses:
+        '200':
+          description: Batch Redis key deletion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/worker-affinity:
+    get:
+      tags: [Storage]
+      summary: Inspect Redis worker affinity
+      operationId: getStorageRedisWorkerAffinity
+      parameters:
+        - name: sessionId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: workspaceId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: ownerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: ownerWorkerId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Worker affinity diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/workspace-placements:
+    get:
+      tags: [Storage]
+      summary: List Redis workspace placements
+      operationId: listStorageRedisWorkspacePlacements
+      parameters:
+        - name: workspaceId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: ownerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: ownerWorkerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [unassigned, active, idle, draining, evicted]
+      responses:
+        '200':
+          description: Workspace placement page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/session-queue/clear:
+    post:
+      tags: [Storage]
+      summary: Clear a Redis session queue key
+      operationId: clearStorageRedisSessionQueue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageRedisMaintenanceRequest'
+      responses:
+        '200':
+          description: Maintenance result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/session-lock/release:
+    post:
+      tags: [Storage]
+      summary: Release a Redis session lock key
+      operationId: releaseStorageRedisSessionLock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageRedisMaintenanceRequest'
+      responses:
+        '200':
+          description: Maintenance result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
 components:
   parameters:
     WorkspaceId:
@@ -1045,6 +2039,12 @@ components:
         type: string
     MessageId:
       name: messageId
+      in: path
+      required: true
+      schema:
+        type: string
+    TerminalId:
+      name: terminalId
       in: path
       required: true
       schema:
@@ -1078,6 +2078,18 @@ components:
         type: string
         enum: [forward, backward]
         default: forward
+    MessageView:
+      name: view
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [stored, transcript]
+        default: stored
+      description: >
+        `stored` returns persisted Message records. `transcript` returns API
+        Message records after transcript projection and includes projection
+        metadata such as projectedView and projectedSourceMessageIds.
     MessagesBefore:
       name: before
       in: query
@@ -1176,6 +2188,21 @@ components:
       required: false
       schema:
         type: string
+    SelectedRunId:
+      name: selectedRunId
+      in: query
+      required: false
+      schema:
+        type: string
+    MaxTerminalBytes:
+      name: maxBytes
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1024
+        maximum: 1048576
+        default: 262144
   responses:
     ErrorResponse:
       description: Error response
@@ -2382,12 +3409,18 @@ components:
           type: string
         workspaceId:
           type: string
+        parentSessionId:
+          type: string
         subjectRef:
+          type: string
+        modelRef:
           type: string
         agentName:
           type: string
         activeAgentName:
           type: string
+        workspaceMemory:
+          $ref: '#/components/schemas/JsonObject'
         title:
           type: string
         status:
@@ -2409,6 +3442,22 @@ components:
             $ref: '#/components/schemas/Session'
         nextCursor:
           type: string
+    SessionSnapshot:
+      type: object
+      required: [session, messages, runs, queue]
+      properties:
+        session:
+          $ref: '#/components/schemas/Session'
+        messages:
+          $ref: '#/components/schemas/MessagePage'
+        runs:
+          $ref: '#/components/schemas/RunPage'
+        selectedRunId:
+          type: string
+        selectedRunSteps:
+          $ref: '#/components/schemas/RunStepPage'
+        queue:
+          $ref: '#/components/schemas/SessionQueue'
     Message:
       allOf:
         - oneOf:
@@ -2443,6 +3492,9 @@ components:
         nextCursor:
           type: string
           description: Opaque cursor for the next page in the requested direction
+        totalCount:
+          type: integer
+          minimum: 0
     MessageContext:
       type: object
       required:
@@ -2517,6 +3569,16 @@ components:
           type: string
         metadata:
           $ref: '#/components/schemas/JsonObject'
+    RunPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Run'
+        nextCursor:
+          type: string
     CreateWorkspaceRequest:
       type: object
       properties:
@@ -2804,6 +3866,32 @@ components:
           type: string
         agentName:
           type: string
+        modelRef:
+          type: string
+          minLength: 1
+        workspaceMemory:
+          $ref: '#/components/schemas/JsonObject'
+      additionalProperties: false
+    UpdateSessionRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        activeAgentName:
+          type: string
+          minLength: 1
+        modelRef:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        workspaceMemory:
+          oneOf:
+            - $ref: '#/components/schemas/JsonObject'
+            - type: 'null'
       additionalProperties: false
     RunStep:
       type: object
@@ -2911,6 +3999,88 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SessionQueuedRun'
+    SessionTerminalSnapshot:
+      type: object
+      required:
+        - sessionId
+        - terminalId
+        - status
+        - outputPath
+        - output
+        - encoding
+        - truncated
+      properties:
+        sessionId:
+          type: string
+        terminalId:
+          type: string
+        status:
+          type: string
+          enum: [running, completed, failed, stopped, unknown]
+        outputPath:
+          type: string
+        output:
+          type: string
+        encoding:
+          type: string
+          enum: [utf8, base64]
+        truncated:
+          type: boolean
+        inputWritable:
+          type: boolean
+        terminalKind:
+          type: string
+          enum: [pty, pipe]
+        pid:
+          type: number
+        description:
+          type: string
+        command:
+          type: string
+        exitCode:
+          type: number
+        signal:
+          type: string
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        endedAt:
+          $ref: '#/components/schemas/Timestamp'
+    SessionTerminalInputRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          type: string
+        appendNewline:
+          type: boolean
+      additionalProperties: false
+    SessionTerminalInputAccepted:
+      type: object
+      required:
+        - sessionId
+        - terminalId
+        - status
+        - inputWritten
+        - appendNewline
+      properties:
+        sessionId:
+          type: string
+        terminalId:
+          type: string
+        status:
+          type: string
+          enum: [running, completed, failed, stopped, unknown]
+        inputWritten:
+          type: boolean
+          enum: [true]
+        appendNewline:
+          type: boolean
+        inputWritable:
+          type: boolean
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
     SessionCompactResult:
       type: object
       required:
@@ -3042,6 +4212,67 @@ components:
         status:
           type: string
           enum: [interrupt_requested]
+    RequeueRunAccepted:
+      type: object
+      required:
+        - runId
+        - status
+        - previousStatus
+        - source
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [queued]
+        previousStatus:
+          type: string
+          enum: [failed, timed_out]
+        source:
+          type: string
+          enum: [manual_requeue]
+    BatchRequeueRunsRequest:
+      type: object
+      required: [runIds]
+      properties:
+        runIds:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: string
+            minLength: 1
+      additionalProperties: false
+    BatchRequeueRunsResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/RequeueRunAccepted'
+              - type: object
+                required: [runId, status, errorCode, errorMessage]
+                properties:
+                  runId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [error]
+                  errorCode:
+                    type: string
+                  errorMessage:
+                    type: string
+                additionalProperties: false
+    StorageRedisMaintenanceRequest:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          minLength: 1
+      additionalProperties: false
     Error:
       type: object
       required:

@@ -30,18 +30,16 @@ Open Agent Harness 是一个可部署的 Agent Engine。它运行 Agent Runtime�
 
 ```bash
 pnpm install                                        # 安装依赖
-mkdir -p /absolute/path/to/oah-deploy-root
-cp -R ./template/deploy-root/. /absolute/path/to/oah-deploy-root
-export OAH_DEPLOY_ROOT=/absolute/path/to/oah-deploy-root
-pnpm local:up                                       # 启动 PostgreSQL + Redis + MinIO + oah-api + oah-controller + oah-sandbox，并自动同步一次
+export OPENAI_API_KEY=sk-...                       # 模型 API key
+pnpm dev:cli -- daemon start                       # 首次运行会初始化 ~/.openagentharness
 pnpm dev:web                                        # 启动 WebUI
-pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui # 启动终端 TUI
+pnpm dev:cli -- tui                                # 启动终端 TUI
 ```
 
 启动后访问：
 
 - :material-monitor-dashboard: **WebUI** — [http://localhost:5174](http://localhost:5174)
-- :material-console: **终端 TUI** — `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui`
+- :material-console: **终端 TUI** — `pnpm dev:cli -- tui`
 - :material-api: **oah-api** — [http://localhost:8787](http://localhost:8787)
 
 [:octicons-arrow-right-24: 完整指南](./getting-started.md){ .md-button .md-button--primary }
@@ -74,13 +72,21 @@ pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui # 启动终端 TUI
 
     [:octicons-arrow-right-24: 查看](./terminology.md)
 
--   :material-folder-cog-outline:{ .lg .middle } **Workspace 配置**
+-   :material-folder-cog-outline:{ .lg .middle } **配置文件参考**
 
     ---
 
-    Agent、Model、Skill、Action、Hook 定义
+    Settings、Agent、Model、Skill、Action、Hook 定义
 
-    [:octicons-arrow-right-24: 配置](./workspace/README.md)
+    [:octicons-arrow-right-24: 查看参考](./workspace/README.md)
+
+-   :material-cube-outline:{ .lg .middle } **Runtime 配置**
+
+    ---
+
+    从零编写、发布和维护可复用 runtime 模板
+
+    [:octicons-arrow-right-24: 编写 Runtime](./runtime/README.md)
 
 -   :material-server-outline:{ .lg .middle } **部署与运行**
 
