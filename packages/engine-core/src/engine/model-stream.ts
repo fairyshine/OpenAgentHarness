@@ -413,7 +413,7 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
 
         const latestRun = await this.#planning.getRun(this.#run.id);
         const nextInput =
-          context?.messages && context.messages.length > 0
+          context?.messages && context.messages.length > 0 && !this.#executionContext.injectSystemReminder
             ? {
                 ...this.#latestHookedModelInput,
                 messages: context.messages
