@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access, stat } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createConnection } from "node:net";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -21,15 +22,23 @@ type WebUiServerOptions = WebUiOptions & {
 };
 
 const STATIC_PROXY_PREFIXES = ["/api/", "/internal/", "/healthz", "/readyz", "/metrics"] as const;
+const MAX_WEBUI_PORT_ATTEMPTS = 20;
+const WEBUI_PORT_PROBE_TIMEOUT_MS = 200;
 
 export async function launchWebUi(options: WebUiOptions): Promise<void> {
+  const port = await resolveAvailableWebUiPort(options.host, options.port);
+  if (port !== options.port) {
+    console.error(`WebUI port ${options.port} is in use; using ${port} instead.`);
+  }
+
+  const resolvedOptions = { ...options, port };
   const staticRoot = await resolveWebUiStaticRoot();
   if (staticRoot) {
-    await launchStaticWebUi({ ...options, staticRoot });
+    await launchStaticWebUi({ ...resolvedOptions, staticRoot });
     return;
   }
 
-  await launchViteWebUi(options);
+  await launchViteWebUi(resolvedOptions);
 }
 
 export async function resolveWebUiStaticRoot(): Promise<string | undefined> {
@@ -97,16 +106,8 @@ async function launchViteWebUi(options: WebUiOptions): Promise<void> {
 }
 
 async function launchStaticWebUi(options: WebUiServerOptions): Promise<void> {
-  const publicUrl = `http://${options.host}:${options.port}`;
-  const server = createPackagedWebUiServer(options);
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.port, options.host, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  const { server, port } = await listenStaticWebUi(options);
+  const publicUrl = `http://${options.host}:${port}`;
 
   console.error(`Serving WebUI at ${publicUrl} with OAH API ${options.connection.baseUrl}`);
   console.error(`Using WebUI static bundle from ${options.staticRoot}`);
@@ -117,6 +118,90 @@ async function launchStaticWebUi(options: WebUiServerOptions): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.once("close", resolve);
     server.once("error", reject);
+  });
+}
+
+async function listenStaticWebUi(options: WebUiServerOptions): Promise<{ server: Server; port: number }> {
+  for (let offset = 0; offset < MAX_WEBUI_PORT_ATTEMPTS; offset += 1) {
+    const port = options.port + offset;
+    if (await isWebUiPortInUse(options.host, port)) {
+      continue;
+    }
+
+    const server = createPackagedWebUiServer({ ...options, port });
+    try {
+      await listen(server, options.host, port);
+      return { server, port };
+    } catch (error) {
+      if (isAddressInUseError(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error(
+    `Unable to start WebUI: ports ${options.port}-${options.port + MAX_WEBUI_PORT_ATTEMPTS - 1} are already in use.`
+  );
+}
+
+async function resolveAvailableWebUiPort(host: string, requestedPort: number): Promise<number> {
+  for (let offset = 0; offset < MAX_WEBUI_PORT_ATTEMPTS; offset += 1) {
+    const port = requestedPort + offset;
+    if (!(await isWebUiPortInUse(host, port))) {
+      return port;
+    }
+  }
+
+  throw new Error(`Unable to start WebUI: ports ${requestedPort}-${requestedPort + MAX_WEBUI_PORT_ATTEMPTS - 1} are already in use.`);
+}
+
+function listen(server: Server, host: string, port: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+}
+
+function isAddressInUseError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EADDRINUSE";
+}
+
+async function isWebUiPortInUse(host: string, port: number): Promise<boolean> {
+  for (const candidateHost of probeHostsForBindHost(host)) {
+    if (await canConnect(candidateHost, port)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function probeHostsForBindHost(host: string): string[] {
+  if (host === "0.0.0.0" || host === "::") {
+    return ["127.0.0.1", "::1"];
+  }
+  if (host === "localhost") {
+    return ["127.0.0.1", "::1", "localhost"];
+  }
+  return [host];
+}
+
+function canConnect(host: string, port: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const socket = createConnection({ host, port });
+    const finish = (result: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setTimeout(WEBUI_PORT_PROBE_TIMEOUT_MS);
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.once("timeout", () => finish(false));
   });
 }
 
