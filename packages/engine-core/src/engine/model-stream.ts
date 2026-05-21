@@ -25,6 +25,9 @@ type ToolMessageMetadata = {
 
 type AssistantMessage = Extract<Message, { role: "assistant" }>;
 
+const STRUCTURED_DELTA_MIN_SIZE_CHANGE = 2048;
+const STRUCTURED_DELTA_MAX_QUIET_MS = 3000;
+
 type LiveToolInputState = {
   toolCallId: string;
   toolName: string;
@@ -34,6 +37,14 @@ type LiveToolInputState = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function safeSerializedLength(value: unknown): number {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
 }
 
 function readSystemMessageSignature(metadata: Record<string, unknown> | undefined): string | undefined {
@@ -314,6 +325,8 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
   #latestHookedModelInput: TModelInput;
   #latestMessageGenerationMetadata: Record<string, unknown> | undefined;
   #latestDeltaSystemMessageSignature: string | undefined;
+  #lastStructuredDeltaEmittedAt = 0;
+  #lastStructuredDeltaSize = 0;
   #finalAssistantStep: ModelStepResult | undefined;
   #completedModelStepCount = 0;
 
@@ -755,6 +768,7 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
         }
         this.#resetLiveReasoning();
         this.#resetLiveToolInputs();
+        this.#resetStructuredDeltaThrottle();
       }
     };
   }
@@ -829,7 +843,7 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
       inputText: existing?.inputText ?? "",
       ...(existing?.input !== undefined ? { input: existing.input } : {})
     });
-    await this.#emitLiveStructuredContent();
+    await this.#emitLiveStructuredContent(undefined, { force: true });
   }
 
   async consumeToolInputDelta(toolCallId: string, inputTextDelta: string): Promise<void> {
@@ -864,7 +878,7 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
       inputText: existing?.inputText ?? "",
       input
     });
-    await this.#emitLiveStructuredContent();
+    await this.#emitLiveStructuredContent(undefined, { force: true });
   }
 
   async completePendingModelSteps(
@@ -919,9 +933,26 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
     return Array.isArray(content) ? content : null;
   }
 
-  async #emitLiveStructuredContent(existingMessage?: AssistantMessage | undefined): Promise<void> {
+  async #emitLiveStructuredContent(
+    existingMessage?: AssistantMessage | undefined,
+    options: { force?: boolean | undefined } = {}
+  ): Promise<void> {
     const liveStructuredContent = this.#buildLiveStructuredContent();
     if (!liveStructuredContent) {
+      return;
+    }
+
+    const serializedSize = safeSerializedLength(liveStructuredContent);
+    const now = Date.now();
+    const sizeChangedEnough =
+      Math.abs(serializedSize - this.#lastStructuredDeltaSize) >= STRUCTURED_DELTA_MIN_SIZE_CHANGE;
+    const quietLongEnough = now - this.#lastStructuredDeltaEmittedAt >= STRUCTURED_DELTA_MAX_QUIET_MS;
+    if (
+      !options.force &&
+      this.#lastStructuredDeltaEmittedAt > 0 &&
+      !sizeChangedEnough &&
+      !quietLongEnough
+    ) {
       return;
     }
 
@@ -951,6 +982,13 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
         ...(deltaEventMetadata.metadata ? { metadata: deltaEventMetadata.metadata } : {})
       }
     });
+    this.#lastStructuredDeltaEmittedAt = now;
+    this.#lastStructuredDeltaSize = serializedSize;
+  }
+
+  #resetStructuredDeltaThrottle() {
+    this.#lastStructuredDeltaEmittedAt = 0;
+    this.#lastStructuredDeltaSize = 0;
   }
 
   #resetLiveReasoning() {

@@ -7,6 +7,17 @@ import {
   type ConnectionSettings,
   type SseFrame
 } from "./support";
+import { LATEST_SESSION_EVENT_CURSOR } from "./app-controller-utils";
+
+export function buildSessionEventStreamPath(sessionId: string, cursor: string | undefined) {
+  const eventCursor = cursor?.trim() || LATEST_SESSION_EVENT_CURSOR;
+  const query = new URLSearchParams({ cursor: eventCursor });
+
+  return {
+    cursor: eventCursor,
+    path: `/api/v1/sessions/${sessionId}/events?${query.toString()}`
+  };
+}
 
 function useSessionEventStream(params: {
   connection: ConnectionSettings;
@@ -39,10 +50,8 @@ function useSessionEventStream(params: {
       }
     }, 1200);
 
-    const query = new URLSearchParams();
-    if (params.lastCursorRef.current) {
-      query.set("cursor", params.lastCursorRef.current);
-    }
+    const eventStream = buildSessionEventStreamPath(params.sessionId, params.lastCursorRef.current);
+    params.lastCursorRef.current = eventStream.cursor;
 
     void (async () => {
       try {
@@ -52,7 +61,7 @@ function useSessionEventStream(params: {
           headers.set("authorization", `Bearer ${token}`);
         }
         const response = await fetch(
-          buildUrl(params.connection.baseUrl, `/api/v1/sessions/${params.sessionId}/events${query.size > 0 ? `?${query.toString()}` : ""}`),
+          buildUrl(params.connection.baseUrl, eventStream.path),
           {
             signal: controller.signal,
             headers

@@ -70,7 +70,7 @@ export async function dispatchRegisteredSessionRoute(
       const [session, currentState, messages, queue] = await Promise.all([
         dependencies.runtimeService.getSession(params.sessionId),
         dependencies.runtimeService.getSessionCurrentState(params.sessionId),
-        dependencies.runtimeService.listSessionMessages(
+        dependencies.runtimeService.listSessionTranscriptMessages(
           params.sessionId,
           SESSION_SNAPSHOT_MESSAGE_PAGE_SIZE,
           undefined,
@@ -124,12 +124,20 @@ export async function dispatchRegisteredSessionRoute(
     case "GET /api/v1/sessions/:sessionId/messages": {
       const params = createParamsSchema("sessionId").parse(request.params);
       const query = messageListQuerySchema.parse(request.query);
-      const page = await dependencies.runtimeService.listSessionMessages(
-        params.sessionId,
-        query.pageSize,
-        query.cursor,
-        query.direction
-      );
+      const page =
+        query.view === "transcript"
+          ? await dependencies.runtimeService.listSessionTranscriptMessages(
+              params.sessionId,
+              query.pageSize,
+              query.cursor,
+              query.direction
+            )
+          : await dependencies.runtimeService.listSessionMessages(
+              params.sessionId,
+              query.pageSize,
+              query.cursor,
+              query.direction
+            );
       return reply.send(messagePageSchema.parse(page));
     }
     case "GET /api/v1/sessions/:sessionId/children": {

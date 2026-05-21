@@ -10,6 +10,14 @@ import {
 } from "../execution-message-content.js";
 import type { ModelDefinition, ModelStepResult, EngineToolSet, WorkspaceRecord } from "../types.js";
 
+const MODEL_CALL_SNAPSHOT_MAX_CHARS = 128 * 1024;
+const MODEL_CALL_SNAPSHOT_HEAD_MESSAGES = 4;
+const MODEL_CALL_SNAPSHOT_TAIL_MESSAGES = 12;
+const MODEL_CALL_SNAPSHOT_MAX_STRING_CHARS = 4096;
+const MODEL_CALL_SNAPSHOT_MAX_ARRAY_ITEMS = 40;
+const MODEL_CALL_SNAPSHOT_MAX_OBJECT_KEYS = 80;
+const MODEL_CALL_SNAPSHOT_MAX_DEPTH = 6;
+
 export interface ModelExecutionInputSnapshot {
   model: string;
   canonicalModelRef: string;
@@ -97,6 +105,103 @@ export function serializeModelCallRequestSnapshot(modelInput: ModelExecutionInpu
   };
 }
 
+function safeJsonLength(value: unknown): number {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function truncateSnapshotString(value: string, maxChars = MODEL_CALL_SNAPSHOT_MAX_STRING_CHARS): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  const head = Math.max(0, Math.floor(maxChars * 0.6));
+  const tail = Math.max(0, maxChars - head);
+  return `${value.slice(0, head)}\n[truncated ${value.length - maxChars} chars]\n${value.slice(-tail)}`;
+}
+
+function compactSnapshotValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    return truncateSnapshotString(value);
+  }
+
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+
+  if (depth >= MODEL_CALL_SNAPSHOT_MAX_DEPTH) {
+    return "[truncated:max-depth]";
+  }
+
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, MODEL_CALL_SNAPSHOT_MAX_ARRAY_ITEMS)
+      .map((entry) => compactSnapshotValue(entry, depth + 1));
+    return value.length > MODEL_CALL_SNAPSHOT_MAX_ARRAY_ITEMS
+      ? [
+          ...items,
+          {
+            truncated: true,
+            omittedItems: value.length - MODEL_CALL_SNAPSHOT_MAX_ARRAY_ITEMS
+          }
+        ]
+      : items;
+  }
+
+  const entries = Object.entries(value);
+  const compacted: Record<string, unknown> = {};
+  for (const [key, entry] of entries.slice(0, MODEL_CALL_SNAPSHOT_MAX_OBJECT_KEYS)) {
+    compacted[key] = compactSnapshotValue(entry, depth + 1);
+  }
+  if (entries.length > MODEL_CALL_SNAPSHOT_MAX_OBJECT_KEYS) {
+    compacted.__truncated = {
+      omittedKeys: entries.length - MODEL_CALL_SNAPSHOT_MAX_OBJECT_KEYS
+    };
+  }
+  return compacted;
+}
+
+function compactModelCallMessages(messages: ChatMessage[]) {
+  const retainedIndexes = new Set<number>();
+  for (let index = 0; index < Math.min(MODEL_CALL_SNAPSHOT_HEAD_MESSAGES, messages.length); index += 1) {
+    retainedIndexes.add(index);
+  }
+  for (let index = Math.max(0, messages.length - MODEL_CALL_SNAPSHOT_TAIL_MESSAGES); index < messages.length; index += 1) {
+    retainedIndexes.add(index);
+  }
+
+  const indexes = [...retainedIndexes].sort((left, right) => left - right);
+  return {
+    indexes,
+    messages: indexes.map((index) => ({
+      ...messages[index]!,
+      content: compactSnapshotValue(messages[index]!.content)
+    }))
+  };
+}
+
+export function compactModelCallRequestSnapshot(request: Record<string, unknown>, messages: ChatMessage[]): Record<string, unknown> {
+  if (safeJsonLength(request) <= MODEL_CALL_SNAPSHOT_MAX_CHARS) {
+    return request;
+  }
+
+  const compacted = compactModelCallMessages(messages);
+  return {
+    ...request,
+    messages: compacted.messages,
+    messagesCompacted: {
+      originalCount: messages.length,
+      retainedCount: compacted.messages.length,
+      retainedIndexes: compacted.indexes,
+      maxSnapshotChars: MODEL_CALL_SNAPSHOT_MAX_CHARS,
+      maxStringChars: MODEL_CALL_SNAPSHOT_MAX_STRING_CHARS
+    }
+  };
+}
+
 export function serializeEngineTools(engineTools: EngineToolSet): Array<Record<string, unknown>> {
   return Object.entries(engineTools).map(([name, definition]) => ({
     name,
@@ -140,8 +245,9 @@ export function serializeModelCallStepInput(
   engineToolNames: string[],
   engineTools?: EngineToolSet | undefined
 ): Record<string, unknown> {
+  const request = serializeModelCallRequestSnapshot(modelInput);
   return {
-    request: serializeModelCallRequestSnapshot(modelInput),
+    request: compactModelCallRequestSnapshot(request, modelInput.messages),
     runtime: serializeModelCallRuntimeSnapshot(
       modelInput,
       activeToolNames,

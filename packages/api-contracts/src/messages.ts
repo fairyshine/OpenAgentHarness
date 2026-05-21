@@ -217,7 +217,8 @@ export const messagePageSchema = z.object({
 });
 
 export const messageListQuerySchema = pageQuerySchema.extend({
-  direction: z.enum(["forward", "backward"]).default("forward")
+  direction: z.enum(["forward", "backward"]).default("forward"),
+  view: z.enum(["stored", "transcript"]).default("stored")
 });
 
 export const messageContextQuerySchema = z.object({

@@ -1,6 +1,7 @@
 import type { ChatMessage, Message, RunStep } from "@oah/api-contracts";
 
 import { isMessageContentForRole, isStructuredToolResultOutput, normalizeToolResultOutput } from "./execution-message-content.js";
+import { compactModelCallRequestSnapshot } from "./engine/model-call-serialization.js";
 
 type MessagePart = Extract<Message["content"], unknown[]>[number];
 type ToolCallMessagePart = Extract<MessagePart, { type: "tool-call" }>;
@@ -280,6 +281,13 @@ function normalizeModelCallInput(input: unknown): { input: unknown; changed: boo
   if (normalizedMessages.changed) {
     request.messages = normalizedMessages.messages as ChatMessage[];
     changed = true;
+  }
+  if (Array.isArray(request.messages)) {
+    const compactedRequest = compactModelCallRequestSnapshot(request, request.messages as ChatMessage[]);
+    if (compactedRequest !== request) {
+      request = compactedRequest;
+      changed = true;
+    }
   }
 
   return {

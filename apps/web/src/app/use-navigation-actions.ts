@@ -848,7 +848,7 @@ export function useNavigationActions(params: NavigationActionParams) {
       params.runtime.sessionSnapshotHydrationRef.current = { sessionId: nextSessionId, at: Date.now() };
       params.runtime.streamAbortRef.current?.abort();
       params.runtime.activeSessionIdRef.current = nextSessionId;
-      params.runtime.lastCursorRef.current = undefined;
+      params.runtime.lastCursorRef.current = LATEST_SESSION_EVENT_CURSOR;
       window.clearTimeout(params.runtime.runPollingTimerRef.current);
       startTransition(() => {
         params.runtime.setStreamState("idle");

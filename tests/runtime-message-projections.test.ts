@@ -9,6 +9,7 @@ import {
   buildSessionEngineMessages,
   type EngineMessage
 } from "../packages/engine-core/src/engine/engine-messages";
+import { EngineMessageSyncService } from "../packages/engine-core/src/engine/engine-message-sync";
 import { EngineMessageProjector } from "../packages/engine-core/src/engine/message-projections";
 import type { SessionEvent, WorkspaceRecord } from "../packages/engine-core/src/types";
 import { createLocalWorkspaceFileSystem } from "../packages/engine-core/src/workspace/workspace-file-system";
@@ -37,6 +38,66 @@ function createWorkspaceRecord(rootPath: string): WorkspaceRecord {
 }
 
 describe("runtime message projections", () => {
+  it("materializes runtime messages on first derived history load", async () => {
+    const messages: Message[] = [
+      {
+        id: "msg_user",
+        sessionId: "ses_materialize",
+        role: "user",
+        content: "hello",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      },
+      {
+        id: "msg_assistant",
+        sessionId: "ses_materialize",
+        runId: "run_materialize",
+        role: "assistant",
+        content: "stored final",
+        createdAt: "2026-01-01T00:00:01.000Z"
+      }
+    ];
+    let storedEngineMessages: EngineMessage[] = [];
+    const sync = new EngineMessageSyncService({
+      messageRepository: {
+        async listBySessionId() {
+          return messages;
+        }
+      } as any,
+      sessionEventStore: {
+        async listSince() {
+          return [
+            {
+              id: "evt_completed",
+              cursor: "1",
+              sessionId: "ses_materialize",
+              runId: "run_materialize",
+              event: "message.completed",
+              data: {
+                runId: "run_materialize",
+                messageId: "msg_assistant",
+                content: "stored final"
+              },
+              createdAt: "2026-01-01T00:00:02.000Z"
+            }
+          ];
+        }
+      } as any,
+      engineMessageRepository: {
+        async listBySessionId() {
+          return storedEngineMessages;
+        },
+        async replaceBySessionId(_sessionId, nextMessages) {
+          storedEngineMessages = nextMessages;
+        }
+      }
+    });
+
+    const loaded = await sync.loadSessionEngineMessages("ses_materialize");
+
+    expect(loaded.map((message) => message.id)).toEqual(["msg_user", "msg_assistant"]);
+    expect(storedEngineMessages.map((message) => message.id)).toEqual(["msg_user", "msg_assistant"]);
+  });
+
   it("builds segmented runtime messages from interrupted assistant output", () => {
     const messages: Message[] = [
       {

@@ -177,7 +177,12 @@ export class SessionEngineService {
     return nextCursor === undefined ? { items } : { items, nextCursor };
   }
 
-  async listSessionTranscriptMessages(sessionId: string, pageSize = 100, cursor?: string): Promise<MessageListResult> {
+  async listSessionTranscriptMessages(
+    sessionId: string,
+    pageSize = 100,
+    cursor?: string,
+    direction: MessagePageDirection = "forward"
+  ): Promise<MessageListResult> {
     await this.getSession(sessionId);
     const engineMessages = await this.#engineMessageSync.loadSessionEngineMessages(sessionId);
     const engineMessagesById = new Map(engineMessages.map((message) => [message.id, message]));
@@ -189,12 +194,30 @@ export class SessionEngineService {
     const transcriptMessages = projection.messages.map((message) =>
       this.#toTranscriptMessage(sessionId, message, engineMessagesById)
     );
-    const startIndex = parseCursor(cursor);
-    const items = transcriptMessages.slice(startIndex, startIndex + pageSize);
+    const cursorIndex = parseCursor(cursor);
+    const startIndex =
+      direction === "backward"
+        ? Math.max(0, Math.min(cursor ? cursorIndex : transcriptMessages.length, transcriptMessages.length) - pageSize)
+        : cursorIndex;
+    const endIndex =
+      direction === "backward"
+        ? Math.min(cursor ? cursorIndex : transcriptMessages.length, transcriptMessages.length)
+        : startIndex + pageSize;
+    const items = transcriptMessages.slice(startIndex, endIndex);
     const nextCursor =
-      startIndex + pageSize < transcriptMessages.length ? String(startIndex + pageSize) : undefined;
+      direction === "backward"
+        ? startIndex > 0
+          ? String(startIndex)
+          : undefined
+        : endIndex < transcriptMessages.length
+          ? String(endIndex)
+          : undefined;
 
-    return nextCursor === undefined ? { items } : { items, nextCursor };
+    return {
+      items,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+      totalCount: transcriptMessages.length
+    };
   }
 
   async listSessionRuns(sessionId: string, pageSize = 100, cursor?: string): Promise<RunListResult> {

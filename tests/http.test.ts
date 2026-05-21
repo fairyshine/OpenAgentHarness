@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { discoverWorkspace } from "@oah/config";
 import type { SystemProfile } from "@oah/api-contracts";
-import type { CallerContext, SortOrder, WorkspaceEntryPage, WorkspaceEntrySortBy, WorkspaceRecord } from "@oah/engine-core";
+import type { CallerContext, EngineMessage, SortOrder, WorkspaceEntryPage, WorkspaceEntrySortBy, WorkspaceRecord } from "@oah/engine-core";
 import { EngineService } from "@oah/engine-core";
 import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
@@ -5450,5 +5450,103 @@ Use ripgrep first.
     expect(context.after.map((item) => extractMessageText(item.content))).toEqual(["message-4"]);
     expect(context.hasMoreBefore).toBe(false);
     expect(context.hasMoreAfter).toBe(true);
+  });
+
+  it("serves transcript messages for Web session hydration without replaying raw stored messages", async () => {
+    const gateway = new FakeModelGateway();
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+    await persistence.workspaceRepository.upsert(
+      await createWorkspaceRecord({
+        id: "project_http_transcript_messages",
+        historyMirrorEnabled: false
+      })
+    );
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    } satisfies CallerContext;
+    const session = await runtimeService.createSession({
+      workspaceId: "project_http_transcript_messages",
+      caller,
+      input: {}
+    });
+    await persistence.messageRepository.create({
+      id: "msg_raw_old",
+      sessionId: session.id,
+      role: "assistant",
+      content: "raw old",
+      createdAt: "2024-01-01T00:00:00.000Z"
+    });
+    await persistence.engineMessageRepository.replaceBySessionId(session.id, [
+      {
+        id: "rtm_latest_1",
+        sessionId: session.id,
+        role: "assistant",
+        kind: "assistant_text",
+        content: "processed latest 1",
+        createdAt: "2024-01-01T00:00:10.000Z"
+      },
+      {
+        id: "rtm_latest_2",
+        sessionId: session.id,
+        role: "assistant",
+        kind: "assistant_text",
+        content: "processed latest 2",
+        createdAt: "2024-01-01T00:00:11.000Z"
+      }
+    ] satisfies EngineMessage[]);
+
+    activeApp = await createStartedAppWithEngineService(runtimeService, gateway);
+
+    const snapshotResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/snapshot`, {
+      headers: {
+        authorization: "Bearer token-1"
+      }
+    });
+    expect(snapshotResponse.status).toBe(200);
+    const snapshot = (await snapshotResponse.json()) as {
+      messages: { items: Array<{ content: unknown }>; totalCount?: number };
+    };
+    expect(snapshot.messages.items.map((message) => extractMessageText(message.content))).toEqual([
+      "processed latest 1",
+      "processed latest 2"
+    ]);
+    expect(snapshot.messages.totalCount).toBe(2);
+
+    const transcriptResponse = await fetch(
+      `${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages?pageSize=8&direction=backward&view=transcript`,
+      {
+        headers: {
+          authorization: "Bearer token-1"
+        }
+      }
+    );
+    expect(transcriptResponse.status).toBe(200);
+    const transcriptPage = (await transcriptResponse.json()) as {
+      items: Array<{ content: unknown }>;
+      totalCount?: number;
+    };
+    expect(transcriptPage.items.map((message) => extractMessageText(message.content))).toEqual([
+      "processed latest 1",
+      "processed latest 2"
+    ]);
+    expect(transcriptPage.totalCount).toBe(2);
+
+    const storedResponse = await fetch(`${activeApp.baseUrl}/api/v1/sessions/${session.id}/messages?pageSize=8`, {
+      headers: {
+        authorization: "Bearer token-1"
+      }
+    });
+    expect(storedResponse.status).toBe(200);
+    const storedPage = (await storedResponse.json()) as { items: Array<{ content: unknown }> };
+    expect(storedPage.items.map((message) => extractMessageText(message.content))).toEqual(["raw old"]);
   });
 });

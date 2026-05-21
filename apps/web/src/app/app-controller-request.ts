@@ -44,7 +44,7 @@ export async function listAllSessionMessages(input: {
 
   while (true) {
     const page = await input.request<MessagePage>(
-      buildMessagePagePath(input.sessionId, { cursor, direction: "forward" })
+      buildMessagePagePath(input.sessionId, { cursor, direction: "forward", view: "stored" })
     );
     allMessages = mergeSessionMessages(allMessages, page.items);
     if (!page.nextCursor) {

@@ -68,7 +68,11 @@ export class EngineMessageSyncService {
       }
     }
 
-    return this.buildEngineMessagesForSession(sessionId);
+    const engineMessages = await this.buildEngineMessagesForSession(sessionId);
+    if (this.#engineMessageRepository && engineMessages.length > 0) {
+      await this.#engineMessageRepository.replaceBySessionId(sessionId, engineMessages);
+    }
+    return engineMessages;
   }
 
   async buildEngineMessagesForSession(sessionId: string, persistedMessages?: Message[]): Promise<EngineMessage[]> {

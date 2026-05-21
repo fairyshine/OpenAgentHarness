@@ -800,8 +800,18 @@ export class EngineService {
     return (await this.#ensureRuntimeKernel()).sessionRuntime.listSessionEngineMessages(sessionId, pageSize, cursor);
   }
 
-  async listSessionTranscriptMessages(sessionId: string, pageSize = 100, cursor?: string): Promise<MessageListResult> {
-    return (await this.#ensureRuntimeKernel()).sessionRuntime.listSessionTranscriptMessages(sessionId, pageSize, cursor);
+  async listSessionTranscriptMessages(
+    sessionId: string,
+    pageSize = 100,
+    cursor?: string,
+    direction: MessagePageDirection = "forward"
+  ): Promise<MessageListResult> {
+    return (await this.#ensureRuntimeKernel()).sessionRuntime.listSessionTranscriptMessages(
+      sessionId,
+      pageSize,
+      cursor,
+      direction
+    );
   }
 
   async listSessionRuns(sessionId: string, pageSize = 100, cursor?: string): Promise<RunListResult> {

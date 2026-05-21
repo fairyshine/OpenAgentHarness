@@ -17,11 +17,13 @@ export function buildMessagePagePath(
     cursor?: string | undefined;
     direction?: "forward" | "backward" | undefined;
     pageSize?: number | undefined;
+    view?: "stored" | "transcript" | undefined;
   }
 ) {
   const query = new URLSearchParams({
     pageSize: String(options?.pageSize ?? MESSAGE_PAGE_SIZE),
-    direction: options?.direction ?? "backward"
+    direction: options?.direction ?? "backward",
+    view: options?.view ?? "transcript"
   });
   if (options?.cursor) {
     query.set("cursor", options.cursor);
