@@ -95,4 +95,43 @@ describe("packaged WebUI server", () => {
       }
     ]);
   });
+
+  it("keeps serving after an upstream streaming response is terminated", async () => {
+    const staticRoot = await mkdtemp(path.join(os.tmpdir(), "oah-web-static-stream-"));
+    tempRoots.push(staticRoot);
+    await writeFile(path.join(staticRoot, "index.html"), "<!doctype html><main>OAH Web</main>", "utf8");
+
+    const backendUrl = await listen(
+      createServer((request, response) => {
+        if (request.url?.startsWith("/api/v1/sessions/")) {
+          response.writeHead(200, {
+            "content-type": "text/event-stream"
+          });
+          response.write("event: ping\ndata: {}\n\n");
+          response.destroy(new Error("simulated upstream stream termination"));
+          return;
+        }
+
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ ok: true }));
+      })
+    );
+
+    const webUrl = await listen(
+      createPackagedWebUiServer({
+        staticRoot,
+        connection: {
+          baseUrl: backendUrl,
+          token: "local-token"
+        },
+        host: "127.0.0.1",
+        port: 0
+      })
+    );
+
+    await fetch(`${webUrl}/api/v1/sessions/demo/events`).then((response) => response.text()).catch(() => "");
+    const indexResponse = await fetch(`${webUrl}/`);
+
+    await expect(indexResponse.text()).resolves.toContain("OAH Web");
+  });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import { Check, ChevronRight, CornerDownRight, Loader2, MessageSquare, Send, Wrench } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -126,6 +126,7 @@ function AutoFollowPre({
 }) {
   const preRef = useRef<HTMLPreElement | null>(null);
   const shouldFollowRef = useRef(true);
+  const userScrollIntentUntilRef = useRef(0);
 
   const scrollToBottom = useCallback(() => {
     const el = preRef.current;
@@ -142,9 +143,20 @@ function AutoFollowPre({
     }
 
     scrollToBottom();
-    const frameId = window.requestAnimationFrame(scrollToBottom);
+    let frameId: number | undefined;
+    let remainingFrames = 3;
+    const settle = () => {
+      scrollToBottom();
+      remainingFrames -= 1;
+      if (remainingFrames > 0) {
+        frameId = window.requestAnimationFrame(settle);
+      }
+    };
+    frameId = window.requestAnimationFrame(settle);
     return () => {
-      window.cancelAnimationFrame(frameId);
+      if (frameId !== undefined) {
+        window.cancelAnimationFrame(frameId);
+      }
     };
   }, [scrollToBottom, text]);
 
@@ -154,14 +166,39 @@ function AutoFollowPre({
       return;
     }
 
-    shouldFollowRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 24;
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 24;
+    if (isNearBottom) {
+      shouldFollowRef.current = true;
+      return;
+    }
+
+    if (Date.now() < userScrollIntentUntilRef.current) {
+      shouldFollowRef.current = false;
+    }
   }, []);
+
+  const noteUserScrollIntent = useCallback(() => {
+    userScrollIntentUntilRef.current = Date.now() + 700;
+  }, []);
+
+  const handleWheel = useCallback((event: WheelEvent<HTMLPreElement>) => {
+    noteUserScrollIntent();
+    if (event.deltaY > 1) {
+      const el = preRef.current;
+      if (el && el.scrollHeight - el.scrollTop - el.clientHeight <= 32) {
+        shouldFollowRef.current = true;
+      }
+    }
+  }, [noteUserScrollIntent]);
 
   return (
     <pre
       ref={preRef}
       className={className}
       onScroll={handleScroll}
+      onPointerDown={noteUserScrollIntent}
+      onTouchStart={noteUserScrollIntent}
+      onWheel={handleWheel}
     >
       {text || placeholder}
     </pre>

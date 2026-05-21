@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access, stat } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { request as httpsRequest } from "node:https";
 import path from "node:path";
-import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import type { OahConnection } from "../api/oah-api.js";
@@ -151,30 +151,65 @@ async function proxyRequest(connection: OahConnection, request: IncomingMessage,
   const hasBody = !["GET", "HEAD"].includes(method.toUpperCase());
   const body = hasBody ? await readRequestBody(request) : undefined;
 
-  const upstream = await fetch(targetUrl, {
-    method,
-    headers,
-    ...(body ? { body } : {})
-  });
+  await new Promise<void>((resolve, reject) => {
+    const upstreamRequest = (targetUrl.protocol === "https:" ? httpsRequest : httpRequest)(
+      targetUrl,
+      {
+        method,
+        headers
+      },
+      (upstreamResponse) => {
+        response.statusCode = upstreamResponse.statusCode ?? 502;
+        response.statusMessage = upstreamResponse.statusMessage ?? "";
+        for (const [key, value] of Object.entries(upstreamResponse.headers)) {
+          if (value !== undefined && key.toLowerCase() !== "connection") {
+            response.setHeader(key, value);
+          }
+        }
 
-  response.statusCode = upstream.status;
-  response.statusMessage = upstream.statusText;
-  upstream.headers.forEach((value, key) => {
-    if (key.toLowerCase() !== "content-encoding") {
-      response.setHeader(key, value);
+        upstreamResponse.on("error", (error) => {
+          if (!response.destroyed) {
+            response.destroy(error);
+          }
+          resolve();
+        });
+        response.on("error", () => {
+          upstreamRequest.destroy();
+          upstreamResponse.destroy();
+          resolve();
+        });
+        response.on("close", () => {
+          upstreamRequest.destroy();
+          upstreamResponse.destroy();
+          resolve();
+        });
+        upstreamResponse.on("end", resolve);
+        upstreamResponse.pipe(response);
+      }
+    );
+
+    upstreamRequest.setTimeout(0);
+    upstreamRequest.on("error", (error) => {
+      if (response.headersSent || response.destroyed) {
+        resolve();
+        return;
+      }
+      reject(error);
+    });
+    request.on("aborted", () => {
+      upstreamRequest.destroy();
+      resolve();
+    });
+    if (body) {
+      upstreamRequest.end(body);
+    } else {
+      upstreamRequest.end();
     }
   });
-
-  if (!upstream.body) {
-    response.end();
-    return;
-  }
-
-  Readable.fromWeb(upstream.body).pipe(response);
 }
 
-function buildProxyHeaders(connection: OahConnection, request: IncomingMessage): Headers {
-  const headers = new Headers();
+function buildProxyHeaders(connection: OahConnection, request: IncomingMessage): Record<string, string | string[]> {
+  const headers: Record<string, string | string[]> = {};
   for (const [key, value] of Object.entries(request.headers)) {
     if (value === undefined) {
       continue;
@@ -184,19 +219,22 @@ function buildProxyHeaders(connection: OahConnection, request: IncomingMessage):
       continue;
     }
     if (Array.isArray(value)) {
-      for (const entry of value) {
-        headers.append(key, entry);
-      }
+      headers[key] = value;
       continue;
     }
-    headers.set(key, value);
+    headers[key] = value;
   }
 
-  if (connection.token?.trim() && !headers.has("authorization")) {
-    headers.set("authorization", `Bearer ${connection.token.trim()}`);
+  if (connection.token?.trim() && !hasHeader(headers, "authorization")) {
+    headers.authorization = `Bearer ${connection.token.trim()}`;
   }
 
   return headers;
+}
+
+function hasHeader(headers: Record<string, string | string[]>, name: string): boolean {
+  const lowerName = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === lowerName);
 }
 
 async function readRequestBody(request: IncomingMessage): Promise<Buffer | undefined> {

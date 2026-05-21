@@ -1,107 +1,107 @@
-# Open Agent Harness
+---
+title: Open Agent Harness
+hide:
+  - navigation
+  - toc
+---
 
-<div class="hero" markdown>
-### A Headless Agent Engine
+<div class="oah-home" markdown>
 
-Define agent runtimes in Markdown, switch by scenario, run many workspaces in parallel. You build the product UI. This is the backend engine.
+<section class="oah-hero" markdown>
+<div class="oah-hero__copy" markdown>
+<div class="oah-eyebrow"><img src="/assets/logo-mkdocs.png" alt="">Long-lived agent engine documentation</div>
 
+# Open Agent Harness Docs
+
+Organize runtimes with Markdown and run many workspaces in parallel. OAH owns workspace lifecycle, agent execution loops, tool calls, queue coordination, and durable state; WebUI, TUI, and Desktop all connect through the same REST + SSE API.
+
+<div class="oah-hero__actions" markdown>
 [Get Started](./getting-started.md){ .md-button .md-button--primary }
-[Architecture](./architecture-overview.md){ .md-button }
+[Deploy](./deploy.md){ .md-button }
+[API Reference](./openapi/README.md){ .md-button }
+</div>
+
+<div class="oah-hero__chips" markdown>
+<span>TypeScript Engine</span>
+<span>PostgreSQL + Redis</span>
+<span>REST + SSE</span>
+<span>Runtime Spec</span>
+</div>
+</div>
+
+<div class="oah-stage" markdown>
+<div class="oah-terminal" markdown>
+<div class="oah-terminal__bar"><span class="oah-dot oah-dot--red"></span><span class="oah-dot oah-dot--amber"></span><span class="oah-dot oah-dot--green"></span><span>oah local stack</span></div>
+<pre><code>pnpm install
+export OPENAI_API_KEY=sk-...
+pnpm dev:cli -- daemon start
+pnpm dev:web
+pnpm dev:cli -- tui</code></pre>
+</div>
+
+<div class="oah-architecture" markdown>
+<span>WebUI</span>
+<span>TUI</span>
+<span>Desktop</span>
+<strong>OAH API</strong>
+<span>Controller</span>
+<span>Workers</span>
+<span>Storage</span>
+</div>
+</div>
+</section>
+
+<section class="oah-section" markdown>
+<div class="oah-section__head" markdown>
+
+## Recommended Path
+
+Start with runtime confidence, then move through configuration, architecture, and API integration.
 
 </div>
 
-## What It Is
+<nav class="oah-path" markdown>
+<a href="./getting-started.md"><strong>1. Run it</strong><span>Install, launch, and verify locally</span></a>
+<a href="./architecture-overview.md"><strong>2. Learn the boundaries</strong><span>Layers, core modules, and request flow</span></a>
+<a href="./workspace/README.md"><strong>3. Configure capabilities</strong><span>Workspace config, agents, models, skills, hooks</span></a>
+<a href="./openapi/README.md"><strong>4. Integrate the API</strong><span>REST, SSE, schemas, and calling conventions</span></a>
+</nav>
+</section>
 
-Open Agent Harness is a deployable Agent Engine. It runs Agent Runtime units and extends them with Agent Spec. It manages workspace lifecycles, agent execution loops, tool invocations, and state persistence without shipping a product UI.
+<section class="oah-section" markdown>
+<div class="oah-section__head" markdown>
 
-Client surfaces are converging on WebUI, TUI, and Desktop. This repository currently ships WebUI and TUI: use WebUI for browser-based sessions, runtime state, trace, and storage inspection, or the TUI when you are already working in a shell and want to select a workspace, enter a session, and watch streaming output. Desktop should connect to the same OAH-compatible API.
+## Core Documentation Entrypoints
 
-## Core Capabilities
+Organized around long-term maintenance tasks, not just a list of files.
 
-- **Parallel workspaces** — PostgreSQL for persistence, Redis for queues and coordination. Many workspaces run concurrently.
-- **Declarative runtime structure** — Define agent/runtime behavior in Markdown and YAML. Hot-reloaded.
-- **Composable capabilities** — agent / skill / action / tool / hook / context are configured independently per workspace.
-- **One workspace model** — the same directory structure supports conversation, tools, and execution.
-- **REST + SSE API** — Everything exposed under `/api/v1`. Frontend-agnostic.
-- **TUI** — Workspace and session operation in the terminal over the same API / SSE surfaces.
-- **Flexible deployment** — Use `oah-api` with an embedded worker for the smallest deployment, or split into `oah-api + oah-controller + oah-sandbox`.
+</div>
 
-## Quick Start
+<div class="oah-feature-grid" markdown>
+<a class="oah-feature" href="./deploy.md"><strong>Deploy and Run</strong><span>Local development, embedded worker, split deployment, and Kubernetes paths.</span></a>
+<a class="oah-feature" href="./runtime/README.md"><strong>Runtime Config</strong><span>Build, publish, and maintain reusable runtime templates.</span></a>
+<a class="oah-feature" href="./workspace/README.md"><strong>Workspace Spec</strong><span>Settings, agents, models, skills, actions, hooks, and MCP.</span></a>
+<a class="oah-feature" href="./engine/README.md"><strong>Engine Internals</strong><span>Lifecycle, context, execution backends, queue reliability, and audit events.</span></a>
+<a class="oah-feature" href="./k8s-rollout-checklist.md"><strong>Kubernetes Rollout</strong><span>Rollout checklist, production readiness, and operations runbook.</span></a>
+<a class="oah-feature" href="./openapi/README.md"><strong>API and Schemas</strong><span>OpenAPI 3.1, server config schemas, and workspace config schemas.</span></a>
+</div>
+</section>
 
-```bash
-pnpm install                                        # Install dependencies
-export OPENAI_API_KEY=sk-...                       # Model API key
-pnpm dev:cli -- daemon start                       # First run seeds ~/.openagentharness
-pnpm dev:web                                        # Start WebUI
-pnpm dev:cli -- tui                                # Start terminal TUI
-```
+<section class="oah-section oah-section--split" markdown>
+<div class="oah-section__head" markdown>
 
-After startup:
+## System Shape
 
-- :material-monitor-dashboard: **WebUI** — [http://localhost:5174](http://localhost:5174)
-- :material-console: **Terminal TUI** — `pnpm dev:cli -- tui`
-- :material-api: **oah-api** — [http://localhost:8787](http://localhost:8787)
+The docs should help maintainers answer: where should I change this, who does it affect, and how do I verify it?
 
-[:octicons-arrow-right-24: Full guide](./getting-started.md){ .md-button .md-button--primary }
+</div>
 
-## Where to Go
-
-<div class="grid cards" markdown>
-
--   :material-rocket-launch:{ .lg .middle } **Quick Start**
-
-    ---
-
-    Install, launch, verify — up and running in 5 minutes
-
-    [:octicons-arrow-right-24: Start](./getting-started.md)
-
--   :material-layers-outline:{ .lg .middle } **Architecture**
-
-    ---
-
-    Layered design, core modules, request flow
-
-    [:octicons-arrow-right-24: View](./architecture-overview.md)
-
--   :material-tag-outline:{ .lg .middle } **Terminology**
-
-    ---
-
-    Shared boundaries for Engine, Runtime, and Spec
-
-    [:octicons-arrow-right-24: View](./terminology.en.md)
-
--   :material-folder-cog-outline:{ .lg .middle } **Config Reference**
-
-    ---
-
-    Settings, agents, models, skills, actions, hooks
-
-    [:octicons-arrow-right-24: View reference](./workspace/README.md)
-
--   :material-cube-outline:{ .lg .middle } **Runtime Config**
-
-    ---
-
-    Build, publish, and maintain reusable runtime templates
-
-    [:octicons-arrow-right-24: Build a Runtime](./runtime/README.md)
-
--   :material-server-outline:{ .lg .middle } **Deploy and Run**
-
-    ---
-
-    Local dev, split deployment, single workspace mode
-
-    [:octicons-arrow-right-24: Deploy](./deploy.md)
-
--   :material-console:{ .lg .middle } **TUI**
-
-    ---
-
-    Operate workspaces, sessions, catalogs, and streaming output from the terminal
-
-    [:octicons-arrow-right-24: View](./tui.md)
+<div class="oah-lanes" markdown>
+<div><strong>Client Surfaces</strong><span>WebUI, TUI, and Desktop consume OAH-compatible APIs without owning engine state.</span></div>
+<div><strong>Control Plane</strong><span>API, controller, queues, placement, and rebalance coordinate concurrent workspaces.</span></div>
+<div><strong>Execution Plane</strong><span>Embedded or sandbox workers execute runs and synchronize workspace state.</span></div>
+<div><strong>Storage Plane</strong><span>PostgreSQL is the source of truth, Redis coordinates queues, and object storage backs workspace state.</span></div>
+</div>
+</section>
 
 </div>

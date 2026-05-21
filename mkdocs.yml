@@ -33,14 +33,22 @@ theme:
         icon: material/weather-sunny
         name: 切换到浅色模式
   features:
+    - navigation.tracking
     - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.indexes
     - navigation.sections
+    - navigation.path
     - navigation.top
+    - navigation.footer
     - toc.follow
     - search.suggest
     - search.highlight
+    - search.share
     - content.code.copy
+    - content.code.select
+    - content.code.annotate
+    - content.tabs.link
     - content.action.edit
 
 plugins:
@@ -70,9 +78,18 @@ plugins:
             使用指南: Guides
             快速开始: Quick Start
             部署与运行: Deploy and Run
+            目录与部署根: Home and Deploy Root
+            Kubernetes: Kubernetes
+            Compose / K8S 复用矩阵: Compose / K8S Reuse Matrix
+            K8S 上线清单: K8S Rollout Checklist
+            K8S 运维 Runbook: K8S Operations Runbook
+            生产就绪: Production Readiness
+            路线图: Roadmap
+            实现路线图: Implementation Roadmap
             配置与 Runtime: Configuration
             服务端配置: Server Config
             Runtime 配置: Runtime Config
+            Runtime 设计: Runtime Design
             配置文件详解: Config Files
             配置文件参考: Config Reference
             TUI: TUI
@@ -83,6 +100,7 @@ plugins:
             架构总览: Architecture Overview
             领域模型: Domain Model
             存储设计: Storage Design
+            API 设计: API Design
             当前进度: Project Roadmap
             导航: Overview
             加载与校验: Loading and Validation
@@ -92,8 +110,13 @@ plugins:
             模型运行时: Model Runtime
             执行后端: Execution Backend
             Projection 与 Executors: Projection and Executors
+            Hook Runtime: Hook Runtime
             Queue 与可靠性: Queue and Reliability
             事件与审计: Events and Audit
+            Worker 控制面: Worker Control Plane
+            拆分部署: Split Deployment
+            Subagent 编排: Subagent Orchestration
+            Rust 热路径: Rust Hot Paths
             Worker 成熟化路线图: Worker Maturity Roadmap
             API 与 Schema: API & Schema
             API 参考: API Reference
@@ -134,11 +157,20 @@ nav:
   - 使用指南:
       - 快速开始: getting-started.md
       - 部署与运行: deploy.md
+      - 目录与部署根: home-and-deploy-root.md
       - TUI: tui.md
-      - 当前进度: project-roadmap.md
+      - Kubernetes:
+          - Compose / K8S 复用矩阵: k8s-compose-reuse-matrix.md
+          - K8S 上线清单: k8s-rollout-checklist.md
+          - K8S 运维 Runbook: k8s-operations-runbook.md
+      - 路线图:
+          - 当前进度: project-roadmap.md
+          - 生产就绪: production-readiness.md
+          - 实现路线图: implementation-roadmap.md
   - 配置与 Runtime:
       - 服务端配置: server-config.md
       - Runtime 配置: runtime/README.md
+      - Runtime 设计: runtime-design.md
       - 配置文件详解: runtime/config-files.md
       - 配置文件总览: workspace/README.md
       - Settings: workspace/settings.md
@@ -151,6 +183,7 @@ nav:
       - Hooks: workspace/hooks.md
       - MCP: workspace/mcp.md
       - 加载与校验: workspace/loading-and-validation.md
+      - Agent Spec: agent-spec.md
   - 架构与设计:
       - 设计总览: design-overview.md
       - 术语约定: terminology.md
@@ -158,6 +191,7 @@ nav:
       - 架构总览: architecture-overview.md
       - 领域模型: domain-model.md
       - 存储设计: storage-design.md
+      - API 设计: api-design.md
       - Engine:
           - 导航: engine/README.md
           - 生命周期: engine/lifecycle.md
@@ -172,8 +206,12 @@ nav:
           - 执行后端: engine/execution-backend.md
           - Hook Runtime: engine/hook-runtime.md
           - Queue 与可靠性: engine/queue-and-reliability.md
-          - Worker 成熟化路线图: engine/worker-scaling-roadmap.md
           - 事件与审计: engine/events-and-audit.md
+          - Worker 控制面: engine/worker-control-plane.md
+          - 拆分部署: engine/split-deployment.md
+          - Subagent 编排: engine/subagent-orchestration.md
+          - Rust 热路径: engine/rust-hot-paths.md
+          - Worker 成熟化路线图: engine/worker-scaling-roadmap.md
   - API 与 Schema:
       - API 参考:
           - 导航: openapi/README.md

@@ -1,123 +1,107 @@
-# Open Agent Harness
+---
+title: Open Agent Harness
+hide:
+  - navigation
+  - toc
+---
 
-<div class="hero" markdown>
-### 无头 Agent Engine
+<div class="oah-home" markdown>
 
-用 Markdown 定义 Agent Runtime，按场景切换，多 Workspace 并行执行。你做产品界面，它做后端 Engine。
+<section class="oah-hero" markdown>
+<div class="oah-hero__copy" markdown>
+<div class="oah-eyebrow"><img src="/assets/logo-mkdocs.png" alt="">长期维护的 Agent Engine 文档</div>
 
+# Open Agent Harness 文档
+
+用 Markdown 组织 Runtime，让多 Workspace 并行执行。OAH 负责 workspace 生命周期、agent 执行循环、工具调用、队列调度和状态持久化；WebUI、TUI、Desktop 都通过同一套 REST + SSE API 接入。
+
+<div class="oah-hero__actions" markdown>
 [快速开始](./getting-started.md){ .md-button .md-button--primary }
-[架构总览](./architecture-overview.md){ .md-button }
+[部署指南](./deploy.md){ .md-button }
+[API 参考](./openapi/README.md){ .md-button }
+</div>
+
+<div class="oah-hero__chips" markdown>
+<span>TypeScript Engine</span>
+<span>PostgreSQL + Redis</span>
+<span>REST + SSE</span>
+<span>Runtime Spec</span>
+</div>
+</div>
+
+<div class="oah-stage" markdown>
+<div class="oah-terminal" markdown>
+<div class="oah-terminal__bar"><span class="oah-dot oah-dot--red"></span><span class="oah-dot oah-dot--amber"></span><span class="oah-dot oah-dot--green"></span><span>oah local stack</span></div>
+<pre><code>pnpm install
+export OPENAI_API_KEY=sk-...
+pnpm dev:cli -- daemon start
+pnpm dev:web
+pnpm dev:cli -- tui</code></pre>
+</div>
+
+<div class="oah-architecture" markdown>
+<span>WebUI</span>
+<span>TUI</span>
+<span>Desktop</span>
+<strong>OAH API</strong>
+<span>Controller</span>
+<span>Workers</span>
+<span>Storage</span>
+</div>
+</div>
+</section>
+
+<section class="oah-section" markdown>
+<div class="oah-section__head" markdown>
+
+## 推荐阅读路径
+
+从运行、配置、架构到 API，对新加入的维护者也比较友好。
 
 </div>
 
-## 它是什么
+<nav class="oah-path" markdown>
+<a href="./getting-started.md"><strong>1. 跑起来</strong><span>安装、启动、验证本地环境</span></a>
+<a href="./architecture-overview.md"><strong>2. 看边界</strong><span>系统分层、核心模块和请求链路</span></a>
+<a href="./workspace/README.md"><strong>3. 配能力</strong><span>workspace 配置、agent、model、skill、hook</span></a>
+<a href="./openapi/README.md"><strong>4. 接 API</strong><span>REST、SSE、Schema 与调用约定</span></a>
+</nav>
+</section>
 
-Open Agent Harness 是一个可部署的 Agent Engine。它运行 Agent Runtime，并通过 Agent Spec 扩展运行行为。它管理 workspace 生命周期、agent 执行循环、工具调用和状态持久化，但不提供产品界面。
+<section class="oah-section" markdown>
+<div class="oah-section__head" markdown>
 
-客户端形态收敛为 WebUI、TUI 和 Desktop。当前仓库自带 WebUI 与 TUI：WebUI 适合在浏览器内查看会话、运行状态、trace 与存储状态，TUI 则适合在 shell 里直接选择 workspace、进入 session、观察流式输出；Desktop 后续也应连接同一套 OAH-compatible API。
+## 核心文档入口
 
-## 核心能力
+围绕长期维护常见任务组织，而不是按文件堆目录。
 
-- **多 Workspace 并行** — PostgreSQL 持久化 + Redis 队列调度，支撑大量 Workspace 同时运行
-- **声明式 Runtime 组织** — 用 Markdown 和 YAML 组织 agent/runtime 能力，热加载生效
-- **能力自由组合** — agent / skill / action / tool / hook / context 按 Workspace 独立配置
-- **统一 Workspace 结构** — 同一套目录结构承载对话、工具调用和执行能力
-- **REST + SSE API** — 全部能力通过 `/api/v1` 暴露，前端无关
-- **TUI** — 通过同一套 API / SSE 在终端内操作 workspace 与 session
-- **灵活部署** — 最小化时可用 `oah-api` 内嵌 worker，拆分时使用 `oah-api + oah-controller + oah-sandbox`
+</div>
 
-## 快速开始
+<div class="oah-feature-grid" markdown>
+<a class="oah-feature" href="./deploy.md"><strong>部署与运行</strong><span>本地开发、embedded worker、split deployment、K8S 路径。</span></a>
+<a class="oah-feature" href="./runtime/README.md"><strong>Runtime 配置</strong><span>编写、发布和维护可复用 runtime 模板。</span></a>
+<a class="oah-feature" href="./workspace/README.md"><strong>Workspace Spec</strong><span>Settings、Agent、Model、Skill、Action、Hook、MCP。</span></a>
+<a class="oah-feature" href="./engine/README.md"><strong>Engine 内部设计</strong><span>生命周期、上下文、执行后端、队列可靠性和事件审计。</span></a>
+<a class="oah-feature" href="./k8s-rollout-checklist.md"><strong>Kubernetes 上线</strong><span>上线清单、production readiness、运维 runbook。</span></a>
+<a class="oah-feature" href="./openapi/README.md"><strong>API 与 Schema</strong><span>OpenAPI 3.1、服务端配置 Schema、workspace 配置 Schema。</span></a>
+</div>
+</section>
 
-```bash
-pnpm install                                        # 安装依赖
-export OPENAI_API_KEY=sk-...                       # 模型 API key
-pnpm dev:cli -- daemon start                       # 首次运行会初始化 ~/.openagentharness
-pnpm dev:web                                        # 启动 WebUI
-pnpm dev:cli -- tui                                # 启动终端 TUI
-```
+<section class="oah-section oah-section--split" markdown>
+<div class="oah-section__head" markdown>
 
-启动后访问：
+## 系统形态
 
-- :material-monitor-dashboard: **WebUI** — [http://localhost:5174](http://localhost:5174)
-- :material-console: **终端 TUI** — `pnpm dev:cli -- tui`
-- :material-api: **oah-api** — [http://localhost:8787](http://localhost:8787)
+OAH 的文档应该帮助维护者快速判断：改哪里、影响谁、怎么验证。
 
-[:octicons-arrow-right-24: 完整指南](./getting-started.md){ .md-button .md-button--primary }
+</div>
 
-## 从这里开始
-
-<div class="grid cards" markdown>
-
--   :material-rocket-launch:{ .lg .middle } **快速开始**
-
-    ---
-
-    安装、启动、验证，5 分钟跑起来
-
-    [:octicons-arrow-right-24: 开始](./getting-started.md)
-
--   :material-layers-outline:{ .lg .middle } **架构总览**
-
-    ---
-
-    分层设计、核心模块、请求链路
-
-    [:octicons-arrow-right-24: 查看](./architecture-overview.md)
-
--   :material-tag-outline:{ .lg .middle } **术语约定**
-
-    ---
-
-    Engine、Runtime、Spec 的统一边界
-
-    [:octicons-arrow-right-24: 查看](./terminology.md)
-
--   :material-folder-cog-outline:{ .lg .middle } **配置文件参考**
-
-    ---
-
-    Settings、Agent、Model、Skill、Action、Hook 定义
-
-    [:octicons-arrow-right-24: 查看参考](./workspace/README.md)
-
--   :material-cube-outline:{ .lg .middle } **Runtime 配置**
-
-    ---
-
-    从零编写、发布和维护可复用 runtime 模板
-
-    [:octicons-arrow-right-24: 编写 Runtime](./runtime/README.md)
-
--   :material-server-outline:{ .lg .middle } **部署与运行**
-
-    ---
-
-    本地开发、分离部署、单 Workspace 模式
-
-    [:octicons-arrow-right-24: 部署](./deploy.md)
-
--   :material-console:{ .lg .middle } **TUI**
-
-    ---
-
-    在终端内操作 workspace、session、catalog 和流式输出
-
-    [:octicons-arrow-right-24: 查看](./tui.md)
-
--   :material-shield-check-outline:{ .lg .middle } **K8S 上线清单**
-
-    ---
-
-    staging 验证、production readiness、release gate
-
-    [:octicons-arrow-right-24: 检查](./k8s-rollout-checklist.md)
-
--   :material-stethoscope:{ .lg .middle } **K8S 运维 Runbook**
-
-    ---
-
-    leader、rollout、drain、strict egress 等故障排查
-
-    [:octicons-arrow-right-24: 排障](./k8s-operations-runbook.md)
+<div class="oah-lanes" markdown>
+<div><strong>Client Surfaces</strong><span>WebUI、TUI、Desktop 只消费 OAH-compatible API，不拥有 engine 状态。</span></div>
+<div><strong>Control Plane</strong><span>API、controller、queue、placement、rebalance 共同管理并发 workspace。</span></div>
+<div><strong>Execution Plane</strong><span>embedded worker 或 sandbox worker 执行 run，并同步 workspace 状态。</span></div>
+<div><strong>Storage Plane</strong><span>PostgreSQL 是中心事实源，Redis 负责队列与协调，对象存储承载 workspace backing store。</span></div>
+</div>
+</section>
 
 </div>
