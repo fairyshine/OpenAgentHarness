@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access, stat } from "node:fs/promises";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 import type { OahConnection } from "../api/oah-api.js";
@@ -217,9 +219,14 @@ export function createPackagedWebUiServer(options: WebUiServerOptions) {
 
       await serveStaticFile(staticRoot, request, response);
     } catch (error) {
-      response.statusCode = 500;
-      response.setHeader("content-type", "text/plain; charset=utf-8");
-      response.end(error instanceof Error ? error.message : "Internal WebUI server error.");
+      if (!response.headersSent) {
+        response.statusCode = 500;
+        response.setHeader("content-type", "text/plain; charset=utf-8");
+        response.end(error instanceof Error ? error.message : "Internal WebUI server error.");
+        return;
+      }
+
+      response.destroy(error instanceof Error ? error : undefined);
     }
   });
 }
@@ -231,6 +238,11 @@ function shouldProxy(requestUrl: string): boolean {
 
 async function proxyRequest(connection: OahConnection, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const targetUrl = new URL(request.url ?? "/", connection.baseUrl);
+  if (shouldUseStreamingProxy(targetUrl)) {
+    await proxyStreamingRequest(connection, targetUrl, request, response);
+    return;
+  }
+
   const headers = buildProxyHeaders(connection, request);
   const method = request.method ?? "GET";
   const hasBody = !["GET", "HEAD"].includes(method.toUpperCase());
@@ -255,7 +267,55 @@ async function proxyRequest(connection: OahConnection, request: IncomingMessage,
     return;
   }
 
-  Readable.fromWeb(upstream.body).pipe(response);
+  await pipeline(Readable.fromWeb(upstream.body), response);
+}
+
+function shouldUseStreamingProxy(targetUrl: URL): boolean {
+  return targetUrl.pathname.endsWith("/events");
+}
+
+async function proxyStreamingRequest(
+  connection: OahConnection,
+  targetUrl: URL,
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<void> {
+  const headers = buildProxyHeaders(connection, request);
+  const method = request.method ?? "GET";
+  const hasBody = !["GET", "HEAD"].includes(method.toUpperCase());
+  const body = hasBody ? await readRequestBody(request) : undefined;
+
+  await new Promise<void>((resolve, reject) => {
+    const upstreamRequest = (targetUrl.protocol === "https:" ? httpsRequest : httpRequest)(
+      targetUrl,
+      {
+        method,
+        headers: headersToNodeHeaders(headers)
+      },
+      (upstreamResponse) => {
+        response.statusCode = upstreamResponse.statusCode ?? 502;
+        response.statusMessage = upstreamResponse.statusMessage ?? "";
+        copyUpstreamHeaders(upstreamResponse, response);
+
+        upstreamResponse.once("error", (error) => {
+          if (!response.writableEnded) {
+            response.end();
+          }
+          reject(error);
+        });
+        response.once("close", () => {
+          upstreamResponse.destroy();
+          resolve();
+        });
+
+        void pipeline(upstreamResponse, response).then(resolve, reject);
+      }
+    );
+
+    upstreamRequest.once("error", reject);
+    request.once("close", () => upstreamRequest.destroy());
+    upstreamRequest.end(body);
+  });
 }
 
 function buildProxyHeaders(connection: OahConnection, request: IncomingMessage): Headers {
@@ -282,6 +342,24 @@ function buildProxyHeaders(connection: OahConnection, request: IncomingMessage):
   }
 
   return headers;
+}
+
+function headersToNodeHeaders(headers: Headers): Record<string, string> {
+  const entries: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    entries[key] = value;
+  });
+  return entries;
+}
+
+function copyUpstreamHeaders(upstreamResponse: IncomingMessage, response: ServerResponse): void {
+  for (const [key, value] of Object.entries(upstreamResponse.headers)) {
+    if (value === undefined || key.toLowerCase() === "content-encoding") {
+      continue;
+    }
+
+    response.setHeader(key, value);
+  }
 }
 
 async function readRequestBody(request: IncomingMessage): Promise<Buffer | undefined> {
