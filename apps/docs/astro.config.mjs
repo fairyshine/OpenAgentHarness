@@ -6,64 +6,49 @@ const docsBase = process.env.DOCS_BASE ?? "/";
 
 const sidebar = [
   {
-    label: "使用指南",
+    label: "开始使用",
     items: [
       { label: "文档总览", slug: "docs/overview" },
       { label: "快速开始", slug: "getting-started" },
-      { label: "部署与运行", slug: "deploy" },
-      { label: "目录与部署根", slug: "home-and-deploy-root" },
+      { label: "设计总览", slug: "design-overview" },
+      { label: "术语约定", slug: "terminology" },
       { label: "TUI", slug: "tui" },
-      {
-        label: "Kubernetes",
-        items: [
-          { label: "Compose / K8S 复用矩阵", slug: "k8s-compose-reuse-matrix" },
-          { label: "K8S 上线清单", slug: "k8s-rollout-checklist" },
-          { label: "K8S 运维 Runbook", slug: "k8s-operations-runbook" },
-        ],
-      },
-      {
-        label: "路线图",
-        items: [
-          { label: "当前进度", slug: "project-roadmap" },
-          { label: "生产就绪", slug: "production-readiness" },
-          { label: "实现路线图", slug: "implementation-roadmap" },
-        ],
-      },
     ],
   },
   {
-    label: "配置与 Runtime",
+    label: "Workspace 与 Runtime",
     items: [
-      { label: "服务端配置", slug: "server-config" },
       { label: "Runtime 配置", slug: "runtime" },
       { label: "Runtime 设计", slug: "runtime-design" },
       { label: "配置文件详解", slug: "runtime/config-files" },
-      { label: "配置文件总览", slug: "workspace" },
-      { label: "Settings", slug: "workspace/settings" },
-      { label: "Prompts", slug: "workspace/prompts" },
-      { label: "Agents", slug: "workspace/agents" },
-      { label: "Models", slug: "workspace/models" },
-      { label: "Providers", slug: "workspace/model-providers" },
-      { label: "Actions", slug: "workspace/actions" },
-      { label: "Skills", slug: "workspace/skills" },
-      { label: "Hooks", slug: "workspace/hooks" },
-      { label: "MCP", slug: "workspace/mcp" },
-      { label: "加载与校验", slug: "workspace/loading-and-validation" },
+      {
+        label: "Workspace Spec",
+        items: [
+          { label: "配置文件总览", slug: "workspace" },
+          { label: "Settings", slug: "workspace/settings" },
+          { label: "Prompts", slug: "workspace/prompts" },
+          { label: "Agents", slug: "workspace/agents" },
+          { label: "Models", slug: "workspace/models" },
+          { label: "Providers", slug: "workspace/model-providers" },
+          { label: "Actions", slug: "workspace/actions" },
+          { label: "Skills", slug: "workspace/skills" },
+          { label: "Hooks", slug: "workspace/hooks" },
+          { label: "MCP", slug: "workspace/mcp" },
+          { label: "加载与校验", slug: "workspace/loading-and-validation" },
+        ],
+      },
       { label: "Agent Spec", slug: "agent-spec" },
     ],
   },
   {
-    label: "架构与设计",
+    label: "架构与 Engine",
     items: [
-      { label: "设计总览", slug: "design-overview" },
-      { label: "术语约定", slug: "terminology" },
-      { label: "概念关系", slug: "concept-relationships" },
       { label: "架构总览", slug: "architecture-overview" },
+      { label: "概念关系", slug: "concept-relationships" },
       { label: "领域模型", slug: "domain-model" },
       { label: "存储设计", slug: "storage-design" },
-      { label: "API 设计", slug: "api-design" },
       {
-        label: "Engine",
+        label: "Engine 主链路",
         items: [
           { label: "导航", slug: "engine" },
           { label: "生命周期", slug: "engine/lifecycle" },
@@ -76,6 +61,11 @@ const sidebar = [
           { label: "Projection 与 Executors", slug: "engine/projection-and-executors" },
           { label: "执行后端", slug: "engine/execution-backend" },
           { label: "Hook Runtime", slug: "engine/hook-runtime" },
+        ],
+      },
+      {
+        label: "可靠性与扩展",
+        items: [
           { label: "Queue 与可靠性", slug: "engine/queue-and-reliability" },
           { label: "事件与审计", slug: "engine/events-and-audit" },
           { label: "Worker 控制面", slug: "engine/worker-control-plane" },
@@ -88,19 +78,50 @@ const sidebar = [
     ],
   },
   {
-    label: "API 与 Schema",
+    label: "API 合约",
     items: [
+      { label: "API 设计", slug: "api-design" },
       { label: "API 参考", slug: "openapi" },
-      { label: "Workspaces", slug: "openapi/workspaces" },
-      { label: "Sessions", slug: "openapi/sessions" },
-      { label: "Runs", slug: "openapi/runs" },
-      { label: "Actions", slug: "openapi/actions" },
-      { label: "Files", slug: "openapi/files" },
-      { label: "Storage", slug: "openapi/storage" },
-      { label: "Models", slug: "openapi/models" },
-      { label: "Streaming", slug: "openapi/streaming" },
-      { label: "Components", slug: "openapi/components" },
+      {
+        label: "OpenAPI resources",
+        items: [
+          { label: "Workspaces", slug: "openapi/workspaces" },
+          { label: "Sessions", slug: "openapi/sessions" },
+          { label: "Runs", slug: "openapi/runs" },
+          { label: "Actions", slug: "openapi/actions" },
+          { label: "Files", slug: "openapi/files" },
+          { label: "Storage", slug: "openapi/storage" },
+          { label: "Models", slug: "openapi/models" },
+          { label: "Streaming", slug: "openapi/streaming" },
+          { label: "Components", slug: "openapi/components" },
+        ],
+      },
       { label: "Schemas", slug: "schemas" },
+    ],
+  },
+  {
+    label: "部署与运维",
+    items: [
+      { label: "部署与运行", slug: "deploy" },
+      { label: "服务端配置", slug: "server-config" },
+      { label: "目录与部署根", slug: "home-and-deploy-root" },
+      { label: "生产就绪", slug: "production-readiness" },
+      {
+        label: "Kubernetes",
+        items: [
+          { label: "Compose / K8S 复用矩阵", slug: "k8s-compose-reuse-matrix" },
+          { label: "K8S 上线清单", slug: "k8s-rollout-checklist" },
+          { label: "K8S 运维 Runbook", slug: "k8s-operations-runbook" },
+        ],
+      },
+    ],
+  },
+  {
+    label: "路线图",
+    items: [
+      { label: "当前进度", slug: "project-roadmap" },
+      { label: "实现路线图", slug: "implementation-roadmap" },
+      { label: "Worker 成熟化路线图", slug: "engine/worker-scaling-roadmap" },
     ],
   },
 ];

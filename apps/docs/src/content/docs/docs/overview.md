@@ -59,10 +59,12 @@ pnpm dev:cli -- tui</code></pre>
 </div>
 
 <nav class="oah-path" markdown>
-<a href="../../getting-started/"><strong>1. 跑起来</strong><span>安装、启动、验证本地环境</span></a>
-<a href="../../architecture-overview/"><strong>2. 看边界</strong><span>系统分层、核心模块和请求链路</span></a>
-<a href="../../workspace/"><strong>3. 配能力</strong><span>workspace 配置、agent、model、skill、hook</span></a>
-<a href="../../openapi/"><strong>4. 接 API</strong><span>REST、SSE、Schema 与调用约定</span></a>
+<a href="../../getting-started/"><strong>1. 入门定位</strong><span>安装、启动、验证本地环境，先建立共同语境。</span></a>
+<a href="../../workspace/"><strong>2. 配置 Workspace</strong><span>runtime、settings、agent、model、skill、hook、MCP。</span></a>
+<a href="../../engine/"><strong>3. 追踪 Engine</strong><span>生命周期、上下文、投影、队列、worker 和事件。</span></a>
+<a href="../../openapi/"><strong>4. 接入 API</strong><span>REST、SSE、Schema 与资源级调用约定。</span></a>
+<a href="../../operations/"><strong>5. 运维部署</strong><span>部署形态、服务端配置、生产就绪、Kubernetes runbook。</span></a>
+<a href="../../roadmap/"><strong>6. 规划演进</strong><span>项目路线图、实现阶段和 worker 成熟化方向。</span></a>
 </nav>
 </section>
 
@@ -76,12 +78,13 @@ pnpm dev:cli -- tui</code></pre>
 </div>
 
 <div class="oah-feature-grid" markdown>
-<a class="oah-feature" href="../../deploy/"><strong>部署与运行</strong><span>本地开发、embedded worker、split deployment、K8S 路径。</span></a>
+<a class="oah-feature" href="../../getting-started/"><strong>入门与定位</strong><span>从本地启动、术语、设计总览建立维护者共同语境。</span></a>
 <a class="oah-feature" href="../../runtime/"><strong>Runtime 配置</strong><span>编写、发布和维护可复用 runtime 模板。</span></a>
 <a class="oah-feature" href="../../workspace/"><strong>Workspace Spec</strong><span>Settings、Agent、Model、Skill、Action、Hook、MCP。</span></a>
 <a class="oah-feature" href="../../engine/"><strong>Engine 内部设计</strong><span>生命周期、上下文、执行后端、队列可靠性和事件审计。</span></a>
-<a class="oah-feature" href="../../k8s-rollout-checklist/"><strong>Kubernetes 上线</strong><span>上线清单、production readiness、运维 runbook。</span></a>
 <a class="oah-feature" href="../../openapi/"><strong>API 与 Schema</strong><span>OpenAPI 3.1、服务端配置 Schema、workspace 配置 Schema。</span></a>
+<a class="oah-feature" href="../../operations/"><strong>部署与运维</strong><span>本地开发、embedded worker、split deployment、K8S 路径。</span></a>
+<a class="oah-feature" href="../../roadmap/"><strong>路线图</strong><span>当前进度、实现路线图、worker scale 与生产成熟度。</span></a>
 </div>
 </section>
 

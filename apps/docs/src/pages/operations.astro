@@ -1,0 +1,99 @@
+---
+import ProductLayout from "../components/ProductLayout.astro";
+import { sitePath } from "../lib/site-paths";
+
+const operationsTracks = [
+  ["Local operation", "Start the daemon, WebUI, and TUI, then validate the full workspace loop.", "/getting-started/"],
+  ["Deployment shape", "Choose embedded workers first, then split API, controller, queue, and worker planes when scale needs it.", "/deploy/"],
+  ["Production readiness", "Review storage, credentials, observability, backups, rollout, and failure-mode requirements.", "/production-readiness/"],
+  ["Kubernetes rollout", "Use the checklist and runbook as the deployable operational contract.", "/k8s-rollout-checklist/"],
+];
+
+const runbooks = [
+  ["Server config", "/server-config/", "Ports, storage, runtime paths, model provider defaults, and deployment-sensitive settings."],
+  ["Split deployment", "/engine/split-deployment/", "How control plane, worker pool, Redis, and Postgres separate in production."],
+  ["Queue reliability", "/engine/queue-and-reliability/", "Locks, retry behavior, worker ownership, and failure recovery boundaries."],
+  ["K8S runbook", "/k8s-operations-runbook/", "Operational checks for rollout, incident response, and routine maintenance."],
+];
+
+const rolloutFlow = [
+  "Configure",
+  "Validate",
+  "Deploy",
+  "Observe",
+  "Recover",
+];
+
+const signals = [
+  ["Embedded first", "Keep local development simple while preserving the split-deployment path."],
+  ["Stateful by design", "Treat PostgreSQL, Redis, and workspace backing store as explicit operational dependencies."],
+  ["Runbook owned", "Production docs stay close to rollout checks and failure recovery steps."],
+];
+---
+
+<ProductLayout
+  active="operations"
+  title="Operations | Open Agent Harness"
+  description="Operational documentation for running Open Agent Harness locally, deploying it, hardening production, and operating Kubernetes environments."
+>
+  <section class="page-hero">
+    <div>
+      <p class="eyebrow">Operations</p>
+      <h1>From local loop to production runbook.</h1>
+      <p>
+        Operations deserves its own lane: deployment shape, configuration, production readiness,
+        Kubernetes rollout, and incident recovery should not be hidden inside architecture or roadmap pages.
+      </p>
+      <div class="hero-actions">
+        <a class="button button--primary" href={sitePath("/deploy/")}>Open deploy guide</a>
+        <a class="button button--secondary" href={sitePath("/production-readiness/")}>Read readiness checklist</a>
+      </div>
+    </div>
+    <div class="maturity-panel" aria-label="Operations principles">
+      {signals.map(([label, body]) => (
+        <div>
+          <strong>{label}</strong>
+          <span>{body}</span>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <section class="process-strip" aria-label="Operations flow">
+    {rolloutFlow.map((item, index) => (
+      <div>
+        <span>{String(index + 1).padStart(2, "0")}</span>
+        <strong>{item}</strong>
+      </div>
+    ))}
+  </section>
+
+  <section class="page-grid page-grid--four" aria-label="Operations tracks">
+    {operationsTracks.map(([title, body, href]) => (
+      <a class="link-card" href={sitePath(href)}>
+        <span>Track</span>
+        <strong>{title}</strong>
+        <p>{body}</p>
+      </a>
+    ))}
+  </section>
+
+  <section class="split-panel" aria-labelledby="runbook-title">
+    <div>
+      <p class="section-kicker">Runbook shelf</p>
+      <h2 id="runbook-title">Keep deploy-time facts close to failure recovery.</h2>
+      <p>
+        These pages form the practical operating surface: configuration, split deployment,
+        queue reliability, and the Kubernetes runbook.
+      </p>
+    </div>
+    <div class="resource-list">
+      {runbooks.map(([title, href, body]) => (
+        <a href={sitePath(href)}>
+          <strong>{title}</strong>
+          <span>{body}</span>
+        </a>
+      ))}
+    </div>
+  </section>
+</ProductLayout>

@@ -4,7 +4,7 @@ import { sitePath } from "../lib/site-paths";
 
 const tracks = [
   ["Runtime maturity", "Tighten config validation, runtime materialization, and model provider behavior.", "/project-roadmap/"],
-  ["Production hardening", "Move through deployment readiness, observability, storage, and failure-mode review.", "/production-readiness/"],
+  ["Production hardening", "Move through deployment readiness, observability, storage, and failure-mode review.", "/operations/"],
   ["Worker scale", "Evolve queue reliability, worker placement, rebalance, and split deployment controls.", "/engine/worker-scaling-roadmap/"],
   ["Kubernetes path", "Keep rollout checklists and runbooks close to implementation changes.", "/k8s-rollout-checklist/"],
 ];
@@ -35,7 +35,7 @@ const maturity = [
       <h1>Make the next maintenance decision visible.</h1>
       <p>
         Roadmap pages should be useful to maintainers, not decorative. This entry point connects product maturity,
-        implementation work, worker scale, and operations readiness.
+        implementation work, worker scale, and the operational lane that turns plans into deployment checks.
       </p>
       <div class="hero-actions">
         <a class="button button--primary" href={sitePath("/project-roadmap/")}>Current progress</a>

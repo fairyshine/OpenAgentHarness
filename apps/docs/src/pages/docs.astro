@@ -4,42 +4,54 @@ import { sitePath } from "../lib/site-paths";
 
 const docGroups = [
   {
-    label: "Start",
-    title: "Run OAH locally",
-    body: "Install dependencies, start the daemon, open the WebUI, and verify a complete local loop.",
+    label: "01",
+    title: "Start and orient",
+    body: "Run OAH locally, learn the product boundary, and understand the vocabulary used across the docs.",
     href: "/getting-started/",
   },
   {
-    label: "Configure",
-    title: "Shape workspace runtime",
-    body: "Review settings, prompts, agents, models, skills, hooks, MCP servers, and validation rules.",
+    label: "02",
+    title: "Configure a workspace",
+    body: "Review runtime templates, settings, prompts, agents, models, skills, hooks, MCP servers, and validation rules.",
     href: "/workspace/",
   },
   {
-    label: "Operate",
-    title: "Deploy with confidence",
-    body: "Move from embedded worker development to split deployment, Kubernetes rollout, and runbooks.",
-    href: "/deploy/",
+    label: "03",
+    title: "Trace the engine",
+    body: "Follow lifecycle, context construction, message projection, queue reliability, and worker ownership.",
+    href: "/engine/",
   },
   {
-    label: "Reference",
-    title: "Read the full API",
+    label: "04",
+    title: "Integrate through the API",
     body: "Browse OpenAPI resources, streaming events, schemas, actions, storage, and model contracts.",
     href: "/openapi/",
+  },
+  {
+    label: "05",
+    title: "Operate deployments",
+    body: "Move from embedded worker development to split deployment, Kubernetes rollout, readiness checks, and runbooks.",
+    href: "/operations/",
+  },
+  {
+    label: "06",
+    title: "Plan the roadmap",
+    body: "Track product maturity, implementation stages, worker scale, and the next maintenance decisions.",
+    href: "/roadmap/",
   },
 ];
 
 const collections = [
-  ["Guide path", "/docs/overview/", "A curated map of the migrated Starlight documentation."],
+  ["Orientation", "/docs/overview/", "A curated map of the migrated Starlight documentation."],
+  ["Workspace spec", "/workspace/", "Settings, prompts, agents, models, actions, skills, hooks, and MCP."],
   ["Engine internals", "/engine/", "Lifecycle, context, projections, workers, queues, and events."],
-  ["Runtime design", "/runtime/", "Reusable runtime templates and configuration files."],
-  ["Production readiness", "/production-readiness/", "The checklist for hardening OAH beyond local development."],
+  ["Operations shelf", "/operations/", "Deployment, server config, production readiness, and Kubernetes runbooks."],
 ];
 
 const docSignals = [
-  ["Searchable", "Pagefind index across guides and reference pages"],
-  ["Bilingual", "Chinese at root, English under /en"],
-  ["Editable", "Every Starlight page keeps an edit link"],
+  ["Task-first", "Product pages route readers by job before the full sidebar appears."],
+  ["Reference-safe", "Existing Starlight URLs stay stable for deep links and edit links."],
+  ["Maintainable", "Sidebar sections now reflect ownership boundaries, not historical file order."],
 ];
 ---
 
@@ -51,14 +63,15 @@ const docSignals = [
   <section class="page-hero page-hero--compact">
     <div>
       <p class="eyebrow">Documentation hub</p>
-      <h1>Find the right page without spelunking the sidebar.</h1>
+      <h1>Choose a lane before opening the reference.</h1>
       <p>
-        The full Starlight reference stays deep and searchable. This page acts as the softer front door:
-        start here, pick the task, then drop into the exact document you need.
+        The Starlight reference stays deep and searchable. This hub groups the docs by reader intent:
+        get oriented, configure a workspace, understand the engine, integrate the API, operate a deployment,
+        or plan the next implementation step.
       </p>
       <div class="hero-actions">
         <a class="button button--primary" href={sitePath("/getting-started/")}>Start with the guide</a>
-        <a class="button button--secondary" href={sitePath("/docs/overview/")}>Open docs overview</a>
+        <a class="button button--secondary" href={sitePath("/operations/")}>Open operations</a>
       </div>
     </div>
     <div class="hero-side-panel" aria-label="Documentation signals">
@@ -71,7 +84,7 @@ const docSignals = [
     </div>
   </section>
 
-  <section class="page-grid page-grid--four" aria-label="Documentation groups">
+  <section class="page-grid page-grid--six" aria-label="Documentation groups">
     {docGroups.map((item) => (
         <a class="link-card" href={sitePath(item.href)}>
         <span>{item.label}</span>
@@ -84,10 +97,11 @@ const docSignals = [
   <section class="split-panel" aria-labelledby="docs-map-title">
     <div>
       <p class="section-kicker">Maintenance map</p>
-      <h2 id="docs-map-title">Keep high-signal pages near the front.</h2>
+      <h2 id="docs-map-title">Keep each page close to its owner.</h2>
       <p>
         The product pages are intentionally shallow. Durable technical detail still belongs in Starlight,
-        where search, sidebar hierarchy, and edit links make long-term maintenance calmer.
+        but the sidebar now mirrors ownership: workspace configuration, engine internals, API contract,
+        operations, and roadmap each have their own shelf.
       </p>
     </div>
     <div class="resource-list">

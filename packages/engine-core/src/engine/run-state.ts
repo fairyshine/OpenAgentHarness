@@ -20,6 +20,10 @@ export function canTransitionRunStatus(from: Run["status"], to: Run["status"]): 
   }
 }
 
+function isRunNotFoundError(error: unknown): boolean {
+  return error instanceof AppError && error.code === "run_not_found";
+}
+
 export interface RunStateServiceDependencies {
   runRepository: RunRepository;
   getRun: (runId: string) => Promise<Run>;
@@ -94,23 +98,39 @@ export class RunStateService {
   }
 
   async setRunStatusIfPossible(runId: string, nextStatus: Run["status"]): Promise<void> {
-    const run = await this.#getRun(runId);
-    if (run.status === nextStatus || !canTransitionRunStatus(run.status, nextStatus)) {
-      return;
-    }
+    try {
+      const run = await this.#getRun(runId);
+      if (run.status === nextStatus || !canTransitionRunStatus(run.status, nextStatus)) {
+        return;
+      }
 
-    await this.setRunStatus(run, nextStatus, {});
+      await this.setRunStatus(run, nextStatus, {});
+    } catch (error) {
+      if (isRunNotFoundError(error)) {
+        return;
+      }
+
+      throw error;
+    }
   }
 
   async refreshRunHeartbeat(runId: string): Promise<void> {
-    const run = await this.#getRun(runId);
-    if (run.status !== "running" && run.status !== "waiting_tool") {
-      return;
-    }
+    try {
+      const run = await this.#getRun(runId);
+      if (run.status !== "running" && run.status !== "waiting_tool") {
+        return;
+      }
 
-    await this.updateRun(run, {
-      heartbeatAt: this.#nowIso()
-    });
+      await this.updateRun(run, {
+        heartbeatAt: this.#nowIso()
+      });
+    } catch (error) {
+      if (isRunNotFoundError(error)) {
+        return;
+      }
+
+      throw error;
+    }
   }
 
   async updateRun(run: Run, patch: Partial<Run>): Promise<Run> {

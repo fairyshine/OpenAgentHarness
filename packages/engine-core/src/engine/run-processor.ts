@@ -119,7 +119,7 @@ export class RunProcessorService {
     const abortController = new AbortController();
     this.#runAbortControllers.set(run.id, abortController);
     const runHeartbeat = setInterval(() => {
-      void this.#refreshRunHeartbeat(run.id);
+      void this.#refreshRunHeartbeat(run.id).catch(() => undefined);
     }, this.#runHeartbeatIntervalMs);
     runHeartbeat.unref?.();
     const runTimeoutMs = timeoutMsFromSeconds(workspace.agents[run.effectiveAgentName]?.policy?.runTimeoutSeconds);
