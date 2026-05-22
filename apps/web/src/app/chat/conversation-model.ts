@@ -45,11 +45,14 @@ export type RuntimeProps = RuntimeViewModel & {
   conversationTailRef: RefObject<HTMLDivElement | null>;
   shouldAutoFollowConversationRef: MutableRefObject<boolean>;
   hasMoreMessages: boolean;
+  hasNewerMessages: boolean;
   messagesTotalCount: number | undefined;
   messagesLoading: boolean;
   loadingOlderMessages: boolean;
+  loadingNewerMessages: boolean;
   queuedSessionRuns: SessionQueuedRun[];
   loadOlderMessages: () => void;
+  loadNewerMessages: () => void;
   refreshMessages: () => void;
   sendMessage: (draftOverride?: { message: string; attachments: DraftImageAttachment[] }) => void;
   answerAskUserQuestion: (answer: string) => void;

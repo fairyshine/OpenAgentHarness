@@ -2,6 +2,8 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import lucode from "lucode-starlight";
 
+const docsBase = process.env.DOCS_BASE ?? "/";
+
 const sidebar = [
   {
     label: "使用指南",
@@ -105,6 +107,7 @@ const sidebar = [
 
 export default defineConfig({
   site: process.env.DOCS_SITE_URL ?? "http://127.0.0.1:4321",
+  base: docsBase,
   integrations: [
     starlight({
       title: "Open Agent Harness",

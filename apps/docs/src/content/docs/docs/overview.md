@@ -7,16 +7,16 @@ template: splash
 
 <section class="oah-hero" markdown>
 <div class="oah-hero__copy" markdown>
-<div class="oah-eyebrow"><img src="/assets/logo-mkdocs.png" alt="">长期维护的 Agent Engine 文档</div>
+<div class="oah-eyebrow"><img src="../../assets/logo-mkdocs.png" alt="">长期维护的 Agent Engine 文档</div>
 
 # Open Agent Harness 文档总览
 
 用 Markdown 组织 Runtime，让多 Workspace 并行执行。OAH 负责 workspace 生命周期、agent 执行循环、工具调用、队列调度和状态持久化；WebUI、TUI、Desktop 都通过同一套 REST + SSE API 接入。
 
 <div class="oah-hero__actions" markdown>
-<a href="/getting-started/">快速开始</a>
-<a href="/deploy/">部署指南</a>
-<a href="/openapi/">API 参考</a>
+<a href="../../getting-started/">快速开始</a>
+<a href="../../deploy/">部署指南</a>
+<a href="../../openapi/">API 参考</a>
 </div>
 
 <div class="oah-hero__chips" markdown>
@@ -59,10 +59,10 @@ pnpm dev:cli -- tui</code></pre>
 </div>
 
 <nav class="oah-path" markdown>
-<a href="/getting-started/"><strong>1. 跑起来</strong><span>安装、启动、验证本地环境</span></a>
-<a href="/architecture-overview/"><strong>2. 看边界</strong><span>系统分层、核心模块和请求链路</span></a>
-<a href="/workspace/"><strong>3. 配能力</strong><span>workspace 配置、agent、model、skill、hook</span></a>
-<a href="/openapi/"><strong>4. 接 API</strong><span>REST、SSE、Schema 与调用约定</span></a>
+<a href="../../getting-started/"><strong>1. 跑起来</strong><span>安装、启动、验证本地环境</span></a>
+<a href="../../architecture-overview/"><strong>2. 看边界</strong><span>系统分层、核心模块和请求链路</span></a>
+<a href="../../workspace/"><strong>3. 配能力</strong><span>workspace 配置、agent、model、skill、hook</span></a>
+<a href="../../openapi/"><strong>4. 接 API</strong><span>REST、SSE、Schema 与调用约定</span></a>
 </nav>
 </section>
 
@@ -76,12 +76,12 @@ pnpm dev:cli -- tui</code></pre>
 </div>
 
 <div class="oah-feature-grid" markdown>
-<a class="oah-feature" href="/deploy/"><strong>部署与运行</strong><span>本地开发、embedded worker、split deployment、K8S 路径。</span></a>
-<a class="oah-feature" href="/runtime/"><strong>Runtime 配置</strong><span>编写、发布和维护可复用 runtime 模板。</span></a>
-<a class="oah-feature" href="/workspace/"><strong>Workspace Spec</strong><span>Settings、Agent、Model、Skill、Action、Hook、MCP。</span></a>
-<a class="oah-feature" href="/engine/"><strong>Engine 内部设计</strong><span>生命周期、上下文、执行后端、队列可靠性和事件审计。</span></a>
-<a class="oah-feature" href="/k8s-rollout-checklist/"><strong>Kubernetes 上线</strong><span>上线清单、production readiness、运维 runbook。</span></a>
-<a class="oah-feature" href="/openapi/"><strong>API 与 Schema</strong><span>OpenAPI 3.1、服务端配置 Schema、workspace 配置 Schema。</span></a>
+<a class="oah-feature" href="../../deploy/"><strong>部署与运行</strong><span>本地开发、embedded worker、split deployment、K8S 路径。</span></a>
+<a class="oah-feature" href="../../runtime/"><strong>Runtime 配置</strong><span>编写、发布和维护可复用 runtime 模板。</span></a>
+<a class="oah-feature" href="../../workspace/"><strong>Workspace Spec</strong><span>Settings、Agent、Model、Skill、Action、Hook、MCP。</span></a>
+<a class="oah-feature" href="../../engine/"><strong>Engine 内部设计</strong><span>生命周期、上下文、执行后端、队列可靠性和事件审计。</span></a>
+<a class="oah-feature" href="../../k8s-rollout-checklist/"><strong>Kubernetes 上线</strong><span>上线清单、production readiness、运维 runbook。</span></a>
+<a class="oah-feature" href="../../openapi/"><strong>API 与 Schema</strong><span>OpenAPI 3.1、服务端配置 Schema、workspace 配置 Schema。</span></a>
 </div>
 </section>
 

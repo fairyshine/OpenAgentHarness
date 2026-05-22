@@ -727,7 +727,8 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
             objectStorageMirror,
             workspaceMaterializationManager,
             sqliteShadowRoot,
-            clearWorkspaceCoordination
+            clearWorkspaceCoordination,
+            ...(controlPlaneRuntime ? { closeWorkspaceWatcher: controlPlaneRuntime.closeWorkspaceWatcher } : {})
           })
         }
       : {}),

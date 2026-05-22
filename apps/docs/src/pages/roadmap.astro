@@ -1,5 +1,6 @@
 ---
 import ProductLayout from "../components/ProductLayout.astro";
+import { sitePath } from "../lib/site-paths";
 
 const tracks = [
   ["Runtime maturity", "Tighten config validation, runtime materialization, and model provider behavior.", "/project-roadmap/"],
@@ -15,6 +16,12 @@ const milestones = [
   "Kubernetes rollout readiness",
   "Long-running workspace operations",
 ];
+
+const maturity = [
+  ["Now", "Docs migration, local runtime confidence, and API surface consolidation"],
+  ["Next", "Worker placement, queue hardening, and operational telemetry"],
+  ["Later", "Long-running workspace controls and production deployment polish"],
+];
 ---
 
 <ProductLayout
@@ -23,15 +30,25 @@ const milestones = [
   description="Open Agent Harness roadmap entry point for product maturity, production readiness, worker scaling, and Kubernetes rollout plans."
 >
   <section class="page-hero">
-    <p class="eyebrow">Roadmap</p>
-    <h1>Make the next maintenance decision visible.</h1>
-    <p>
-      Roadmap pages should be useful to maintainers, not decorative. This entry point connects product maturity,
-      implementation work, worker scale, and operations readiness.
-    </p>
-    <div class="hero-actions">
-      <a class="button button--primary" href="/project-roadmap/">Current progress</a>
-      <a class="button button--secondary" href="/implementation-roadmap/">Implementation roadmap</a>
+    <div>
+      <p class="eyebrow">Roadmap</p>
+      <h1>Make the next maintenance decision visible.</h1>
+      <p>
+        Roadmap pages should be useful to maintainers, not decorative. This entry point connects product maturity,
+        implementation work, worker scale, and operations readiness.
+      </p>
+      <div class="hero-actions">
+        <a class="button button--primary" href={sitePath("/project-roadmap/")}>Current progress</a>
+        <a class="button button--secondary" href={sitePath("/implementation-roadmap/")}>Implementation roadmap</a>
+      </div>
+    </div>
+    <div class="maturity-panel" aria-label="Maturity lanes">
+      {maturity.map(([label, body]) => (
+        <div>
+          <strong>{label}</strong>
+          <span>{body}</span>
+        </div>
+      ))}
     </div>
   </section>
 
@@ -46,7 +63,7 @@ const milestones = [
 
   <section class="page-grid page-grid--four" aria-label="Roadmap tracks">
     {tracks.map(([title, body, href]) => (
-      <a class="link-card" href={href}>
+      <a class="link-card" href={sitePath(href)}>
         <span>Track</span>
         <strong>{title}</strong>
         <p>{body}</p>

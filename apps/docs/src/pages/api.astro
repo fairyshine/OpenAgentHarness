@@ -1,5 +1,6 @@
 ---
 import ProductLayout from "../components/ProductLayout.astro";
+import { sitePath } from "../lib/site-paths";
 
 const resources = [
   ["Workspaces", "/openapi/workspaces/", "Create, inspect, and operate durable workspace records."],
@@ -9,6 +10,13 @@ const resources = [
   ["Files", "/openapi/files/", "Coordinate file access and workspace artifacts."],
   ["Streaming", "/openapi/streaming/", "Consume progress and state changes over SSE."],
 ];
+
+const endpoints = [
+  ["GET", "/workspaces"],
+  ["POST", "/sessions"],
+  ["POST", "/runs"],
+  ["GET", "/runs/{id}/events"],
+];
 ---
 
 <ProductLayout
@@ -17,15 +25,25 @@ const resources = [
   description="Open Agent Harness API entry point for REST resources, SSE streaming, OpenAPI documentation, and schema references."
 >
   <section class="page-hero page-hero--compact">
-    <p class="eyebrow">API surface</p>
-    <h1>A stable contract for every client surface.</h1>
-    <p>
-      WebUI, TUI, Desktop, and external integrations should all talk to the same runtime API.
-      Start with the reference, then drill into resources and schemas as needed.
-    </p>
-    <div class="hero-actions">
-      <a class="button button--primary" href="/openapi/">Open API reference</a>
-      <a class="button button--secondary" href="/schemas/">View schemas</a>
+    <div>
+      <p class="eyebrow">API surface</p>
+      <h1>A stable contract for every client surface.</h1>
+      <p>
+        WebUI, TUI, Desktop, and external integrations should all talk to the same runtime API.
+        Start with the reference, then drill into resources and schemas as needed.
+      </p>
+      <div class="hero-actions">
+        <a class="button button--primary" href={sitePath("/openapi/")}>Open API reference</a>
+        <a class="button button--secondary" href={sitePath("/schemas/")}>View schemas</a>
+      </div>
+    </div>
+    <div class="endpoint-panel" aria-label="API endpoint examples">
+      {endpoints.map(([method, path]) => (
+        <div>
+          <span>{method}</span>
+          <code>{path}</code>
+        </div>
+      ))}
     </div>
   </section>
 
@@ -49,7 +67,7 @@ const resources = [
 
   <section class="page-grid" aria-label="API resources">
     {resources.map(([title, href, body]) => (
-      <a class="link-card" href={href}>
+      <a class="link-card" href={sitePath(href)}>
         <span>Resource</span>
         <strong>{title}</strong>
         <p>{body}</p>

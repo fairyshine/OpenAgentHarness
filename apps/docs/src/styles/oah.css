@@ -6,6 +6,9 @@
   --sl-font-system-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
   --oah-surface: color-mix(in srgb, var(--sl-color-bg) 92%, var(--sl-color-accent-low));
   --oah-border: color-mix(in srgb, var(--sl-color-gray-5) 58%, transparent);
+  --oah-border-strong: color-mix(in srgb, var(--sl-color-gray-4) 74%, transparent);
+  --oah-amber: #d99b38;
+  --oah-blue: #3b82f6;
 }
 
 :root[data-theme="dark"] {
@@ -13,6 +16,8 @@
   --sl-color-accent: #63d8c7;
   --sl-color-accent-high: #d7fff7;
   --oah-surface: color-mix(in srgb, var(--sl-color-bg) 88%, #14221f);
+  --oah-amber: #f6c177;
+  --oah-blue: #8bb8ff;
 }
 
 body:has(.oah-home) {
@@ -43,13 +48,66 @@ body:has(.oah-home) {
   letter-spacing: 0;
 }
 
+.sl-markdown-content > h1:first-child,
+.sl-markdown-content > .sl-heading-wrapper:first-child:has(> h1) {
+  display: none;
+}
+
+.sl-markdown-content > h2 {
+  border-top: 1px solid var(--oah-border);
+  margin-top: 2.6rem;
+  padding-top: 1.45rem;
+}
+
+.sl-markdown-content > h2::before {
+  background: var(--sl-color-accent);
+  border-radius: 99px;
+  content: "";
+  display: block;
+  height: 0.18rem;
+  margin-bottom: 0.8rem;
+  width: 2.4rem;
+}
+
+.sl-markdown-content > p,
+.sl-markdown-content > ul,
+.sl-markdown-content > ol {
+  line-height: 1.75;
+}
+
+.sl-markdown-content a:not(.oah-feature):not(.oah-path a):not(.oah-hero__actions a) {
+  text-underline-offset: 0.22em;
+}
+
+.sl-markdown-content blockquote {
+  background: color-mix(in srgb, var(--sl-color-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sl-color-accent) 20%, transparent);
+  border-inline-start: 0.22rem solid var(--sl-color-accent);
+  border-radius: 0.5rem;
+  color: var(--sl-color-gray-2);
+  padding: 0.85rem 1rem;
+}
+
 .sl-markdown-content table {
   border-radius: 0.5rem;
   overflow: hidden;
 }
 
+.sl-markdown-content th {
+  background: color-mix(in srgb, var(--sl-color-accent) 11%, transparent);
+}
+
+.sl-markdown-content tr:hover td {
+  background: color-mix(in srgb, var(--sl-color-accent) 5%, transparent);
+}
+
 .sl-markdown-content code {
   border-radius: 0.3rem;
+}
+
+.sl-markdown-content pre {
+  border: 1px solid var(--oah-border);
+  border-radius: 0.5rem;
 }
 
 .oah-home {
@@ -67,7 +125,7 @@ body:has(.oah-home) {
     linear-gradient(135deg, color-mix(in srgb, var(--sl-color-accent) 16%, transparent), transparent 42%),
     var(--oah-surface);
   border: 1px solid var(--oah-border);
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   display: grid;
   gap: clamp(1.2rem, 3vw, 3rem);
   grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.95fr);
@@ -162,7 +220,7 @@ body:has(.oah-home) {
 .oah-terminal {
   background: #101412;
   border: 1px solid color-mix(in srgb, white 12%, transparent);
-  border-radius: 0.55rem;
+  border-radius: 0.5rem;
   color: #d1fae5;
   font-family: var(--sl-font-system-mono);
   font-size: 0.74rem;
@@ -203,7 +261,7 @@ body:has(.oah-home) {
 
 .oah-architecture {
   border: 1px solid var(--oah-border);
-  border-radius: 0.55rem;
+  border-radius: 0.5rem;
   display: grid;
   gap: 0.5rem;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -277,11 +335,15 @@ body:has(.oah-home) {
 .oah-lanes div {
   background: var(--oah-surface);
   border: 1px solid var(--oah-border);
-  border-radius: 0.55rem;
+  border-radius: 0.5rem;
   color: var(--sl-color-white);
   display: block;
   padding: 0.9rem;
   text-decoration: none;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease,
+    background-color 160ms ease;
 }
 
 :root[data-theme="light"] .oah-path a,
@@ -293,6 +355,22 @@ body:has(.oah-home) {
 .oah-path a:hover,
 .oah-feature:hover {
   border-color: color-mix(in srgb, var(--sl-color-accent) 45%, transparent);
+  transform: translateY(-1px);
+}
+
+.oah-path a,
+.oah-feature {
+  position: relative;
+}
+
+.oah-path a::before,
+.oah-feature::before {
+  background: linear-gradient(90deg, var(--sl-color-accent), var(--oah-amber));
+  content: "";
+  height: 0.16rem;
+  inset: 0.7rem 0.85rem auto;
+  opacity: 0.68;
+  position: absolute;
 }
 
 .oah-path strong,

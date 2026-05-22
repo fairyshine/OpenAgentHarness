@@ -7,6 +7,7 @@
   --text: #f4f7fb;
   --muted: #a8b3c2;
   --line: rgba(190, 207, 225, 0.18);
+  --line-strong: rgba(214, 229, 245, 0.3);
   --teal: #5eead4;
   --green: #8bdc9c;
   --blue: #8bb8ff;
@@ -30,6 +31,7 @@ body {
   background:
     linear-gradient(180deg, rgba(94, 234, 212, 0.08), transparent 22rem),
     linear-gradient(120deg, rgba(139, 184, 255, 0.09), transparent 34rem),
+    linear-gradient(28deg, transparent 64%, rgba(246, 193, 119, 0.07)),
     var(--bg);
   color: var(--text);
 }
@@ -41,6 +43,20 @@ a {
 .product-shell {
   min-height: 100vh;
   overflow: hidden;
+  position: relative;
+}
+
+.product-shell::before {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 5rem 5rem;
+  content: "";
+  inset: 4.25rem 0 auto;
+  height: 34rem;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent);
+  pointer-events: none;
+  position: absolute;
 }
 
 .product-nav {
@@ -120,6 +136,31 @@ a {
   padding: 0.55rem 0.85rem;
 }
 
+.nav-cta,
+.button,
+.link-card,
+.route-grid a,
+.resource-list a,
+.layer-stack a,
+.pill-grid a {
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.button:hover,
+.nav-cta:hover,
+.link-card:hover,
+.route-grid a:hover,
+.resource-list a:hover,
+.layer-stack a:hover,
+.pill-grid a:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+
 .hero {
   align-items: center;
   display: grid;
@@ -140,22 +181,23 @@ a {
 }
 
 .hero-backdrop {
-  inset: auto 5vw 3.25rem auto;
-  mask-image: linear-gradient(90deg, transparent 0, rgba(0, 0, 0, 0.08) 10%, rgba(0, 0, 0, 0.55) 34%, #000 52%);
-  opacity: 0.76;
+  inset: auto 2.6vw 6.4rem auto;
+  mask-image: linear-gradient(90deg, transparent 0, rgba(0, 0, 0, 0.05) 16%, rgba(0, 0, 0, 0.5) 35%, #000 54%);
+  opacity: 0.9;
   position: absolute;
-  width: min(46rem, 54vw);
+  width: min(56rem, 60vw);
+  z-index: 1;
 }
 
 .system-map {
   background: linear-gradient(180deg, rgba(18, 24, 31, 0.82), rgba(18, 24, 31, 0.28));
   border: 1px solid var(--line);
-  border-radius: 0.7rem;
+  border-radius: 0.5rem;
   box-shadow: var(--shadow);
   display: grid;
-  gap: 1rem;
+  gap: 1.1rem;
   overflow: hidden;
-  padding: 1rem;
+  padding: 1.1rem;
   position: relative;
 }
 
@@ -183,11 +225,11 @@ a {
 .map-row span {
   background: rgba(244, 247, 251, 0.06);
   border: 1px solid var(--line);
-  border-radius: 0.48rem;
+  border-radius: 0.45rem;
   color: var(--muted);
   font-size: 0.75rem;
   font-weight: 700;
-  min-height: 3.4rem;
+  min-height: 3.8rem;
   padding: 1rem;
   text-align: center;
 }
@@ -200,11 +242,11 @@ a {
   align-items: center;
   background: linear-gradient(135deg, rgba(94, 234, 212, 0.18), rgba(139, 184, 255, 0.12));
   border: 1px solid rgba(94, 234, 212, 0.32);
-  border-radius: 0.55rem;
+  border-radius: 0.5rem;
   display: grid;
   gap: 0.28rem;
   justify-items: center;
-  min-height: 10.5rem;
+  min-height: clamp(12rem, 18vw, 17rem);
   padding: 1.4rem;
 }
 
@@ -262,8 +304,24 @@ a {
   margin-top: 1.8rem;
 }
 
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+.hero-meta span {
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.34rem 0.65rem;
+}
+
 .button {
-  border-radius: 0.5rem;
+  border-radius: 0.45rem;
   font-size: 0.95rem;
   font-weight: 760;
   min-height: 2.8rem;
@@ -361,7 +419,7 @@ a {
 .route-grid a {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 0.65rem;
+  border-radius: 0.5rem;
   padding: 1.1rem;
 }
 
@@ -409,7 +467,7 @@ a {
 .console {
   background: #0c1015;
   border: 1px solid var(--line);
-  border-radius: 0.7rem;
+  border-radius: 0.5rem;
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -470,6 +528,10 @@ a {
 }
 
 .page-hero {
+  align-items: center;
+  display: grid;
+  gap: clamp(1.5rem, 4vw, 4rem);
+  grid-template-columns: minmax(0, 1fr) minmax(19rem, 0.65fr);
   margin-inline: auto;
   max-width: 76rem;
   min-height: 26rem;
@@ -538,10 +600,14 @@ a {
 .resource-list a,
 .layer-stack a,
 .api-panel div,
-.timeline div {
+.timeline div,
+.hero-side-panel,
+.flow-panel,
+.endpoint-panel,
+.maturity-panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 0.65rem;
+  border-radius: 0.5rem;
   color: var(--text);
   text-decoration: none;
 }
@@ -550,6 +616,28 @@ a {
   display: block;
   min-height: 13rem;
   padding: 1.1rem;
+}
+
+.link-card,
+.layer-stack a,
+.api-panel div,
+.timeline div,
+.route-grid a,
+.capabilities article {
+  position: relative;
+}
+
+.link-card::before,
+.layer-stack a::before,
+.api-panel div::before,
+.route-grid a::before,
+.capabilities article::before {
+  background: linear-gradient(90deg, var(--teal), var(--amber));
+  content: "";
+  height: 0.16rem;
+  inset: 0.7rem 0.8rem auto;
+  opacity: 0.62;
+  position: absolute;
 }
 
 .link-card span,
@@ -617,6 +705,12 @@ a {
   padding: 1rem;
 }
 
+.resource-list a:hover span,
+.link-card:hover p,
+.route-grid a:hover span {
+  color: #d3dde8;
+}
+
 .resource-list span {
   display: block;
   margin-top: 0.35rem;
@@ -660,6 +754,157 @@ a {
   text-decoration: none;
 }
 
+.hero-side-panel,
+.maturity-panel {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.hero-side-panel div,
+.maturity-panel div {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.8rem;
+}
+
+.hero-side-panel div:last-child,
+.maturity-panel div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.hero-side-panel strong,
+.maturity-panel strong {
+  display: block;
+  font-size: 0.96rem;
+}
+
+.hero-side-panel span,
+.maturity-panel span {
+  color: var(--muted);
+  display: block;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  margin-top: 0.28rem;
+}
+
+.flow-panel {
+  display: grid;
+  gap: 0.55rem;
+  padding: 1rem;
+}
+
+.flow-panel span {
+  align-items: center;
+  background: rgba(244, 247, 251, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 0.42rem;
+  color: #d6edf0;
+  display: flex;
+  font-size: 0.84rem;
+  font-weight: 760;
+  min-height: 2.45rem;
+  padding-inline: 0.8rem;
+}
+
+.flow-panel span:nth-child(2n) {
+  margin-left: 1.1rem;
+}
+
+.endpoint-panel {
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem;
+}
+
+.endpoint-panel div {
+  align-items: center;
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: 4.2rem 1fr;
+}
+
+.endpoint-panel span {
+  background: color-mix(in srgb, var(--teal) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--teal) 32%, transparent);
+  border-radius: 0.36rem;
+  color: var(--teal);
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.34rem 0.45rem;
+  text-align: center;
+}
+
+.endpoint-panel code {
+  color: #d8f7ee;
+  font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.process-strip {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-inline: auto;
+  max-width: 76rem;
+  padding: 0 5vw 3rem;
+}
+
+.process-strip div {
+  border-top: 1px solid var(--line-strong);
+  min-height: 5rem;
+  padding-top: 0.8rem;
+}
+
+.process-strip span {
+  color: var(--teal);
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 800;
+  margin-bottom: 0.42rem;
+}
+
+.process-strip strong {
+  display: block;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.product-footer {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-inline: auto;
+  max-width: 76rem;
+  padding: 1.3rem 5vw 2rem;
+}
+
+.product-footer div,
+.product-footer nav {
+  align-items: center;
+  display: flex;
+  gap: 0.7rem;
+}
+
+.product-footer img {
+  height: 1.65rem;
+  width: 1.65rem;
+}
+
+.product-footer a,
+.product-footer strong {
+  color: var(--muted);
+  font-size: 0.84rem;
+  text-decoration: none;
+}
+
+.product-footer a:hover {
+  color: var(--text);
+}
+
 .api-panel {
   display: grid;
   gap: 0.85rem;
@@ -682,6 +927,14 @@ a {
 .timeline div {
   min-height: 9rem;
   padding: 1rem;
+}
+
+@media (max-width: 68rem) and (min-width: 821px) {
+  .hero-backdrop {
+    inset: auto 4vw 4.5rem auto;
+    opacity: 0.72;
+    width: min(44rem, 54vw);
+  }
 }
 
 @media (max-width: 820px) {
@@ -728,6 +981,8 @@ a {
   .api-panel,
   .split-panel,
   .timeline,
+  .process-strip,
+  .page-hero,
   .section,
   .operator-view {
     grid-template-columns: 1fr;
@@ -756,6 +1011,19 @@ a {
   .layer-stack a,
   .api-panel div {
     min-height: auto;
+  }
+
+  .flow-panel span:nth-child(2n) {
+    margin-left: 0;
+  }
+
+  .product-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .product-footer nav {
+    flex-wrap: wrap;
   }
 }
 

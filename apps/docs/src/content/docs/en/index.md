@@ -6,16 +6,16 @@ title: "Open Agent Harness Docs"
 
 <section class="oah-hero" markdown>
 <div class="oah-hero__copy" markdown>
-<div class="oah-eyebrow"><img src="/assets/logo-mkdocs.png" alt="">Long-lived agent engine documentation</div>
+<div class="oah-eyebrow"><img src="../assets/logo-mkdocs.png" alt="">Long-lived agent engine documentation</div>
 
 # Open Agent Harness Docs
 
 Organize runtimes with Markdown and run many workspaces in parallel. OAH owns workspace lifecycle, agent execution loops, tool calls, queue coordination, and durable state; WebUI, TUI, and Desktop all connect through the same REST + SSE API.
 
 <div class="oah-hero__actions" markdown>
-<a href="/en/getting-started/">Get Started</a>
-<a href="/en/deploy/">Deploy</a>
-<a href="/en/openapi/">API Reference</a>
+<a href="./getting-started/">Get Started</a>
+<a href="./deploy/">Deploy</a>
+<a href="./openapi/">API Reference</a>
 </div>
 
 <div class="oah-hero__chips" markdown>

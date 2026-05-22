@@ -131,6 +131,7 @@ export interface PreparedControlPlaneRuntime {
   reconciledWorkspaces: WorkspaceRecord[];
   initialize(): Promise<void>;
   refreshWorkspaceDefinitionsForPlatformModels(): Promise<void>;
+  closeWorkspaceWatcher(workspace: Pick<WorkspaceRecord, "rootPath">): void;
   createControlPlaneEngineService(input: {
     runtimeService: EngineService;
     touchWorkspaceActivity?: ((workspaceId: string) => Promise<void>) | undefined;
@@ -250,6 +251,16 @@ export async function prepareControlPlaneRuntime(options: {
   let workspaceMetadataHydrationPending = false;
   let workspaceSyncTimer: NodeJS.Timeout | undefined;
   let watchedProjectRoots = new Map<string, FSWatcher>();
+
+  function closeWatchedProjectRoot(rootPath: string): void {
+    const watcher = watchedProjectRoots.get(rootPath);
+    if (!watcher) {
+      return;
+    }
+
+    closeFsWatcher(watcher);
+    watchedProjectRoots.delete(rootPath);
+  }
 
   async function clearWorkspaceCoordination(workspaceId: string): Promise<void> {
     const normalizedWorkspaceId = workspaceId.trim();
@@ -543,6 +554,7 @@ export async function prepareControlPlaneRuntime(options: {
               `[oah-bootstrap] Removing stale workspace registry entry ${workspace.id}; rootPath is retained by workspace ${retainedWorkspaceIdForRoot}.`
             );
           } else {
+            closeWatchedProjectRoot(workspace.rootPath);
             const cleanup = await cleanupWorkspaceLocalArtifacts({
               workspace,
               paths: options.config.paths,
@@ -605,8 +617,7 @@ export async function prepareControlPlaneRuntime(options: {
         continue;
       }
 
-      closeFsWatcher(watcher);
-      watchedProjectRoots.delete(rootPath);
+      closeWatchedProjectRoot(rootPath);
     }
 
     for (const rootPath of nextRoots) {
@@ -690,6 +701,9 @@ export async function prepareControlPlaneRuntime(options: {
     },
     async refreshWorkspaceDefinitionsForPlatformModels() {
       await refreshWorkspaceDefinitionsForPlatformModelsNow();
+    },
+    closeWorkspaceWatcher(workspace) {
+      closeWatchedProjectRoot(workspace.rootPath);
     },
     createControlPlaneEngineService(input) {
       if (!options.enableControlPlaneFacade) {

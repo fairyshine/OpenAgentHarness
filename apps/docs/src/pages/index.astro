@@ -1,5 +1,6 @@
 ---
 import ProductLayout from "../components/ProductLayout.astro";
+import { sitePath } from "../lib/site-paths";
 
 const capabilities = [
   {
@@ -22,10 +23,18 @@ const capabilities = [
 const surfaces = ["WebUI", "TUI", "Desktop", "REST API", "SSE Stream", "Worker"];
 
 const metrics = [
-  ["129", "generated site pages"],
+  ["133", "generated site pages"],
   ["REST + SSE", "shared integration contract"],
   ["PostgreSQL", "durable source of truth"],
   ["Redis", "queue coordination"],
+];
+
+const operatingLoop = [
+  "Load workspace",
+  "Validate runtime",
+  "Start run",
+  "Stream events",
+  "Persist state",
 ];
 ---
 
@@ -40,7 +49,7 @@ const metrics = [
           {surfaces.slice(0, 3).map((surface) => <span>{surface}</span>)}
         </div>
         <div class="map-core">
-          <img src="/assets/logo-mkdocs-dark.png" alt="" />
+          <img src={sitePath("/assets/logo-mkdocs-dark.png")} alt="" />
           <strong>OAH Engine</strong>
           <small>workspace lifecycle + agent loop + tool calls</small>
         </div>
@@ -58,8 +67,13 @@ const metrics = [
         keep agent configuration reviewable, and expose one consistent API to WebUI, TUI, and Desktop clients.
       </p>
       <div class="hero-actions">
-        <a class="button button--primary" href="/docs/">Explore docs</a>
-        <a class="button button--secondary" href="/architecture/">View architecture</a>
+        <a class="button button--primary" href={sitePath("/docs/")}>Explore docs</a>
+        <a class="button button--secondary" href={sitePath("/architecture/")}>View architecture</a>
+      </div>
+      <div class="hero-meta" aria-label="Runtime qualities">
+        <span>Workspace-native</span>
+        <span>Queue-aware</span>
+        <span>API-first</span>
       </div>
     </div>
   </section>
@@ -103,7 +117,7 @@ const metrics = [
         Product teams can keep the user experience focused while OAH handles the runtime mechanics:
         controller decisions, worker execution, storage persistence, and streaming progress.
       </p>
-      <a href="/architecture/">Explore engine shape</a>
+      <a href={sitePath("/architecture/")}>Explore engine shape</a>
     </div>
     <div class="console" aria-label="Example runtime command output">
       <div class="console-bar"><span></span><span></span><span></span></div>
@@ -116,16 +130,25 @@ sse stream connected</code></pre>
     </div>
   </section>
 
+  <section class="process-strip" aria-label="Runtime operating loop">
+    {operatingLoop.map((item, index) => (
+      <div>
+        <span>{String(index + 1).padStart(2, "0")}</span>
+        <strong>{item}</strong>
+      </div>
+    ))}
+  </section>
+
   <section class="doc-routes" aria-labelledby="routes-title">
     <div>
       <p class="section-kicker">Site paths</p>
       <h2 id="routes-title">Four front doors before the full reference.</h2>
     </div>
     <div class="route-grid">
-      <a href="/docs/"><strong>Docs</strong><span>Find the right guide, reference page, or operations checklist.</span></a>
-      <a href="/architecture/"><strong>Architecture</strong><span>Understand the planes, boundaries, and ownership model.</span></a>
-      <a href="/api/"><strong>API</strong><span>Enter from REST, SSE, OpenAPI, or resource-specific contracts.</span></a>
-      <a href="/roadmap/"><strong>Roadmap</strong><span>Track maturity, production readiness, and next implementation steps.</span></a>
+      <a href={sitePath("/docs/")}><strong>Docs</strong><span>Find the right guide, reference page, or operations checklist.</span></a>
+      <a href={sitePath("/architecture/")}><strong>Architecture</strong><span>Understand the planes, boundaries, and ownership model.</span></a>
+      <a href={sitePath("/api/")}><strong>API</strong><span>Enter from REST, SSE, OpenAPI, or resource-specific contracts.</span></a>
+      <a href={sitePath("/roadmap/")}><strong>Roadmap</strong><span>Track maturity, production readiness, and next implementation steps.</span></a>
     </div>
   </section>
 </ProductLayout>

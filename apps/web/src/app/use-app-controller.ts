@@ -298,12 +298,15 @@ export function useAppController() {
 
   const {
     messagesNextCursor,
+    newerMessagesCursor,
     messagesTotalCount,
     messagesLoading,
     loadingOlderMessages,
+    loadingNewerMessages,
     setMessagesLoading,
     refreshMessages,
     loadOlderMessages,
+    loadNewerMessages,
     resetMessagePaging,
     mergeMessagePageCursor
   } = useSessionMessages({
@@ -927,6 +930,9 @@ export function useAppController() {
   const handleLoadOlderMessages = useEffectEvent(() => {
     void loadOlderMessages();
   });
+  const handleLoadNewerMessages = useEffectEvent(() => {
+    void loadNewerMessages();
+  });
   const handleRefreshMessages = useEffectEvent(() => {
     void refreshMessages();
   });
@@ -997,6 +1003,7 @@ export function useAppController() {
     handleGuideQueuedSessionInput,
     handleInspectConsoleEntry,
     handleLoadOlderMessages,
+    handleLoadNewerMessages,
     handlePingHealth,
     handleRefreshMessages,
     handleRefreshModelProviders,
@@ -1017,10 +1024,12 @@ export function useAppController() {
     latestModelCallTrace,
     latestModelMessageCounts,
     loadingOlderMessages,
+    loadingNewerMessages,
     mainViewMode,
     messageFeed,
     messagesLoading,
     messagesNextCursor,
+    newerMessagesCursor,
     messagesTotalCount,
     modelCallTraces,
     modelProviders,

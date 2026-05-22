@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { CircleCheck, Database, Folder, Loader2, MessageSquareText, Radio, SendHorizontal } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import type { Message } from "@oah/api-contracts";
 
 import { useStreamStore } from "../stores/stream-store";
@@ -21,6 +20,8 @@ type ConversationFeedProps = Pick<
   | "messagesLoading"
   | "messageFeed"
   | "conversationTailRef"
+  | "hasNewerMessages"
+  | "loadingNewerMessages"
   | "catalog"
   | "session"
   | "sessionEvents"
@@ -32,6 +33,7 @@ type ConversationFeedProps = Pick<
   hasMoreMessages: boolean;
   loadingOlderMessages: boolean;
   onLoadOlderMessages: () => void;
+  onLoadNewerMessages: () => void;
   scrollTop: number;
   viewportHeight: number;
   scrollViewportRef: RefObject<HTMLDivElement | null>;
@@ -141,7 +143,7 @@ const ConversationVirtualMessageRow = memo(function ConversationVirtualMessageRo
   }, [message.id, messageIdRef, onHeightChangeRef]);
 
   return (
-    <div ref={containerRef}>
+    <div ref={containerRef} data-conversation-message-id={message.id}>
       <ConversationMessageRow
         message={message}
         {...(agentName ? { agentName } : {})}
@@ -496,17 +498,11 @@ export const ConversationFeed = memo(function ConversationFeed(props: Conversati
   return (
     <>
       {props.hasMoreMessages || props.loadingOlderMessages ? (
-        <div className="mb-5 flex justify-center">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={props.onLoadOlderMessages}
-            disabled={props.loadingOlderMessages}
-            className="rounded-full bg-background/85 px-4 shadow-sm backdrop-blur-sm"
-          >
-            {props.loadingOlderMessages ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
-            {props.loadingOlderMessages ? "Loading earlier messages" : "Load earlier messages"}
-          </Button>
+        <div className="mb-5 flex justify-center" aria-live="polite">
+          <div className="inline-flex h-8 items-center gap-2 rounded-full border border-border/70 bg-background/85 px-3 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
+            {props.loadingOlderMessages ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {props.loadingOlderMessages ? "Loading earlier messages" : "Scroll up for earlier messages"}
+          </div>
         </div>
       ) : null}
       <div ref={messageListRef}>
@@ -515,15 +511,16 @@ export const ConversationFeed = memo(function ConversationFeed(props: Conversati
           const messageAgentInfo = messageAgentInfoById.get(message.id);
           if (!virtualizationEnabled) {
             return (
-              <ConversationMessageRow
-                key={message.id}
-                message={message}
-                {...(messageAgentInfo?.name ? { agentName: messageAgentInfo.name } : {})}
-                {...(messageAgentInfo?.mode ? { agentMode: messageAgentInfo.mode } : {})}
-                onInspectRun={handleInspectRun}
-                onOpenSession={props.openSessionById}
-                onAnswerAskUserQuestion={props.answerAskUserQuestion}
-              />
+              <div key={message.id} data-conversation-message-id={message.id}>
+                <ConversationMessageRow
+                  message={message}
+                  {...(messageAgentInfo?.name ? { agentName: messageAgentInfo.name } : {})}
+                  {...(messageAgentInfo?.mode ? { agentMode: messageAgentInfo.mode } : {})}
+                  onInspectRun={handleInspectRun}
+                  onOpenSession={props.openSessionById}
+                  onAnswerAskUserQuestion={props.answerAskUserQuestion}
+                />
+              </div>
             );
           }
 
@@ -542,6 +539,14 @@ export const ConversationFeed = memo(function ConversationFeed(props: Conversati
         })}
         {virtualRows.bottomSpacerHeight > 0 ? <div style={{ height: virtualRows.bottomSpacerHeight }} aria-hidden="true" /> : null}
       </div>
+      {props.hasNewerMessages || props.loadingNewerMessages ? (
+        <div className="mt-5 flex justify-center" aria-live="polite">
+          <div className="inline-flex h-8 items-center gap-2 rounded-full border border-border/70 bg-background/85 px-3 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
+            {props.loadingNewerMessages ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {props.loadingNewerMessages ? "Loading newer messages" : "Scroll down for newer messages"}
+          </div>
+        </div>
+      ) : null}
       {props.hasActiveSession ? <div className="h-36" aria-hidden="true" /> : null}
       <div ref={props.conversationTailRef} aria-hidden="true" />
     </>

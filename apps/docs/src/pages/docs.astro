@@ -1,5 +1,6 @@
 ---
 import ProductLayout from "../components/ProductLayout.astro";
+import { sitePath } from "../lib/site-paths";
 
 const docGroups = [
   {
@@ -34,6 +35,12 @@ const collections = [
   ["Runtime design", "/runtime/", "Reusable runtime templates and configuration files."],
   ["Production readiness", "/production-readiness/", "The checklist for hardening OAH beyond local development."],
 ];
+
+const docSignals = [
+  ["Searchable", "Pagefind index across guides and reference pages"],
+  ["Bilingual", "Chinese at root, English under /en"],
+  ["Editable", "Every Starlight page keeps an edit link"],
+];
 ---
 
 <ProductLayout
@@ -42,21 +49,31 @@ const collections = [
   description="A guided entry point for Open Agent Harness documentation, runtime configuration, API references, and operations guides."
 >
   <section class="page-hero page-hero--compact">
-    <p class="eyebrow">Documentation hub</p>
-    <h1>Find the right page without spelunking the sidebar.</h1>
-    <p>
-      The full Starlight reference stays deep and searchable. This page acts as the softer front door:
-      start here, pick the task, then drop into the exact document you need.
-    </p>
-    <div class="hero-actions">
-      <a class="button button--primary" href="/getting-started/">Start with the guide</a>
-      <a class="button button--secondary" href="/docs/overview/">Open docs overview</a>
+    <div>
+      <p class="eyebrow">Documentation hub</p>
+      <h1>Find the right page without spelunking the sidebar.</h1>
+      <p>
+        The full Starlight reference stays deep and searchable. This page acts as the softer front door:
+        start here, pick the task, then drop into the exact document you need.
+      </p>
+      <div class="hero-actions">
+        <a class="button button--primary" href={sitePath("/getting-started/")}>Start with the guide</a>
+        <a class="button button--secondary" href={sitePath("/docs/overview/")}>Open docs overview</a>
+      </div>
+    </div>
+    <div class="hero-side-panel" aria-label="Documentation signals">
+      {docSignals.map(([title, body]) => (
+        <div>
+          <strong>{title}</strong>
+          <span>{body}</span>
+        </div>
+      ))}
     </div>
   </section>
 
   <section class="page-grid page-grid--four" aria-label="Documentation groups">
     {docGroups.map((item) => (
-      <a class="link-card" href={item.href}>
+        <a class="link-card" href={sitePath(item.href)}>
         <span>{item.label}</span>
         <strong>{item.title}</strong>
         <p>{item.body}</p>
@@ -75,7 +92,7 @@ const collections = [
     </div>
     <div class="resource-list">
       {collections.map(([title, href, body]) => (
-        <a href={href}>
+        <a href={sitePath(href)}>
           <strong>{title}</strong>
           <span>{body}</span>
         </a>

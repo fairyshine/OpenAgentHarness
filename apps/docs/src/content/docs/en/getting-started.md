@@ -136,7 +136,7 @@ Optional flags: `--tool-dir`, `--skill-dir`, `--host`, `--port`
 | `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui` | Start TUI |
 | `pnpm build` | Full build |
 | `pnpm test` | Run tests |
-| `mkdocs serve` | Preview docs locally |
+| `pnpm dev:docs` | Preview docs locally |
 
 ## Next Steps
 

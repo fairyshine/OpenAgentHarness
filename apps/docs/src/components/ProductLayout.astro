@@ -1,5 +1,6 @@
 ---
 import "../styles/product.css";
+import { sitePath } from "../lib/site-paths";
 
 interface Props {
   active?: "docs" | "architecture" | "api" | "roadmap";
@@ -24,30 +25,44 @@ const navItems = [
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <link rel="icon" href="/assets/logo-mkdocs.png" />
+    <link rel="icon" href={sitePath("/assets/logo-mkdocs.png")} />
   </head>
   <body>
     <div class="product-shell">
       <header class="product-nav" aria-label="Primary navigation">
-        <a class="brand" href="/" aria-label="Open Agent Harness home">
-          <img src="/assets/logo-mkdocs-dark.png" alt="" />
+        <a class="brand" href={sitePath("/")} aria-label="Open Agent Harness home">
+          <img src={sitePath("/assets/logo-mkdocs-dark.png")} alt="" />
           <span>Open Agent Harness</span>
         </a>
         <nav>
           {
             navItems.map((item) => (
-              <a class:list={[{ "is-active": active === item.key }, "nav-link"]} href={item.href}>
+              <a class:list={[{ "is-active": active === item.key }, "nav-link"]} href={sitePath(item.href)}>
                 {item.label}
               </a>
             ))
           }
         </nav>
-        <a class="nav-cta" href="/getting-started/">Start</a>
+        <a class="nav-cta" href={sitePath("/getting-started/")}>Start</a>
       </header>
 
       <main>
         <slot />
       </main>
+
+      <footer class="product-footer">
+        <div>
+          <img src={sitePath("/assets/logo-mkdocs-dark.png")} alt="" />
+          <strong>Open Agent Harness</strong>
+        </div>
+        <nav aria-label="Footer navigation">
+          <a href={sitePath("/docs/")}>Docs</a>
+          <a href={sitePath("/architecture/")}>Architecture</a>
+          <a href={sitePath("/api/")}>API</a>
+          <a href={sitePath("/roadmap/")}>Roadmap</a>
+          <a href="https://github.com/fairyshine/OpenAgentHarness">GitHub</a>
+        </nav>
+      </footer>
     </div>
   </body>
 </html>

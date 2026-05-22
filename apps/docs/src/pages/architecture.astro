@@ -1,5 +1,6 @@
 ---
 import ProductLayout from "../components/ProductLayout.astro";
+import { sitePath } from "../lib/site-paths";
 
 const layers = [
   ["Client Surfaces", "WebUI, TUI, and Desktop stay thin and consume one OAH-compatible contract.", "/architecture-overview/"],
@@ -16,6 +17,8 @@ const internals = [
   ["Events and audit", "/engine/events-and-audit/"],
   ["Subagent orchestration", "/engine/subagent-orchestration/"],
 ];
+
+const runtimeFlow = ["Client", "API", "Controller", "Queue", "Worker", "Storage", "Event stream"];
 ---
 
 <ProductLayout
@@ -24,21 +27,26 @@ const internals = [
   description="The architecture entry point for Open Agent Harness, covering client surfaces, control plane, execution plane, and storage plane."
 >
   <section class="page-hero">
-    <p class="eyebrow">Architecture</p>
-    <h1>One runtime boundary, many product surfaces.</h1>
-    <p>
-      OAH is organized around explicit ownership: clients render and request, the control plane decides,
-      workers execute, and storage keeps durable truth. This page is the fast map before the full design docs.
-    </p>
-    <div class="hero-actions">
-      <a class="button button--primary" href="/architecture-overview/">Read architecture overview</a>
-      <a class="button button--secondary" href="/engine/">Open engine docs</a>
+    <div>
+      <p class="eyebrow">Architecture</p>
+      <h1>One runtime boundary, many product surfaces.</h1>
+      <p>
+        OAH is organized around explicit ownership: clients render and request, the control plane decides,
+        workers execute, and storage keeps durable truth. This page is the fast map before the full design docs.
+      </p>
+      <div class="hero-actions">
+        <a class="button button--primary" href={sitePath("/architecture-overview/")}>Read architecture overview</a>
+        <a class="button button--secondary" href={sitePath("/engine/")}>Open engine docs</a>
+      </div>
+    </div>
+    <div class="flow-panel" aria-label="Runtime flow">
+      {runtimeFlow.map((item) => <span>{item}</span>)}
     </div>
   </section>
 
   <section class="layer-stack" aria-label="Architecture layers">
     {layers.map(([title, body, href], index) => (
-      <a href={href} style={`--layer-index: ${index + 1}`}>
+      <a href={sitePath(href)} style={`--layer-index: ${index + 1}`}>
         <span>0{index + 1}</span>
         <strong>{title}</strong>
         <p>{body}</p>
@@ -56,7 +64,7 @@ const internals = [
       </p>
     </div>
     <div class="pill-grid">
-      {internals.map(([label, href]) => <a href={href}>{label}</a>)}
+      {internals.map(([label, href]) => <a href={sitePath(href)}>{label}</a>)}
     </div>
   </section>
 </ProductLayout>

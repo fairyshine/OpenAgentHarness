@@ -22,6 +22,7 @@ export function createWorkspaceDeletionHandler(input: {
   workspaceMaterializationManager: WorkspaceMaterializationManager | undefined;
   sqliteShadowRoot: string;
   clearWorkspaceCoordination(workspaceId: string): Promise<void>;
+  closeWorkspaceWatcher?: ((workspace: Pick<WorkspaceRecord, "rootPath">) => void) | undefined;
 }): { deleteWorkspace(workspace: WorkspaceRecord): Promise<void> } {
   return {
     async deleteWorkspace(workspace) {
@@ -70,6 +71,7 @@ export function createWorkspaceDeletionHandler(input: {
         console.info(`[oah-object-storage] No object storage configured; skipping backing-store deletion for ${workspace.id}`);
       }
 
+      input.closeWorkspaceWatcher?.(workspace);
       const deletedCopies = await input.workspaceMaterializationManager?.deleteWorkspaceCopies(workspace.id);
       const cleanup: WorkspaceLocalArtifactCleanupStatus = await cleanupWorkspaceLocalArtifacts({
         workspace,

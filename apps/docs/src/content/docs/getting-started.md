@@ -136,7 +136,7 @@ pnpm exec tsx --tsconfig ./apps/server/tsconfig.json ./apps/server/src/index.ts 
 | `pnpm dev:cli -- --base-url http://127.0.0.1:8787 tui` | 启动 TUI |
 | `pnpm build` | 全量构建 |
 | `pnpm test` | 运行测试 |
-| `mkdocs serve` | 本地预览文档站 |
+| `pnpm dev:docs` | 本地预览文档站 |
 
 ## 接下来
 
