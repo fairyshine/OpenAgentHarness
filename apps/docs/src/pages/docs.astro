@@ -1,0 +1,85 @@
+---
+import ProductLayout from "../components/ProductLayout.astro";
+
+const docGroups = [
+  {
+    label: "Start",
+    title: "Run OAH locally",
+    body: "Install dependencies, start the daemon, open the WebUI, and verify a complete local loop.",
+    href: "/getting-started/",
+  },
+  {
+    label: "Configure",
+    title: "Shape workspace runtime",
+    body: "Review settings, prompts, agents, models, skills, hooks, MCP servers, and validation rules.",
+    href: "/workspace/",
+  },
+  {
+    label: "Operate",
+    title: "Deploy with confidence",
+    body: "Move from embedded worker development to split deployment, Kubernetes rollout, and runbooks.",
+    href: "/deploy/",
+  },
+  {
+    label: "Reference",
+    title: "Read the full API",
+    body: "Browse OpenAPI resources, streaming events, schemas, actions, storage, and model contracts.",
+    href: "/openapi/",
+  },
+];
+
+const collections = [
+  ["Guide path", "/docs/overview/", "A curated map of the migrated Starlight documentation."],
+  ["Engine internals", "/engine/", "Lifecycle, context, projections, workers, queues, and events."],
+  ["Runtime design", "/runtime/", "Reusable runtime templates and configuration files."],
+  ["Production readiness", "/production-readiness/", "The checklist for hardening OAH beyond local development."],
+];
+---
+
+<ProductLayout
+  active="docs"
+  title="Docs | Open Agent Harness"
+  description="A guided entry point for Open Agent Harness documentation, runtime configuration, API references, and operations guides."
+>
+  <section class="page-hero page-hero--compact">
+    <p class="eyebrow">Documentation hub</p>
+    <h1>Find the right page without spelunking the sidebar.</h1>
+    <p>
+      The full Starlight reference stays deep and searchable. This page acts as the softer front door:
+      start here, pick the task, then drop into the exact document you need.
+    </p>
+    <div class="hero-actions">
+      <a class="button button--primary" href="/getting-started/">Start with the guide</a>
+      <a class="button button--secondary" href="/docs/overview/">Open docs overview</a>
+    </div>
+  </section>
+
+  <section class="page-grid page-grid--four" aria-label="Documentation groups">
+    {docGroups.map((item) => (
+      <a class="link-card" href={item.href}>
+        <span>{item.label}</span>
+        <strong>{item.title}</strong>
+        <p>{item.body}</p>
+      </a>
+    ))}
+  </section>
+
+  <section class="split-panel" aria-labelledby="docs-map-title">
+    <div>
+      <p class="section-kicker">Maintenance map</p>
+      <h2 id="docs-map-title">Keep high-signal pages near the front.</h2>
+      <p>
+        The product pages are intentionally shallow. Durable technical detail still belongs in Starlight,
+        where search, sidebar hierarchy, and edit links make long-term maintenance calmer.
+      </p>
+    </div>
+    <div class="resource-list">
+      {collections.map(([title, href, body]) => (
+        <a href={href}>
+          <strong>{title}</strong>
+          <span>{body}</span>
+        </a>
+      ))}
+    </div>
+  </section>
+</ProductLayout>

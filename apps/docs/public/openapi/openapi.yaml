@@ -1,0 +1,4294 @@
+openapi: 3.1.0
+info:
+  title: Open Agent Harness API
+  version: 0.0.1
+  summary: Headless distributed agent runtime API
+  description: >
+    Open Agent Harness is a headless agent runtime for multi-workspace,
+    distributed usage. Identity, membership, and authentication are expected
+    to be managed by an external service or upstream gateway. This document
+    defines the HTTP API for workspace management, session messaging, run
+    lifecycle, action invocation, and SSE event streaming.
+servers:
+  - url: http://localhost:8787/api/v1
+    description: Local development
+tags:
+  - name: Workspaces
+    description: >
+      Workspace identity, catalog, lifecycle, and metadata APIs. This surface
+      remains part of the public contract even though file and command flows
+      are sandbox-scoped.
+  - name: Sandboxes
+    description: >
+      Active execution-copy APIs. Sandbox semantics intentionally align with
+      E2B, so file and command flows stay rooted under /sandboxes and expose
+      /workspace as the in-sandbox root.
+  - name: Files
+    description: >
+      File APIs operate on sandbox-scoped execution copies rather than
+      workspace metadata. The /sandboxes + /workspace shape is a deliberate
+      compatibility contract with E2B, not a temporary shim. The /workspaces
+      API still remains for metadata, catalog, and lifecycle concerns.
+  - name: Commands
+    description: >
+      Command execution APIs run inside the active sandbox context and follow
+      the same sandbox-scoped contract as the file APIs.
+  - name: Catalog
+  - name: Models
+  - name: System
+  - name: Sessions
+  - name: Messages
+  - name: Runs
+  - name: Actions
+  - name: Events
+  - name: Storage
+paths:
+  /healthz:
+    get:
+      tags: [Events]
+      summary: Health report
+      operationId: getHealthReport
+      responses:
+        '200':
+          description: Process health and worker execution status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthReport'
+  /readyz:
+    get:
+      tags: [Events]
+      summary: Readiness report
+      operationId: getReadinessReport
+      responses:
+        '200':
+          description: Process is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessReport'
+        '503':
+          description: Process is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessReport'
+  /system/profile:
+    get:
+      tags: [System]
+      summary: Get server deployment profile
+      operationId: getSystemProfile
+      responses:
+        '200':
+          description: OAH-compatible server profile and client capability flags
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemProfile'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runtimes:
+    get:
+      tags: [Workspaces]
+      summary: List workspace runtimes
+      operationId: listWorkspaceRuntimes
+      responses:
+        '200':
+          description: Workspace runtime list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRuntimeList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runtimes/upload:
+    post:
+      tags: [Workspaces]
+      summary: Upload workspace runtime
+      operationId: uploadWorkspaceRuntime
+      parameters:
+        - in: query
+          name: name
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - in: query
+          name: overwrite
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Workspace runtime uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRuntimeUploadResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runtimes/{runtimeName}:
+    put:
+      tags: [Workspaces]
+      summary: Update workspace runtime
+      operationId: updateWorkspaceRuntime
+      parameters:
+        - in: path
+          name: runtimeName
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Workspace runtime updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRuntimeUploadResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Workspaces]
+      summary: Delete workspace runtime
+      operationId: deleteWorkspaceRuntime
+      parameters:
+        - in: path
+          name: runtimeName
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '204':
+          description: Workspace runtime deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /blueprints:
+    get:
+      tags: [Workspaces]
+      summary: List workspace runtimes (legacy alias)
+      operationId: listWorkspaceBlueprints
+      deprecated: true
+      responses:
+        '200':
+          description: Workspace runtime list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRuntimeList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /blueprints/upload:
+    post:
+      tags: [Workspaces]
+      summary: Upload workspace runtime (legacy alias)
+      operationId: uploadWorkspaceBlueprint
+      deprecated: true
+      parameters:
+        - in: query
+          name: name
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - in: query
+          name: overwrite
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Workspace runtime uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRuntimeUploadResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /blueprints/{runtimeName}:
+    put:
+      tags: [Workspaces]
+      summary: Update workspace runtime (legacy alias)
+      operationId: updateWorkspaceBlueprint
+      deprecated: true
+      parameters:
+        - name: runtimeName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Workspace runtime updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceRuntimeUploadResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Workspaces]
+      summary: Delete workspace runtime (legacy alias)
+      operationId: deleteWorkspaceBlueprint
+      deprecated: true
+      parameters:
+        - name: runtimeName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Workspace runtime deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /model-providers:
+    get:
+      tags: [Models]
+      summary: List supported model providers
+      operationId: listModelProviders
+      responses:
+        '200':
+          description: Supported model provider list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelProviderList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /platform-models:
+    get:
+      tags: [Models]
+      summary: List discovered platform models
+      operationId: listPlatformModels
+      responses:
+        '200':
+          description: Platform model list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /platform-models/refresh:
+    post:
+      tags: [Models]
+      summary: Refresh platform model metadata
+      operationId: refreshPlatformModels
+      responses:
+        '200':
+          description: Platform model snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /platform-models/refresh/distributed:
+    post:
+      tags: [Models]
+      summary: Refresh platform model metadata across workers
+      operationId: refreshPlatformModelsDistributed
+      responses:
+        '200':
+          description: Distributed refresh result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /platform-models/events:
+    get:
+      tags: [Models, Events]
+      summary: Subscribe to platform model metadata updates
+      operationId: streamPlatformModelEvents
+      responses:
+        '200':
+          description: Server-Sent Events stream of platform model snapshots
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces:
+    get:
+      tags: [Workspaces]
+      summary: List workspaces
+      operationId: listWorkspaces
+      parameters:
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Workspace page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspacePage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    post:
+      tags: [Workspaces]
+      summary: Create workspace
+      operationId: createWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspaceRequest'
+      responses:
+        '201':
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/import:
+    post:
+      tags: [Workspaces]
+      summary: Import an existing workspace directory
+      operationId: importWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceImportRequest'
+      responses:
+        '201':
+          description: Workspace imported
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /local/workspaces/register:
+    post:
+      tags: [Workspaces]
+      summary: Register a local workspace path
+      operationId: registerLocalWorkspace
+      description: >
+        Personal deployment endpoint for OAP local daemons. Servers must only
+        enable this when their system profile advertises local workspace path
+        registration capability.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterLocalWorkspaceRequest'
+      responses:
+        '201':
+          description: Local workspace registered or reused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /local/workspaces/{workspaceId}/repair:
+    post:
+      tags: [Workspaces]
+      summary: Repair a local workspace path
+      operationId: repairLocalWorkspace
+      description: >
+        Personal deployment endpoint for OAP local daemons. Rebinds an existing
+        workspace id to a moved or renamed local repo path while preserving
+        session, run, and message history associated with that workspace id.
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepairLocalWorkspaceRequest'
+      responses:
+        '200':
+          description: Local workspace path repaired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '403':
+          $ref: '#/components/responses/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/ErrorResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}:
+    get:
+      tags: [Workspaces]
+      summary: Get workspace
+      operationId: getWorkspace
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '200':
+          description: Workspace metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Workspaces]
+      summary: Delete workspace
+      operationId: deleteWorkspace
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '204':
+          description: Workspace deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/catalog:
+    get:
+      tags: [Catalog]
+      summary: Get workspace catalog
+      operationId: getWorkspaceCatalog
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '200':
+          description: Workspace-discovered capabilities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceCatalog'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/status:
+    get:
+      tags: [Workspaces]
+      summary: Get workspace memory status
+      operationId: getWorkspaceMemoryStatus
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '200':
+          description: Workspace memory status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory:
+    get:
+      tags: [Workspaces]
+      summary: List workspace memory index
+      operationId: listWorkspaceMemory
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '200':
+          description: Workspace memory index
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/search:
+    get:
+      tags: [Workspaces]
+      summary: Search workspace memory
+      operationId: searchWorkspaceMemory
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - name: corpus
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all, index, topics, sessions, daily, dreams]
+            default: all
+        - name: maxResults
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        '200':
+          description: Workspace memory search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/read:
+    get:
+      tags: [Workspaces]
+      summary: Read a workspace memory file slice
+      operationId: readWorkspaceMemory
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: lines
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        '200':
+          description: Workspace memory file content slice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/proposals:
+    get:
+      tags: [Workspaces]
+      summary: List workspace memory proposals
+      operationId: listWorkspaceMemoryProposals
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      responses:
+        '200':
+          description: Workspace memory proposal page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/proposals/apply:
+    post:
+      tags: [Workspaces]
+      summary: Apply a workspace memory proposal
+      operationId: applyWorkspaceMemoryProposal
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                  minLength: 1
+      responses:
+        '200':
+          description: Proposal action result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/memory/proposals/reject:
+    post:
+      tags: [Workspaces]
+      summary: Reject a workspace memory proposal
+      operationId: rejectWorkspaceMemoryProposal
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                  minLength: 1
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 220
+      responses:
+        '200':
+          description: Proposal action result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/entries:
+    get:
+      tags: [Files]
+      summary: List workspace directory entries
+      operationId: listWorkspaceEntries
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/DirectoryPathQuery'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/EntrySortBy'
+        - $ref: '#/components/parameters/SortOrder'
+      responses:
+        '200':
+          description: Workspace entry page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntryPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Files]
+      summary: Delete a workspace file or directory
+      operationId: deleteWorkspaceEntry
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - $ref: '#/components/parameters/Recursive'
+      responses:
+        '200':
+          description: Workspace entry deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDeleteResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/entries/move:
+    patch:
+      tags: [Files]
+      summary: Move or rename a workspace entry
+      operationId: moveWorkspaceEntry
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveWorkspaceEntryRequest'
+      responses:
+        '200':
+          description: Entry moved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/files/content:
+    get:
+      tags: [Files]
+      summary: Read workspace file content
+      operationId: getWorkspaceFileContent
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - $ref: '#/components/parameters/FileEncoding'
+        - $ref: '#/components/parameters/MaxBytes'
+      responses:
+        '200':
+          description: Workspace file content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceFileContent'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    put:
+      tags: [Files]
+      summary: Write workspace file content
+      operationId: putWorkspaceFileContent
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutWorkspaceFileRequest'
+      responses:
+        '200':
+          description: Workspace file written
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/files/upload:
+    put:
+      tags: [Files]
+      summary: Upload raw bytes to a workspace file
+      operationId: uploadWorkspaceFile
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - $ref: '#/components/parameters/UploadOverwrite'
+        - $ref: '#/components/parameters/UploadIfMatch'
+        - $ref: '#/components/parameters/UploadMtimeMs'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Workspace file uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/files/download:
+    get:
+      tags: [Files]
+      summary: Download raw workspace file bytes
+      operationId: downloadWorkspaceFile
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+      responses:
+        '200':
+          description: Raw file bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/directories:
+    post:
+      tags: [Files]
+      summary: Create a workspace directory
+      operationId: createWorkspaceDirectory
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspaceDirectoryRequest'
+      responses:
+        '200':
+          description: Directory created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes:
+    post:
+      tags: [Sandboxes]
+      summary: Ensure a workspace-backed sandbox
+      operationId: ensureSandboxForWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnsureSandboxForWorkspaceRequest'
+      responses:
+        '200':
+          description: Existing sandbox resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '201':
+          description: Sandbox created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}:
+    get:
+      tags: [Sandboxes]
+      summary: Get sandbox metadata
+      operationId: getSandbox
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      responses:
+        '200':
+          description: Sandbox metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/files/entries:
+    get:
+      tags: [Files]
+      summary: List direct children of a sandbox directory
+      operationId: listSandboxEntries
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/DirectoryPathQuery'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/EntrySortBy'
+        - $ref: '#/components/parameters/SortOrder'
+      responses:
+        '200':
+          description: Directory entry page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntryPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/files/stat:
+    get:
+      tags: [Files]
+      summary: Read sandbox file or directory metadata
+      operationId: getSandboxFileStat
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+      responses:
+        '200':
+          description: File or directory metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxFileStat'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/files/entry:
+    delete:
+      tags: [Files]
+      summary: Delete a sandbox file or directory
+      operationId: deleteSandboxEntry
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - $ref: '#/components/parameters/Recursive'
+      responses:
+        '200':
+          description: Entry deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDeleteResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/files/move:
+    patch:
+      tags: [Files]
+      summary: Rename or move a sandbox file or directory
+      operationId: moveSandboxEntry
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveWorkspaceEntryRequest'
+      responses:
+        '200':
+          description: Entry moved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/files/content:
+    get:
+      tags: [Files]
+      summary: Read sandbox file content
+      operationId: getSandboxFileContent
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - $ref: '#/components/parameters/FileEncoding'
+        - $ref: '#/components/parameters/MaxBytes'
+      responses:
+        '200':
+          description: File content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceFileContent'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    put:
+      tags: [Files]
+      summary: Create or overwrite sandbox file content
+      operationId: putSandboxFileContent
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutWorkspaceFileRequest'
+      responses:
+        '200':
+          description: File written
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/files/upload:
+    put:
+      tags: [Files]
+      summary: Upload raw file bytes into a sandbox path
+      operationId: uploadSandboxFile
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+        - $ref: '#/components/parameters/UploadOverwrite'
+        - $ref: '#/components/parameters/UploadIfMatch'
+        - $ref: '#/components/parameters/UploadMtimeMs'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: File uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/files/download:
+    get:
+      tags: [Files]
+      summary: Download raw file bytes from a sandbox path
+      operationId: downloadSandboxFile
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/EntryPathQuery'
+      responses:
+        '200':
+          description: File download
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/directories:
+    post:
+      tags: [Files]
+      summary: Create a sandbox directory
+      operationId: createSandboxDirectory
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspaceDirectoryRequest'
+      responses:
+        '201':
+          description: Directory created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceEntry'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/commands/foreground:
+    post:
+      tags: [Commands]
+      summary: Run a foreground shell command in the sandbox
+      operationId: runSandboxForegroundCommand
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SandboxCommandRequest'
+      responses:
+        '200':
+          description: Command completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxCommandResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/commands/process:
+    post:
+      tags: [Commands]
+      summary: Run a structured process in the sandbox
+      operationId: runSandboxProcessCommand
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SandboxProcessRequest'
+      responses:
+        '200':
+          description: Process completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxCommandResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sandboxes/{sandboxId}/commands/background:
+    post:
+      tags: [Commands]
+      summary: Launch a background command in the sandbox
+      operationId: runSandboxBackgroundCommand
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SandboxBackgroundCommandRequest'
+      responses:
+        '200':
+          description: Background command accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxBackgroundCommandResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/sessions:
+    get:
+      tags: [Sessions]
+      summary: List workspace sessions
+      operationId: listWorkspaceSessions
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Session page for a workspace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    post:
+      tags: [Sessions]
+      summary: Create session
+      operationId: createSession
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /workspaces/{workspaceId}/actions/{actionName}/runs:
+    post:
+      tags: [Actions]
+      summary: Trigger action run
+      operationId: triggerActionRun
+      parameters:
+        - $ref: '#/components/parameters/WorkspaceId'
+        - $ref: '#/components/parameters/ActionName'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateActionRunRequest'
+      responses:
+        '202':
+          description: Action run accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionRunAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /internal/v1/models/generate:
+    post:
+      tags: [Models]
+      summary: Generate text with an internal platform model
+      description: >
+        Internal local-only model runtime for actions, scripts, and the `oah model`
+        CLI. This endpoint is only available from loopback addresses and is not
+        intended for external clients or public network exposure.
+      operationId: internalGenerateModel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelGenerateRequest'
+      responses:
+        '200':
+          description: Model generation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelGenerateResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /internal/v1/platform-models/refresh:
+    post:
+      tags: [Models]
+      summary: Refresh platform model metadata from the internal worker API
+      operationId: internalRefreshPlatformModels
+      description: >
+        Internal local-only alias for platform model refresh used by workers
+        and loopback callers.
+      responses:
+        '200':
+          description: Platform model snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /internal/v1/models/stream:
+    post:
+      tags: [Models]
+      summary: Stream text with an internal platform model
+      description: >
+        Internal local-only model runtime for actions, scripts, and the `oah model`
+        CLI. This endpoint is only available from loopback addresses and is not
+        intended for external clients or public network exposure.
+      operationId: internalStreamModel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelStreamRequest'
+      responses:
+        '200':
+          description: Server-Sent Events stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of model response events
+              examples:
+                started:
+                  summary: Response started event
+                  value: |
+                    event: response.started
+                    data: {"model":"openai-default"}
+                delta:
+                  summary: Text delta event
+                  value: |
+                    event: text.delta
+                    data: {"delta":"hello"}
+                completed:
+                  summary: Response completed event
+                  value: |
+                    event: response.completed
+                    data: {"model":"openai-default","finishReason":"stop"}
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}:
+    get:
+      tags: [Sessions]
+      summary: Get session
+      operationId: getSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    patch:
+      tags: [Sessions]
+      summary: Update session settings
+      operationId: updateSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionRequest'
+      responses:
+        '200':
+          description: Updated session metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Sessions]
+      summary: Delete session
+      operationId: deleteSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '204':
+          description: Session deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/snapshot:
+    get:
+      tags: [Sessions]
+      summary: Get session UI snapshot
+      operationId: getSessionSnapshot
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/SelectedRunId'
+      responses:
+        '200':
+          description: Session snapshot containing session, recent transcript messages, runs, selected run steps, and queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSnapshot'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/messages:
+    get:
+      tags: [Messages]
+      summary: List session messages
+      operationId: listSessionMessages
+      description: |
+        Lists session messages in chronological order.
+        Use `direction=backward` to page from the latest message toward older history.
+        `cursor` is an opaque keyset cursor derived from message position.
+        Use `view=transcript` to return API Message objects after transcript projection.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/MessageDirection'
+        - $ref: '#/components/parameters/MessageView'
+      responses:
+        '200':
+          description: Message page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagePage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    post:
+      tags: [Messages]
+      summary: Create session message and enqueue run
+      operationId: createSessionMessage
+      description: |
+        Creates a user message and enqueues a new run.
+
+        Default behavior is non-interrupting: if the session already has an active run,
+        the new message still creates a queued run and waits for serial execution.
+        Pass `runningRunBehavior: interrupt` to request cancellation of the active run first.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMessageRequest'
+      responses:
+        '202':
+          description: Message accepted and run enqueued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/children:
+    get:
+      tags: [Sessions]
+      summary: List direct child sessions
+      operationId: listChildSessions
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Child session page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/messages/{messageId}:
+    get:
+      tags: [Messages]
+      summary: Get a single session message
+      operationId: getSessionMessage
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: Message record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/messages/{messageId}/context:
+    get:
+      tags: [Messages]
+      summary: Get message context around an anchor message
+      operationId: getSessionMessageContext
+      description: |
+        Returns the anchor message together with a bounded window of messages
+        immediately before and after it.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/MessageId'
+        - $ref: '#/components/parameters/MessagesBefore'
+        - $ref: '#/components/parameters/MessagesAfter'
+      responses:
+        '200':
+          description: Anchor message context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageContext'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/runs:
+    get:
+      tags: [Runs]
+      summary: List runs for a session
+      operationId: listSessionRuns
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Run page for a session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/terminals/{terminalId}:
+    get:
+      tags: [Sessions]
+      summary: Get a session terminal output snapshot
+      operationId: getSessionTerminalSnapshot
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/TerminalId'
+        - $ref: '#/components/parameters/MaxTerminalBytes'
+      responses:
+        '200':
+          description: Terminal output snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTerminalSnapshot'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/terminals/{terminalId}/input:
+    post:
+      tags: [Sessions]
+      summary: Write input to a session terminal
+      operationId: writeSessionTerminalInput
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/TerminalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionTerminalInputRequest'
+      responses:
+        '202':
+          description: Terminal input accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTerminalInputAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/queue:
+    get:
+      tags: [Messages]
+      summary: List queued session follow-up messages
+      operationId: listSessionQueue
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Ordered service-side queue for the session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionQueue'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/compact:
+    post:
+      tags: [Messages]
+      summary: Manually compact a session
+      operationId: compactSession
+      description: |
+        Forces a compaction pass for the current session and persists
+        `compact_boundary` / `compact_summary` artifacts when there is enough
+        history to summarize. The request is rejected while the session still
+        has an active run or queued follow-up work.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompactSessionRequest'
+      responses:
+        '200':
+          description: Manual compaction completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionCompactResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /sessions/{sessionId}/events:
+    get:
+      tags: [Events]
+      summary: Subscribe to session SSE events
+      operationId: streamSessionEvents
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/RunIdQuery'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Server-Sent Events stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of session and run events
+              examples:
+                runStarted:
+                  summary: Run started event
+                  value: |
+                    event: run.started
+                    data: {"runId":"run_123","sessionId":"ses_123","status":"running"}
+                tokenDelta:
+                  summary: Token delta event
+                  value: |
+                    event: message.delta
+                    data: {"runId":"run_123","messageId":"msg_456","delta":"hello"}
+                toolCompleted:
+                  summary: Tool completed event
+                  value: |
+                    event: tool.completed
+                    data: {"runId":"run_123","callId":"tc_001","toolName":"code.review","sourceType":"action"}
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runs/{runId}:
+    get:
+      tags: [Runs]
+      summary: Get run
+      operationId: getRun
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runs/{runId}/steps:
+    get:
+      tags: [Runs]
+      summary: List run steps
+      operationId: listRunSteps
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Run step page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStepPage'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runs/{runId}/cancel:
+    post:
+      tags: [Runs]
+      summary: Cancel run
+      operationId: cancelRun
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: Cancellation requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelRunAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runs/{runId}/guide:
+    post:
+      tags: [Runs]
+      summary: Promote a queued session message and interrupt active work
+      operationId: guideQueuedRun
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: Guide request accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuideQueuedRunAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runs/{runId}/requeue:
+    post:
+      tags: [Runs]
+      summary: Manually requeue a recovery run
+      operationId: requeueRun
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: Run requeued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequeueRunAccepted'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /runs/requeue:
+    post:
+      tags: [Runs]
+      summary: Batch requeue recovery runs
+      operationId: batchRequeueRuns
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchRequeueRunsRequest'
+      responses:
+        '200':
+          description: Per-run requeue results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchRequeueRunsResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/overview:
+    get:
+      tags: [Storage]
+      summary: Get storage overview
+      operationId: getStorageOverview
+      parameters:
+        - name: serviceName
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Storage overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/postgres/tables/{table}:
+    get:
+      tags: [Storage]
+      summary: Inspect a PostgreSQL table
+      operationId: getStoragePostgresTable
+      parameters:
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [workspaces, sessions, runs, messages, run_steps, session_events, session_current_state, tool_calls, hook_runs, artifacts, history_events, archives]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - $ref: '#/components/parameters/Cursor'
+        - name: serviceName
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: searchMode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [full_row]
+        - name: includeRowCount
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: workspaceId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: sessionId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: runId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: errorCode
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: recoveryState
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: PostgreSQL table page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/keys:
+    get:
+      tags: [Storage]
+      summary: Scan Redis keys
+      operationId: listStorageRedisKeys
+      parameters:
+        - name: pattern
+          in: query
+          required: false
+          schema:
+            type: string
+            default: oah:*
+        - $ref: '#/components/parameters/Cursor'
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: Redis key page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/key:
+    get:
+      tags: [Storage]
+      summary: Get Redis key detail
+      operationId: getStorageRedisKey
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Redis key detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Storage]
+      summary: Delete Redis key
+      operationId: deleteStorageRedisKey
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Redis key deletion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/keys/delete:
+    post:
+      tags: [Storage]
+      summary: Delete multiple Redis keys
+      operationId: deleteStorageRedisKeys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [keys]
+              properties:
+                keys:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    type: string
+                    minLength: 1
+      responses:
+        '200':
+          description: Batch Redis key deletion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/worker-affinity:
+    get:
+      tags: [Storage]
+      summary: Inspect Redis worker affinity
+      operationId: getStorageRedisWorkerAffinity
+      parameters:
+        - name: sessionId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: workspaceId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: ownerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: ownerWorkerId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Worker affinity diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/workspace-placements:
+    get:
+      tags: [Storage]
+      summary: List Redis workspace placements
+      operationId: listStorageRedisWorkspacePlacements
+      parameters:
+        - name: workspaceId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: ownerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: ownerWorkerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [unassigned, active, idle, draining, evicted]
+      responses:
+        '200':
+          description: Workspace placement page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/session-queue/clear:
+    post:
+      tags: [Storage]
+      summary: Clear a Redis session queue key
+      operationId: clearStorageRedisSessionQueue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageRedisMaintenanceRequest'
+      responses:
+        '200':
+          description: Maintenance result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /storage/redis/session-lock/release:
+    post:
+      tags: [Storage]
+      summary: Release a Redis session lock key
+      operationId: releaseStorageRedisSessionLock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageRedisMaintenanceRequest'
+      responses:
+        '200':
+          description: Maintenance result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonObject'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+components:
+  parameters:
+    WorkspaceId:
+      name: workspaceId
+      in: path
+      required: true
+      schema:
+        type: string
+    SandboxId:
+      name: sandboxId
+      in: path
+      required: true
+      schema:
+        type: string
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      schema:
+        type: string
+    TerminalId:
+      name: terminalId
+      in: path
+      required: true
+      schema:
+        type: string
+    ActionName:
+      name: actionName
+      in: path
+      required: true
+      schema:
+        type: string
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    MessageDirection:
+      name: direction
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [forward, backward]
+        default: forward
+    MessageView:
+      name: view
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [stored, transcript]
+        default: stored
+      description: >
+        `stored` returns persisted Message records. `transcript` returns API
+        Message records after transcript projection and includes projection
+        metadata such as projectedView and projectedSourceMessageIds.
+    MessagesBefore:
+      name: before
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 200
+        default: 20
+    MessagesAfter:
+      name: after
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 200
+        default: 20
+    DirectoryPathQuery:
+      name: path
+      in: query
+      required: false
+      schema:
+        type: string
+        default: /workspace
+    EntryPathQuery:
+      name: path
+      in: query
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    UploadOverwrite:
+      name: overwrite
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: true
+    UploadIfMatch:
+      name: ifMatch
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Optimistic concurrency token. When provided, upload only succeeds if the current file etag matches.
+    UploadMtimeMs:
+      name: mtimeMs
+      in: query
+      required: false
+      schema:
+        type: number
+        minimum: 0
+      description: Optional modification timestamp in milliseconds to preserve for the uploaded file.
+    EntrySortBy:
+      name: sortBy
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [name, updatedAt, sizeBytes, type]
+        default: name
+    SortOrder:
+      name: sortOrder
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: asc
+    Recursive:
+      name: recursive
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+    FileEncoding:
+      name: encoding
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [utf8, base64]
+        default: utf8
+    MaxBytes:
+      name: maxBytes
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+    RunIdQuery:
+      name: runId
+      in: query
+      required: false
+      schema:
+        type: string
+    SelectedRunId:
+      name: selectedRunId
+      in: query
+      required: false
+      schema:
+        type: string
+    MaxTerminalBytes:
+      name: maxBytes
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1024
+        maximum: 1048576
+        default: 262144
+  responses:
+    ErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    Timestamp:
+      type: string
+      format: date-time
+    JsonObject:
+      type: object
+      additionalProperties: true
+    WorkerMode:
+      type: string
+      enum: [embedded, external, disabled]
+    WorkerProcessKind:
+      type: string
+      enum: [embedded, standalone]
+    WorkerState:
+      type: string
+      enum: [starting, idle, busy, stopping]
+    WorkerHealth:
+      type: string
+      enum: [healthy, late]
+    HealthCheckStatus:
+      type: string
+      enum: [up, down, not_configured]
+    RuntimeProcess:
+      type: object
+      required: [mode, label, execution]
+      properties:
+        mode:
+          type: string
+          enum: [api_embedded_worker, api_only, standalone_worker]
+        label:
+          type: string
+          enum: ["API + embedded worker", "API only", "standalone worker"]
+        execution:
+          type: string
+          enum: [redis_queue, local_inline, none]
+      additionalProperties: false
+    HealthStorage:
+      type: object
+      required: [primary, events, runQueue]
+      properties:
+        primary:
+          type: string
+          enum: [postgres, sqlite]
+        events:
+          type: string
+          enum: [redis, memory]
+        runQueue:
+          type: string
+          enum: [redis, in_process]
+      additionalProperties: false
+    WorkerLease:
+      type: object
+      required:
+        - workerId
+        - processKind
+        - state
+        - lastSeenAt
+        - leaseTtlMs
+        - expiresAt
+        - lastSeenAgeMs
+        - health
+      properties:
+        workerId:
+          type: string
+        processKind:
+          $ref: '#/components/schemas/WorkerProcessKind'
+        state:
+          $ref: '#/components/schemas/WorkerState'
+        lastSeenAt:
+          $ref: '#/components/schemas/Timestamp'
+        leaseTtlMs:
+          type: integer
+          minimum: 0
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        lastSeenAgeMs:
+          type: integer
+          minimum: 0
+        health:
+          $ref: '#/components/schemas/WorkerHealth'
+        currentSessionId:
+          type: string
+        currentRunId:
+          type: string
+        currentWorkspaceId:
+          type: string
+      additionalProperties: false
+    WorkerSlot:
+      type: object
+      required: [slotId, workerId, processKind, state]
+      properties:
+        slotId:
+          type: string
+        workerId:
+          type: string
+        processKind:
+          $ref: '#/components/schemas/WorkerProcessKind'
+        state:
+          $ref: '#/components/schemas/WorkerState'
+        currentSessionId:
+          type: string
+        currentRunId:
+          type: string
+        currentWorkspaceId:
+          type: string
+      additionalProperties: false
+    WorkerSummary:
+      type: object
+      required: [active, healthy, late, busy, embedded, standalone]
+      properties:
+        active:
+          type: integer
+          minimum: 0
+        healthy:
+          type: integer
+          minimum: 0
+        late:
+          type: integer
+          minimum: 0
+        busy:
+          type: integer
+          minimum: 0
+        embedded:
+          type: integer
+          minimum: 0
+        standalone:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    WorkerPoolDecisionReason:
+      type: string
+      enum: [startup, steady, scale_up, scale_down, cooldown_hold, shutdown]
+    WorkerPoolDecision:
+      type: object
+      required: [timestamp, reason, suggestedWorkers, desiredWorkers, activeWorkers]
+      properties:
+        timestamp:
+          $ref: '#/components/schemas/Timestamp'
+        reason:
+          $ref: '#/components/schemas/WorkerPoolDecisionReason'
+        suggestedWorkers:
+          type: integer
+          minimum: 0
+        globalSuggestedWorkers:
+          type: integer
+          minimum: 0
+        reservedSubagentCapacity:
+          type: integer
+          minimum: 0
+        reservedWorkers:
+          type: integer
+          minimum: 0
+        availableIdleCapacity:
+          type: integer
+          minimum: 0
+        readySessionsPerActiveWorker:
+          type: number
+          minimum: 0
+        subagentReserveTarget:
+          type: integer
+          minimum: 0
+        subagentReserveDeficit:
+          type: integer
+          minimum: 0
+        desiredWorkers:
+          type: integer
+          minimum: 0
+        activeWorkers:
+          type: integer
+          minimum: 0
+        busyWorkers:
+          type: integer
+          minimum: 0
+        globalActiveWorkers:
+          type: integer
+          minimum: 0
+        globalBusyWorkers:
+          type: integer
+          minimum: 0
+        remoteActiveWorkers:
+          type: integer
+          minimum: 0
+        remoteBusyWorkers:
+          type: integer
+          minimum: 0
+        readySessionCount:
+          type: integer
+          minimum: 0
+        readyQueueDepth:
+          type: integer
+          minimum: 0
+        uniqueReadySessionCount:
+          type: integer
+          minimum: 0
+        subagentReadySessionCount:
+          type: integer
+          minimum: 0
+        subagentReadyQueueDepth:
+          type: integer
+          minimum: 0
+        lockedReadySessionCount:
+          type: integer
+          minimum: 0
+        staleReadySessionCount:
+          type: integer
+          minimum: 0
+        oldestSchedulableReadyAgeMs:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    WorkerPool:
+      type: object
+      required:
+        - running
+        - processKind
+        - sessionSerialBoundary
+        - minWorkers
+        - maxWorkers
+        - suggestedWorkers
+        - reservedSubagentCapacity
+        - availableIdleCapacity
+        - subagentReserveTarget
+        - subagentReserveDeficit
+        - desiredWorkers
+        - slotCapacity
+        - slots
+        - activeWorkers
+        - busySlots
+        - idleSlots
+        - busyWorkers
+        - idleWorkers
+        - readySessionsPerCapacityUnit
+        - scaleIntervalMs
+        - scaleUpCooldownMs
+        - scaleDownCooldownMs
+        - scaleUpSampleSize
+        - scaleDownSampleSize
+        - scaleUpBusyRatioThreshold
+        - scaleUpMaxReadyAgeMs
+        - scaleUpPressureStreak
+        - scaleDownPressureStreak
+        - scaleUpCooldownRemainingMs
+        - scaleDownCooldownRemainingMs
+        - recentDecisions
+      properties:
+        running:
+          type: boolean
+        processKind:
+          $ref: '#/components/schemas/WorkerProcessKind'
+        sessionSerialBoundary:
+          type: string
+          enum: [session]
+        minWorkers:
+          type: integer
+          minimum: 0
+        maxWorkers:
+          type: integer
+          minimum: 0
+        suggestedWorkers:
+          type: integer
+          minimum: 0
+        globalSuggestedWorkers:
+          type: integer
+          minimum: 0
+        reservedSubagentCapacity:
+          type: integer
+          minimum: 0
+        reservedWorkers:
+          type: integer
+          minimum: 0
+        availableIdleCapacity:
+          type: integer
+          minimum: 0
+        readySessionsPerActiveWorker:
+          type: number
+          minimum: 0
+        subagentReserveTarget:
+          type: integer
+          minimum: 0
+        subagentReserveDeficit:
+          type: integer
+          minimum: 0
+        desiredWorkers:
+          type: integer
+          minimum: 0
+        slotCapacity:
+          type: integer
+          minimum: 0
+        slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerSlot'
+        activeWorkers:
+          type: integer
+          minimum: 0
+        busySlots:
+          type: integer
+          minimum: 0
+        idleSlots:
+          type: integer
+          minimum: 0
+        busyWorkers:
+          type: integer
+          minimum: 0
+        idleWorkers:
+          type: integer
+          minimum: 0
+        globalActiveWorkers:
+          type: integer
+          minimum: 0
+        globalBusyWorkers:
+          type: integer
+          minimum: 0
+        remoteActiveWorkers:
+          type: integer
+          minimum: 0
+        remoteBusyWorkers:
+          type: integer
+          minimum: 0
+        readySessionsPerCapacityUnit:
+          type: integer
+          minimum: 1
+          description: Primary queue-density target per observed capacity unit.
+        scaleIntervalMs:
+          type: integer
+          minimum: 0
+        scaleUpCooldownMs:
+          type: integer
+          minimum: 0
+        scaleDownCooldownMs:
+          type: integer
+          minimum: 0
+        scaleUpSampleSize:
+          type: integer
+          minimum: 1
+        scaleDownSampleSize:
+          type: integer
+          minimum: 1
+        scaleUpBusyRatioThreshold:
+          type: number
+          minimum: 0
+          maximum: 1
+        scaleUpMaxReadyAgeMs:
+          type: integer
+          minimum: 0
+        readySessionCount:
+          type: integer
+          minimum: 0
+        readyQueueDepth:
+          type: integer
+          minimum: 0
+        uniqueReadySessionCount:
+          type: integer
+          minimum: 0
+        subagentReadySessionCount:
+          type: integer
+          minimum: 0
+        subagentReadyQueueDepth:
+          type: integer
+          minimum: 0
+        lockedReadySessionCount:
+          type: integer
+          minimum: 0
+        staleReadySessionCount:
+          type: integer
+          minimum: 0
+        oldestSchedulableReadyAgeMs:
+          type: integer
+          minimum: 0
+        lastRebalanceAt:
+          $ref: '#/components/schemas/Timestamp'
+        lastRebalanceReason:
+          $ref: '#/components/schemas/WorkerPoolDecisionReason'
+        scaleUpPressureStreak:
+          type: integer
+          minimum: 0
+        scaleDownPressureStreak:
+          type: integer
+          minimum: 0
+        scaleUpCooldownRemainingMs:
+          type: integer
+          minimum: 0
+        scaleDownCooldownRemainingMs:
+          type: integer
+          minimum: 0
+        recentDecisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerPoolDecision'
+      additionalProperties: false
+    HealthChecks:
+      type: object
+      required: [postgres, redisEvents, redisRunQueue]
+      properties:
+        postgres:
+          $ref: '#/components/schemas/HealthCheckStatus'
+        redisEvents:
+          $ref: '#/components/schemas/HealthCheckStatus'
+        redisRunQueue:
+          $ref: '#/components/schemas/HealthCheckStatus'
+      additionalProperties: false
+    HealthWorker:
+      type: object
+      required: [mode, sessionSerialBoundary, localSlots, activeWorkers, summary, pool]
+      properties:
+        mode:
+          $ref: '#/components/schemas/WorkerMode'
+        sessionSerialBoundary:
+          type: string
+          enum: [session]
+        localSlots:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerSlot'
+        activeWorkers:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerLease'
+        summary:
+          $ref: '#/components/schemas/WorkerSummary'
+        pool:
+          oneOf:
+            - $ref: '#/components/schemas/WorkerPool'
+            - type: 'null'
+      additionalProperties: false
+    SandboxTopology:
+      type: object
+      required: [provider, executionModel, workerPlacement]
+      properties:
+        provider:
+          type: string
+          enum: [embedded, self_hosted, e2b]
+        executionModel:
+          type: string
+          enum: [local_embedded, sandbox_hosted]
+        workerPlacement:
+          type: string
+          enum: [api_process, inside_sandbox]
+      additionalProperties: false
+    HealthReport:
+      type: object
+      required: [status, storage, process, sandbox, checks, worker]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        storage:
+          $ref: '#/components/schemas/HealthStorage'
+        process:
+          $ref: '#/components/schemas/RuntimeProcess'
+        sandbox:
+          $ref: '#/components/schemas/SandboxTopology'
+        checks:
+          $ref: '#/components/schemas/HealthChecks'
+        worker:
+          $ref: '#/components/schemas/HealthWorker'
+      additionalProperties: false
+    ReadinessReport:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        checks:
+          $ref: '#/components/schemas/HealthChecks'
+      additionalProperties: false
+    SystemCapabilities:
+      type: object
+      required:
+        - localDaemonControl
+        - localWorkspacePaths
+        - workspaceRegistration
+        - storageInspection
+        - modelManagement
+        - localDaemonSupervisor
+      properties:
+        localDaemonControl:
+          type: boolean
+        localWorkspacePaths:
+          type: boolean
+        workspaceRegistration:
+          type: boolean
+        storageInspection:
+          type: boolean
+        modelManagement:
+          type: boolean
+        localDaemonSupervisor:
+          type: boolean
+      additionalProperties: false
+    SystemProfile:
+      type: object
+      required:
+        - apiCompatibility
+        - product
+        - edition
+        - runtimeMode
+        - deploymentKind
+        - displayName
+        - capabilities
+      properties:
+        apiCompatibility:
+          type: string
+          enum: [oah/v1]
+        product:
+          type: string
+          enum: [open-agent-harness]
+        edition:
+          type: string
+          enum: [enterprise, personal]
+        runtimeMode:
+          type: string
+          enum: [daemon, embedded, compose, kubernetes, split]
+        deploymentKind:
+          type: string
+          enum: [oah, oap]
+        displayName:
+          type: string
+          minLength: 1
+        capabilities:
+          $ref: '#/components/schemas/SystemCapabilities'
+      additionalProperties: false
+    WorkspaceRuntime:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    WorkspaceRuntimeList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceRuntime'
+    WorkspaceRuntimeUploadResponse:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    ModelProvider:
+      type: object
+      required:
+        - id
+        - packageName
+        - description
+        - requiresUrl
+        - useCases
+      properties:
+        id:
+          type: string
+          enum: [openai, openai-compatible, deepseek, moonshotai]
+        packageName:
+          type: string
+        description:
+          type: string
+        requiresUrl:
+          type: boolean
+        useCases:
+          type: array
+          items:
+            type: string
+      additionalProperties: false
+    ModelProviderList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelProvider'
+      additionalProperties: false
+    Workspace:
+      type: object
+      required:
+        - id
+        - name
+        - rootPath
+        - executionPolicy
+        - status
+        - kind
+        - readOnly
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        externalRef:
+          type: string
+        name:
+          type: string
+        runtime:
+          type: string
+          description: Preferred field for the workspace runtime name.
+        rootPath:
+          type: string
+        executionPolicy:
+          type: string
+          enum: [local, container, remote_runner]
+        status:
+          type: string
+          enum: [active, archived, disabled]
+        kind:
+          type: string
+          enum: [project]
+        readOnly:
+          type: boolean
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+    WorkspacePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Workspace'
+        nextCursor:
+          type: string
+    Sandbox:
+      type: object
+      required:
+        - id
+        - workspaceId
+        - provider
+        - executionModel
+        - workerPlacement
+        - rootPath
+        - name
+        - kind
+        - executionPolicy
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        workspaceId:
+          type: string
+        provider:
+          type: string
+          enum: [embedded, self_hosted, e2b]
+        executionModel:
+          type: string
+          enum: [local_embedded, sandbox_hosted]
+        workerPlacement:
+          type: string
+          enum: [api_process, inside_sandbox]
+        rootPath:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [project]
+        executionPolicy:
+          type: string
+          enum: [local, container, remote_runner]
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        ownerWorkerId:
+          type: string
+        ownerBaseUrl:
+          type: string
+    WorkspaceEntry:
+      type: object
+      required:
+        - path
+        - name
+        - type
+        - readOnly
+      properties:
+        path:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [file, directory]
+        sizeBytes:
+          type: integer
+          minimum: 0
+        mimeType:
+          type: string
+        etag:
+          type: string
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        readOnly:
+          type: boolean
+      additionalProperties: false
+    WorkspaceEntryPage:
+      type: object
+      required:
+        - workspaceId
+        - path
+        - items
+      properties:
+        workspaceId:
+          type: string
+        path:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceEntry'
+        nextCursor:
+          type: string
+      additionalProperties: false
+    WorkspaceFileContent:
+      type: object
+      required:
+        - workspaceId
+        - path
+        - encoding
+        - content
+        - truncated
+        - readOnly
+      properties:
+        workspaceId:
+          type: string
+        path:
+          type: string
+        encoding:
+          type: string
+          enum: [utf8, base64]
+        content:
+          type: string
+        truncated:
+          type: boolean
+        sizeBytes:
+          type: integer
+          minimum: 0
+        mimeType:
+          type: string
+        etag:
+          type: string
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        readOnly:
+          type: boolean
+      additionalProperties: false
+    WorkspaceDeleteResult:
+      type: object
+      required:
+        - workspaceId
+        - path
+        - type
+        - deleted
+      properties:
+        workspaceId:
+          type: string
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, directory]
+        deleted:
+          type: boolean
+      additionalProperties: false
+    SandboxFileStat:
+      type: object
+      required:
+        - kind
+        - size
+        - mtimeMs
+        - birthtimeMs
+        - path
+      properties:
+        kind:
+          type: string
+          enum: [file, directory]
+        size:
+          type: integer
+          minimum: 0
+        mtimeMs:
+          type: number
+          minimum: 0
+        birthtimeMs:
+          type: number
+          minimum: 0
+        path:
+          type: string
+      additionalProperties: false
+    AgentCatalogItem:
+      type: object
+      required: [name, source]
+      properties:
+        name:
+          type: string
+        source:
+          type: string
+          enum: [platform, workspace]
+        description:
+          type: string
+    ModelCatalogItem:
+      type: object
+      required: [ref, name, source, provider]
+      properties:
+        ref:
+          type: string
+          pattern: '^(platform|workspace)/.+$'
+        name:
+          type: string
+        source:
+          type: string
+          enum: [platform, workspace]
+        provider:
+          type: string
+        modelName:
+          type: string
+        url:
+          type: string
+    ChatMessage:
+      oneOf:
+        - $ref: '#/components/schemas/SystemChatMessage'
+        - $ref: '#/components/schemas/UserChatMessage'
+        - $ref: '#/components/schemas/AssistantChatMessage'
+        - $ref: '#/components/schemas/ToolChatMessage'
+    SystemChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system]
+        content:
+          type: string
+      additionalProperties: false
+    UserChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user]
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                oneOf:
+                  - $ref: '#/components/schemas/TextMessagePart'
+                  - $ref: '#/components/schemas/ImageMessagePart'
+                  - $ref: '#/components/schemas/FileMessagePart'
+      additionalProperties: false
+    AssistantChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [assistant]
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                oneOf:
+                  - $ref: '#/components/schemas/TextMessagePart'
+                  - $ref: '#/components/schemas/FileMessagePart'
+                  - $ref: '#/components/schemas/ReasoningMessagePart'
+                  - $ref: '#/components/schemas/ToolCallMessagePart'
+                  - $ref: '#/components/schemas/ToolResultMessagePart'
+                  - $ref: '#/components/schemas/ToolApprovalRequestMessagePart'
+      additionalProperties: false
+    ToolChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [tool]
+        content:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/ToolResultMessagePart'
+              - $ref: '#/components/schemas/ToolApprovalResponseMessagePart'
+      additionalProperties: false
+    MessagePart:
+      oneOf:
+        - $ref: '#/components/schemas/TextMessagePart'
+        - $ref: '#/components/schemas/ImageMessagePart'
+        - $ref: '#/components/schemas/FileMessagePart'
+        - $ref: '#/components/schemas/ReasoningMessagePart'
+        - $ref: '#/components/schemas/ToolCallMessagePart'
+        - $ref: '#/components/schemas/ToolResultMessagePart'
+        - $ref: '#/components/schemas/ToolApprovalRequestMessagePart'
+        - $ref: '#/components/schemas/ToolApprovalResponseMessagePart'
+    TextMessagePart:
+      type: object
+      required: [type, text]
+      properties:
+        type:
+          type: string
+          enum: [text]
+        text:
+          type: string
+        providerOptions:
+          $ref: '#/components/schemas/JsonObject'
+      additionalProperties: false
+    ImageMessagePart:
+      type: object
+      required: [type, image]
+      properties:
+        type:
+          type: string
+          enum: [image]
+        image:
+          type: string
+        mediaType:
+          type: string
+        providerOptions:
+          $ref: '#/components/schemas/JsonObject'
+      additionalProperties: false
+    FileMessagePart:
+      type: object
+      required: [type, data, mediaType]
+      properties:
+        type:
+          type: string
+          enum: [file]
+        data:
+          type: string
+        filename:
+          type: string
+        mediaType:
+          type: string
+        providerOptions:
+          $ref: '#/components/schemas/JsonObject'
+      additionalProperties: false
+    ReasoningMessagePart:
+      type: object
+      required: [type, text]
+      properties:
+        type:
+          type: string
+          enum: [reasoning]
+        text:
+          type: string
+        providerOptions:
+          $ref: '#/components/schemas/JsonObject'
+      additionalProperties: false
+    ToolCallMessagePart:
+      type: object
+      required: [type, toolCallId, toolName, input]
+      properties:
+        type:
+          type: string
+          enum: [tool-call]
+        toolCallId:
+          type: string
+        toolName:
+          type: string
+        input: {}
+        providerExecuted:
+          type: boolean
+        providerOptions:
+          $ref: '#/components/schemas/JsonObject'
+      additionalProperties: false
+    ToolResultOutput:
+      oneOf:
+        - type: object
+          required: [type, value]
+          properties:
+            type:
+              type: string
+              enum: [text]
+            value:
+              type: string
+            providerOptions:
+              $ref: '#/components/schemas/JsonObject'
+          additionalProperties: false
+        - type: object
+          required: [type, value]
+          properties:
+            type:
+              type: string
+              enum: [json]
+            value: {}
+            providerOptions:
+              $ref: '#/components/schemas/JsonObject'
+          additionalProperties: false
+        - type: object
+          required: [type]
+          properties:
+            type:
+              type: string
+              enum: [execution-denied]
+            reason:
+              type: string
+            providerOptions:
+              $ref: '#/components/schemas/JsonObject'
+          additionalProperties: false
+        - type: object
+          required: [type, value]
+          properties:
+            type:
+              type: string
+              enum: [error-text]
+            value:
+              type: string
+            providerOptions:
+              $ref: '#/components/schemas/JsonObject'
+          additionalProperties: false
+        - type: object
+          required: [type, value]
+          properties:
+            type:
+              type: string
+              enum: [error-json]
+            value: {}
+            providerOptions:
+              $ref: '#/components/schemas/JsonObject'
+          additionalProperties: false
+        - type: object
+          required: [type, value]
+          properties:
+            type:
+              type: string
+              enum: [content]
+            value:
+              type: array
+              items: {}
+          additionalProperties: false
+    ToolResultMessagePart:
+      type: object
+      required: [type, toolCallId, toolName, output]
+      properties:
+        type:
+          type: string
+          enum: [tool-result]
+        toolCallId:
+          type: string
+        toolName:
+          type: string
+        output:
+          $ref: '#/components/schemas/ToolResultOutput'
+        providerOptions:
+          $ref: '#/components/schemas/JsonObject'
+      additionalProperties: false
+    ToolApprovalRequestMessagePart:
+      type: object
+      required: [type, approvalId, toolCallId]
+      properties:
+        type:
+          type: string
+          enum: [tool-approval-request]
+        approvalId:
+          type: string
+        toolCallId:
+          type: string
+      additionalProperties: false
+    ToolApprovalResponseMessagePart:
+      type: object
+      required: [type, approvalId, approved]
+      properties:
+        type:
+          type: string
+          enum: [tool-approval-response]
+        approvalId:
+          type: string
+        approved:
+          type: boolean
+        reason:
+          type: string
+        providerExecuted:
+          type: boolean
+      additionalProperties: false
+    Usage:
+      type: object
+      properties:
+        inputTokens:
+          type: integer
+          minimum: 0
+        outputTokens:
+          type: integer
+          minimum: 0
+        totalTokens:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    ActionCatalogItem:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        exposeToLlm:
+          type: boolean
+        callableByUser:
+          type: boolean
+        callableByApi:
+          type: boolean
+        retryPolicy:
+          type: string
+          enum: [manual, safe]
+    SkillCatalogItem:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        exposeToLlm:
+          type: boolean
+    ToolCatalogItem:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        transportType:
+          type: string
+        toolPrefix:
+          type: string
+    HookCatalogItem:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        matcher:
+          type: string
+        handlerType:
+          type: string
+          enum: [command, http, prompt, agent]
+        events:
+          type: array
+          items:
+            type: string
+    WorkspaceCatalog:
+      type: object
+      required:
+        - workspaceId
+        - agents
+        - models
+        - actions
+        - skills
+        - tools
+        - hooks
+        - nativeTools
+      properties:
+        workspaceId:
+          type: string
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentCatalogItem'
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelCatalogItem'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActionCatalogItem'
+        skills:
+          type: array
+          items:
+            $ref: '#/components/schemas/SkillCatalogItem'
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolCatalogItem'
+        hooks:
+          type: array
+          items:
+            $ref: '#/components/schemas/HookCatalogItem'
+        nativeTools:
+          type: array
+          items:
+            type: string
+    Session:
+      type: object
+      required:
+        - id
+        - workspaceId
+        - subjectRef
+        - activeAgentName
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        workspaceId:
+          type: string
+        parentSessionId:
+          type: string
+        subjectRef:
+          type: string
+        modelRef:
+          type: string
+        agentName:
+          type: string
+        activeAgentName:
+          type: string
+        workspaceMemory:
+          $ref: '#/components/schemas/JsonObject'
+        title:
+          type: string
+        status:
+          type: string
+          enum: [active, archived, closed]
+        lastRunAt:
+          $ref: '#/components/schemas/Timestamp'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+    SessionPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Session'
+        nextCursor:
+          type: string
+    SessionSnapshot:
+      type: object
+      required: [session, messages, runs, queue]
+      properties:
+        session:
+          $ref: '#/components/schemas/Session'
+        messages:
+          $ref: '#/components/schemas/MessagePage'
+        runs:
+          $ref: '#/components/schemas/RunPage'
+        selectedRunId:
+          type: string
+        selectedRunSteps:
+          $ref: '#/components/schemas/RunStepPage'
+        queue:
+          $ref: '#/components/schemas/SessionQueue'
+    Message:
+      allOf:
+        - oneOf:
+            - $ref: '#/components/schemas/SystemChatMessage'
+            - $ref: '#/components/schemas/UserChatMessage'
+            - $ref: '#/components/schemas/AssistantChatMessage'
+            - $ref: '#/components/schemas/ToolChatMessage'
+        - type: object
+          required:
+            - id
+            - sessionId
+            - createdAt
+          properties:
+            id:
+              type: string
+            sessionId:
+              type: string
+            runId:
+              type: string
+            metadata:
+              $ref: '#/components/schemas/JsonObject'
+            createdAt:
+              $ref: '#/components/schemas/Timestamp'
+    MessagePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        nextCursor:
+          type: string
+          description: Opaque cursor for the next page in the requested direction
+        totalCount:
+          type: integer
+          minimum: 0
+    MessageContext:
+      type: object
+      required:
+        - anchor
+        - before
+        - after
+        - hasMoreBefore
+        - hasMoreAfter
+      properties:
+        anchor:
+          $ref: '#/components/schemas/Message'
+        before:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        after:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        hasMoreBefore:
+          type: boolean
+        hasMoreAfter:
+          type: boolean
+    Run:
+      type: object
+      required:
+        - id
+        - workspaceId
+        - triggerType
+        - effectiveAgentName
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+        workspaceId:
+          type: string
+        sessionId:
+          type: string
+        parentRunId:
+          type: string
+        initiatorRef:
+          type: string
+        triggerType:
+          type: string
+          enum: [message, manual_action, api_action, hook, system]
+        triggerRef:
+          type: string
+        agentName:
+          type: string
+        effectiveAgentName:
+          type: string
+        switchCount:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum: [queued, running, waiting_tool, completed, failed, cancelled, timed_out]
+        cancelRequestedAt:
+          $ref: '#/components/schemas/Timestamp'
+        startedAt:
+          $ref: '#/components/schemas/Timestamp'
+        heartbeatAt:
+          $ref: '#/components/schemas/Timestamp'
+        endedAt:
+          $ref: '#/components/schemas/Timestamp'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/JsonObject'
+    RunPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Run'
+        nextCursor:
+          type: string
+    CreateWorkspaceRequest:
+      type: object
+      properties:
+        externalRef:
+          type: string
+        name:
+          type: string
+          minLength: 1
+        runtime:
+          type: string
+          minLength: 1
+          description: Preferred field for selecting the workspace runtime.
+        rootPath:
+          type: string
+          minLength: 1
+        ownerId:
+          type: string
+          minLength: 1
+          description: Optional owner affinity key used to colocate workspaces for the same owner on one sandbox. When omitted, placement uses the ownerless shared pool and considers sandbox CPU / memory / disk pressure before falling back to a warm empty sandbox.
+        serviceName:
+          type: string
+          minLength: 1
+          description: Optional service namespace used for service-scoped storage partitioning.
+        agentsMd:
+          type: string
+          minLength: 1
+        toolServers:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/JsonObject'
+        skills:
+          type: array
+          items:
+            type: object
+            required:
+              - name
+              - content
+            properties:
+              name:
+                type: string
+                minLength: 1
+              content:
+                type: string
+                minLength: 1
+            additionalProperties: false
+        executionPolicy:
+          type: string
+          enum: [local, container, remote_runner]
+          default: local
+      required:
+        - name
+        - runtime
+      additionalProperties: false
+    EnsureSandboxForWorkspaceRequest:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+          minLength: 1
+        externalRef:
+          type: string
+        name:
+          type: string
+          minLength: 1
+        runtime:
+          type: string
+          minLength: 1
+          description: Preferred field for selecting the workspace runtime when creating a sandbox-backed workspace.
+        rootPath:
+          type: string
+          minLength: 1
+        ownerId:
+          type: string
+          minLength: 1
+          description: Optional owner affinity key used to colocate workspaces for the same owner on one sandbox. When omitted, placement uses the ownerless shared pool and considers sandbox CPU / memory / disk pressure before falling back to a warm empty sandbox.
+        serviceName:
+          type: string
+          minLength: 1
+        executionPolicy:
+          type: string
+          enum: [local, container, remote_runner]
+          default: local
+      additionalProperties: false
+    PutWorkspaceFileRequest:
+      type: object
+      required:
+        - path
+        - content
+      properties:
+        path:
+          type: string
+          minLength: 1
+        content:
+          type: string
+        encoding:
+          type: string
+          enum: [utf8, base64]
+          default: utf8
+        overwrite:
+          type: boolean
+          default: true
+        ifMatch:
+          type: string
+      additionalProperties: false
+    CreateWorkspaceDirectoryRequest:
+      type: object
+      required:
+        - path
+      properties:
+        path:
+          type: string
+          minLength: 1
+        createParents:
+          type: boolean
+          default: true
+      additionalProperties: false
+    MoveWorkspaceEntryRequest:
+      type: object
+      required:
+        - sourcePath
+        - targetPath
+      properties:
+        sourcePath:
+          type: string
+          minLength: 1
+        targetPath:
+          type: string
+          minLength: 1
+        overwrite:
+          type: boolean
+          default: false
+      additionalProperties: false
+    SandboxCommandRequest:
+      type: object
+      required:
+        - command
+      properties:
+        command:
+          type: string
+          minLength: 1
+        cwd:
+          type: string
+          minLength: 1
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        timeoutMs:
+          type: integer
+          minimum: 1
+        stdinText:
+          type: string
+      additionalProperties: false
+    SandboxProcessRequest:
+      type: object
+      required:
+        - executable
+      properties:
+        executable:
+          type: string
+          minLength: 1
+        args:
+          type: array
+          items:
+            type: string
+        cwd:
+          type: string
+          minLength: 1
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        timeoutMs:
+          type: integer
+          minimum: 1
+        stdinText:
+          type: string
+      additionalProperties: false
+    SandboxBackgroundCommandRequest:
+      type: object
+      required:
+        - command
+      properties:
+        command:
+          type: string
+          minLength: 1
+        sessionId:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          minLength: 1
+        cwd:
+          type: string
+          minLength: 1
+        env:
+          type: object
+          additionalProperties:
+            type: string
+      additionalProperties: false
+    SandboxCommandResult:
+      type: object
+      required:
+        - stdout
+        - stderr
+        - exitCode
+      properties:
+        stdout:
+          type: string
+        stderr:
+          type: string
+        exitCode:
+          type: integer
+      additionalProperties: false
+    SandboxBackgroundCommandResult:
+      type: object
+      required:
+        - outputPath
+        - taskId
+        - pid
+      properties:
+        outputPath:
+          type: string
+        taskId:
+          type: string
+        pid:
+          type: integer
+          minimum: 0
+      additionalProperties: false
+    WorkspaceImportRequest:
+      type: object
+      required:
+        - rootPath
+      properties:
+        rootPath:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          enum: [project]
+        name:
+          type: string
+        externalRef:
+          type: string
+      additionalProperties: false
+    RegisterLocalWorkspaceRequest:
+      type: object
+      required:
+        - rootPath
+      properties:
+        rootPath:
+          type: string
+          minLength: 1
+        name:
+          type: string
+        runtime:
+          type: string
+          minLength: 1
+          description: Optional runtime template to apply before registering the local workspace.
+        ownerId:
+          type: string
+        serviceName:
+          type: string
+          minLength: 1
+          maxLength: 63
+          pattern: '^[a-zA-Z0-9](?:[a-zA-Z0-9-_]*[a-zA-Z0-9])?$'
+      additionalProperties: false
+    RepairLocalWorkspaceRequest:
+      type: object
+      required:
+        - rootPath
+      properties:
+        rootPath:
+          type: string
+          minLength: 1
+          description: New local repo path for the existing workspace id.
+        name:
+          type: string
+          minLength: 1
+      additionalProperties: false
+    CreateSessionRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        agentName:
+          type: string
+        modelRef:
+          type: string
+          minLength: 1
+        workspaceMemory:
+          $ref: '#/components/schemas/JsonObject'
+      additionalProperties: false
+    UpdateSessionRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        activeAgentName:
+          type: string
+          minLength: 1
+        modelRef:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+        workspaceMemory:
+          oneOf:
+            - $ref: '#/components/schemas/JsonObject'
+            - type: 'null'
+      additionalProperties: false
+    RunStep:
+      type: object
+      required:
+        - id
+        - runId
+        - seq
+        - stepType
+        - status
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        seq:
+          type: integer
+          minimum: 1
+        stepType:
+          type: string
+          enum: [model_call, tool_call, agent_switch, agent_delegate, hook, system]
+        name:
+          type: string
+        agentName:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed, cancelled]
+        input:
+          $ref: '#/components/schemas/JsonObject'
+        output:
+          $ref: '#/components/schemas/JsonObject'
+        startedAt:
+          $ref: '#/components/schemas/Timestamp'
+        endedAt:
+          $ref: '#/components/schemas/Timestamp'
+    RunStepPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunStep'
+        nextCursor:
+          type: string
+    CreateMessageRequest:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: string
+          minLength: 1
+        metadata:
+          $ref: '#/components/schemas/JsonObject'
+        runningRunBehavior:
+          type: string
+          enum: [queue, interrupt]
+          description: |
+            Optional behavior when the session already has an active run.
+            Defaults to `queue`. Use `interrupt` to request cancellation of the active run
+            before enqueuing the new message.
+      additionalProperties: false
+    MessageAccepted:
+      type: object
+      required:
+        - messageId
+        - runId
+        - status
+      properties:
+        messageId:
+          type: string
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [queued]
+    SessionQueuedRun:
+      type: object
+      required:
+        - runId
+        - messageId
+        - content
+        - createdAt
+        - position
+      properties:
+        runId:
+          type: string
+        messageId:
+          type: string
+        content:
+          type: string
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        position:
+          type: integer
+          minimum: 1
+    SessionQueue:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionQueuedRun'
+    SessionTerminalSnapshot:
+      type: object
+      required:
+        - sessionId
+        - terminalId
+        - status
+        - outputPath
+        - output
+        - encoding
+        - truncated
+      properties:
+        sessionId:
+          type: string
+        terminalId:
+          type: string
+        status:
+          type: string
+          enum: [running, completed, failed, stopped, unknown]
+        outputPath:
+          type: string
+        output:
+          type: string
+        encoding:
+          type: string
+          enum: [utf8, base64]
+        truncated:
+          type: boolean
+        inputWritable:
+          type: boolean
+        terminalKind:
+          type: string
+          enum: [pty, pipe]
+        pid:
+          type: number
+        description:
+          type: string
+        command:
+          type: string
+        exitCode:
+          type: number
+        signal:
+          type: string
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        endedAt:
+          $ref: '#/components/schemas/Timestamp'
+    SessionTerminalInputRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          type: string
+        appendNewline:
+          type: boolean
+      additionalProperties: false
+    SessionTerminalInputAccepted:
+      type: object
+      required:
+        - sessionId
+        - terminalId
+        - status
+        - inputWritten
+        - appendNewline
+      properties:
+        sessionId:
+          type: string
+        terminalId:
+          type: string
+        status:
+          type: string
+          enum: [running, completed, failed, stopped, unknown]
+        inputWritten:
+          type: boolean
+          enum: [true]
+        appendNewline:
+          type: boolean
+        inputWritable:
+          type: boolean
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+    SessionCompactResult:
+      type: object
+      required:
+        - runId
+        - status
+        - compacted
+        - createdAt
+        - completedAt
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [completed]
+        compacted:
+          type: boolean
+        reason:
+          type: string
+          enum: [insufficient_history, summary_empty]
+        boundaryMessageId:
+          type: string
+        summaryMessageId:
+          type: string
+        summarizedMessageCount:
+          type: integer
+          minimum: 0
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        completedAt:
+          $ref: '#/components/schemas/Timestamp'
+    CompactSessionRequest:
+      type: object
+      properties:
+        instructions:
+          type: string
+          minLength: 1
+          maxLength: 8000
+          description: Optional extra instructions that apply only to this manual compaction request
+      additionalProperties: false
+    CreateActionRunRequest:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        agentName:
+          type: string
+          description: Optional agent context to associate with this action run
+        input:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: 'null'
+      additionalProperties: false
+    ModelGenerateRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          minLength: 1
+          description: Platform model name from the server models directory
+        prompt:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        temperature:
+          type: number
+        maxTokens:
+          type: integer
+          minimum: 1
+      additionalProperties: false
+      anyOf:
+        - required: [prompt]
+        - required: [messages]
+    ModelStreamRequest:
+      allOf:
+        - $ref: '#/components/schemas/ModelGenerateRequest'
+    ModelGenerateResponse:
+      type: object
+      required:
+        - model
+        - text
+      properties:
+        model:
+          type: string
+        text:
+          type: string
+        finishReason:
+          type: string
+        usage:
+          $ref: '#/components/schemas/Usage'
+      additionalProperties: false
+    ActionRunAccepted:
+      type: object
+      required:
+        - runId
+        - status
+        - actionName
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [queued]
+        actionName:
+          type: string
+        sessionId:
+          type: string
+    CancelRunAccepted:
+      type: object
+      required:
+        - runId
+        - status
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [cancellation_requested]
+    GuideQueuedRunAccepted:
+      type: object
+      required:
+        - runId
+        - status
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [interrupt_requested]
+    RequeueRunAccepted:
+      type: object
+      required:
+        - runId
+        - status
+        - previousStatus
+        - source
+      properties:
+        runId:
+          type: string
+        status:
+          type: string
+          enum: [queued]
+        previousStatus:
+          type: string
+          enum: [failed, timed_out]
+        source:
+          type: string
+          enum: [manual_requeue]
+    BatchRequeueRunsRequest:
+      type: object
+      required: [runIds]
+      properties:
+        runIds:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: string
+            minLength: 1
+      additionalProperties: false
+    BatchRequeueRunsResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/RequeueRunAccepted'
+              - type: object
+                required: [runId, status, errorCode, errorMessage]
+                properties:
+                  runId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [error]
+                  errorCode:
+                    type: string
+                  errorMessage:
+                    type: string
+                additionalProperties: false
+    StorageRedisMaintenanceRequest:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          minLength: 1
+      additionalProperties: false
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          $ref: '#/components/schemas/JsonObject'
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'

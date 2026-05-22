@@ -1,0 +1,19 @@
+{
+  "name": "@oah/docs",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev --host 127.0.0.1",
+    "build": "astro build",
+    "preview": "astro preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.39.2",
+    "astro": "6.3.6",
+    "lucode-starlight": "0.1.3"
+  },
+  "devDependencies": {
+    "typescript": "6.0.2"
+  }
+}

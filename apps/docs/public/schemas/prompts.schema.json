@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-agent-harness.dev/schemas/prompts.schema.json",
+  "title": "Open Agent Harness Workspace Prompts",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "base": {
+      "$ref": "#/$defs/promptSource"
+    },
+    "llm_optimized": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "providers": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/promptSource"
+          }
+        },
+        "models": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/promptSource"
+          }
+        }
+      }
+    },
+    "compose": {
+      "$ref": "#/$defs/compose"
+    }
+  },
+  "$defs": {
+    "promptSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inline": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "inline"
+          ]
+        },
+        {
+          "required": [
+            "file"
+          ]
+        }
+      ]
+    },
+    "compose": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "order": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "base",
+              "llm_optimized",
+              "agent",
+              "actions",
+              "project_agents_md",
+              "skills",
+              "agent_switches",
+              "subagents",
+              "environment"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "include_environment": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

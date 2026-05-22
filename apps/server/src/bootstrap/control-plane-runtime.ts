@@ -18,6 +18,7 @@ import { ScopedRunRepository, ScopedSessionRepository, ScopedWorkspaceRepository
 import type { SandboxHost } from "./sandbox-host.js";
 import { objectStorageBacksManagedWorkspaces } from "./object-storage-policy.js";
 import {
+  closeFsWatcher,
   discoverProjectWorkspaces,
   findManagedWorkspaceIdsToDelete,
   isManagedWorkspace,
@@ -604,7 +605,7 @@ export async function prepareControlPlaneRuntime(options: {
         continue;
       }
 
-      watcher.close();
+      closeFsWatcher(watcher);
       watchedProjectRoots.delete(rootPath);
     }
 
@@ -613,7 +614,15 @@ export async function prepareControlPlaneRuntime(options: {
         continue;
       }
 
-      const watcher = openFsWatcher(rootPath, scheduleWorkspaceRegistrySync, true);
+      let watcher: FSWatcher | undefined;
+      watcher = openFsWatcher(rootPath, scheduleWorkspaceRegistrySync, {
+        recursive: true,
+        onError: () => {
+          if (watcher && watchedProjectRoots.get(rootPath) === watcher) {
+            watchedProjectRoots.delete(rootPath);
+          }
+        }
+      });
       if (watcher) {
         watchedProjectRoots.set(rootPath, watcher);
       }
@@ -638,8 +647,12 @@ export async function prepareControlPlaneRuntime(options: {
     workspaceSyncTimer.unref?.();
   }
 
-  const rootWorkspaceWatcher = options.managesWorkspaceRegistry
-    ? openFsWatcher(options.config.paths.workspace_dir, scheduleWorkspaceRegistrySync)
+  let rootWorkspaceWatcher: FSWatcher | undefined = options.managesWorkspaceRegistry
+    ? openFsWatcher(options.config.paths.workspace_dir, scheduleWorkspaceRegistrySync, {
+        onError: () => {
+          rootWorkspaceWatcher = undefined;
+        }
+      })
     : undefined;
 
   return {
@@ -712,9 +725,10 @@ export async function prepareControlPlaneRuntime(options: {
       if (workspaceRegistryPollTimer) {
         clearInterval(workspaceRegistryPollTimer);
       }
-      rootWorkspaceWatcher?.close();
+      closeFsWatcher(rootWorkspaceWatcher);
+      rootWorkspaceWatcher = undefined;
       for (const watcher of watchedProjectRoots.values()) {
-        watcher.close();
+        closeFsWatcher(watcher);
       }
       watchedProjectRoots.clear();
     }

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-agent-harness.dev/schemas/mcp-settings.schema.json",
+  "title": "Open Agent Harness MCP Settings",
+  "type": "object",
+  "propertyNames": {
+    "pattern": "^[a-zA-Z0-9._-]+$"
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/server"
+  },
+  "$defs": {
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "oauth": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "object",
+              "additionalProperties": true
+            }
+          ]
+        },
+        "expose": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tool_prefix": {
+              "type": "string"
+            },
+            "include": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "exclude": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "command"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "url"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "url"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "command"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

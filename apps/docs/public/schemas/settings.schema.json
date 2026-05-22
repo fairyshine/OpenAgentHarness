@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-agent-harness.dev/schemas/settings.schema.json",
+  "title": "Open Agent Harness Workspace Settings",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "default_agent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime": {
+      "type": "string",
+      "minLength": 1
+    },
+    "models": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^(platform|workspace)/.+$"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ref"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string",
+                "pattern": "^(platform|workspace)/.+$"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "top_p": {
+                "type": "number"
+              },
+              "max_tokens": {
+                "type": "integer"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "skill_dirs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "engine": {
+      "$ref": "#/$defs/engine"
+    },
+    "imports": {
+      "$ref": "#/$defs/imports"
+    },
+    "system_prompt": {
+      "$ref": "#/$defs/systemPrompt"
+    }
+  },
+  "$defs": {
+    "namedImports": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "imports": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tools": {
+          "$ref": "#/$defs/namedImports"
+        },
+        "skills": {
+          "$ref": "#/$defs/namedImports"
+        }
+      }
+    },
+    "engineToggle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "workspaceMemory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "write_policy": {
+          "type": "string",
+          "enum": [
+            "explicit-only",
+            "confirm-suggested",
+            "auto-extract"
+          ]
+        }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "compact": {
+          "$ref": "#/$defs/engineToggle"
+        },
+        "session_memory": {
+          "$ref": "#/$defs/engineToggle"
+        },
+        "workspace_memory": {
+          "$ref": "#/$defs/workspaceMemory"
+        }
+      }
+    },
+    "promptSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inline": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "inline"
+          ]
+        },
+        {
+          "required": [
+            "file"
+          ]
+        }
+      ]
+    },
+    "compose": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "order": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "base",
+              "llm_optimized",
+              "agent",
+              "actions",
+              "project_agents_md",
+              "skills",
+              "agent_switches",
+              "subagents",
+              "environment"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "include_environment": {
+          "type": "boolean"
+        }
+      }
+    },
+    "systemPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/promptSource"
+        },
+        "llm_optimized": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "providers": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/promptSource"
+              }
+            },
+            "models": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/promptSource"
+              }
+            }
+          }
+        },
+        "compose": {
+          "$ref": "#/$defs/compose"
+        }
+      }
+    }
+  }
+}

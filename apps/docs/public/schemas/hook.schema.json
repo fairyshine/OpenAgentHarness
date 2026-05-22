@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-agent-harness.dev/schemas/hook.schema.json",
+  "title": "Open Agent Harness Hook Definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "events",
+    "handler"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9._-]+$"
+    },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": [
+          "before_context_compact",
+          "after_context_compact",
+          "before_context_build",
+          "after_context_build",
+          "before_model_call",
+          "after_model_call",
+          "before_tool_dispatch",
+          "after_tool_dispatch",
+          "run_completed",
+          "run_failed"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "matcher": {
+      "type": "string",
+      "minLength": 1
+    },
+    "handler": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/commandHandler"
+        },
+        {
+          "$ref": "#/$defs/httpHandler"
+        },
+        {
+          "$ref": "#/$defs/promptHandler"
+        },
+        {
+          "$ref": "#/$defs/agentHandler"
+        }
+      ]
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "rewrite_context",
+          "rewrite_model_request",
+          "rewrite_model_response",
+          "rewrite_tool_request",
+          "rewrite_tool_response",
+          "suppress_output"
+        ]
+      },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "promptSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "inline"
+          ]
+        },
+        {
+          "required": [
+            "file"
+          ]
+        }
+      ],
+      "properties": {
+        "inline": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "commandHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "command"
+      ],
+      "properties": {
+        "type": {
+          "const": "command"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "httpHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "url"
+      ],
+      "properties": {
+        "type": {
+          "const": "http"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "promptHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "prompt"
+      ],
+      "properties": {
+        "type": {
+          "const": "prompt"
+        },
+        "prompt": {
+          "$ref": "#/$defs/promptSource"
+        },
+        "model_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "agentHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "agent",
+        "task"
+      ],
+      "properties": {
+        "type": {
+          "const": "agent"
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task": {
+          "$ref": "#/$defs/promptSource"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

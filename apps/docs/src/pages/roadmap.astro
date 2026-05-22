@@ -1,0 +1,56 @@
+---
+import ProductLayout from "../components/ProductLayout.astro";
+
+const tracks = [
+  ["Runtime maturity", "Tighten config validation, runtime materialization, and model provider behavior.", "/project-roadmap/"],
+  ["Production hardening", "Move through deployment readiness, observability, storage, and failure-mode review.", "/production-readiness/"],
+  ["Worker scale", "Evolve queue reliability, worker placement, rebalance, and split deployment controls.", "/engine/worker-scaling-roadmap/"],
+  ["Kubernetes path", "Keep rollout checklists and runbooks close to implementation changes.", "/k8s-rollout-checklist/"],
+];
+
+const milestones = [
+  "Local runtime and docs migration",
+  "Split deployment control plane",
+  "Queue reliability and audit trail",
+  "Kubernetes rollout readiness",
+  "Long-running workspace operations",
+];
+---
+
+<ProductLayout
+  active="roadmap"
+  title="Roadmap | Open Agent Harness"
+  description="Open Agent Harness roadmap entry point for product maturity, production readiness, worker scaling, and Kubernetes rollout plans."
+>
+  <section class="page-hero">
+    <p class="eyebrow">Roadmap</p>
+    <h1>Make the next maintenance decision visible.</h1>
+    <p>
+      Roadmap pages should be useful to maintainers, not decorative. This entry point connects product maturity,
+      implementation work, worker scale, and operations readiness.
+    </p>
+    <div class="hero-actions">
+      <a class="button button--primary" href="/project-roadmap/">Current progress</a>
+      <a class="button button--secondary" href="/implementation-roadmap/">Implementation roadmap</a>
+    </div>
+  </section>
+
+  <section class="timeline" aria-label="Roadmap milestones">
+    {milestones.map((item, index) => (
+      <div>
+        <span>0{index + 1}</span>
+        <strong>{item}</strong>
+      </div>
+    ))}
+  </section>
+
+  <section class="page-grid page-grid--four" aria-label="Roadmap tracks">
+    {tracks.map(([title, body, href]) => (
+      <a class="link-card" href={href}>
+        <span>Track</span>
+        <strong>{title}</strong>
+        <p>{body}</p>
+      </a>
+    ))}
+  </section>
+</ProductLayout>

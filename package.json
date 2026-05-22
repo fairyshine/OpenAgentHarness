@@ -23,6 +23,7 @@
     "dev:compose-scaler": "pnpm --filter @oah/compose-scaler dev",
     "dev:cli": "pnpm --filter @oah/cli dev",
     "dev:desktop": "pnpm --filter @oah/desktop dev",
+    "dev:docs": "pnpm --filter @oah/docs dev",
     "dev:web": "pnpm --filter @oah/web dev",
     "native:build": "node ./scripts/build-native.mjs",
     "native:check": "cargo check --manifest-path ./native/Cargo.toml",
@@ -44,7 +45,9 @@
     "postversion": "pnpm version:sync",
     "typecheck": "pnpm -r exec tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:dist": "pnpm build && vitest run"
+    "test:dist": "pnpm build && vitest run",
+    "docs:build": "pnpm --filter @oah/docs build",
+    "docs:preview": "pnpm --filter @oah/docs preview"
   },
   "devDependencies": {
     "@types/node": "25.5.0",

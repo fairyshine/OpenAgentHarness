@@ -227,29 +227,110 @@ export async function discoverProjectWorkspaces(input: {
     .sort((left, right) => left.rootPath.localeCompare(right.rootPath));
 }
 
-export function openFsWatcher(targetPath: string, onChange: () => void, recursive = false): FSWatcher | undefined {
+export interface FsWatcherErrorDetails {
+  targetPath: string;
+  error: unknown;
+  recoverable: boolean;
+}
+
+export interface OpenFsWatcherOptions {
+  recursive?: boolean | undefined;
+  onError?: ((details: FsWatcherErrorDetails) => void) | undefined;
+}
+
+const RECOVERABLE_FS_WATCHER_ERROR_CODES = new Set(["ENOENT", "ENOTDIR", "EPERM"]);
+
+function fsWatcherErrorCode(error: unknown): string | undefined {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string"
+    ? (error as { code: string }).code
+    : undefined;
+}
+
+export function isRecoverableFsWatcherError(error: unknown): boolean {
+  const code = fsWatcherErrorCode(error);
+  return code !== undefined && RECOVERABLE_FS_WATCHER_ERROR_CODES.has(code);
+}
+
+export function closeFsWatcher(watcher: FSWatcher | undefined): void {
   try {
-    return watch(
+    watcher?.close();
+  } catch {
+    // Closing an already-failed watcher can throw on some platforms.
+  }
+}
+
+function notifyFsWatcherChange(targetPath: string, onChange: () => void): void {
+  try {
+    onChange();
+  } catch (error) {
+    console.warn(`[oah-bootstrap] File watcher change handler failed for ${targetPath}.`, error);
+  }
+}
+
+export function attachFsWatcherSafetyHandlers(
+  watcher: FSWatcher,
+  targetPath: string,
+  onChange: () => void,
+  onError?: ((details: FsWatcherErrorDetails) => void) | undefined
+): FSWatcher {
+  watcher.on("error", (error) => {
+    const recoverable = isRecoverableFsWatcherError(error);
+    closeFsWatcher(watcher);
+
+    try {
+      onError?.({
+        targetPath,
+        error,
+        recoverable
+      });
+    } catch (handlerError) {
+      console.warn(`[oah-bootstrap] File watcher error handler failed for ${targetPath}.`, handlerError);
+    }
+
+    if (!recoverable) {
+      console.warn(`[oah-bootstrap] File watcher failed for ${targetPath}.`, error);
+    }
+
+    notifyFsWatcherChange(targetPath, onChange);
+  });
+
+  return watcher;
+}
+
+export function openFsWatcher(
+  targetPath: string,
+  onChange: () => void,
+  options: OpenFsWatcherOptions | boolean = {}
+): FSWatcher | undefined {
+  const resolvedOptions: OpenFsWatcherOptions = typeof options === "boolean" ? { recursive: options } : options;
+  const recursive = resolvedOptions.recursive ?? false;
+  const createWatcher = (watchRecursive: boolean): FSWatcher =>
+    attachFsWatcherSafetyHandlers(
+      watch(
+        targetPath,
+        {
+          persistent: false,
+          ...(watchRecursive ? { recursive: true } : {})
+        },
+        () => notifyFsWatcherChange(targetPath, onChange)
+      ),
       targetPath,
-      {
-        persistent: false,
-        ...(recursive ? { recursive: true } : {})
-      },
-      () => onChange()
+      onChange,
+      resolvedOptions.onError
     );
+
+  try {
+    return createWatcher(recursive);
   } catch {
     if (!recursive) {
       return undefined;
     }
 
     try {
-      return watch(
-        targetPath,
-        {
-          persistent: false
-        },
-        () => onChange()
-      );
+      return createWatcher(false);
     } catch {
       return undefined;
     }

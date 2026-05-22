@@ -1,0 +1,62 @@
+---
+import ProductLayout from "../components/ProductLayout.astro";
+
+const layers = [
+  ["Client Surfaces", "WebUI, TUI, and Desktop stay thin and consume one OAH-compatible contract.", "/architecture-overview/"],
+  ["Control Plane", "API, controller, placement, queues, and rebalance coordinate concurrent workspaces.", "/engine/worker-control-plane/"],
+  ["Execution Plane", "Embedded and sandbox workers execute runs while preserving workspace state boundaries.", "/engine/execution-backend/"],
+  ["Storage Plane", "PostgreSQL, Redis, and object storage split durable state, coordination, and backing store.", "/storage-design/"],
+];
+
+const internals = [
+  ["Lifecycle", "/engine/lifecycle/"],
+  ["Context engine", "/engine/context-engine/"],
+  ["Message projections", "/engine/message-projections/"],
+  ["Queue reliability", "/engine/queue-and-reliability/"],
+  ["Events and audit", "/engine/events-and-audit/"],
+  ["Subagent orchestration", "/engine/subagent-orchestration/"],
+];
+---
+
+<ProductLayout
+  active="architecture"
+  title="Architecture | Open Agent Harness"
+  description="The architecture entry point for Open Agent Harness, covering client surfaces, control plane, execution plane, and storage plane."
+>
+  <section class="page-hero">
+    <p class="eyebrow">Architecture</p>
+    <h1>One runtime boundary, many product surfaces.</h1>
+    <p>
+      OAH is organized around explicit ownership: clients render and request, the control plane decides,
+      workers execute, and storage keeps durable truth. This page is the fast map before the full design docs.
+    </p>
+    <div class="hero-actions">
+      <a class="button button--primary" href="/architecture-overview/">Read architecture overview</a>
+      <a class="button button--secondary" href="/engine/">Open engine docs</a>
+    </div>
+  </section>
+
+  <section class="layer-stack" aria-label="Architecture layers">
+    {layers.map(([title, body, href], index) => (
+      <a href={href} style={`--layer-index: ${index + 1}`}>
+        <span>0{index + 1}</span>
+        <strong>{title}</strong>
+        <p>{body}</p>
+      </a>
+    ))}
+  </section>
+
+  <section class="split-panel" aria-labelledby="architecture-title">
+    <div>
+      <p class="section-kicker">Deep dives</p>
+      <h2 id="architecture-title">Follow the runtime from request to durable event.</h2>
+      <p>
+        These pages explain how an incoming run becomes model input, tool execution, queue state,
+        projection updates, and observable stream events.
+      </p>
+    </div>
+    <div class="pill-grid">
+      {internals.map(([label, href]) => <a href={href}>{label}</a>)}
+    </div>
+  </section>
+</ProductLayout>

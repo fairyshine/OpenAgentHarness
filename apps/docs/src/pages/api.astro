@@ -1,0 +1,59 @@
+---
+import ProductLayout from "../components/ProductLayout.astro";
+
+const resources = [
+  ["Workspaces", "/openapi/workspaces/", "Create, inspect, and operate durable workspace records."],
+  ["Sessions", "/openapi/sessions/", "Group user-visible interaction state around workspaces."],
+  ["Runs", "/openapi/runs/", "Submit and track agent execution loops."],
+  ["Actions", "/openapi/actions/", "Expose tool-like actions through the runtime contract."],
+  ["Files", "/openapi/files/", "Coordinate file access and workspace artifacts."],
+  ["Streaming", "/openapi/streaming/", "Consume progress and state changes over SSE."],
+];
+---
+
+<ProductLayout
+  active="api"
+  title="API | Open Agent Harness"
+  description="Open Agent Harness API entry point for REST resources, SSE streaming, OpenAPI documentation, and schema references."
+>
+  <section class="page-hero page-hero--compact">
+    <p class="eyebrow">API surface</p>
+    <h1>A stable contract for every client surface.</h1>
+    <p>
+      WebUI, TUI, Desktop, and external integrations should all talk to the same runtime API.
+      Start with the reference, then drill into resources and schemas as needed.
+    </p>
+    <div class="hero-actions">
+      <a class="button button--primary" href="/openapi/">Open API reference</a>
+      <a class="button button--secondary" href="/schemas/">View schemas</a>
+    </div>
+  </section>
+
+  <section class="api-panel" aria-label="API contract">
+    <div>
+      <span>REST</span>
+      <strong>Resource operations</strong>
+      <p>Use predictable endpoints for workspaces, sessions, runs, actions, files, models, and storage.</p>
+    </div>
+    <div>
+      <span>SSE</span>
+      <strong>Runtime stream</strong>
+      <p>Subscribe to execution progress and state changes without making clients own the engine loop.</p>
+    </div>
+    <div>
+      <span>JSON Schema</span>
+      <strong>Config validation</strong>
+      <p>Validate workspace settings, actions, hooks, model providers, prompts, and server configuration.</p>
+    </div>
+  </section>
+
+  <section class="page-grid" aria-label="API resources">
+    {resources.map(([title, href, body]) => (
+      <a class="link-card" href={href}>
+        <span>Resource</span>
+        <strong>{title}</strong>
+        <p>{body}</p>
+      </a>
+    ))}
+  </section>
+</ProductLayout>

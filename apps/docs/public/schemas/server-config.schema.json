@@ -1,0 +1,676 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openharness.dev/schemas/server-config.schema.json",
+  "title": "OpenAgentHarness Server Config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "server": {
+      "type": "object",
+      "required": [
+        "host",
+        "port"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "oah",
+            "oap"
+          ],
+          "description": "Deployment family. OAH is enterprise/platform service deployment; OAP is Open Agent Harness Personal."
+        },
+        "runtime_mode": {
+          "type": "string",
+          "enum": [
+            "daemon",
+            "embedded",
+            "compose",
+            "kubernetes",
+            "split"
+          ],
+          "description": "Runtime/deployment mode reported by /api/v1/system/profile."
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short user-facing name reported by /api/v1/system/profile."
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "postgres_url": {
+          "type": "string"
+        },
+        "redis_url": {
+          "type": "string"
+        },
+        "sqlite": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "project_db_location": {
+              "type": "string",
+              "enum": [
+                "shadow",
+                "workspace"
+              ],
+              "description": "Where SQLite stores writable project workspace history databases. Use shadow for OAP local daemon so external repos are not modified by runtime history."
+            }
+          }
+        }
+      }
+    },
+    "object_storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "bucket",
+        "region"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "s3"
+          ]
+        },
+        "bucket": {
+          "type": "string",
+          "minLength": 1
+        },
+        "region": {
+          "type": "string",
+          "minLength": 1
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "access_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "secret_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "force_path_style": {
+          "type": "boolean"
+        },
+        "workspace_backing_store": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "key_prefix": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "mirrors": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "paths": {
+              "type": "array",
+              "description": "Readonly prefixes mirrored from object storage into local directories.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "runtime",
+                  "model",
+                  "tool",
+                  "skill"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "sync_on_boot": {
+              "type": "boolean"
+            },
+            "sync_on_change": {
+              "type": "boolean",
+              "description": "Poll mirrored readonly prefixes for changes. Active workspace writes are not live-synced through this path."
+            },
+            "poll_interval_ms": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "key_prefixes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "runtime": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                },
+                "skill": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "sync_on_boot": {
+          "type": "boolean"
+        },
+        "sync_on_change": {
+          "type": "boolean",
+          "description": "Poll mirrored readonly prefixes for changes. Active workspace writes are not live-synced through this path."
+        },
+        "poll_interval_ms": {
+          "type": "integer",
+          "minimum": 1000
+        },
+        "managed_paths": {
+          "type": "array",
+          "description": "Prefixes managed by object-storage integration. 'workspace' only enables workspace backing-store / externalRef semantics; it is not mirrored on every change.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "workspace",
+              "runtime",
+              "model",
+              "tool",
+              "skill"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "key_prefixes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "workspace": {
+              "type": "string"
+            },
+            "runtime": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "skill": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "embedded",
+            "self_hosted",
+            "e2b"
+          ]
+        },
+        "self_hosted": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "e2b": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "api_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "domain": {
+              "type": "string",
+              "minLength": 1
+            },
+            "template": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "request_timeout_ms": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "fleet": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "warm_empty_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "resource_cpu_pressure_threshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "resource_memory_pressure_threshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "resource_disk_pressure_threshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "max_workspaces_per_sandbox": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ownerless_pool": {
+              "type": "string",
+              "enum": [
+                "shared",
+                "dedicated"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "required": [
+        "workspace_dir",
+        "runtime_dir",
+        "model_dir",
+        "tool_dir",
+        "skill_dir"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workspace_dir": {
+          "type": "string"
+        },
+        "runtime_state_dir": {
+          "type": "string",
+          "description": "Runtime-private state root for SQLite shadow data, archives, and legacy materialization state."
+        },
+        "runtime_dir": {
+          "type": "string"
+        },
+        "model_dir": {
+          "type": "string",
+          "description": "Preferred path for platform models."
+        },
+        "tool_dir": {
+          "type": "string",
+          "description": "Preferred path for platform external tools."
+        },
+        "skill_dir": {
+          "type": "string"
+        }
+        
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "materialization": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "idle_ttl_ms": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "maintenance_interval_ms": {
+              "type": "integer",
+              "minimum": 1000
+            }
+          }
+        }
+      }
+    },
+    "workers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "embedded": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scale_interval_ms": {
+              "type": "integer",
+              "minimum": 250
+            },
+            "idle_ttl_ms": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "scale_up_window": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scale_down_window": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cooldown_ms": {
+              "type": "integer",
+              "minimum": 250
+            },
+            "reserved_capacity_for_subagent": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "standalone": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min_replicas": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_replicas": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "slots_per_pod": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Deprecated compatibility field. Controller sizing ignores this static value and uses observed worker-reported capacity instead."
+            },
+            "ready_sessions_per_capacity_unit": {
+              "type": "integer",
+              "description": "Queue-density target used by controller when translating observed worker capacity into sandbox replica demand.",
+              "minimum": 1
+            },
+            "reserved_capacity_for_subagent": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "controller": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "scale_interval_ms": {
+              "type": "integer",
+              "minimum": 250
+            },
+            "scale_up_window": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scale_down_window": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cooldown_ms": {
+              "type": "integer",
+              "minimum": 250
+            },
+            "scale_up_busy_ratio_threshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "scale_up_max_ready_age_ms": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "leader_election": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "noop",
+                    "kubernetes"
+                  ]
+                },
+                "kubernetes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "namespace": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "lease_name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "api_url": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "token_file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "ca_file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "skip_tls_verify": {
+                      "type": "boolean"
+                    },
+                    "lease_duration_ms": {
+                      "type": "integer",
+                      "minimum": 1000
+                    },
+                    "renew_interval_ms": {
+                      "type": "integer",
+                      "minimum": 250
+                    },
+                    "retry_interval_ms": {
+                      "type": "integer",
+                      "minimum": 250
+                    },
+                    "identity": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            },
+            "scale_target": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "noop",
+                    "kubernetes",
+                    "docker_compose"
+                  ]
+                },
+                "allow_scale_down": {
+                  "type": "boolean"
+                },
+                "kubernetes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "namespace": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "workload_kind": {
+                      "type": "string",
+                      "enum": [
+                        "Deployment",
+                        "StatefulSet",
+                        "deployment",
+                        "statefulset"
+                      ]
+                    },
+                    "workload_name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "deployment": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "statefulset": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "label_selector": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "api_url": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "token_file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "ca_file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "skip_tls_verify": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "docker_compose": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "compose_file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "project_name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "service": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "command": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "endpoint": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "auth_token": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "timeout_ms": {
+                      "type": "integer",
+                      "minimum": 100
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "llm": {
+      "type": "object",
+      "required": [
+        "default_model"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "default_model": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
