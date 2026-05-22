@@ -46,6 +46,7 @@ export interface SandboxHost {
   diagnostics(): SandboxHostDiagnostics;
   maintain(options: { idleBefore: string }): Promise<void>;
   beginDrain(): Promise<void>;
+  deleteWorkspace?(workspace: WorkspaceRecord): Promise<void> | void;
   close(): Promise<void>;
 }
 
@@ -145,6 +146,12 @@ export function createLazySandboxHost(options: {
         return;
       }
       await host.beginDrain();
+    },
+    async deleteWorkspace(workspace) {
+      if (!host) {
+        return;
+      }
+      await host.deleteWorkspace?.(workspace);
     },
     async close() {
       if (!host) {

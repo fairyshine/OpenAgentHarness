@@ -609,6 +609,125 @@ describe("native e2b sandbox service", () => {
     );
   });
 
+  it("releases ownerless shared sandbox capacity when a workspace is deleted", async () => {
+    const sandboxes = ["sb-ownerless-1", "sb-ownerless-2"].map((sandboxId) => ({
+      sandboxId,
+      files: {
+        makeDir: vi.fn(async () => true),
+        write: vi.fn(async () => ({ name: "README.md", path: "/workspace/README.md" })),
+        read: vi.fn(async () => new Uint8Array()),
+        getInfo: vi.fn(async () => ({
+          name: "README.md",
+          path: "/workspace/README.md",
+          type: "file",
+          size: 0,
+          mode: 0o644,
+          permissions: "rw-r--r--",
+          owner: "user",
+          group: "group"
+        })),
+        list: vi.fn(async () => []),
+        remove: vi.fn(async () => undefined),
+        rename: vi.fn(async () => ({ name: "README.md", path: "/workspace/README.md", type: "file" }))
+      },
+      commands: {
+        run: vi.fn(async () => ({
+          stdout: "",
+          stderr: "",
+          exitCode: 0
+        }))
+      }
+    }));
+
+    const create = vi.fn(async () => sandboxes[create.mock.calls.length - 1] ?? sandboxes[0]);
+    const service = createNativeE2BSandboxService({
+      apiKey: "secret",
+      maxWorkspacesPerSandbox: 1,
+      sdk: {
+        connect: vi.fn(async () => sandboxes[0]),
+        create,
+        list: vi.fn(() => ({
+          hasNext: false,
+          async nextItems() {
+            return [];
+          }
+        }))
+      } as never
+    });
+    const firstWorkspace = buildWorkspace({ id: "ws_public_1" });
+    const secondWorkspace = buildWorkspace({ id: "ws_public_2" });
+
+    const firstLease = await service.acquireFileAccess({
+      workspace: firstWorkspace,
+      access: "write"
+    });
+    await service.deleteWorkspace?.(firstWorkspace);
+    const secondLease = await service.acquireFileAccess({
+      workspace: secondWorkspace,
+      access: "write"
+    });
+
+    expect(firstLease.sandboxId).toBe("sb-ownerless-1");
+    expect(secondLease.sandboxId).toBe("sb-ownerless-1");
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("kills dedicated ownerless sandboxes when their workspace is deleted", async () => {
+    const sandbox = {
+      sandboxId: "sb-dedicated",
+      files: {
+        makeDir: vi.fn(async () => true),
+        write: vi.fn(async () => ({ name: "README.md", path: "/workspace/README.md" })),
+        read: vi.fn(async () => new Uint8Array()),
+        getInfo: vi.fn(async () => ({
+          name: "README.md",
+          path: "/workspace/README.md",
+          type: "file",
+          size: 0,
+          mode: 0o644,
+          permissions: "rw-r--r--",
+          owner: "user",
+          group: "group"
+        })),
+        list: vi.fn(async () => []),
+        remove: vi.fn(async () => undefined),
+        rename: vi.fn(async () => ({ name: "README.md", path: "/workspace/README.md", type: "file" }))
+      },
+      commands: {
+        run: vi.fn(async () => ({
+          stdout: "",
+          stderr: "",
+          exitCode: 0
+        }))
+      }
+    };
+    const kill = vi.fn(async () => true);
+    const service = createNativeE2BSandboxService({
+      apiKey: "secret",
+      ownerlessPool: "dedicated",
+      sdk: {
+        connect: vi.fn(async () => sandbox),
+        create: vi.fn(async () => sandbox),
+        kill,
+        list: vi.fn(() => ({
+          hasNext: false,
+          async nextItems() {
+            return [];
+          }
+        }))
+      } as never
+    });
+    const workspace = buildWorkspace({ id: "ws_public_1" });
+
+    await service.acquireFileAccess({
+      workspace,
+      access: "write"
+    });
+    await service.deleteWorkspace?.(workspace);
+
+    expect(kill).toHaveBeenCalledWith("sb-dedicated", expect.objectContaining({ apiKey: "secret" }));
+  });
+
   it("keeps a warm ownerless sandbox ready and replenishes it after use", async () => {
     const sandboxes = ["sb-warm-1", "sb-warm-2", "sb-warm-3"].map((sandboxId) => ({
       sandboxId,

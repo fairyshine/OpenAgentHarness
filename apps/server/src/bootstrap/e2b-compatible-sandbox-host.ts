@@ -98,6 +98,7 @@ export interface E2BCompatibleSandboxService {
   }): Promise<void>;
   rename(input: { sandboxId: string; sourcePath: string; targetPath: string }): Promise<void>;
   realpath?(input: { sandboxId: string; path: string }): Promise<string>;
+  deleteWorkspace?(workspace: WorkspaceRecord): Promise<void> | void;
   diagnostics?(): Record<string, unknown>;
   maintain?(options: { idleBefore: string }): Promise<void>;
   beginDrain?(): Promise<void>;
@@ -440,6 +441,9 @@ export function createHttpE2BCompatibleSandboxService(
     async realpath(input) {
       return normalizeHttpSandboxPath(SANDBOX_ROOT_PATH, input.path);
     },
+    async deleteWorkspace() {
+      return undefined;
+    },
     diagnostics() {
       return {
         transport: "http"
@@ -711,6 +715,9 @@ export function createE2BCompatibleSandboxHost(options: {
     },
     async close() {
       await options.service.close();
+    },
+    async deleteWorkspace(workspace) {
+      await options.service.deleteWorkspace?.(workspace);
     }
   };
 }

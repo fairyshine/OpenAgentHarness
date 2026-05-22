@@ -43,6 +43,7 @@ export function createWorkspaceDeletionHandler(input: {
           sandboxHost: input.sandboxHost,
           workspace
         });
+        await input.sandboxHost.deleteWorkspace?.(workspace);
       } else {
         console.info(`[oah-bootstrap] No remote sandbox cleanup needed for workspace ${workspace.id}`);
       }

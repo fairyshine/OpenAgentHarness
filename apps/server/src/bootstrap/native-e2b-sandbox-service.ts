@@ -41,6 +41,7 @@ interface NativeE2BSandboxSdk {
   create(template: string, opts?: SandboxOpts): Promise<NativeE2BSandboxInstance>;
   connect(sandboxId: string, opts?: SandboxConnectOpts & { timeoutMs?: number | undefined }): Promise<NativeE2BSandboxInstance>;
   list(opts?: SandboxListOpts): NativeE2BSandboxPaginator;
+  kill?(sandboxId: string, opts?: ConnectionOpts): Promise<boolean>;
 }
 
 export interface NativeE2BSandboxServiceOptions {
@@ -186,6 +187,41 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
     workspaceIds.add(workspaceId);
     ownerlessWorkspaceIdsByGroupKey.set(groupKey, workspaceIds);
     return groupKey;
+  }
+
+  function forgetOwnerlessWorkspace(workspaceId: string): string | undefined {
+    const groupKey = ownerlessWorkspaceGroups.get(workspaceId);
+    if (!groupKey) {
+      return undefined;
+    }
+
+    ownerlessWorkspaceGroups.delete(workspaceId);
+    const workspaceIds = ownerlessWorkspaceIdsByGroupKey.get(groupKey);
+    workspaceIds?.delete(workspaceId);
+    if (workspaceIds && workspaceIds.size === 0) {
+      ownerlessWorkspaceIdsByGroupKey.delete(groupKey);
+      if (ownerlessPool === "shared" && isOwnerlessSharedGroupKey(groupKey)) {
+        warmOwnerlessGroupKeys.add(groupKey);
+      }
+    }
+
+    return groupKey;
+  }
+
+  async function killRememberedSandbox(groupKey: string): Promise<void> {
+    const sandboxId = sandboxIdsByGroupKey.get(groupKey);
+    if (!sandboxId) {
+      return;
+    }
+
+    sandboxIdsByGroupKey.delete(groupKey);
+    sandboxesById.delete(sandboxId);
+    warmOwnerlessGroupKeys.delete(groupKey);
+    ownerlessWorkspaceIdsByGroupKey.delete(groupKey);
+    sandboxCreationByGroupKey.delete(groupKey);
+    if (sdk.kill) {
+      await sdk.kill(sandboxId, connectionOpts);
+    }
   }
 
   function ownerlessSharedGroupOrdinal(groupKey: string): number | undefined {
@@ -530,6 +566,23 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
     },
     async realpath(input): Promise<string> {
       return path.posix.normalize(input.path);
+    },
+    async deleteWorkspace(workspace): Promise<void> {
+      const ownerGroupKey = buildOwnerSandboxGroupKey(workspace);
+      if (ownerGroupKey) {
+        return;
+      }
+
+      const groupKey = forgetOwnerlessWorkspace(workspace.id);
+      if (!groupKey) {
+        return;
+      }
+
+      if (ownerlessPool === "dedicated") {
+        await killRememberedSandbox(groupKey);
+      } else {
+        void ensureWarmOwnerlessSandboxes().catch(() => undefined);
+      }
     },
     diagnostics() {
       return {
