@@ -11,6 +11,7 @@ export const systemCapabilitiesSchema = z.object({
   localWorkspacePaths: z.boolean(),
   workspaceRegistration: z.boolean(),
   storageInspection: z.boolean(),
+  assetManagement: z.boolean().default(false),
   modelManagement: z.boolean(),
   localDaemonSupervisor: z.boolean()
 });

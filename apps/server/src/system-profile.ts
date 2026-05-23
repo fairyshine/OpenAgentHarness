@@ -8,6 +8,7 @@ export interface BuildSystemProfileInput {
   process?: EngineProcessDescriptor | undefined;
   workspaceMode?: "multi" | "single" | undefined;
   storageInspection?: boolean | undefined;
+  assetManagement?: boolean | undefined;
 }
 
 function inferRuntimeMode(input: BuildSystemProfileInput): SystemRuntimeMode {
@@ -48,6 +49,7 @@ export function buildSystemProfile(input: BuildSystemProfileInput = {}): SystemP
       localWorkspacePaths: deploymentKind === "oap",
       workspaceRegistration,
       storageInspection: Boolean(input.storageInspection),
+      assetManagement: Boolean(input.assetManagement),
       modelManagement: deploymentKind === "oap",
       localDaemonSupervisor: isLocalDaemon
     }

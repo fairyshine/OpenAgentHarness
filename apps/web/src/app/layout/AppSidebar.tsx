@@ -306,6 +306,7 @@ function AppSidebarImpl(props: SidebarProps) {
   const [assetEditorDraft, setAssetEditorDraft] = useState<AssetEditorDraft>(() => createDefaultAssetDraft("model"));
   const [assetEditorError, setAssetEditorError] = useState("");
   const [workspaceCreateBusy, setWorkspaceCreateBusy] = useState(false);
+  const platformAssetManagementEnabled = props.systemProfile?.capabilities.assetManagement ?? false;
 
   const icon = surfaceIcon(surfaceMode);
   const title = surfaceTitle(surfaceMode);
@@ -377,14 +378,15 @@ function AppSidebarImpl(props: SidebarProps) {
     openAssetManagerDialog("runtime");
   }
 
-  function openAssetManagerDialog(kind: PlatformAssetKind = assetManagerTab) {
+  function openAssetManagerDialog(kind: PlatformAssetKind = "runtime") {
     blurActiveDialogElement();
     props.setShowWorkspaceCreator(false);
     setShowRuntimeUploadDialog(false);
-    setAssetManagerTab(kind);
+    const nextKind = kind === "runtime" || platformAssetManagementEnabled ? kind : "runtime";
+    setAssetManagerTab(nextKind);
     deferDialogOpen(() => {
       setShowAssetManagerDialog(true);
-      void props.refreshPlatformAssets(kind, true);
+      void props.refreshPlatformAssets(nextKind, true);
     });
   }
 
@@ -967,6 +969,9 @@ function AppSidebarImpl(props: SidebarProps) {
               value={assetManagerTab}
               onValueChange={(value) => {
                 const next = value as PlatformAssetKind;
+                if (next !== "runtime" && !platformAssetManagementEnabled) {
+                  return;
+                }
                 setAssetManagerTab(next);
                 setAssetPendingDelete("");
                 void props.refreshPlatformAssets(next, true);
@@ -974,11 +979,11 @@ function AppSidebarImpl(props: SidebarProps) {
               className="min-h-0"
             >
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <TabsList>
+                  <TabsList>
                   <TabsTrigger value="runtime">Runtimes</TabsTrigger>
-                  <TabsTrigger value="model">Models</TabsTrigger>
-                  <TabsTrigger value="tool">Tools</TabsTrigger>
-                  <TabsTrigger value="skill">Skills</TabsTrigger>
+                  <TabsTrigger value="model" disabled={!platformAssetManagementEnabled}>Models</TabsTrigger>
+                  <TabsTrigger value="tool" disabled={!platformAssetManagementEnabled}>Tools</TabsTrigger>
+                  <TabsTrigger value="skill" disabled={!platformAssetManagementEnabled}>Skills</TabsTrigger>
                 </TabsList>
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
@@ -990,7 +995,12 @@ function AppSidebarImpl(props: SidebarProps) {
                       }
                       openCreateAssetEditor(assetManagerTab);
                     }}
-                    disabled={assetMutationBusy || runtimeMutationBusy || (assetManagerTab === "runtime" && !props.workspaceManagementEnabled)}
+                    disabled={
+                      assetMutationBusy ||
+                      runtimeMutationBusy ||
+                      (assetManagerTab === "runtime" && !props.workspaceManagementEnabled) ||
+                      (assetManagerTab !== "runtime" && !platformAssetManagementEnabled)
+                    }
                   >
                     <Upload className="h-4 w-4" />
                     Add
@@ -999,7 +1009,7 @@ function AppSidebarImpl(props: SidebarProps) {
                     type="button"
                     variant="outline"
                     onClick={() => props.refreshPlatformAssets(assetManagerTab)}
-                    disabled={assetMutationBusy || runtimeMutationBusy}
+                    disabled={assetMutationBusy || runtimeMutationBusy || (assetManagerTab !== "runtime" && !platformAssetManagementEnabled)}
                   >
                     <RefreshCw className="h-4 w-4" />
                     Refresh
@@ -1022,22 +1032,29 @@ function AppSidebarImpl(props: SidebarProps) {
               </div>
               {(["runtime", "model", "tool", "skill"] as PlatformAssetKind[]).map((kind) => (
                 <TabsContent key={kind} value={kind} className="mt-0 min-h-0">
-                  <AssetList
-                    kind={kind}
-                    items={kind === assetManagerTab ? filteredAssets : props.platformAssets[kind].items}
-                    pendingDelete={assetPendingDelete}
-                    busy={assetMutationBusy || runtimeMutationBusy}
-                    onEdit={(asset) => {
-                      if (kind === "runtime") {
-                        openRuntimeUpdatePicker(assetDisplayName(asset));
-                        return;
-                      }
-                      openUpdateAssetEditor(kind, asset);
-                    }}
-                    onCancelDelete={() => setAssetPendingDelete("")}
-                    onAskDelete={(name) => setAssetPendingDelete(name)}
-                    onConfirmDelete={(name) => void deleteAsset(kind, name)}
-                  />
+                  {kind !== "runtime" && !platformAssetManagementEnabled ? (
+                    <div className="rounded-2xl border border-dashed border-black/12 px-4 py-8 text-center">
+                      <p className="text-sm font-medium text-foreground">{ASSET_COLLECTION_LABELS[kind]} unavailable</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">This server only exposes runtime asset management.</p>
+                    </div>
+                  ) : (
+                    <AssetList
+                      kind={kind}
+                      items={kind === assetManagerTab ? filteredAssets : props.platformAssets[kind].items}
+                      pendingDelete={assetPendingDelete}
+                      busy={assetMutationBusy || runtimeMutationBusy}
+                      onEdit={(asset) => {
+                        if (kind === "runtime") {
+                          openRuntimeUpdatePicker(assetDisplayName(asset));
+                          return;
+                        }
+                        openUpdateAssetEditor(kind, asset);
+                      }}
+                      onCancelDelete={() => setAssetPendingDelete("")}
+                      onAskDelete={(name) => setAssetPendingDelete(name)}
+                      onConfirmDelete={(name) => void deleteAsset(kind, name)}
+                    />
+                  )}
                 </TabsContent>
               ))}
             </Tabs>

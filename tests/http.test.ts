@@ -625,6 +625,7 @@ describe("http api", () => {
         localWorkspacePaths: false,
         workspaceRegistration: true,
         storageInspection: false,
+        assetManagement: false,
         modelManagement: false,
         localDaemonSupervisor: false
       }
@@ -645,6 +646,7 @@ describe("http api", () => {
           localWorkspacePaths: true,
           workspaceRegistration: true,
           storageInspection: true,
+          assetManagement: false,
           modelManagement: true,
           localDaemonSupervisor: true
         }
@@ -697,6 +699,7 @@ describe("http api", () => {
           localWorkspacePaths: true,
           workspaceRegistration: true,
           storageInspection: true,
+          assetManagement: false,
           modelManagement: true,
           localDaemonSupervisor: true
         }
@@ -781,6 +784,7 @@ describe("http api", () => {
           localWorkspacePaths: true,
           workspaceRegistration: true,
           storageInspection: true,
+          assetManagement: false,
           modelManagement: true,
           localDaemonSupervisor: true
         }
@@ -1109,6 +1113,14 @@ describe("http api", () => {
       modelGateway: new FakeModelGateway(20),
       ...createMemoryRuntimePersistence()
     }), new FakeModelGateway(20), assetManagement);
+
+    const profileResponse = await fetch(`${activeApp.baseUrl}/api/v1/system/profile`);
+    expect(profileResponse.status).toBe(200);
+    await expect(profileResponse.json()).resolves.toMatchObject({
+      capabilities: {
+        assetManagement: true
+      }
+    });
 
     const uploadResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/models/upload?name=managed`, {
       method: "POST",
@@ -2018,6 +2030,7 @@ describe("http api", () => {
             localWorkspacePaths: true,
             workspaceRegistration: true,
             storageInspection: false,
+            assetManagement: false,
             modelManagement: true,
             localDaemonSupervisor: true
           }

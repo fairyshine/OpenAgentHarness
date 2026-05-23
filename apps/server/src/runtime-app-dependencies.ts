@@ -17,7 +17,8 @@ function buildSharedAppDependencies(runtime: BootstrappedRuntime): AppDependenci
     config: runtime.config,
     process: runtime.process,
     workspaceMode: runtime.workspaceMode.kind,
-    storageInspection: Boolean(runtime.adminCapabilities?.storageAdmin)
+    storageInspection: Boolean(runtime.adminCapabilities?.storageAdmin),
+    assetManagement: Boolean(runtime.listPlatformAssets)
   });
 
   return {

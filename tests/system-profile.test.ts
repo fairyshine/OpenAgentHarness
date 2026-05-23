@@ -49,6 +49,7 @@ describe("system profile", () => {
         localWorkspacePaths: false,
         workspaceRegistration: true,
         storageInspection: true,
+        assetManagement: false,
         modelManagement: false,
         localDaemonSupervisor: false
       }
@@ -86,6 +87,7 @@ describe("system profile", () => {
         localWorkspacePaths: true,
         workspaceRegistration: true,
         storageInspection: true,
+        assetManagement: false,
         modelManagement: true,
         localDaemonSupervisor: true
       }
@@ -99,6 +101,16 @@ describe("system profile", () => {
     });
 
     expect(profile.capabilities.workspaceRegistration).toBe(false);
+  });
+
+  it("reports platform asset management when runtime dependencies provide it", () => {
+    const profile = buildSystemProfile({
+      config: baseConfig,
+      workspaceMode: "multi",
+      assetManagement: true
+    });
+
+    expect(profile.capabilities.assetManagement).toBe(true);
   });
 
   it("formats user-facing deployment names without exposing internal split mode", () => {

@@ -519,15 +519,25 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
   app.get("/api/v1", async (request, reply) => reply.send((await loadDeveloperDocsModule()).buildApiIndex(request)));
 
   app.get("/api/v1/system/profile", async (_request, reply) =>
-    reply.send(
-      systemProfileSchema.parse(
+    {
+      const profile =
         dependencies.systemProfile ??
-          buildSystemProfile({
-            workspaceMode: options.workspaceMode,
-            storageInspection: Boolean(dependencies.storageAdmin)
-          })
-      )
-    )
+        buildSystemProfile({
+          workspaceMode: options.workspaceMode,
+          storageInspection: Boolean(dependencies.storageAdmin),
+          assetManagement: Boolean(dependencies.listPlatformAssets)
+        });
+
+      return reply.send(
+        systemProfileSchema.parse({
+          ...profile,
+          capabilities: {
+            ...profile.capabilities,
+            assetManagement: Boolean(dependencies.listPlatformAssets)
+          }
+        })
+      );
+    }
   );
 
   app.get("/api/v1/runtimes", listRuntimes);

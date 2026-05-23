@@ -3016,6 +3016,7 @@ components:
         - localWorkspacePaths
         - workspaceRegistration
         - storageInspection
+        - assetManagement
         - modelManagement
         - localDaemonSupervisor
       properties:
@@ -3026,6 +3027,8 @@ components:
         workspaceRegistration:
           type: boolean
         storageInspection:
+          type: boolean
+        assetManagement:
           type: boolean
         modelManagement:
           type: boolean
