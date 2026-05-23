@@ -501,7 +501,10 @@ function createE2BCompatibleWorkspaceCommandExecutor(service: E2BCompatibleSandb
       return service.runCommand({
         ...context,
         command: input.command,
-        ...(input.env ? { env: input.env } : {}),
+        env: {
+          OPENHARNESS_WORKSPACE_ROOT: input.workspace.rootPath,
+          ...(input.env ?? {})
+        },
         ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
         ...(input.stdinText !== undefined ? { stdinText: input.stdinText } : {}),
         ...(input.signal ? { signal: input.signal } : {})
@@ -513,7 +516,10 @@ function createE2BCompatibleWorkspaceCommandExecutor(service: E2BCompatibleSandb
         ...context,
         executable: input.executable,
         args: input.args,
-        ...(input.env ? { env: input.env } : {}),
+        env: {
+          OPENHARNESS_WORKSPACE_ROOT: input.workspace.rootPath,
+          ...(input.env ?? {})
+        },
         ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
         ...(input.stdinText !== undefined ? { stdinText: input.stdinText } : {}),
         ...(input.signal ? { signal: input.signal } : {})
@@ -526,7 +532,10 @@ function createE2BCompatibleWorkspaceCommandExecutor(service: E2BCompatibleSandb
         command: input.command,
         sessionId: input.sessionId,
         ...(input.description ? { description: input.description } : {}),
-        ...(input.env ? { env: input.env } : {})
+        env: {
+          OPENHARNESS_WORKSPACE_ROOT: input.workspace.rootPath,
+          ...(input.env ?? {})
+        }
       });
     }
   };

@@ -33,6 +33,8 @@ function loadSelfHostedSandboxRoutingModule(): Promise<typeof import("./self-hos
 export async function createConfiguredSandboxHost(options: {
   config: ServerConfig;
   workspaceMaterializationManager?: WorkspaceMaterializationManager | undefined;
+  createWorkspaceMaterializationManager?: (() => WorkspaceMaterializationManager) | undefined;
+  selfHostedWorkerProcess?: boolean | undefined;
   workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignOwnerAffinity"> | undefined;
   workerRegistry?: Pick<WorkerRegistry, "listActive"> | undefined;
 }): Promise<SandboxHost | undefined> {
@@ -41,16 +43,52 @@ export async function createConfiguredSandboxHost(options: {
     (trimToUndefined(options.config.sandbox?.self_hosted?.base_url) ? "self_hosted" : "embedded");
 
   if (provider === "embedded") {
-    if (!options.workspaceMaterializationManager) {
+    const materializationManager = options.workspaceMaterializationManager;
+    if (!materializationManager && !options.createWorkspaceMaterializationManager) {
       return undefined;
     }
 
-    return (await loadSandboxHostModule()).createMaterializationSandboxHost({
-      materializationManager: options.workspaceMaterializationManager
+    const { createLazySandboxHost, createMaterializationSandboxHost } = await loadSandboxHostModule();
+    if (!materializationManager && options.createWorkspaceMaterializationManager) {
+      let lazyMaterializationManager: WorkspaceMaterializationManager | undefined;
+      return createLazySandboxHost({
+        providerKind: "embedded",
+        createHost: () => {
+          lazyMaterializationManager ??= options.createWorkspaceMaterializationManager!();
+          return createMaterializationSandboxHost({
+            materializationManager: lazyMaterializationManager
+          });
+        },
+        diagnostics: () => ({
+          provider: "embedded",
+          executionModel: "local_embedded",
+          workerPlacement: "api_process",
+          materialization: lazyMaterializationManager?.diagnostics()
+        })
+      });
+    }
+
+    return createMaterializationSandboxHost({
+      materializationManager: materializationManager!
     });
   }
 
   if (provider === "self_hosted") {
+    if (options.selfHostedWorkerProcess) {
+      if (!options.workspaceMaterializationManager) {
+        return undefined;
+      }
+      return (await loadSandboxHostModule()).createMaterializationSandboxHost({
+        materializationManager: options.workspaceMaterializationManager,
+        providerKind: "self_hosted",
+        diagnostics: {
+          provider: "self_hosted",
+          executionModel: "sandbox_hosted",
+          workerPlacement: "inside_sandbox"
+        }
+      });
+    }
+
     const baseUrl = trimToUndefined(options.config.sandbox?.self_hosted?.base_url);
     if (!baseUrl) {
       throw new Error("sandbox.self_hosted.base_url is required when sandbox.provider is self_hosted.");

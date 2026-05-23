@@ -12,6 +12,9 @@ import type {
 import type {
   DistributedPlatformModelRefreshResult,
   HealthReport,
+  PlatformAssetKind,
+  PlatformAssetList,
+  PlatformAssetMutationResponse,
   PlatformModelSnapshot,
   ReadinessReport,
   SystemProfile,
@@ -55,6 +58,30 @@ export interface AppDependencies {
   deleteWorkspaceRuntime?: ((input: {
     runtimeName: string;
   }) => Promise<void>) | undefined;
+  listPlatformAssets?: ((kind: PlatformAssetKind) => Promise<PlatformAssetList>) | undefined;
+  uploadPlatformModelAsset?: ((input: {
+    name: string;
+    yamlBuffer: Buffer;
+    overwrite?: boolean | undefined;
+    requireExisting?: boolean | undefined;
+  }) => Promise<PlatformAssetMutationResponse>) | undefined;
+  deletePlatformModelAsset?: ((input: { name: string }) => Promise<void>) | undefined;
+  uploadPlatformToolAsset?: ((input: {
+    name: string;
+    definition: Record<string, unknown>;
+    serverFiles?: Record<string, string> | undefined;
+    overwrite?: boolean | undefined;
+    requireExisting?: boolean | undefined;
+  }) => Promise<PlatformAssetMutationResponse>) | undefined;
+  deletePlatformToolAsset?: ((input: { name: string }) => Promise<void>) | undefined;
+  uploadPlatformSkillAsset?: ((input: {
+    name: string;
+    skillMarkdown: string;
+    files?: Record<string, string> | undefined;
+    overwrite?: boolean | undefined;
+    requireExisting?: boolean | undefined;
+  }) => Promise<PlatformAssetMutationResponse>) | undefined;
+  deletePlatformSkillAsset?: ((input: { name: string }) => Promise<void>) | undefined;
   listPlatformModels?: (() => Promise<
     Array<{
       id: string;

@@ -1,11 +1,9 @@
 import type {
-  Run,
-  Session,
+  SandboxHost as EngineSandboxHost,
+  SandboxHostDiagnostics as EngineSandboxHostDiagnostics,
   WorkspaceExecutionLease,
   WorkspaceFileAccessLease,
   WorkspaceRecord,
-  WorkspaceCommandExecutor,
-  WorkspaceFileSystem
 } from "@oah/engine-core";
 import { AppError, createLocalWorkspaceCommandExecutor, createLocalWorkspaceFileSystem } from "@oah/engine-core";
 
@@ -23,32 +21,13 @@ export interface SandboxHostDiagnostics {
   materialization?: WorkspaceMaterializationDiagnostics | undefined;
 }
 
-/**
- * Local mirror of the engine-core SandboxHost contract.
- *
- * This keeps the server package on a stable type-check path while the broader
- * workspace incrementally adopts the shared contract surface.
- */
-export interface SandboxHost {
-  providerKind: "embedded" | "self_hosted" | "e2b";
-  workspaceCommandExecutor: WorkspaceCommandExecutor;
-  workspaceFileSystem: WorkspaceFileSystem;
-  workspaceExecutionProvider: {
-    acquire(input: { workspace: WorkspaceRecord; run: Run; session?: Session | undefined }): Promise<WorkspaceExecutionLease>;
-  };
-  workspaceFileAccessProvider: {
-    acquire(input: {
-      workspace: WorkspaceRecord;
-      access: "read" | "write";
-      path?: string | undefined;
-    }): Promise<WorkspaceFileAccessLease>;
-  };
+export interface SandboxHost extends Omit<EngineSandboxHost, "diagnostics"> {
   diagnostics(): SandboxHostDiagnostics;
-  maintain(options: { idleBefore: string }): Promise<void>;
-  beginDrain(): Promise<void>;
   deleteWorkspace?(workspace: WorkspaceRecord): Promise<void> | void;
-  close(): Promise<void>;
 }
+
+const _diagnosticsContractCheck: EngineSandboxHostDiagnostics = {} satisfies SandboxHostDiagnostics;
+void _diagnosticsContractCheck;
 
 export function createLazySandboxHost(options: {
   providerKind: SandboxHost["providerKind"];
@@ -224,18 +203,12 @@ export function createMaterializationSandboxHost(options: {
     workspaceCommandExecutor: createLocalWorkspaceCommandExecutor(),
     workspaceFileSystem: createLocalWorkspaceFileSystem(),
     workspaceExecutionProvider: {
-      async acquire({ workspace }: { workspace: WorkspaceRecord; run: Run; session?: Session | undefined }) {
+      async acquire({ workspace }) {
         return materializedExecutionLease(manager, workspace);
       }
     },
     workspaceFileAccessProvider: {
-      async acquire({
-        workspace
-      }: {
-        workspace: WorkspaceRecord;
-        access: "read" | "write";
-        path?: string | undefined;
-      }) {
+      async acquire({ workspace }) {
         return materializedFileAccessLease(manager, workspace);
       }
     },

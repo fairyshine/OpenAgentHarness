@@ -1,6 +1,9 @@
 import type {
   DistributedPlatformModelRefreshResult,
   HealthReport,
+  PlatformAssetList,
+  PlatformAssetKind,
+  PlatformAssetMutationResponse,
   ReadinessReport
 } from "@oah/api-contracts";
 import type { ServerConfig } from "@oah/config";
@@ -62,6 +65,30 @@ export interface BootstrappedRuntime {
     requireExisting?: boolean | undefined;
   }) => Promise<{ name: string }>;
   deleteWorkspaceRuntime?: (input: { runtimeName: string }) => Promise<void>;
+  listPlatformAssets?: (kind: PlatformAssetKind) => Promise<PlatformAssetList>;
+  uploadPlatformModelAsset?: (input: {
+    name: string;
+    yamlBuffer: Buffer;
+    overwrite?: boolean | undefined;
+    requireExisting?: boolean | undefined;
+  }) => Promise<PlatformAssetMutationResponse>;
+  deletePlatformModelAsset?: (input: { name: string }) => Promise<void>;
+  uploadPlatformToolAsset?: (input: {
+    name: string;
+    definition: Record<string, unknown>;
+    serverFiles?: Record<string, string> | undefined;
+    overwrite?: boolean | undefined;
+    requireExisting?: boolean | undefined;
+  }) => Promise<PlatformAssetMutationResponse>;
+  deletePlatformToolAsset?: (input: { name: string }) => Promise<void>;
+  uploadPlatformSkillAsset?: (input: {
+    name: string;
+    skillMarkdown: string;
+    files?: Record<string, string> | undefined;
+    overwrite?: boolean | undefined;
+    requireExisting?: boolean | undefined;
+  }) => Promise<PlatformAssetMutationResponse>;
+  deletePlatformSkillAsset?: (input: { name: string }) => Promise<void>;
   listPlatformModels?: () => Promise<
     Array<{
       id: string;

@@ -65,6 +65,74 @@ describe("configured sandbox host", () => {
     expect(host?.providerKind).toBe("embedded");
   });
 
+  it("can lazily create an embedded sandbox host", async () => {
+    let created = 0;
+    const host = await createConfiguredSandboxHost({
+      config: buildConfig(),
+      createWorkspaceMaterializationManager: () => {
+        created += 1;
+        return createFakeMaterializationManager();
+      }
+    });
+
+    expect(host?.providerKind).toBe("embedded");
+    expect(created).toBe(0);
+    expect(host?.diagnostics()).toMatchObject({
+      provider: "embedded",
+      executionModel: "local_embedded",
+      workerPlacement: "api_process"
+    });
+    await expect(host?.maintain({ idleBefore: "2026-05-23T00:00:00.000Z" })).resolves.toBeUndefined();
+    expect(created).toBe(0);
+    await expect(
+      host?.workspaceFileAccessProvider.acquire({
+        workspace: {
+          id: "ws_lazy",
+          name: "lazy",
+          kind: "project",
+          rootPath: "/tmp/lazy",
+          readOnly: false,
+          historyMirrorEnabled: false,
+          executionPolicy: "local",
+          status: "active",
+          createdAt: "2026-05-23T00:00:00.000Z",
+          updatedAt: "2026-05-23T00:00:00.000Z",
+          settings: {},
+          agents: {},
+          models: {},
+          actions: {},
+          skills: {},
+          toolServers: {},
+          hooks: {}
+        },
+        access: "read"
+      })
+    ).rejects.toThrow("not used in this test");
+    expect(created).toBe(1);
+  });
+
+  it("uses materialized execution for self-hosted worker processes", async () => {
+    const host = await createConfiguredSandboxHost({
+      config: buildConfig({
+        sandbox: {
+          provider: "self_hosted",
+          self_hosted: {
+            base_url: "http://127.0.0.1:8788/internal/v1"
+          }
+        }
+      }),
+      workspaceMaterializationManager: createFakeMaterializationManager(),
+      selfHostedWorkerProcess: true
+    });
+
+    expect(host?.providerKind).toBe("self_hosted");
+    expect(host?.diagnostics()).toMatchObject({
+      provider: "self_hosted",
+      executionModel: "sandbox_hosted",
+      workerPlacement: "inside_sandbox"
+    });
+  });
+
   it("can create a remote self-hosted sandbox host", async () => {
     const host = await createConfiguredSandboxHost({
       config: buildConfig({

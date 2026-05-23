@@ -4,15 +4,19 @@ import {
   distributedPlatformModelRefreshResultSchema,
   healthReportSchema,
   modelProviderListSchema,
+  platformAssetListSchema,
+  platformAssetMutationResponseSchema,
   platformModelListSchema,
   platformModelSnapshotSchema,
   readinessReportSchema,
   systemProfileSchema,
   updateWorkspaceRuntimeResponseSchema,
+  uploadPlatformAssetRequestSchema,
   uploadWorkspaceRuntimeRequestSchema,
   uploadWorkspaceRuntimeResponseSchema,
   workspaceRuntimeListSchema
 } from "@oah/api-contracts";
+import type { PlatformAssetKind } from "@oah/api-contracts";
 import { AppError } from "@oah/engine-core";
 import { SUPPORTED_MODEL_PROVIDERS } from "@oah/model-runtime/providers";
 
@@ -27,6 +31,7 @@ import { buildSystemProfile } from "../../system-profile.js";
 
 let developerDocsModulePromise: Promise<typeof import("../developer-docs.js")> | undefined;
 const RUNTIME_UPLOAD_BODY_LIMIT_BYTES = 256 * 1024 * 1024;
+const PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES = 256 * 1024 * 1024;
 
 function loadDeveloperDocsModule(): Promise<typeof import("../developer-docs.js")> {
   developerDocsModulePromise ??= import("../developer-docs.js");
@@ -53,6 +58,67 @@ function runtimeUploadErrorToAppError(error: unknown): AppError | undefined {
   }
 
   return undefined;
+}
+
+function requirePlatformAssetManagement(dependencies: AppDependencies, options: AppRouteOptions): void {
+  if (options.workspaceMode === "single" || !dependencies.listPlatformAssets) {
+    throw new AppError(501, "platform_assets_unavailable", "Platform asset management is not available on this server.");
+  }
+}
+
+function readPlatformAssetKind(params: unknown): PlatformAssetKind {
+  const assetKind = createParamsSchema("assetKind").parse(params).assetKind;
+  if (assetKind === "models") return "model";
+  if (assetKind === "tools") return "tool";
+  if (assetKind === "skills") return "skill";
+  throw new AppError(404, "platform_asset_kind_not_found", `Unsupported platform asset kind: ${assetKind}`);
+}
+
+function asObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new AppError(400, "invalid_request_body", `${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function readStringMap(value: unknown, label: string): Record<string, string> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const objectValue = asObject(value, label);
+  const entries = Object.entries(objectValue);
+  if (entries.some(([, entryValue]) => typeof entryValue !== "string")) {
+    throw new AppError(400, "invalid_request_body", `${label} values must be strings.`);
+  }
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function readToolAssetBody(body: unknown): {
+  definition: Record<string, unknown>;
+  serverFiles?: Record<string, string> | undefined;
+} {
+  const objectValue = asObject(body, "Tool asset request body");
+  const definition = asObject(objectValue.definition, "Tool asset definition");
+  const serverFiles = readStringMap(objectValue.serverFiles, "Tool server files");
+  return {
+    definition,
+    ...(serverFiles ? { serverFiles } : {})
+  };
+}
+
+function readSkillAssetBody(body: unknown): {
+  skillMarkdown: string;
+  files?: Record<string, string> | undefined;
+} {
+  const objectValue = asObject(body, "Skill asset request body");
+  if (typeof objectValue.skillMarkdown !== "string" || objectValue.skillMarkdown.trim().length === 0) {
+    throw new AppError(400, "invalid_request_body", "Skill asset request body must include skillMarkdown.");
+  }
+  const files = readStringMap(objectValue.files, "Skill files");
+  return {
+    skillMarkdown: objectValue.skillMarkdown,
+    ...(files ? { files } : {})
+  };
 }
 
 export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDependencies, options: AppRouteOptions): void {
@@ -139,6 +205,164 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
       }
       throw error;
     }
+  };
+
+  const listPlatformAssets = async (request: FastifyRequest, reply: FastifyReply) => {
+    requirePlatformAssetManagement(dependencies, options);
+    return reply.send(platformAssetListSchema.parse(await dependencies.listPlatformAssets!(readPlatformAssetKind(request.params))));
+  };
+
+  const uploadPlatformModelAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadPlatformModelAsset) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform model asset upload is not available on this server.");
+    }
+
+    const yamlBuffer = await readRequestBodyBuffer(request.body);
+    if (!yamlBuffer) {
+      throw new AppError(415, "invalid_content_type", "Model asset upload requires Content-Type: application/octet-stream.");
+    }
+
+    const query = uploadPlatformAssetRequestSchema.parse(request.query);
+    return reply.status(201).send(
+      platformAssetMutationResponseSchema.parse(
+        await dependencies.uploadPlatformModelAsset({
+          name: query.name,
+          yamlBuffer,
+          overwrite: query.overwrite
+        })
+      )
+    );
+  };
+
+  const updatePlatformModelAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadPlatformModelAsset) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform model asset update is not available on this server.");
+    }
+
+    const params = createParamsSchema("assetName").parse(request.params);
+    const yamlBuffer = await readRequestBodyBuffer(request.body);
+    if (!yamlBuffer) {
+      throw new AppError(415, "invalid_content_type", "Model asset update requires Content-Type: application/octet-stream.");
+    }
+
+    return reply.send(
+      platformAssetMutationResponseSchema.parse(
+        await dependencies.uploadPlatformModelAsset({
+          name: params.assetName,
+          yamlBuffer,
+          overwrite: true,
+          requireExisting: true
+        })
+      )
+    );
+  };
+
+  const deletePlatformModelAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.deletePlatformModelAsset) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform model asset deletion is not available on this server.");
+    }
+
+    const params = createParamsSchema("assetName").parse(request.params);
+    await dependencies.deletePlatformModelAsset({ name: params.assetName });
+    return reply.status(204).send();
+  };
+
+  const uploadPlatformToolAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadPlatformToolAsset) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform tool asset upload is not available on this server.");
+    }
+
+    const query = uploadPlatformAssetRequestSchema.parse(request.query);
+    const body = readToolAssetBody(request.body);
+    return reply.status(201).send(
+      platformAssetMutationResponseSchema.parse(
+        await dependencies.uploadPlatformToolAsset({
+          name: query.name,
+          definition: body.definition,
+          ...(body.serverFiles ? { serverFiles: body.serverFiles } : {}),
+          overwrite: query.overwrite
+        })
+      )
+    );
+  };
+
+  const updatePlatformToolAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadPlatformToolAsset) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform tool asset update is not available on this server.");
+    }
+
+    const params = createParamsSchema("assetName").parse(request.params);
+    const body = readToolAssetBody(request.body);
+    return reply.send(
+      platformAssetMutationResponseSchema.parse(
+        await dependencies.uploadPlatformToolAsset({
+          name: params.assetName,
+          definition: body.definition,
+          ...(body.serverFiles ? { serverFiles: body.serverFiles } : {}),
+          overwrite: true,
+          requireExisting: true
+        })
+      )
+    );
+  };
+
+  const deletePlatformToolAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.deletePlatformToolAsset) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform tool asset deletion is not available on this server.");
+    }
+
+    const params = createParamsSchema("assetName").parse(request.params);
+    await dependencies.deletePlatformToolAsset({ name: params.assetName });
+    return reply.status(204).send();
+  };
+
+  const uploadPlatformSkillAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadPlatformSkillAsset) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform skill asset upload is not available on this server.");
+    }
+
+    const query = uploadPlatformAssetRequestSchema.parse(request.query);
+    const body = readSkillAssetBody(request.body);
+    return reply.status(201).send(
+      platformAssetMutationResponseSchema.parse(
+        await dependencies.uploadPlatformSkillAsset({
+          name: query.name,
+          skillMarkdown: body.skillMarkdown,
+          ...(body.files ? { files: body.files } : {}),
+          overwrite: query.overwrite
+        })
+      )
+    );
+  };
+
+  const updatePlatformSkillAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadPlatformSkillAsset) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform skill asset update is not available on this server.");
+    }
+
+    const params = createParamsSchema("assetName").parse(request.params);
+    const body = readSkillAssetBody(request.body);
+    return reply.send(
+      platformAssetMutationResponseSchema.parse(
+        await dependencies.uploadPlatformSkillAsset({
+          name: params.assetName,
+          skillMarkdown: body.skillMarkdown,
+          ...(body.files ? { files: body.files } : {}),
+          overwrite: true,
+          requireExisting: true
+        })
+      )
+    );
+  };
+
+  const deletePlatformSkillAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.deletePlatformSkillAsset) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform skill asset deletion is not available on this server.");
+    }
+
+    const params = createParamsSchema("assetName").parse(request.params);
+    await dependencies.deletePlatformSkillAsset({ name: params.assetName });
+    return reply.status(204).send();
   };
 
   app.get("/", async (request, reply) => {
@@ -255,6 +479,76 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
   app.post("/api/v1/blueprints/upload", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, uploadRuntime);
   app.put("/api/v1/blueprints/:runtimeName", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, updateRuntime);
   app.delete("/api/v1/blueprints/:runtimeName", deleteRuntime);
+
+  app.get("/api/v1/assets/:assetKind", listPlatformAssets);
+  app.post(
+    "/api/v1/assets/models/upload",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    uploadPlatformModelAsset
+  );
+  app.put(
+    "/api/v1/assets/models/:assetName",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    updatePlatformModelAsset
+  );
+  app.delete("/api/v1/assets/models/:assetName", deletePlatformModelAsset);
+  app.post(
+    "/api/v1/assets/tools/upload",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    uploadPlatformToolAsset
+  );
+  app.put(
+    "/api/v1/assets/tools/:assetName",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    updatePlatformToolAsset
+  );
+  app.delete("/api/v1/assets/tools/:assetName", deletePlatformToolAsset);
+  app.post(
+    "/api/v1/assets/skills/upload",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    uploadPlatformSkillAsset
+  );
+  app.put(
+    "/api/v1/assets/skills/:assetName",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    updatePlatformSkillAsset
+  );
+  app.delete("/api/v1/assets/skills/:assetName", deletePlatformSkillAsset);
+  // Keep the longer route name as a compatibility alias for early clients.
+  app.get("/api/v1/platform-assets/:assetKind", listPlatformAssets);
+  app.post(
+    "/api/v1/platform-assets/models/upload",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    uploadPlatformModelAsset
+  );
+  app.put(
+    "/api/v1/platform-assets/models/:assetName",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    updatePlatformModelAsset
+  );
+  app.delete("/api/v1/platform-assets/models/:assetName", deletePlatformModelAsset);
+  app.post(
+    "/api/v1/platform-assets/tools/upload",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    uploadPlatformToolAsset
+  );
+  app.put(
+    "/api/v1/platform-assets/tools/:assetName",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    updatePlatformToolAsset
+  );
+  app.delete("/api/v1/platform-assets/tools/:assetName", deletePlatformToolAsset);
+  app.post(
+    "/api/v1/platform-assets/skills/upload",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    uploadPlatformSkillAsset
+  );
+  app.put(
+    "/api/v1/platform-assets/skills/:assetName",
+    { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
+    updatePlatformSkillAsset
+  );
+  app.delete("/api/v1/platform-assets/skills/:assetName", deletePlatformSkillAsset);
 
   app.get("/api/v1/model-providers", async (_request, reply) =>
     reply.send(

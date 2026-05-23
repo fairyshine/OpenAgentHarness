@@ -12,6 +12,7 @@ import { EngineService } from "@oah/engine-core";
 import { createMemoryRuntimePersistence } from "@oah/storage-memory";
 
 import { createApp } from "../apps/server/src/app.ts";
+import { createPlatformAssetManagement } from "../apps/server/src/bootstrap/platform-asset-management-service.ts";
 import { createInternalWorkerApp } from "../apps/server/src/internal-worker-app.ts";
 import {
   observeNativeWorkspaceSyncOperation,
@@ -19,6 +20,7 @@ import {
   resetNativeWorkspaceSyncObservabilityForTests
 } from "../apps/server/src/observability/native-workspace-sync.ts";
 import type { StorageAdmin } from "../apps/server/src/storage-admin.ts";
+import { loadConfigWorkspaceModule } from "../apps/server/src/bootstrap/module-loaders.ts";
 import { FakeModelGateway } from "./helpers/fake-model-runtime";
 
 interface PlatformModelSnapshot {
@@ -285,6 +287,13 @@ async function createStartedAppWithEngineService(
       overwrite: boolean;
       requireExisting?: boolean | undefined;
     }) => Promise<{ name: string }>;
+    listPlatformAssets?: Parameters<typeof createApp>[0]["listPlatformAssets"];
+    uploadPlatformModelAsset?: Parameters<typeof createApp>[0]["uploadPlatformModelAsset"];
+    deletePlatformModelAsset?: Parameters<typeof createApp>[0]["deletePlatformModelAsset"];
+    uploadPlatformToolAsset?: Parameters<typeof createApp>[0]["uploadPlatformToolAsset"];
+    deletePlatformToolAsset?: Parameters<typeof createApp>[0]["deletePlatformToolAsset"];
+    uploadPlatformSkillAsset?: Parameters<typeof createApp>[0]["uploadPlatformSkillAsset"];
+    deletePlatformSkillAsset?: Parameters<typeof createApp>[0]["deletePlatformSkillAsset"];
     sandboxHostProviderKind?: "embedded" | "self_hosted" | "e2b";
     sandboxOwnerFallbackBaseUrl?: string;
     localOwnerBaseUrl?: string;
@@ -299,6 +308,13 @@ async function createStartedAppWithEngineService(
     logger: false,
     listWorkspaceRuntimes: async () => [{ name: "workspace" }],
     ...(options?.uploadWorkspaceRuntime ? { uploadWorkspaceRuntime: options.uploadWorkspaceRuntime } : {}),
+    ...(options?.listPlatformAssets ? { listPlatformAssets: options.listPlatformAssets } : {}),
+    ...(options?.uploadPlatformModelAsset ? { uploadPlatformModelAsset: options.uploadPlatformModelAsset } : {}),
+    ...(options?.deletePlatformModelAsset ? { deletePlatformModelAsset: options.deletePlatformModelAsset } : {}),
+    ...(options?.uploadPlatformToolAsset ? { uploadPlatformToolAsset: options.uploadPlatformToolAsset } : {}),
+    ...(options?.deletePlatformToolAsset ? { deletePlatformToolAsset: options.deletePlatformToolAsset } : {}),
+    ...(options?.uploadPlatformSkillAsset ? { uploadPlatformSkillAsset: options.uploadPlatformSkillAsset } : {}),
+    ...(options?.deletePlatformSkillAsset ? { deletePlatformSkillAsset: options.deletePlatformSkillAsset } : {}),
     ...(options?.listPlatformModels ? { listPlatformModels: options.listPlatformModels } : {}),
     ...(options?.getPlatformModelSnapshot ? { getPlatformModelSnapshot: options.getPlatformModelSnapshot } : {}),
     ...(options?.refreshPlatformModels ? { refreshPlatformModels: options.refreshPlatformModels } : {}),
@@ -1007,6 +1023,185 @@ describe("http api", () => {
         code: "invalid_runtime_zip"
       }
     });
+  });
+
+  it("manages platform model assets through the public API", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-platform-model-assets-"));
+    tempWorkspaceRoots.push(tempDir);
+    const config = {
+      paths: {
+        workspace_dir: path.join(tempDir, "workspaces"),
+        runtime_dir: path.join(tempDir, "runtimes"),
+        model_dir: path.join(tempDir, "models"),
+        tool_dir: path.join(tempDir, "tools"),
+        skill_dir: path.join(tempDir, "skills")
+      },
+      llm: {
+        default_model: "managed"
+      }
+    } as Parameters<typeof createPlatformAssetManagement>[0]["config"];
+    const assetManagement = createPlatformAssetManagement({
+      config,
+      loadConfigWorkspaceModule
+    });
+
+    activeApp = await createStartedAppWithEngineService(new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(20),
+      ...createMemoryRuntimePersistence()
+    }), new FakeModelGateway(20), assetManagement);
+
+    const uploadResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/models/upload?name=managed`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: Buffer.from("managed:\n  provider: openai\n  name: gpt-5\n")
+    });
+    expect(uploadResponse.status).toBe(201);
+    await expect(uploadResponse.json()).resolves.toEqual({ kind: "model", name: "managed" });
+
+    const listResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/models`);
+    expect(listResponse.status).toBe(200);
+    await expect(listResponse.json()).resolves.toEqual({
+      kind: "model",
+      items: [{ id: "managed", provider: "openai", modelName: "gpt-5" }]
+    });
+
+    const updateResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/models/managed`, {
+      method: "PUT",
+      headers: { "content-type": "application/octet-stream" },
+      body: Buffer.from("managed:\n  provider: openai\n  name: gpt-5.1\n")
+    });
+    expect(updateResponse.status).toBe(200);
+    await expect(readFile(path.join(config.paths.model_dir, "managed.yaml"), "utf8")).resolves.toContain("gpt-5.1");
+
+    const deleteResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/models/managed`, {
+      method: "DELETE"
+    });
+    expect(deleteResponse.status).toBe(204);
+    await expect(access(path.join(config.paths.model_dir, "managed.yaml"))).rejects.toThrow();
+  });
+
+  it("manages platform tool assets through the public API", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-platform-tool-assets-"));
+    tempWorkspaceRoots.push(tempDir);
+    const config = {
+      paths: {
+        workspace_dir: path.join(tempDir, "workspaces"),
+        runtime_dir: path.join(tempDir, "runtimes"),
+        model_dir: path.join(tempDir, "models"),
+        tool_dir: path.join(tempDir, "tools"),
+        skill_dir: path.join(tempDir, "skills")
+      },
+      llm: {
+        default_model: "openai-default"
+      }
+    } as Parameters<typeof createPlatformAssetManagement>[0]["config"];
+    const assetManagement = createPlatformAssetManagement({
+      config,
+      loadConfigWorkspaceModule
+    });
+
+    activeApp = await createStartedAppWithEngineService(new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(20),
+      ...createMemoryRuntimePersistence()
+    }), new FakeModelGateway(20), assetManagement);
+
+    const uploadResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/tools/upload?name=repo-tools`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        definition: {
+          command: "node ./servers/repo-tools/index.js",
+          expose: {
+            tool_prefix: "repo"
+          }
+        },
+        serverFiles: {
+          "index.js": "console.log('ok');\n"
+        }
+      })
+    });
+    expect(uploadResponse.status).toBe(201);
+    await expect(uploadResponse.json()).resolves.toEqual({ kind: "tool", name: "repo-tools" });
+
+    const listResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/tools`);
+    expect(listResponse.status).toBe(200);
+    await expect(listResponse.json()).resolves.toEqual({
+      kind: "tool",
+      items: [{ name: "repo-tools", transportType: "stdio", enabled: true, toolPrefix: "repo" }]
+    });
+
+    const deleteResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/tools/repo-tools`, {
+      method: "DELETE"
+    });
+    expect(deleteResponse.status).toBe(204);
+    await expect(access(path.join(config.paths.tool_dir, "servers", "repo-tools"))).rejects.toThrow();
+  });
+
+  it("manages platform skill assets through the public API", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-platform-skill-assets-"));
+    tempWorkspaceRoots.push(tempDir);
+    const config = {
+      paths: {
+        workspace_dir: path.join(tempDir, "workspaces"),
+        runtime_dir: path.join(tempDir, "runtimes"),
+        model_dir: path.join(tempDir, "models"),
+        tool_dir: path.join(tempDir, "tools"),
+        skill_dir: path.join(tempDir, "skills")
+      },
+      llm: {
+        default_model: "openai-default"
+      }
+    } as Parameters<typeof createPlatformAssetManagement>[0]["config"];
+    const assetManagement = createPlatformAssetManagement({
+      config,
+      loadConfigWorkspaceModule
+    });
+
+    activeApp = await createStartedAppWithEngineService(new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(20),
+      ...createMemoryRuntimePersistence()
+    }), new FakeModelGateway(20), assetManagement);
+
+    const uploadResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/skills/upload?name=repo-scout`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        skillMarkdown: "---\ndescription: Inspect repositories\n---\n# Repo scout\n\nRead the repository and summarize it.\n",
+        files: {
+          "references/checklist.md": "- inspect tree\n"
+        }
+      })
+    });
+    expect(uploadResponse.status).toBe(201);
+    await expect(uploadResponse.json()).resolves.toEqual({ kind: "skill", name: "repo-scout" });
+
+    const listResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/skills`);
+    expect(listResponse.status).toBe(200);
+    await expect(listResponse.json()).resolves.toEqual({
+      kind: "skill",
+      items: [{ name: "repo-scout", description: "Inspect repositories", exposeToLlm: true }]
+    });
+
+    const updateResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/skills/repo-scout`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        skillMarkdown: "# Repo scout\n\nUpdated instructions.\n"
+      })
+    });
+    expect(updateResponse.status).toBe(200);
+    await expect(readFile(path.join(config.paths.skill_dir, "repo-scout", "SKILL.md"), "utf8")).resolves.toContain(
+      "Updated instructions"
+    );
+
+    const deleteResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/skills/repo-scout`, {
+      method: "DELETE"
+    });
+    expect(deleteResponse.status).toBe(204);
+    await expect(access(path.join(config.paths.skill_dir, "repo-scout"))).rejects.toThrow();
   });
 
   it("lists platform models loaded from model_dir", async () => {
