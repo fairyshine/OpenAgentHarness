@@ -32,6 +32,7 @@ import {
   createSelfHostedSandbox,
   type SelfHostedSandboxInitializerOptions
 } from "./self-hosted-workspace-initializer.js";
+import { shouldUseSelfHostedSeedTransfer } from "../sandbox-capabilities.js";
 
 export { createSelfHostedWorkspaceDelegatingInitializer } from "./self-hosted-workspace-initializer.js";
 export { nativeWorkspaceSyncAdapter } from "./sandbox-workspace-seed-fingerprint.js";
@@ -62,6 +63,19 @@ interface SeedUploadPlanFile {
 interface PreparedSeedArchiveMetrics {
   fileCount: number;
   totalBytes: number;
+}
+
+interface SelfHostedSeedSandbox {
+  id: string;
+  baseUrl: string;
+  headers?: Record<string, string> | undefined;
+}
+
+interface SandboxSeedTransferStrategy {
+  archiveUpload: boolean;
+  nativeHttpUpload: boolean;
+  createOnlyLeafEmptyDirectories: boolean;
+  selfHostedSandbox?: SelfHostedSeedSandbox | undefined;
 }
 
 interface RemoteWorkspaceEntry {
@@ -386,13 +400,51 @@ function resolveLeafEmptyRemoteDirectories(input: {
   });
 }
 
+export function resolveSandboxSeedTransferStrategy(input: {
+  sandboxHost: Pick<SandboxHost, "providerKind">;
+  selfHostedSandbox?: SelfHostedSeedSandbox | undefined;
+}): SandboxSeedTransferStrategy {
+  if (input.selfHostedSandbox) {
+    const useSelfHostedSeedTransfer = shouldUseSelfHostedSeedTransfer(input.sandboxHost.providerKind);
+    return {
+      archiveUpload: useSelfHostedSeedTransfer,
+      nativeHttpUpload: useSelfHostedSeedTransfer,
+      createOnlyLeafEmptyDirectories: true,
+      selfHostedSandbox: input.selfHostedSandbox
+    };
+  }
+
+  return {
+    archiveUpload: false,
+    nativeHttpUpload: false,
+    createOnlyLeafEmptyDirectories: shouldUseSelfHostedSeedTransfer(input.sandboxHost.providerKind)
+  };
+}
+
+export function resolveSeedDirectoriesToCreate(input: {
+  strategy: Pick<SandboxSeedTransferStrategy, "createOnlyLeafEmptyDirectories">;
+  directories: string[];
+  filePaths: string[];
+  existingEntries: Map<string, RemoteWorkspaceEntry>;
+}): string[] {
+  const directories = input.strategy.createOnlyLeafEmptyDirectories
+    ? resolveLeafEmptyRemoteDirectories({
+        directories: input.directories,
+        filePaths: input.filePaths
+      })
+    : input.directories;
+
+  return directories.filter((remotePath) => input.existingEntries.get(remotePath)?.kind !== "directory");
+}
+
 async function maybeUploadSeedArchive(input: {
   sandboxHost: SandboxHost;
+  strategy: SandboxSeedTransferStrategy;
   workspace: WorkspaceRecord;
   resolveArchivePath: () => Promise<string>;
   archiveMetrics?: PreparedSeedArchiveMetrics | undefined;
 }): Promise<boolean> {
-  if (input.sandboxHost.providerKind !== "self_hosted" || !input.archiveMetrics || !shouldAttemptSeedArchiveUpload(input.archiveMetrics)) {
+  if (!input.strategy.archiveUpload || !input.archiveMetrics || !shouldAttemptSeedArchiveUpload(input.archiveMetrics)) {
     return false;
   }
 
@@ -522,6 +574,7 @@ async function uploadDirectoryTree(input: {
   currentLocalPath: string;
   currentRemotePath: string;
   sandboxHost: SandboxHost;
+  strategy: SandboxSeedTransferStrategy;
 }): Promise<void> {
   return observeNativeWorkspaceSyncOperation({
     operation: "sync_local_to_sandbox_http",
@@ -555,14 +608,12 @@ async function uploadDirectoryTree(input: {
         expectedFiles: plan.files.map((file) => file.remotePath)
       });
 
-      const directoriesToCreate = (
-        input.sandboxHost.providerKind === "self_hosted"
-          ? resolveLeafEmptyRemoteDirectories({
-              directories: plan.directories,
-              filePaths: plan.files.map((file) => file.remotePath)
-            })
-          : plan.directories
-      ).filter((remotePath) => remoteEntries.get(remotePath)?.kind !== "directory");
+      const directoriesToCreate = resolveSeedDirectoriesToCreate({
+        strategy: input.strategy,
+        directories: plan.directories,
+        filePaths: plan.files.map((file) => file.remotePath),
+        existingEntries: remoteEntries
+      });
 
       await runWithConcurrency(directoriesToCreate, concurrency, async (remotePath) => {
         await input.sandboxHost.workspaceFileSystem.mkdir(remotePath, { recursive: true });
@@ -594,11 +645,7 @@ async function uploadDirectoryTree(input: {
 async function uploadDirectoryTreeToSelfHostedSandboxNative(input: {
   currentLocalPath: string;
   currentRemotePath: string;
-  sandbox: {
-    id: string;
-    baseUrl: string;
-    headers?: Record<string, string> | undefined;
-  };
+  sandbox: SelfHostedSeedSandbox;
 }): Promise<void> {
   const maxConcurrency = resolveSeedUploadConcurrency();
   await observeNativeWorkspaceSyncOperation({
@@ -634,13 +681,7 @@ async function uploadWorkspaceSeed(input: {
   archiveMetrics?: PreparedSeedArchiveMetrics | undefined;
   sandboxHost: SandboxHost;
   remoteRootPath?: string | undefined;
-  selfHostedSandbox?:
-    | {
-        id: string;
-        baseUrl: string;
-        headers?: Record<string, string> | undefined;
-      }
-    | undefined;
+  strategy: SandboxSeedTransferStrategy;
 }): Promise<void> {
   const lease = await input.sandboxHost.workspaceFileAccessProvider.acquire({
     workspace: createSandboxSeedWorkspace({
@@ -665,11 +706,12 @@ async function uploadWorkspaceSeed(input: {
         await input.sandboxHost.workspaceFileSystem.mkdir(lease.workspace.rootPath, { recursive: true });
       }
     }
-    if (input.selfHostedSandbox) {
+    if (input.strategy.archiveUpload) {
       try {
         if (
           await maybeUploadSeedArchive({
             sandboxHost: input.sandboxHost,
+            strategy: input.strategy,
             workspace: lease.workspace,
             resolveArchivePath: input.resolveArchivePath,
             archiveMetrics: input.archiveMetrics
@@ -687,17 +729,17 @@ async function uploadWorkspaceSeed(input: {
           metadata: {
             mode: "archive_upload",
             remoteRootPath: input.remoteRootPath ?? SANDBOX_WORKSPACE_ROOT,
-            ...(input.selfHostedSandbox ? { sandboxId: input.selfHostedSandbox.id } : {})
+            ...(input.strategy.selfHostedSandbox ? { sandboxId: input.strategy.selfHostedSandbox.id } : {})
           }
         });
       }
     }
-    if (input.selfHostedSandbox && nativeWorkspaceSyncAdapter.isEnabled()) {
+    if (input.strategy.nativeHttpUpload && input.strategy.selfHostedSandbox && nativeWorkspaceSyncAdapter.isEnabled()) {
       try {
         await uploadDirectoryTreeToSelfHostedSandboxNative({
           currentLocalPath: input.localSeedRoot,
           currentRemotePath: input.remoteRootPath ?? SANDBOX_WORKSPACE_ROOT,
-          sandbox: input.selfHostedSandbox
+          sandbox: input.strategy.selfHostedSandbox
         });
         return;
       } catch (error) {
@@ -707,7 +749,7 @@ async function uploadWorkspaceSeed(input: {
           error,
           metadata: {
             remoteRootPath: input.remoteRootPath ?? SANDBOX_WORKSPACE_ROOT,
-            sandboxId: input.selfHostedSandbox.id
+            sandboxId: input.strategy.selfHostedSandbox.id
           }
         });
       }
@@ -716,7 +758,8 @@ async function uploadWorkspaceSeed(input: {
     await uploadDirectoryTree({
       currentLocalPath: input.localSeedRoot,
       currentRemotePath: lease.workspace.rootPath,
-      sandboxHost: input.sandboxHost
+      sandboxHost: input.sandboxHost,
+      strategy: input.strategy
     });
   } finally {
     await lease.release({ dirty: true });
@@ -915,7 +958,10 @@ export function createSandboxBackedWorkspaceInitializer(options: {
         archiveMetrics: prepared.archiveMetrics,
         sandboxHost: options.sandboxHost,
         remoteRootPath,
-        selfHostedSandbox
+        strategy: resolveSandboxSeedTransferStrategy({
+          sandboxHost: options.sandboxHost,
+          ...(selfHostedSandbox ? { selfHostedSandbox } : {})
+        })
       });
 
       return {

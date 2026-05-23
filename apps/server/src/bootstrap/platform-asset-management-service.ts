@@ -193,6 +193,8 @@ export function createPlatformAssetManagement(input: {
     listPlatformAssets: async (kind): Promise<PlatformAssetList> => {
       const { loadPlatformModels, loadPlatformToolServers, loadPlatformSkills } = await input.loadConfigWorkspaceModule();
       switch (kind) {
+        case "runtime":
+          throw new AppError(501, "workspace_runtimes_unavailable", "Workspace runtimes are managed by the runtime asset service.");
         case "model":
           return { kind, items: toModelAssets(await loadPlatformModels(input.config.paths.model_dir)) };
         case "tool":

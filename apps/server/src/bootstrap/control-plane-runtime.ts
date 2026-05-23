@@ -18,6 +18,10 @@ import { ScopedRunRepository, ScopedSessionRepository, ScopedWorkspaceRepository
 import type { SandboxHost } from "./sandbox-host.js";
 import { objectStorageBacksManagedWorkspaces } from "./object-storage-policy.js";
 import {
+  shouldRefreshWorkspaceDefinitionsFromLiveRoots,
+  shouldSnapshotWorkspaceDefinitionBeforeDiscovery
+} from "../sandbox-capabilities.js";
+import {
   closeFsWatcher,
   discoverProjectWorkspaces,
   findManagedWorkspaceIdsToDelete,
@@ -351,7 +355,12 @@ export async function prepareControlPlaneRuntime(options: {
   }
 
   async function refreshWorkspaceDefinitionsForPlatformModelsNow(): Promise<void> {
-    if (options.remoteSandboxProvider || !options.enableControlPlaneFacade) {
+    if (
+      !shouldRefreshWorkspaceDefinitionsFromLiveRoots({
+        remoteSandboxProvider: options.remoteSandboxProvider,
+        controlPlaneFacadeEnabled: options.enableControlPlaneFacade
+      })
+    ) {
       return;
     }
 
@@ -392,7 +401,12 @@ export async function prepareControlPlaneRuntime(options: {
       return;
     }
 
-    if (options.remoteSandboxProvider || !options.enableControlPlaneFacade) {
+    if (
+      !shouldRefreshWorkspaceDefinitionsFromLiveRoots({
+        remoteSandboxProvider: options.remoteSandboxProvider,
+        controlPlaneFacadeEnabled: options.enableControlPlaneFacade
+      })
+    ) {
       return;
     }
 
@@ -469,8 +483,11 @@ export async function prepareControlPlaneRuntime(options: {
         return;
       }
 
+      const shouldUseDefinitionSnapshot = shouldSnapshotWorkspaceDefinitionBeforeDiscovery({
+        remoteSandboxProvider: options.remoteSandboxProvider
+      });
       const discoveryRoot =
-        options.remoteSandboxProvider
+        shouldUseDefinitionSnapshot
           ? await copyWorkspaceDefinitionSnapshot({
               workspace,
               workspaceFileAccessProvider: options.sandboxHost?.workspaceFileAccessProvider,
@@ -486,7 +503,7 @@ export async function prepareControlPlaneRuntime(options: {
         await options.persistence.workspaceRepository.upsert(refreshed);
         visibleWorkspaceIds.add(refreshed.id);
       } finally {
-        if (options.remoteSandboxProvider) {
+        if (shouldUseDefinitionSnapshot) {
           const { rm } = await import("node:fs/promises");
           await rm(discoveryRoot, { recursive: true, force: true });
         }

@@ -27,10 +27,6 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/runtimes` | 列出 workspace runtimes |
-| POST | `/runtimes/upload` | 上传 workspace runtime |
-| PUT | `/runtimes/{name}` | 覆盖更新 workspace runtime |
-| DELETE | `/runtimes/{name}` | 删除 workspace runtime |
 | GET | `/workspaces` | 列出 workspace |
 | POST | `/workspaces` | 创建 workspace |
 | POST | `/workspaces/import` | 导入 workspace |
@@ -46,6 +42,27 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | GET | `/workspaces/{id}/memory/proposals` | 列出 memory proposals |
 | POST | `/workspaces/{id}/memory/proposals/apply` | 应用 memory proposal |
 | POST | `/workspaces/{id}/memory/proposals/reject` | 拒绝 memory proposal |
+
+### Assets
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/assets/runtimes` | 列出 runtime 资产 |
+| POST | `/assets/runtimes/upload` | 上传 runtime zip |
+| PUT | `/assets/runtimes/{name}` | 覆盖更新 runtime |
+| DELETE | `/assets/runtimes/{name}` | 删除 runtime |
+| GET | `/assets/models` | 列出平台 model 资产 |
+| POST | `/assets/models/upload` | 上传平台 model YAML |
+| PUT | `/assets/models/{name}` | 覆盖更新平台 model |
+| DELETE | `/assets/models/{name}` | 删除平台 model |
+| GET | `/assets/tools` | 列出平台 tool 资产 |
+| POST | `/assets/tools/upload` | 上传平台 tool 定义 |
+| PUT | `/assets/tools/{name}` | 覆盖更新平台 tool |
+| DELETE | `/assets/tools/{name}` | 删除平台 tool |
+| GET | `/assets/skills` | 列出平台 skill 资产 |
+| POST | `/assets/skills/upload` | 上传平台 skill |
+| PUT | `/assets/skills/{name}` | 覆盖更新平台 skill |
+| DELETE | `/assets/skills/{name}` | 删除平台 skill |
 
 ### Sandboxes & Files
 
@@ -143,6 +160,7 @@ HTTP API 基于 REST 资源接口 + SSE 事件流。接口定义以 [openapi.yam
 | --- | --- |
 | [openapi.yaml](./openapi.yaml) | OpenAPI 3.1 规范 |
 | [workspaces.md](./workspaces/) | workspace、catalog、模型可见性 |
+| [assets.md](./assets/) | 平台 runtime、model、tool、skill 资产管理 |
 | [sessions.md](./sessions/) | session 与 message |
 | [runs.md](./runs/) | run 查询与取消 |
 | [actions.md](./actions/) | action 手动触发 |

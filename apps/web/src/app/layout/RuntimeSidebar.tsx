@@ -14,7 +14,7 @@ import { SessionNavItem, WorkspaceNavItem } from "./sidebar-items";
 import { SidebarModeToggle } from "./sidebar-primitives";
 import type { SidebarProps } from "./sidebar-types";
 
-function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeManager?: () => void }) {
+function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeAssets?: () => void }) {
   const [runtimeWorkspaceDeleteBusy, setRuntimeWorkspaceDeleteBusy] = useState(false);
   const { mainViewMode, setMainViewMode } = useUiStore(
     useShallow((state) => ({
@@ -217,8 +217,8 @@ function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeManager?: () => voi
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7"
-                      onClick={() => props.onOpenRuntimeManager?.()}
-                      title="Runtime Manager"
+                      onClick={() => props.onOpenRuntimeAssets?.()}
+                      title="Manage runtime assets"
                     >
                       <Settings2 className="h-3.5 w-3.5" />
                     </Button>

@@ -23,6 +23,7 @@ import type {
 } from "@oah/engine-core";
 
 import type { SandboxHost } from "./sandbox-host.js";
+import { describeSandboxTopology } from "../sandbox-capabilities.js";
 
 const VIRTUAL_SANDBOX_ROOT = "/__oah_sandbox__";
 const SANDBOX_LIST_PAGE_SIZE = 200;
@@ -673,6 +674,7 @@ export function createE2BCompatibleSandboxHost(options: {
 }): SandboxHost {
   const workspaceCommandExecutor = createE2BCompatibleWorkspaceCommandExecutor(options.service);
   const workspaceFileSystem = createE2BCompatibleWorkspaceFileSystem(options.service);
+  const providerKind = options.providerKind ?? "e2b";
   const workspaceExecutionProvider: WorkspaceExecutionProvider = {
     async acquire(input) {
       const lease = await options.service.acquireExecution(input);
@@ -703,15 +705,16 @@ export function createE2BCompatibleSandboxHost(options: {
   };
 
   return {
-    providerKind: options.providerKind ?? "e2b",
+    providerKind,
     workspaceCommandExecutor,
     workspaceFileSystem,
     workspaceExecutionProvider,
     workspaceFileAccessProvider,
     diagnostics() {
+      const topology = describeSandboxTopology(providerKind);
       return {
-        executionModel: "sandbox_hosted",
-        workerPlacement: "inside_sandbox",
+        executionModel: topology.executionModel,
+        workerPlacement: topology.workerPlacement,
         ...(options.diagnostics ?? {}),
         ...(options.service.diagnostics ? options.service.diagnostics() : {})
       };

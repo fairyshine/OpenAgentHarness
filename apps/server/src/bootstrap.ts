@@ -97,13 +97,14 @@ import {
   createConfiguredWorkspaceLifecycle,
   createSandboxHostMaintenance,
   createSandboxWorkspaceActivityTracker,
+  resolveSandboxBootstrapPlan,
   resolveSandboxWorkspaceServicePlan
 } from "./bootstrap/configured-sandbox-services.js";
 import { createObjectStorageWorkspaceEntryLister } from "./object-storage-workspace-list.js";
+import { shouldExposeLocalWorkspaceManagement } from "./sandbox-capabilities.js";
 import type { BootstrappedRuntime, BootstrapOptions } from "./bootstrap/bootstrap-runtime-types.js";
 import {
   fileExists,
-  isRemoteSandboxProvider,
   isTruthyEnvValue,
   listRepositoryWorkspaces,
   parseStaleRunRecoveryStrategyEnv,
@@ -144,6 +145,20 @@ export {
 export { resolveEmbeddedWorkerPoolConfig, resolveWorkerMode } from "./bootstrap/worker-host.js";
 export { resolveRuntimeUploadCacheDir } from "./bootstrap/runtime-upload-cache.js";
 
+async function runRuntimeCloseTasks(tasks: Array<{ label: string; run: () => Promise<unknown> | unknown }>): Promise<void> {
+  const results = await Promise.allSettled(
+    tasks.map(async (task) => {
+      await task.run();
+    })
+  );
+
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.warn(`[oah-bootstrap] Failed to close ${tasks[index]!.label}.`, result.reason);
+    }
+  });
+}
+
 export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<BootstrappedRuntime> {
   const argv = options.argv ?? process.argv.slice(2);
   const startWorker = options.startWorker ?? false;
@@ -173,11 +188,14 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
               ? requestedConfig.path
               : path.resolve(process.cwd(), "server.example.yaml")
         );
-  const remoteSandboxProvider = isRemoteSandboxProvider(config);
-  const selfHostedWorkerProcess =
-    processKind === "worker" &&
-    (config.sandbox?.provider === "self_hosted" ||
-      (!config.sandbox?.provider && Boolean(config.sandbox?.self_hosted?.base_url?.trim())));
+  const sandboxBootstrapPlan = resolveSandboxBootstrapPlan({
+    config,
+    processKind,
+    startWorker,
+    hasSandboxHostFactory: Boolean(options.sandboxHostFactory)
+  });
+  const remoteSandboxProvider = sandboxBootstrapPlan.remoteSandboxProvider;
+  const selfHostedWorkerProcess = sandboxBootstrapPlan.selfHostedWorkerProcess;
   const assemblyProfile = resolveRuntimeAssemblyProfile({
     processKind,
     startWorker,
@@ -438,17 +456,9 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           workspacePlacementRegistry: redisWorkspacePlacementRegistry
         })
       : redisRawRunQueue;
-  const canDeferEmbeddedSandboxMaterialization =
-    !remoteSandboxProvider &&
-    Boolean(config.object_storage) &&
-    processKind === "api" &&
-    !startWorker &&
-    !options.sandboxHostFactory;
-  const shouldUseWorkspaceMaterialization =
-    Boolean(config.object_storage) && (!remoteSandboxProvider || selfHostedWorkerProcess);
-  workspaceMaterializationManager = canDeferEmbeddedSandboxMaterialization
+  workspaceMaterializationManager = sandboxBootstrapPlan.canDeferEmbeddedSandboxMaterialization
     ? undefined
-    : shouldUseWorkspaceMaterialization && config.object_storage
+    : sandboxBootstrapPlan.shouldUseWorkspaceMaterialization && config.object_storage
       ? new (await loadWorkspaceMaterializationModule()).WorkspaceMaterializationManager({
           cacheRoot: resolveWorkspaceMaterializationCacheRoot(config.paths),
           workspaceRoot: config.paths.workspace_dir,
@@ -473,13 +483,13 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
     : undefined;
   if (!sandboxHost) {
     const configuredSandboxHostModule = await loadConfiguredSandboxHostModule();
-    const lazyWorkspaceMaterializationManagerClass = canDeferEmbeddedSandboxMaterialization
+    const lazyWorkspaceMaterializationManagerClass = sandboxBootstrapPlan.canDeferEmbeddedSandboxMaterialization
       ? (await loadWorkspaceMaterializationModule()).WorkspaceMaterializationManager
       : undefined;
     sandboxHost = await configuredSandboxHostModule.createConfiguredSandboxHost({
       config,
       ...(workspaceMaterializationManager ? { workspaceMaterializationManager } : {}),
-      ...(canDeferEmbeddedSandboxMaterialization
+      ...(sandboxBootstrapPlan.canDeferEmbeddedSandboxMaterialization
         ? {
             createWorkspaceMaterializationManager: () => {
               workspaceMaterializationManager ??= new lazyWorkspaceMaterializationManagerClass!({
@@ -631,7 +641,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
         };
   const sandboxWorkspaceActivityTracker = createSandboxWorkspaceActivityTracker({
     workspaceMaterializationManager,
-    canDeferEmbeddedSandboxMaterialization
+    canDeferEmbeddedSandboxMaterialization: sandboxBootstrapPlan.canDeferEmbeddedSandboxMaterialization
   });
   workspaceMaterializationMaintenanceTimer = createSandboxHostMaintenance({
     sandboxHost,
@@ -863,7 +873,7 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
             loadConfigWorkspaceModule,
             onPlatformModelsChanged: () => platformModelService.refresh()
           }),
-          ...(!remoteSandboxProvider
+          ...(shouldExposeLocalWorkspaceManagement({ remoteSandboxProvider })
             ? createLocalWorkspaceManagement({
                 config,
                 workspaceRepository,
@@ -914,32 +924,37 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       await postgresMetadataRetentionService?.close();
     },
     async close() {
-      await Promise.all([
-        workerRuntime?.close() ?? Promise.resolve(),
-        postgresMetadataRetentionService?.close() ?? Promise.resolve(),
-        adminCapabilities?.close() ?? Promise.resolve(),
-        redisBus?.close() ?? Promise.resolve(),
-        redisWorkerRegistry?.close() ?? Promise.resolve(),
-        redisWorkspaceLeaseRegistry?.close() ?? Promise.resolve(),
-        redisWorkspacePlacementRegistry?.close() ?? Promise.resolve(),
-        redisRunQueue?.close() ?? Promise.resolve()
+      const closeObjectStoreWorkspaceListStore = async () => {
+        if (
+          objectStoreWorkspaceListStore &&
+          "close" in objectStoreWorkspaceListStore &&
+          typeof objectStoreWorkspaceListStore.close === "function"
+        ) {
+          await objectStoreWorkspaceListStore.close();
+        }
+      };
+
+      await runRuntimeCloseTasks([
+        { label: "worker runtime", run: () => workerRuntime?.close() },
+        { label: "metadata retention service", run: () => postgresMetadataRetentionService?.close() },
+        { label: "admin capabilities", run: () => adminCapabilities?.close() },
+        { label: "redis event bus", run: () => redisBus?.close() },
+        { label: "redis worker registry", run: () => redisWorkerRegistry?.close() },
+        { label: "redis workspace lease registry", run: () => redisWorkspaceLeaseRegistry?.close() },
+        { label: "redis workspace placement registry", run: () => redisWorkspacePlacementRegistry?.close() },
+        { label: "redis run queue", run: () => redisRunQueue?.close() },
+        { label: "sandbox host", run: () => sandboxHost?.close() },
+        { label: "persistence", run: () => closePersistence() },
+        { label: "object-store workspace list store", run: closeObjectStoreWorkspaceListStore },
+        { label: "object storage mirror", run: () => objectStorageMirror?.close() },
+        { label: "platform model service", run: () => platformModelService.close() },
+        { label: "native workspace sync worker pool", run: () => nativeBridge.shutdownNativeWorkspaceSyncWorkerPool() },
+        { label: "control plane runtime", run: () => controlPlaneRuntime?.close() }
       ]);
-      await sandboxHost?.close();
-      await closePersistence();
-      if (
-        objectStoreWorkspaceListStore &&
-        "close" in objectStoreWorkspaceListStore &&
-        typeof objectStoreWorkspaceListStore.close === "function"
-      ) {
-        await objectStoreWorkspaceListStore.close();
-      }
-      await objectStorageMirror?.close();
-      await platformModelService.close();
-      await nativeBridge.shutdownNativeWorkspaceSyncWorkerPool();
       if (workspaceMaterializationMaintenanceTimer) {
         clearInterval(workspaceMaterializationMaintenanceTimer);
+        workspaceMaterializationMaintenanceTimer = undefined;
       }
-      await controlPlaneRuntime?.close();
     }
   };
 }

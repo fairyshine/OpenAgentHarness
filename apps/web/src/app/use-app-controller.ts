@@ -149,6 +149,8 @@ export function useAppController() {
     setWorkspace,
     workspaceRuntimes,
     setWorkspaceRuntimes,
+    platformAssets,
+    setPlatformAssets,
     catalog,
     setCatalog,
     session,
@@ -473,6 +475,7 @@ export function useAppController() {
       workspace,
       setWorkspace,
       setWorkspaceRuntimes,
+      setPlatformAssets,
       setCatalog,
       session,
       setSession,
@@ -1077,6 +1080,7 @@ export function useAppController() {
     workspaceMemory,
     workspaceId,
     workspaceManagementEnabled,
+    platformAssets,
     workspaceRuntimeFilterOptions,
     workspaceRuntimes
   });

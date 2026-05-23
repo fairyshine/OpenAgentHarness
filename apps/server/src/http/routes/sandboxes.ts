@@ -33,6 +33,11 @@ import type {
 } from "@oah/engine-core";
 import { AppError, createId } from "@oah/engine-core";
 import { hasErrorCode } from "../../bootstrap/error-codes.js";
+import {
+  normalizeSandboxOwnerInternalBaseUrl,
+  shouldDelegateWorkspaceOperationToFallbackWorker,
+  shouldReserveOwnerScopedPlacement
+} from "../../sandbox-capabilities.js";
 
 import { assertWorkspaceAccess, createParamsSchema, sendError, toCallerContext } from "../context.js";
 import {
@@ -77,7 +82,13 @@ async function reserveOwnerScopedWorkspacePlacement(
   ownerId: string | undefined,
   workspaceId: string | undefined
 ): Promise<{ workspaceId: string | undefined; release: () => Promise<void> }> {
-  if (!ownerId || !workspaceId || dependencies.sandboxHostProviderKind !== "self_hosted") {
+  if (
+    !shouldReserveOwnerScopedPlacement({
+      provider: dependencies.sandboxHostProviderKind,
+      ownerId,
+      workspaceId
+    })
+  ) {
     return {
       workspaceId,
       async release() {
@@ -86,48 +97,23 @@ async function reserveOwnerScopedWorkspacePlacement(
     };
   }
 
+  const reservedWorkspaceId = workspaceId!;
+  const reservedOwnerId = ownerId!;
   await dependencies.assignWorkspacePlacementOwnerAffinity?.({
-    workspaceId,
-    ownerId,
+    workspaceId: reservedWorkspaceId,
+    ownerId: reservedOwnerId,
     overwrite: true
   });
 
   return {
-    workspaceId,
+    workspaceId: reservedWorkspaceId,
     async release() {
       await dependencies.releaseWorkspacePlacement?.({
-        workspaceId,
+        workspaceId: reservedWorkspaceId,
         state: "evicted"
       });
     }
   };
-}
-
-function normalizeSandboxOwnerBaseUrl(input: string | undefined): string | undefined {
-  const trimmed = input?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  try {
-    const url = new URL(trimmed);
-    if (url.pathname.endsWith("/internal/v1")) {
-      return `${url.origin}${url.pathname.replace(/\/+$/u, "")}`;
-    }
-    if (url.pathname.endsWith("/api/v1")) {
-      return `${url.origin}${url.pathname.replace(/\/api\/v1$/u, "/internal/v1")}`;
-    }
-    const normalizedPath = url.pathname.replace(/\/+$/u, "");
-    return `${url.origin}${normalizedPath}/internal/v1`;
-  } catch {
-    if (trimmed.endsWith("/internal/v1")) {
-      return trimmed.replace(/\/+$/u, "");
-    }
-    if (trimmed.endsWith("/api/v1")) {
-      return trimmed.replace(/\/api\/v1$/u, "/internal/v1");
-    }
-    return `${trimmed.replace(/\/+$/u, "")}/internal/v1`;
-  }
 }
 
 function assertSandboxOwnerMatchesWorkspace(
@@ -163,11 +149,11 @@ function resolveWorkspaceOwnerBaseUrl(
 function shouldDelegateSelfHostedSandboxOperation(
   dependencies: Pick<AppDependencies, "localOwnerBaseUrl" | "sandboxHostProviderKind" | "sandboxOwnerFallbackBaseUrl">
 ): boolean {
-  return (
-    dependencies.sandboxHostProviderKind === "self_hosted" &&
-    Boolean(dependencies.sandboxOwnerFallbackBaseUrl) &&
-    !dependencies.localOwnerBaseUrl
-  );
+  return shouldDelegateWorkspaceOperationToFallbackWorker({
+    provider: dependencies.sandboxHostProviderKind,
+    fallbackBaseUrl: dependencies.sandboxOwnerFallbackBaseUrl,
+    localOwnerBaseUrl: dependencies.localOwnerBaseUrl
+  });
 }
 
 async function proxySandboxRequestToOwner(
@@ -318,7 +304,7 @@ async function buildSandboxResponse(dependencies: AppDependencies, workspaceId: 
   const workspace = await dependencies.runtimeService.getWorkspace(workspaceId);
   await touchWorkspaceActivity(dependencies, workspaceId);
   const ownership = await dependencies.resolveWorkspaceOwnership?.(workspaceId);
-  const resolvedOwnerBaseUrl = normalizeSandboxOwnerBaseUrl(
+  const resolvedOwnerBaseUrl = normalizeSandboxOwnerInternalBaseUrl(
     ownership?.ownerBaseUrl ??
       ((ownership?.isLocalOwner ?? true) ? dependencies.localOwnerBaseUrl : undefined)
   );

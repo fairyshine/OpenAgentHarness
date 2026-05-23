@@ -9,6 +9,7 @@ import { resolveManagedWorkspaceExternalRef } from "./object-storage-policy.js";
 import type { SandboxHost } from "./sandbox-host.js";
 import type { WorkspaceMaterializationManager } from "./workspace-materialization.js";
 import { clearWorkspaceRootContents } from "./bootstrap-runtime-helpers.js";
+import { shouldCleanupWorkspaceThroughSandboxHost } from "../sandbox-capabilities.js";
 
 type ObjectStorageModule = NonNullable<Awaited<ReturnType<typeof import("./module-loaders.js").loadObjectStorageModule>>>;
 
@@ -38,12 +39,17 @@ export function createWorkspaceDeletionHandler(input: {
         );
       }
 
-      if (input.remoteSandboxProvider && input.sandboxHost) {
+      if (
+        shouldCleanupWorkspaceThroughSandboxHost({
+          remoteSandboxProvider: input.remoteSandboxProvider,
+          sandboxHostAvailable: Boolean(input.sandboxHost)
+        })
+      ) {
         await clearWorkspaceRootContents({
-          sandboxHost: input.sandboxHost,
+          sandboxHost: input.sandboxHost!,
           workspace
         });
-        await input.sandboxHost.deleteWorkspace?.(workspace);
+        await input.sandboxHost!.deleteWorkspace?.(workspace);
       } else {
         console.info(`[oah-bootstrap] No remote sandbox cleanup needed for workspace ${workspace.id}`);
       }

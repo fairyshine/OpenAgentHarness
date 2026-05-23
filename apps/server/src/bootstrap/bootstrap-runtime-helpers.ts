@@ -10,6 +10,7 @@ import type { SandboxHost } from "./sandbox-host.js";
 import type { WorkerRuntimeStatus } from "./worker-runtime.js";
 import { resolveManagedWorkspaceExternalRef } from "./object-storage-policy.js";
 import { parseBooleanEnv, parseNonNegativeIntEnv, parseOptionalPositiveIntEnv, parsePositiveIntEnv } from "./bootstrap-config.js";
+export { isRemoteSandboxProvider } from "./configured-sandbox-services.js";
 
 export function hasRemoteErrorCode(error: unknown, code: string): boolean {
   if (hasErrorCode(error, code)) {
@@ -191,11 +192,6 @@ export async function resolveRedisReadyQueueDepth(input: {
 
 export function resolveRedisReadyQueueReadinessLimit(): number | undefined {
   return parseOptionalPositiveIntEnv("OAH_REDIS_READY_QUEUE_READINESS_LIMIT");
-}
-
-export function isRemoteSandboxProvider(config: Pick<ServerConfig, "sandbox">): boolean {
-  const provider = config.sandbox?.provider ?? (config.sandbox?.self_hosted?.base_url?.trim() ? "self_hosted" : "embedded");
-  return provider === "self_hosted" || provider === "e2b";
 }
 
 export function runtimeHasPersistedWorkspaceListing(

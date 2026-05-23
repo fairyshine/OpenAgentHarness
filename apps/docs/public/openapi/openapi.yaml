@@ -33,6 +33,8 @@ tags:
     description: >
       Command execution APIs run inside the active sandbox context and follow
       the same sandbox-scoped contract as the file APIs.
+  - name: Assets
+    description: Platform-level runtime, model, tool, and skill asset management.
   - name: Catalog
   - name: Models
   - name: System
@@ -273,6 +275,311 @@ paths:
       responses:
         '204':
           description: Workspace runtime deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/runtimes:
+    get:
+      tags: [Assets]
+      summary: List runtime assets
+      operationId: listPlatformRuntimeAssets
+      responses:
+        '200':
+          description: Runtime asset list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformRuntimeAssetList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/runtimes/upload:
+    post:
+      tags: [Assets]
+      summary: Upload runtime asset
+      operationId: uploadPlatformRuntimeAsset
+      parameters:
+        - in: query
+          name: name
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: '^[a-zA-Z0-9_-]+$'
+        - $ref: '#/components/parameters/OverwriteQuery'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Runtime asset uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAssetMutationResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/runtimes/{runtimeName}:
+    put:
+      tags: [Assets]
+      summary: Update runtime asset
+      operationId: updatePlatformRuntimeAsset
+      parameters:
+        - in: path
+          name: runtimeName
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: '^[a-zA-Z0-9_-]+$'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Runtime asset updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAssetMutationResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Assets]
+      summary: Delete runtime asset
+      operationId: deletePlatformRuntimeAsset
+      parameters:
+        - in: path
+          name: runtimeName
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: '^[a-zA-Z0-9_-]+$'
+      responses:
+        '204':
+          description: Runtime asset deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/models:
+    get:
+      tags: [Assets]
+      summary: List platform model assets
+      operationId: listPlatformModelAssets
+      responses:
+        '200':
+          description: Platform model asset list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformModelAssetList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/models/upload:
+    post:
+      tags: [Assets]
+      summary: Upload platform model asset
+      operationId: uploadPlatformModelAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetNameQuery'
+        - $ref: '#/components/parameters/OverwriteQuery'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Platform model asset uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAssetMutationResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/models/{assetName}:
+    put:
+      tags: [Assets]
+      summary: Update platform model asset
+      operationId: updatePlatformModelAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetNamePath'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Platform model asset updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAssetMutationResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Assets]
+      summary: Delete platform model asset
+      operationId: deletePlatformModelAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetNamePath'
+      responses:
+        '204':
+          description: Platform model asset deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/tools:
+    get:
+      tags: [Assets]
+      summary: List platform tool assets
+      operationId: listPlatformToolAssets
+      responses:
+        '200':
+          description: Platform tool asset list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformToolAssetList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/tools/upload:
+    post:
+      tags: [Assets]
+      summary: Upload platform tool asset
+      operationId: uploadPlatformToolAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetNameQuery'
+        - $ref: '#/components/parameters/OverwriteQuery'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadPlatformToolAssetRequest'
+      responses:
+        '201':
+          description: Platform tool asset uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAssetMutationResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/tools/{assetName}:
+    put:
+      tags: [Assets]
+      summary: Update platform tool asset
+      operationId: updatePlatformToolAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetNamePath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadPlatformToolAssetRequest'
+      responses:
+        '200':
+          description: Platform tool asset updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAssetMutationResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Assets]
+      summary: Delete platform tool asset
+      operationId: deletePlatformToolAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetNamePath'
+      responses:
+        '204':
+          description: Platform tool asset deleted
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/skills:
+    get:
+      tags: [Assets]
+      summary: List platform skill assets
+      operationId: listPlatformSkillAssets
+      responses:
+        '200':
+          description: Platform skill asset list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformSkillAssetList'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/skills/upload:
+    post:
+      tags: [Assets]
+      summary: Upload platform skill asset
+      operationId: uploadPlatformSkillAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetNameQuery'
+        - $ref: '#/components/parameters/OverwriteQuery'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadPlatformSkillAssetRequest'
+      responses:
+        '201':
+          description: Platform skill asset uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAssetMutationResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+  /assets/skills/{assetName}:
+    put:
+      tags: [Assets]
+      summary: Update platform skill asset
+      operationId: updatePlatformSkillAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetNamePath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadPlatformSkillAssetRequest'
+      responses:
+        '200':
+          description: Platform skill asset updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAssetMutationResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+    delete:
+      tags: [Assets]
+      summary: Delete platform skill asset
+      operationId: deletePlatformSkillAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetNamePath'
+      responses:
+        '204':
+          description: Platform skill asset deleted
         default:
           $ref: '#/components/responses/ErrorResponse'
   /model-providers:
@@ -2055,6 +2362,31 @@ components:
       required: true
       schema:
         type: string
+    AssetNamePath:
+      name: assetName
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[a-zA-Z0-9._-]+$'
+    AssetNameQuery:
+      name: name
+      in: query
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[a-zA-Z0-9._-]+$'
+    OverwriteQuery:
+      name: overwrite
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
     PageSize:
       name: pageSize
       in: query
@@ -2752,6 +3084,125 @@ components:
       properties:
         name:
           type: string
+    PlatformModelAsset:
+      type: object
+      required: [id, provider, modelName]
+      properties:
+        id:
+          type: string
+        provider:
+          type: string
+        modelName:
+          type: string
+        url:
+          type: string
+      additionalProperties: false
+    PlatformToolAsset:
+      type: object
+      required: [name, transportType, enabled]
+      properties:
+        name:
+          type: string
+        transportType:
+          type: string
+          enum: [stdio, http]
+        enabled:
+          type: boolean
+        toolPrefix:
+          type: string
+      additionalProperties: false
+    PlatformSkillAsset:
+      type: object
+      required: [name, exposeToLlm]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        exposeToLlm:
+          type: boolean
+      additionalProperties: false
+    PlatformModelAssetList:
+      type: object
+      required: [kind, items]
+      properties:
+        kind:
+          type: string
+          const: model
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformModelAsset'
+      additionalProperties: false
+    PlatformRuntimeAssetList:
+      type: object
+      required: [kind, items]
+      properties:
+        kind:
+          type: string
+          const: runtime
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceRuntime'
+      additionalProperties: false
+    PlatformToolAssetList:
+      type: object
+      required: [kind, items]
+      properties:
+        kind:
+          type: string
+          const: tool
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformToolAsset'
+      additionalProperties: false
+    PlatformSkillAssetList:
+      type: object
+      required: [kind, items]
+      properties:
+        kind:
+          type: string
+          const: skill
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformSkillAsset'
+      additionalProperties: false
+    PlatformAssetMutationResponse:
+      type: object
+      required: [kind, name]
+      properties:
+        kind:
+          type: string
+          enum: [runtime, model, tool, skill]
+        name:
+          type: string
+      additionalProperties: false
+    UploadPlatformToolAssetRequest:
+      type: object
+      required: [definition]
+      properties:
+        definition:
+          $ref: '#/components/schemas/JsonObject'
+        serverFiles:
+          type: object
+          additionalProperties:
+            type: string
+      additionalProperties: false
+    UploadPlatformSkillAssetRequest:
+      type: object
+      required: [skillMarkdown]
+      properties:
+        skillMarkdown:
+          type: string
+          minLength: 1
+        files:
+          type: object
+          additionalProperties:
+            type: string
+      additionalProperties: false
     ModelProvider:
       type: object
       required:

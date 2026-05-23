@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
-  SANDBOX_ROOT_PATH,
   createActionRunRequestSchema,
   createSessionRequestSchema,
   createWorkspaceDirectoryRequestSchema,
@@ -35,6 +34,12 @@ import {
 import { AppError, createId } from "@oah/engine-core";
 
 import { hasErrorCode } from "../../bootstrap/error-codes.js";
+import {
+  projectWorkspaceRootPathForPublicApi,
+  shouldDelegateWorkspaceOperationToFallbackWorker,
+  shouldProjectWorkspaceRootPath,
+  shouldReserveOwnerScopedPlacement
+} from "../../sandbox-capabilities.js";
 import { assertWorkspaceAccess, createParamsSchema, sendError, toCallerContext } from "../context.js";
 import {
   buildOwnerProxyUrl,
@@ -112,27 +117,24 @@ function resolveWorkspaceOwnerBaseUrl(
 function shouldDelegateSelfHostedWorkspaceOperation(
   dependencies: Pick<AppDependencies, "localOwnerBaseUrl" | "sandboxHostProviderKind" | "sandboxOwnerFallbackBaseUrl">
 ): boolean {
-  return (
-    dependencies.sandboxHostProviderKind === "self_hosted" &&
-    Boolean(dependencies.sandboxOwnerFallbackBaseUrl) &&
-    !dependencies.localOwnerBaseUrl
-  );
+  return shouldDelegateWorkspaceOperationToFallbackWorker({
+    provider: dependencies.sandboxHostProviderKind,
+    fallbackBaseUrl: dependencies.sandboxOwnerFallbackBaseUrl,
+    localOwnerBaseUrl: dependencies.localOwnerBaseUrl
+  });
 }
 
 function projectWorkspaceForPublicApi(
   dependencies: Pick<AppDependencies, "sandboxHostProviderKind">,
   workspace: import("@oah/api-contracts").Workspace
 ): import("@oah/api-contracts").Workspace {
-  if (
-    dependencies.sandboxHostProviderKind !== "self_hosted" &&
-    dependencies.sandboxHostProviderKind !== "e2b"
-  ) {
+  if (!shouldProjectWorkspaceRootPath(dependencies.sandboxHostProviderKind)) {
     return workspace;
   }
 
   return {
     ...workspace,
-    rootPath: SANDBOX_ROOT_PATH
+    rootPath: projectWorkspaceRootPathForPublicApi(dependencies.sandboxHostProviderKind, workspace.rootPath)
   };
 }
 
@@ -154,7 +156,13 @@ async function reserveOwnerScopedWorkspacePlacement(
   ownerId: string | undefined,
   workspaceId: string | undefined
 ): Promise<{ workspaceId: string | undefined; release: () => Promise<void> }> {
-  if (!ownerId || !workspaceId || dependencies.sandboxHostProviderKind !== "self_hosted") {
+  if (
+    !shouldReserveOwnerScopedPlacement({
+      provider: dependencies.sandboxHostProviderKind,
+      ownerId,
+      workspaceId
+    })
+  ) {
     return {
       workspaceId,
       async release() {
@@ -163,17 +171,19 @@ async function reserveOwnerScopedWorkspacePlacement(
     };
   }
 
+  const reservedWorkspaceId = workspaceId!;
+  const reservedOwnerId = ownerId!;
   await dependencies.assignWorkspacePlacementOwnerAffinity?.({
-    workspaceId,
-    ownerId,
+    workspaceId: reservedWorkspaceId,
+    ownerId: reservedOwnerId,
     overwrite: true
   });
 
   return {
-    workspaceId,
+    workspaceId: reservedWorkspaceId,
     async release() {
       await dependencies.releaseWorkspacePlacement?.({
-        workspaceId,
+        workspaceId: reservedWorkspaceId,
         state: "evicted"
       });
     }

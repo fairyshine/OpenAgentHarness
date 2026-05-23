@@ -21,6 +21,7 @@ import type {
 } from "@oah/engine-core";
 
 import type { E2BCompatibleSandboxLease, E2BCompatibleSandboxService } from "./e2b-compatible-sandbox-host.js";
+import { describeSandboxTopology } from "../sandbox-capabilities.js";
 import { trimToUndefined } from "./string-utils.js";
 
 const DEFAULT_E2B_TIMEOUT_MS = 300_000;
@@ -585,12 +586,13 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
       }
     },
     diagnostics() {
+      const topology = describeSandboxTopology("e2b");
       return {
-        provider: "e2b",
+        provider: topology.provider,
         transport: "native_e2b",
         layout: "multi_workspace_sandbox",
-        executionModel: "sandbox_hosted",
-        workerPlacement: "inside_sandbox",
+        executionModel: topology.executionModel,
+        workerPlacement: topology.workerPlacement,
         ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
         ...(options.domain ? { domain: options.domain } : {}),
         ...(options.template ? { template: options.template } : {}),

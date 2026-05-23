@@ -8,26 +8,26 @@ title: "Workspace Module"
 
 ### `GET /runtimes`
 
-列出 `server.paths.runtime_dir` 下可用 workspace runtime。返回 `items[].name`。
+列出 `server.paths.runtime_dir` 下可用 workspace runtime。返回 `items[].name`。新客户端应优先使用统一资产接口 `GET /assets/runtimes`。
 
 ### `POST /runtimes/upload`
 
-上传一个 `.zip` 包作为新的 workspace runtime，请求参数：
+兼容接口：上传一个 `.zip` 包作为新的 workspace runtime。新客户端应使用 `POST /assets/runtimes/upload`。请求参数：
 
 - Query: `name`、`overwrite`
 - Body: `application/octet-stream`
 
 ### `PUT /runtimes/{runtimeName}`
 
-覆盖更新一个已有 workspace runtime。Body: `application/octet-stream`。该接口要求目标 runtime 已存在。
+兼容接口：覆盖更新一个已有 workspace runtime。新客户端应使用 `PUT /assets/runtimes/{name}`。Body: `application/octet-stream`。该接口要求目标 runtime 已存在。
 
 ### `DELETE /runtimes/{runtimeName}`
 
-删除一个已有 runtime。
+兼容接口：删除一个已有 runtime。新客户端应使用 `DELETE /assets/runtimes/{name}`。
 
 ### Legacy runtime aliases
 
-`/blueprints`、`/blueprints/upload`、`/blueprints/{runtimeName}` 是 runtime API rename 期间保留的兼容别名，行为分别等同于 `/runtimes`、`/runtimes/upload`、`/runtimes/{runtimeName}`。新客户端应使用 `/runtimes*`。
+`/blueprints`、`/blueprints/upload`、`/blueprints/{runtimeName}` 是 runtime API rename 期间保留的兼容别名，行为分别等同于 `/runtimes`、`/runtimes/upload`、`/runtimes/{runtimeName}`。新客户端应使用 `/assets/runtimes*`。
 
 ### `POST /workspaces`
 

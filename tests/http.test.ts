@@ -287,6 +287,7 @@ async function createStartedAppWithEngineService(
       overwrite: boolean;
       requireExisting?: boolean | undefined;
     }) => Promise<{ name: string }>;
+    deleteWorkspaceRuntime?: (input: { runtimeName: string }) => Promise<void>;
     listPlatformAssets?: Parameters<typeof createApp>[0]["listPlatformAssets"];
     uploadPlatformModelAsset?: Parameters<typeof createApp>[0]["uploadPlatformModelAsset"];
     deletePlatformModelAsset?: Parameters<typeof createApp>[0]["deletePlatformModelAsset"];
@@ -308,6 +309,7 @@ async function createStartedAppWithEngineService(
     logger: false,
     listWorkspaceRuntimes: async () => [{ name: "workspace" }],
     ...(options?.uploadWorkspaceRuntime ? { uploadWorkspaceRuntime: options.uploadWorkspaceRuntime } : {}),
+    ...(options?.deleteWorkspaceRuntime ? { deleteWorkspaceRuntime: options.deleteWorkspaceRuntime } : {}),
     ...(options?.listPlatformAssets ? { listPlatformAssets: options.listPlatformAssets } : {}),
     ...(options?.uploadPlatformModelAsset ? { uploadPlatformModelAsset: options.uploadPlatformModelAsset } : {}),
     ...(options?.deletePlatformModelAsset ? { deletePlatformModelAsset: options.deletePlatformModelAsset } : {}),
@@ -987,6 +989,63 @@ describe("http api", () => {
         bytes: "zip-bytes".length
       }
     ]);
+  });
+
+  it("exposes workspace runtimes through the unified assets API", async () => {
+    const uploads: Array<{ runtimeName: string; overwrite: boolean; requireExisting?: boolean; bytes: number }> = [];
+    const deletes: string[] = [];
+    activeApp = await createStartedAppWithEngineService(new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(20),
+      ...createMemoryRuntimePersistence()
+    }), new FakeModelGateway(20), {
+      uploadWorkspaceRuntime: async (input) => {
+        uploads.push({
+          runtimeName: input.runtimeName,
+          overwrite: input.overwrite,
+          ...(input.requireExisting !== undefined ? { requireExisting: input.requireExisting } : {}),
+          bytes: input.zipBuffer.length
+        });
+        return { name: input.runtimeName };
+      },
+      deleteWorkspaceRuntime: async (input) => {
+        deletes.push(input.runtimeName);
+      }
+    });
+
+    const listResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/runtimes`);
+    expect(listResponse.status).toBe(200);
+    await expect(listResponse.json()).resolves.toEqual({
+      kind: "runtime",
+      items: [{ name: "workspace" }]
+    });
+
+    const uploadResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/runtimes/upload?name=asset-runtime&overwrite=true`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: Buffer.from("runtime-zip")
+    });
+    expect(uploadResponse.status).toBe(201);
+    await expect(uploadResponse.json()).resolves.toEqual({ kind: "runtime", name: "asset-runtime" });
+
+    const updateResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/runtimes/asset-runtime`, {
+      method: "PUT",
+      headers: { "content-type": "application/octet-stream" },
+      body: Buffer.from("runtime-zip-2")
+    });
+    expect(updateResponse.status).toBe(200);
+    await expect(updateResponse.json()).resolves.toEqual({ kind: "runtime", name: "asset-runtime" });
+
+    const deleteResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/runtimes/asset-runtime`, {
+      method: "DELETE"
+    });
+    expect(deleteResponse.status).toBe(204);
+
+    expect(uploads).toEqual([
+      { runtimeName: "asset-runtime", overwrite: true, bytes: "runtime-zip".length },
+      { runtimeName: "asset-runtime", overwrite: true, requireExisting: true, bytes: "runtime-zip-2".length }
+    ]);
+    expect(deletes).toEqual(["asset-runtime"]);
   });
 
   it("returns a client error for invalid runtime zip uploads", async () => {

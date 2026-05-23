@@ -4,6 +4,10 @@ import type { WorkerRegistry, WorkspacePlacementRegistry } from "@oah/engine-cor
 import type { SandboxHost } from "./sandbox-host.js";
 import { trimToUndefined } from "./string-utils.js";
 import type { WorkspaceMaterializationManager } from "./workspace-materialization.js";
+import {
+  describeSandboxTopology,
+  resolveConfiguredSandboxProvider
+} from "../sandbox-capabilities.js";
 
 let sandboxHostModulePromise: Promise<typeof import("./sandbox-host.js")> | undefined;
 let e2bCompatibleSandboxHostModulePromise: Promise<typeof import("./e2b-compatible-sandbox-host.js")> | undefined;
@@ -38,11 +42,10 @@ export async function createConfiguredSandboxHost(options: {
   workspacePlacementRegistry?: Pick<WorkspacePlacementRegistry, "listAll" | "assignOwnerAffinity"> | undefined;
   workerRegistry?: Pick<WorkerRegistry, "listActive"> | undefined;
 }): Promise<SandboxHost | undefined> {
-  const provider =
-    options.config.sandbox?.provider ??
-    (trimToUndefined(options.config.sandbox?.self_hosted?.base_url) ? "self_hosted" : "embedded");
+  const provider = resolveConfiguredSandboxProvider(options.config);
 
   if (provider === "embedded") {
+    const topology = describeSandboxTopology("embedded");
     const materializationManager = options.workspaceMaterializationManager;
     if (!materializationManager && !options.createWorkspaceMaterializationManager) {
       return undefined;
@@ -60,9 +63,9 @@ export async function createConfiguredSandboxHost(options: {
           });
         },
         diagnostics: () => ({
-          provider: "embedded",
-          executionModel: "local_embedded",
-          workerPlacement: "api_process",
+          provider: topology.provider,
+          executionModel: topology.executionModel,
+          workerPlacement: topology.workerPlacement,
           materialization: lazyMaterializationManager?.diagnostics()
         })
       });
@@ -74,6 +77,7 @@ export async function createConfiguredSandboxHost(options: {
   }
 
   if (provider === "self_hosted") {
+    const topology = describeSandboxTopology("self_hosted");
     if (options.selfHostedWorkerProcess) {
       if (!options.workspaceMaterializationManager) {
         return undefined;
@@ -82,9 +86,9 @@ export async function createConfiguredSandboxHost(options: {
         materializationManager: options.workspaceMaterializationManager,
         providerKind: "self_hosted",
         diagnostics: {
-          provider: "self_hosted",
-          executionModel: "sandbox_hosted",
-          workerPlacement: "inside_sandbox"
+          provider: topology.provider,
+          executionModel: topology.executionModel,
+          workerPlacement: topology.workerPlacement
         }
       });
     }
@@ -100,10 +104,10 @@ export async function createConfiguredSandboxHost(options: {
     return createE2BCompatibleSandboxHost({
       providerKind: "self_hosted",
       diagnostics: {
-        provider: "self_hosted",
+        provider: topology.provider,
         transport: "http",
-        executionModel: "sandbox_hosted",
-        workerPlacement: "inside_sandbox"
+        executionModel: topology.executionModel,
+        workerPlacement: topology.workerPlacement
       },
       service: createHttpE2BCompatibleSandboxService({
         baseUrl,

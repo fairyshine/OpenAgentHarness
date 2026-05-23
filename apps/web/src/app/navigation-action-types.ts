@@ -2,6 +2,8 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import type {
   Message,
+  PlatformAssetKind,
+  PlatformAssetList,
   Run,
   RunPage,
   RunStep,
@@ -51,6 +53,7 @@ interface NavigationActionParams {
     workspace: Workspace | null;
     setWorkspace: Dispatch<SetStateAction<Workspace | null>>;
     setWorkspaceRuntimes: Dispatch<SetStateAction<string[]>>;
+    setPlatformAssets: Dispatch<SetStateAction<Record<PlatformAssetKind, PlatformAssetList>>>;
     setCatalog: Dispatch<SetStateAction<WorkspaceCatalog | null>>;
     session: Session | null;
     setSession: Dispatch<SetStateAction<Session | null>>;

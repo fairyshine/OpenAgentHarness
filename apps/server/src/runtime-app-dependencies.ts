@@ -1,21 +1,7 @@
 import type { AppDependencies } from "./http/types.js";
 import type { BootstrappedRuntime } from "./bootstrap.js";
+import { resolveSandboxOwnerFallbackBaseUrl } from "./sandbox-capabilities.js";
 import { buildSystemProfile } from "./system-profile.js";
-
-function normalizeOwnerProxyBaseUrl(input: string | undefined): string | undefined {
-  const trimmed = input?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  try {
-    const url = new URL(trimmed);
-    const normalizedPath = url.pathname.replace(/\/(?:api|internal)\/v1\/?$/u, "").replace(/\/+$/u, "");
-    return `${url.origin}${normalizedPath}`;
-  } catch {
-    return trimmed.replace(/\/(?:api|internal)\/v1\/?$/u, "").replace(/\/+$/u, "");
-  }
-}
 
 function resolveLocalApiAuthToken(): string | undefined {
   const token = process.env.OAH_LOCAL_API_TOKEN?.trim();
@@ -23,10 +9,10 @@ function resolveLocalApiAuthToken(): string | undefined {
 }
 
 function buildSharedAppDependencies(runtime: BootstrappedRuntime): AppDependencies {
-  const sandboxOwnerFallbackBaseUrl =
-    runtime.sandboxHostProviderKind === "self_hosted"
-      ? normalizeOwnerProxyBaseUrl(runtime.config.sandbox?.self_hosted?.base_url)
-      : undefined;
+  const sandboxOwnerFallbackBaseUrl = resolveSandboxOwnerFallbackBaseUrl({
+    provider: runtime.sandboxHostProviderKind,
+    configuredBaseUrl: runtime.config.sandbox?.self_hosted?.base_url
+  });
   const systemProfile = buildSystemProfile({
     config: runtime.config,
     process: runtime.process,

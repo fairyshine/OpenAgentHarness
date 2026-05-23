@@ -9,7 +9,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSandboxBackedWorkspaceInitializer,
   createSelfHostedWorkspaceDelegatingInitializer,
-  nativeWorkspaceSyncAdapter
+  nativeWorkspaceSyncAdapter,
+  resolveSandboxSeedTransferStrategy,
+  resolveSeedDirectoriesToCreate
 } from "../apps/server/src/bootstrap/sandbox-backed-workspace-initializer.ts";
 import type { SandboxHost } from "../apps/server/src/bootstrap/sandbox-host.ts";
 
@@ -64,6 +66,74 @@ afterEach(async () => {
 });
 
 describe("sandbox-backed workspace initializer", () => {
+  it("derives seed transfer strategy from sandbox capabilities", () => {
+    expect(
+      resolveSandboxSeedTransferStrategy({
+        sandboxHost: {
+          providerKind: "self_hosted"
+        },
+        selfHostedSandbox: {
+          id: "sandbox-1",
+          baseUrl: "http://127.0.0.1:8787/internal/v1"
+        }
+      })
+    ).toMatchObject({
+      archiveUpload: true,
+      nativeHttpUpload: true,
+      createOnlyLeafEmptyDirectories: true
+    });
+
+    expect(
+      resolveSandboxSeedTransferStrategy({
+        sandboxHost: {
+          providerKind: "e2b"
+        }
+      })
+    ).toEqual({
+      archiveUpload: false,
+      nativeHttpUpload: false,
+      createOnlyLeafEmptyDirectories: false
+    });
+  });
+
+  it("uses the seed strategy to decide which remote directories need explicit mkdir", () => {
+    const existingEntries = new Map([
+      [
+        "/workspace/existing",
+        {
+          path: "/workspace/existing",
+          kind: "directory" as const
+        }
+      ]
+    ]);
+
+    expect(
+      resolveSeedDirectoriesToCreate({
+        strategy: {
+          archiveUpload: false,
+          nativeHttpUpload: false,
+          createOnlyLeafEmptyDirectories: false
+        },
+        directories: ["/workspace/parent", "/workspace/parent/child", "/workspace/empty", "/workspace/existing"],
+        filePaths: ["/workspace/parent/child/file.txt"],
+        existingEntries
+      })
+    ).toEqual(["/workspace/parent", "/workspace/parent/child", "/workspace/empty"]);
+
+    expect(
+      resolveSeedDirectoriesToCreate({
+        strategy: {
+          archiveUpload: false,
+          nativeHttpUpload: false,
+          createOnlyLeafEmptyDirectories: true
+        },
+        directories: ["/workspace/parent", "/workspace/parent/child", "/workspace/empty", "/workspace/existing"],
+        filePaths: ["/workspace/parent/child/file.txt"],
+        existingEntries
+      })
+    ).toEqual(["/workspace/empty"]);
+  });
+
   it("delegates object-storage backed workspace creation to self-hosted workers", async () => {
     const workspace = createWorkspaceRecordFixture({
       id: "ws_worker_created",

@@ -754,6 +754,101 @@ openai-default:
     expect(hostOperations).toContain("close");
   });
 
+  it("continues closing runtime components after sandbox host close fails", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-single-workspace-close-resilience-"));
+    tempDirs.push(tempDir);
+
+    const workspaceRoot = path.join(tempDir, "repo");
+    const modelsDir = path.join(tempDir, "models");
+    const hostOperations: string[] = [];
+    await Promise.all([
+      mkdir(path.join(workspaceRoot, ".openharness"), { recursive: true }),
+      mkdir(modelsDir, { recursive: true })
+    ]);
+
+    await writeFile(path.join(workspaceRoot, ".openharness", "settings.yaml"), "default_agent: assistant\n", "utf8");
+    await writeFile(
+      path.join(modelsDir, "openai.yaml"),
+      `
+openai-default:
+  provider: openai
+  name: gpt-4o-mini
+`,
+      "utf8"
+    );
+
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const runtime = await bootstrapRuntime({
+      argv: ["--workspace", workspaceRoot, "--model-dir", modelsDir, "--default-model", "openai-default"],
+      startWorker: false,
+      processKind: "api",
+      sandboxHostFactory: async () =>
+        createE2BCompatibleSandboxHost({
+          service: {
+            async acquireExecution(input) {
+              return {
+                sandboxId: "sandbox-1",
+                rootPath: `/workspace/${input.workspace.id}`,
+                async release() {}
+              };
+            },
+            async acquireFileAccess(input) {
+              return {
+                sandboxId: "sandbox-1",
+                rootPath: `/workspace/${input.workspace.id}`,
+                async release() {}
+              };
+            },
+            async runCommand() {
+              return { stdout: "", stderr: "", exitCode: 0 };
+            },
+            async runProcess() {
+              return { stdout: "", stderr: "", exitCode: 0 };
+            },
+            async runBackground() {
+              return { outputPath: "/tmp/log", taskId: "task-1", pid: 1 };
+            },
+            async stat() {
+              return { kind: "directory" as const, size: 0, mtimeMs: 0, birthtimeMs: 0 };
+            },
+            async readFile() {
+              return Buffer.from("");
+            },
+            async readdir() {
+              return [];
+            },
+            async mkdir() {
+              return undefined;
+            },
+            async writeFile() {
+              return undefined;
+            },
+            async rm() {
+              return undefined;
+            },
+            async rename() {
+              return undefined;
+            },
+            async close() {
+              hostOperations.push("close");
+              throw new Error("sandbox close failed");
+            }
+          }
+        })
+    });
+
+    try {
+      await expect(runtime.close()).resolves.toBeUndefined();
+      expect(hostOperations).toEqual(["close"]);
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "[oah-bootstrap] Failed to close sandbox host.",
+        expect.objectContaining({ message: "sandbox close failed" })
+      );
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
   it("skips invalid platform model files during multi-workspace bootstrap and logs the failure", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-bootstrap-bad-platform-model-"));
     tempDirs.push(tempDir);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { Session, Workspace, WorkspaceCatalog } from "@oah/api-contracts";
+import type { PlatformAssetKind, PlatformAssetList, Session, Workspace, WorkspaceCatalog } from "@oah/api-contracts";
 
 import {
   compareSavedWorkspacesByUpdatedAtDesc,
@@ -30,6 +30,12 @@ export function useNavigationState() {
   const [expandedSessionIds, setExpandedSessionIds] = usePersistentState<string[]>(storageKeys.expandedSessions, []);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [workspaceRuntimes, setWorkspaceRuntimes] = useState<string[]>([]);
+  const [platformAssets, setPlatformAssets] = useState<Record<PlatformAssetKind, PlatformAssetList>>({
+    runtime: { kind: "runtime", items: [] },
+    model: { kind: "model", items: [] },
+    tool: { kind: "tool", items: [] },
+    skill: { kind: "skill", items: [] }
+  });
   const [catalog, setCatalog] = useState<WorkspaceCatalog | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [showWorkspaceCreator, setShowWorkspaceCreator] = useState(false);
@@ -94,6 +100,8 @@ export function useNavigationState() {
     setWorkspace,
     workspaceRuntimes,
     setWorkspaceRuntimes,
+    platformAssets,
+    setPlatformAssets,
     catalog,
     setCatalog,
     session,

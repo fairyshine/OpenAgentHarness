@@ -10,6 +10,16 @@ import type { PlatformAgentRegistry } from "./workspace-registry.js";
 import { createWorkspaceDeletionHandler } from "./workspace-deletion-handler.js";
 import { createWorkspaceLifecycle } from "./workspace-lifecycle-service.js";
 import type { WorkspaceMaterializationManager } from "./workspace-materialization.js";
+import {
+  isRemoteSandboxProviderConfig,
+  isRemoteSandboxProviderKind,
+  isSelfHostedSandboxProviderKind,
+  resolveConfiguredSandboxProvider,
+  shouldDeferEmbeddedSandboxMaterialization,
+  shouldUseSandboxBackedWorkspaceInitializer,
+  shouldUseSelfHostedWorkspaceDelegatingInitializer,
+  shouldUseWorkspaceMaterialization
+} from "../sandbox-capabilities.js";
 
 type ConfigWorkspaceModule = typeof import("@oah/config/workspace");
 type ConfigRuntimesModule = typeof import("@oah/config/runtimes");
@@ -17,12 +27,61 @@ type ObjectStorageModule = typeof import("../object-storage.js");
 type SandboxBackedWorkspaceInitializerModule = typeof import("./sandbox-backed-workspace-initializer.js");
 
 export type SandboxWorkspaceInitializerMode = "self_hosted_delegated" | "sandbox_backed" | "local";
+export type SandboxMaterializationMode = "none" | "eager" | "lazy";
+
+export interface SandboxBootstrapPlan {
+  provider: "embedded" | "self_hosted" | "e2b";
+  remoteSandboxProvider: boolean;
+  selfHostedWorkerProcess: boolean;
+  materializationMode: SandboxMaterializationMode;
+  shouldUseWorkspaceMaterialization: boolean;
+  canDeferEmbeddedSandboxMaterialization: boolean;
+}
 
 export interface SandboxWorkspaceServicePlan {
   useSelfHostedWorkspaceDelegatingInitializer: boolean;
   useSandboxBackedWorkspaceInitializer: boolean;
   initializerMode: SandboxWorkspaceInitializerMode;
   selfHostedSandboxOptions?: SelfHostedSandboxInitializerOptions | undefined;
+}
+
+export { isRemoteSandboxProviderConfig as isRemoteSandboxProvider, resolveConfiguredSandboxProvider };
+
+export function resolveSandboxBootstrapPlan(input: {
+  config: ServerConfig;
+  processKind: "api" | "worker";
+  startWorker: boolean;
+  hasSandboxHostFactory: boolean;
+}): SandboxBootstrapPlan {
+  const provider = resolveConfiguredSandboxProvider(input.config);
+  const remoteSandboxProvider = isRemoteSandboxProviderKind(provider);
+  const selfHostedWorkerProcess = input.processKind === "worker" && isSelfHostedSandboxProviderKind(provider);
+  const objectStorageConfigured = Boolean(input.config.object_storage);
+  const canDeferEmbeddedSandboxMaterialization = shouldDeferEmbeddedSandboxMaterialization({
+    remoteSandboxProvider,
+    objectStorageConfigured,
+    processKind: input.processKind,
+    startWorker: input.startWorker,
+    hasSandboxHostFactory: input.hasSandboxHostFactory
+  });
+  const useWorkspaceMaterialization = shouldUseWorkspaceMaterialization({
+    objectStorageConfigured,
+    remoteSandboxProvider,
+    selfHostedWorkerProcess
+  });
+
+  return {
+    provider,
+    remoteSandboxProvider,
+    selfHostedWorkerProcess,
+    materializationMode: canDeferEmbeddedSandboxMaterialization
+      ? "lazy"
+      : useWorkspaceMaterialization
+        ? "eager"
+        : "none",
+    shouldUseWorkspaceMaterialization: useWorkspaceMaterialization,
+    canDeferEmbeddedSandboxMaterialization
+  };
 }
 
 export function resolveSandboxWorkspaceServicePlan(input: {
@@ -35,7 +94,7 @@ export function resolveSandboxWorkspaceServicePlan(input: {
   workerRegistry?: SelfHostedSandboxInitializerOptions["workerRegistry"];
 }): SandboxWorkspaceServicePlan {
   const selfHostedSandboxOptions =
-    input.sandboxHost?.providerKind === "self_hosted" && trimToUndefined(input.config.sandbox?.self_hosted?.base_url)
+    isSelfHostedSandboxProviderKind(input.sandboxHost?.providerKind) && trimToUndefined(input.config.sandbox?.self_hosted?.base_url)
       ? ({
           baseUrl: trimToUndefined(input.config.sandbox?.self_hosted?.base_url)!,
           headers: input.config.sandbox?.self_hosted?.headers,
@@ -47,16 +106,18 @@ export function resolveSandboxWorkspaceServicePlan(input: {
           ...(input.workerRegistry ? { workerRegistry: input.workerRegistry } : {})
         } satisfies SelfHostedSandboxInitializerOptions)
       : undefined;
-  const useSelfHostedWorkspaceDelegatingInitializer =
-    input.processKind === "api" &&
-    !input.startWorker &&
-    input.remoteSandboxProvider &&
-    Boolean(selfHostedSandboxOptions);
-  const useSandboxBackedWorkspaceInitializer =
-    input.remoteSandboxProvider &&
-    Boolean(input.sandboxHost) &&
-    !useSelfHostedWorkspaceDelegatingInitializer &&
-    !objectStorageBacksManagedWorkspaces(input.config);
+  const useSelfHostedWorkspaceDelegatingInitializer = shouldUseSelfHostedWorkspaceDelegatingInitializer({
+    processKind: input.processKind,
+    startWorker: input.startWorker,
+    remoteSandboxProvider: input.remoteSandboxProvider,
+    hasSelfHostedSandboxOptions: Boolean(selfHostedSandboxOptions)
+  });
+  const useSandboxBackedWorkspaceInitializer = shouldUseSandboxBackedWorkspaceInitializer({
+    remoteSandboxProvider: input.remoteSandboxProvider,
+    sandboxHostAvailable: Boolean(input.sandboxHost),
+    useSelfHostedWorkspaceDelegatingInitializer,
+    objectStorageBacksManagedWorkspaces: objectStorageBacksManagedWorkspaces(input.config)
+  });
 
   return {
     useSelfHostedWorkspaceDelegatingInitializer,

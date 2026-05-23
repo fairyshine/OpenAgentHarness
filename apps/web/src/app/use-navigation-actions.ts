@@ -1,6 +1,8 @@
 import { startTransition, useRef } from "react";
 
 import type {
+  PlatformAssetKind,
+  PlatformAssetList,
   Session,
   SessionPage,
   Workspace,
@@ -32,6 +34,12 @@ const WORKSPACE_SESSION_BACKGROUND_SYNC_CONCURRENCY = 1;
 const WORKSPACE_SESSION_PRIORITY_LIMIT = 12;
 const WORKSPACE_SESSION_PRIORITY_PAGE_SIZE = 80;
 const WORKSPACE_SESSION_BACKGROUND_PAGE_SIZE = 120;
+const PLATFORM_ASSET_COLLECTIONS: Record<PlatformAssetKind, "runtimes" | "models" | "tools" | "skills"> = {
+  runtime: "runtimes",
+  model: "models",
+  tool: "tools",
+  skill: "skills"
+};
 
 function scheduleDeferredIdleTask(callback: () => void, delayMs: number, timeoutMs: number) {
   window.setTimeout(() => {
@@ -94,6 +102,39 @@ export function useNavigationActions(params: NavigationActionParams) {
     }
 
     return fetch(buildUrl(params.connection.baseUrl, legacyPath), init);
+  }
+
+  async function requestPlatformAssetEndpoint<T>(kind: PlatformAssetKind) {
+    const collection = PLATFORM_ASSET_COLLECTIONS[kind];
+    if (kind === "runtime") {
+      const response = await requestWorkspaceRuntimeEndpoint<WorkspaceRuntimeList>("/api/v1/runtimes", "/api/v1/blueprints");
+      return { kind: "runtime", items: response.items } as T;
+    }
+
+    try {
+      return await params.request<T>(`/api/v1/platform-assets/${collection}`);
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+
+      return params.request<T>(`/api/v1/assets/${collection}`);
+    }
+  }
+
+  async function fetchPlatformAssetEndpoint(kind: PlatformAssetKind, path: string, init: RequestInit) {
+    if (kind === "runtime") {
+      const runtimePath = path.replace(/^runtimes/u, "runtimes");
+      const legacyPath = runtimePath.replace(/^runtimes/u, "blueprints");
+      return fetchWorkspaceRuntimeEndpoint(`/api/v1/${runtimePath}`, `/api/v1/${legacyPath}`, init);
+    }
+
+    const compatibilityResponse = await fetch(buildUrl(params.connection.baseUrl, `/api/v1/platform-assets/${path}`), init);
+    if (compatibilityResponse.status !== 404) {
+      return compatibilityResponse;
+    }
+
+    return fetch(buildUrl(params.connection.baseUrl, `/api/v1/assets/${path}`), init);
   }
 
   async function deleteWorkspace(workspaceToRemoveId: string) {
@@ -362,6 +403,10 @@ export function useNavigationActions(params: NavigationActionParams) {
       startTransition(() => {
         params.navigation.setWorkspaceManagementEnabled(true);
         params.navigation.setWorkspaceRuntimes(response.items.map((item) => item.name));
+        params.navigation.setPlatformAssets((current) => ({
+          ...current,
+          runtime: { kind: "runtime", items: response.items }
+        }));
       });
       if (!quiet) {
         params.setActivity(`已加载 ${response.items.length} 个运行时`);
@@ -472,6 +517,259 @@ export function useNavigationActions(params: NavigationActionParams) {
       params.setErrorMessage(toErrorMessage(error));
       return false;
     }
+  }
+
+  async function refreshPlatformAssets(kind?: PlatformAssetKind, quiet = false) {
+    const kinds: PlatformAssetKind[] = kind ? [kind] : ["runtime", "model", "tool", "skill"];
+    try {
+      const lists = await Promise.all(
+        kinds.map(async (assetKind) => requestPlatformAssetEndpoint<PlatformAssetList>(assetKind))
+      );
+      startTransition(() => {
+        params.navigation.setPlatformAssets((current) => {
+          const next = { ...current };
+          for (const list of lists) {
+            next[list.kind] = list;
+          }
+          return next;
+        });
+        const runtimeList = lists.find((list): list is Extract<PlatformAssetList, { kind: "runtime" }> => list.kind === "runtime");
+        if (runtimeList) {
+          params.navigation.setWorkspaceManagementEnabled(true);
+          params.navigation.setWorkspaceRuntimes(runtimeList.items.map((item) => item.name));
+        }
+      });
+      if (!quiet) {
+        const count = lists.reduce((sum, list) => sum + list.items.length, 0);
+        params.setActivity(`已加载 ${count} 个资产`);
+        params.setErrorMessage("");
+      }
+    } catch (error) {
+      if (!quiet) {
+        params.setErrorMessage(toErrorMessage(error));
+      }
+    }
+  }
+
+  async function uploadPlatformModelAsset(name: string, yaml: string, overwrite: boolean): Promise<boolean> {
+    try {
+      const assetName = name.trim();
+      const query = new URLSearchParams({ name: assetName });
+      if (overwrite) {
+        query.set("overwrite", "true");
+      }
+      const response = await fetchPlatformAssetEndpoint("model", `models/upload?${query.toString()}`, {
+        method: "POST",
+        headers: buildAuthHeaders(params.connection, { "content-type": "application/octet-stream" }),
+        body: new Blob([yaml], { type: "application/octet-stream" })
+      });
+      if (!response.ok) {
+        throw await createHttpRequestError(response);
+      }
+      await refreshPlatformAssets("model", true);
+      params.setActivity(`模型资产 "${assetName}" 上传成功`);
+      params.setErrorMessage("");
+      return true;
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
+      return false;
+    }
+  }
+
+  async function uploadPlatformRuntimeAsset(file: File, name: string, overwrite: boolean): Promise<boolean> {
+    try {
+      const assetName = name.trim();
+      const query = new URLSearchParams({ name: assetName });
+      if (overwrite) {
+        query.set("overwrite", "true");
+      }
+      const response = await fetchPlatformAssetEndpoint("runtime", `runtimes/upload?${query.toString()}`, {
+        method: "POST",
+        headers: buildAuthHeaders(params.connection, { "content-type": "application/octet-stream" }),
+        body: file
+      });
+      if (!response.ok) {
+        throw await createHttpRequestError(response);
+      }
+      await refreshPlatformAssets("runtime", true);
+      params.setActivity(`运行时资产 "${assetName}" 上传成功`);
+      params.setErrorMessage("");
+      return true;
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
+      return false;
+    }
+  }
+
+  async function updatePlatformRuntimeAsset(name: string, file: File): Promise<boolean> {
+    try {
+      const runtimeName = name.trim();
+      const response = await fetchPlatformAssetEndpoint("runtime", `runtimes/${encodeURIComponent(runtimeName)}`, {
+        method: "PUT",
+        headers: buildAuthHeaders(params.connection, { "content-type": "application/octet-stream" }),
+        body: file
+      });
+      if (!response.ok) {
+        throw await createHttpRequestError(response);
+      }
+      await refreshPlatformAssets("runtime", true);
+      params.setActivity(`运行时资产 "${runtimeName}" 已更新`);
+      params.setErrorMessage("");
+      return true;
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
+      return false;
+    }
+  }
+
+  async function updatePlatformModelAsset(name: string, yaml: string): Promise<boolean> {
+    try {
+      const assetName = name.trim();
+      const response = await fetchPlatformAssetEndpoint("model", `models/${encodeURIComponent(assetName)}`, {
+        method: "PUT",
+        headers: buildAuthHeaders(params.connection, { "content-type": "application/octet-stream" }),
+        body: new Blob([yaml], { type: "application/octet-stream" })
+      });
+      if (!response.ok) {
+        throw await createHttpRequestError(response);
+      }
+      await refreshPlatformAssets("model", true);
+      params.setActivity(`模型资产 "${assetName}" 已更新`);
+      params.setErrorMessage("");
+      return true;
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
+      return false;
+    }
+  }
+
+  async function mutateJsonAsset(
+    path: string,
+    method: "POST" | "PUT",
+    body: Record<string, unknown>,
+    kind: PlatformAssetKind,
+    name: string,
+    doneMessage: string
+  ): Promise<boolean> {
+    try {
+      const response = await fetchPlatformAssetEndpoint(kind, path.replace(/^\/api\/v1\/assets\//u, ""), {
+        method,
+        headers: buildAuthHeaders(params.connection, { "content-type": "application/json" }),
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) {
+        throw await createHttpRequestError(response);
+      }
+      await refreshPlatformAssets(kind, true);
+      params.setActivity(doneMessage);
+      params.setErrorMessage("");
+      return true;
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
+      return false;
+    }
+  }
+
+  async function deletePlatformAsset(kind: PlatformAssetKind, name: string): Promise<boolean> {
+    try {
+      const assetName = name.trim();
+      const response = await fetchPlatformAssetEndpoint(kind, `${PLATFORM_ASSET_COLLECTIONS[kind]}/${encodeURIComponent(assetName)}`, {
+        method: "DELETE",
+        headers: buildAuthHeaders(params.connection)
+      });
+      if (!response.ok) {
+        throw await createHttpRequestError(response);
+      }
+      await refreshPlatformAssets(kind, true);
+      params.setActivity(`资产 "${assetName}" 已删除`);
+      params.setErrorMessage("");
+      return true;
+    } catch (error) {
+      params.setErrorMessage(toErrorMessage(error));
+      return false;
+    }
+  }
+
+  async function uploadPlatformToolAsset(
+    name: string,
+    definition: Record<string, unknown>,
+    serverFiles: Record<string, string>,
+    overwrite: boolean
+  ): Promise<boolean> {
+    const assetName = name.trim();
+    const query = new URLSearchParams({ name: assetName });
+    if (overwrite) {
+      query.set("overwrite", "true");
+    }
+    return mutateJsonAsset(
+      `/api/v1/assets/tools/upload?${query.toString()}`,
+      "POST",
+      {
+        definition,
+        ...(Object.keys(serverFiles).length > 0 ? { serverFiles } : {})
+      },
+      "tool",
+      assetName,
+      `工具资产 "${assetName}" 上传成功`
+    );
+  }
+
+  async function updatePlatformToolAsset(
+    name: string,
+    definition: Record<string, unknown>,
+    serverFiles: Record<string, string>
+  ): Promise<boolean> {
+    const assetName = name.trim();
+    return mutateJsonAsset(
+      `/api/v1/assets/tools/${encodeURIComponent(assetName)}`,
+      "PUT",
+      {
+        definition,
+        ...(Object.keys(serverFiles).length > 0 ? { serverFiles } : {})
+      },
+      "tool",
+      assetName,
+      `工具资产 "${assetName}" 已更新`
+    );
+  }
+
+  async function uploadPlatformSkillAsset(
+    name: string,
+    skillMarkdown: string,
+    files: Record<string, string>,
+    overwrite: boolean
+  ): Promise<boolean> {
+    const assetName = name.trim();
+    const query = new URLSearchParams({ name: assetName });
+    if (overwrite) {
+      query.set("overwrite", "true");
+    }
+    return mutateJsonAsset(
+      `/api/v1/assets/skills/upload?${query.toString()}`,
+      "POST",
+      {
+        skillMarkdown,
+        ...(Object.keys(files).length > 0 ? { files } : {})
+      },
+      "skill",
+      assetName,
+      `技能资产 "${assetName}" 上传成功`
+    );
+  }
+
+  async function updatePlatformSkillAsset(name: string, skillMarkdown: string, files: Record<string, string>): Promise<boolean> {
+    const assetName = name.trim();
+    return mutateJsonAsset(
+      `/api/v1/assets/skills/${encodeURIComponent(assetName)}`,
+      "PUT",
+      {
+        skillMarkdown,
+        ...(Object.keys(files).length > 0 ? { files } : {})
+      },
+      "skill",
+      assetName,
+      `技能资产 "${assetName}" 已更新`
+    );
   }
 
   async function refreshWorkspaceIndex(quiet = false) {
@@ -1157,6 +1455,19 @@ export function useNavigationActions(params: NavigationActionParams) {
     uploadWorkspaceRuntime,
     updateWorkspaceRuntime,
     deleteWorkspaceRuntime,
+    refreshPlatformAssets,
+    uploadPlatformRuntimeAsset,
+    updatePlatformRuntimeAsset,
+    deletePlatformRuntimeAsset: (name: string) => deletePlatformAsset("runtime", name),
+    uploadPlatformModelAsset,
+    updatePlatformModelAsset,
+    deletePlatformModelAsset: (name: string) => deletePlatformAsset("model", name),
+    uploadPlatformToolAsset,
+    updatePlatformToolAsset,
+    deletePlatformToolAsset: (name: string) => deletePlatformAsset("tool", name),
+    uploadPlatformSkillAsset,
+    updatePlatformSkillAsset,
+    deletePlatformSkillAsset: (name: string) => deletePlatformAsset("skill", name),
     refreshWorkspaceIndex,
     refreshWorkspace,
     createWorkspace,

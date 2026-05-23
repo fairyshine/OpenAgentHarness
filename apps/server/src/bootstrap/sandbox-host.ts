@@ -7,6 +7,7 @@ import type {
 } from "@oah/engine-core";
 import { AppError, createLocalWorkspaceCommandExecutor, createLocalWorkspaceFileSystem } from "@oah/engine-core";
 
+import { describeSandboxTopology } from "../sandbox-capabilities.js";
 import type {
   WorkspaceMaterializationDiagnostics,
   WorkspaceMaterializationLease,
@@ -213,10 +214,11 @@ export function createMaterializationSandboxHost(options: {
       }
     },
     diagnostics() {
+      const topology = describeSandboxTopology(providerKind);
       return {
-        provider: providerKind,
-        executionModel: "local_embedded",
-        workerPlacement: "api_process",
+        provider: topology.provider,
+        executionModel: topology.executionModel,
+        workerPlacement: topology.workerPlacement,
         materialization: manager.diagnostics(),
         ...(options.diagnostics ?? {})
       } satisfies SandboxHostDiagnostics;

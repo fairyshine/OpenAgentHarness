@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import type { Run, SystemProfile } from "@oah/api-contracts";
+import type { PlatformAssetKind, PlatformAssetList } from "@oah/api-contracts";
 
 import type { SavedSessionRecord, SavedWorkspaceRecord, WorkspaceDraft } from "../support";
 import type { AppThemeName } from "../theme";
@@ -58,11 +59,22 @@ type SidebarProps = SidebarStorageProps & {
   workspaceDraft: WorkspaceDraft;
   setWorkspaceDraft: Dispatch<SetStateAction<WorkspaceDraft>>;
   workspaceRuntimes: string[];
+  platformAssets: Record<PlatformAssetKind, PlatformAssetList>;
   createWorkspace: () => Promise<void> | void;
   refreshWorkspaceRuntimes: (quiet?: boolean) => Promise<void> | void;
-  uploadWorkspaceRuntime: (file: File, name: string, overwrite: boolean) => Promise<boolean>;
-  updateWorkspaceRuntime: (runtimeName: string, file: File) => Promise<boolean>;
-  deleteWorkspaceRuntime: (runtimeName: string) => Promise<boolean>;
+  refreshPlatformAssets: (kind?: PlatformAssetKind, quiet?: boolean) => Promise<void> | void;
+  uploadPlatformRuntimeAsset: (file: File, name: string, overwrite: boolean) => Promise<boolean>;
+  updatePlatformRuntimeAsset: (name: string, file: File) => Promise<boolean>;
+  deletePlatformRuntimeAsset: (name: string) => Promise<boolean>;
+  uploadPlatformModelAsset: (name: string, yaml: string, overwrite: boolean) => Promise<boolean>;
+  updatePlatformModelAsset: (name: string, yaml: string) => Promise<boolean>;
+  deletePlatformModelAsset: (name: string) => Promise<boolean>;
+  uploadPlatformToolAsset: (name: string, definition: Record<string, unknown>, serverFiles: Record<string, string>, overwrite: boolean) => Promise<boolean>;
+  updatePlatformToolAsset: (name: string, definition: Record<string, unknown>, serverFiles: Record<string, string>) => Promise<boolean>;
+  deletePlatformToolAsset: (name: string) => Promise<boolean>;
+  uploadPlatformSkillAsset: (name: string, skillMarkdown: string, files: Record<string, string>, overwrite: boolean) => Promise<boolean>;
+  updatePlatformSkillAsset: (name: string, skillMarkdown: string, files: Record<string, string>) => Promise<boolean>;
+  deletePlatformSkillAsset: (name: string) => Promise<boolean>;
   refreshWorkspaceIndex: (quiet?: boolean) => Promise<void> | void;
   createSession: () => Promise<void> | void;
   sessionId: string;

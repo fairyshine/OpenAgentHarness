@@ -4,7 +4,7 @@ export const workspaceRuntimeSchema = z.object({
   name: z.string()
 });
 
-export const platformAssetKindSchema = z.enum(["model", "tool", "skill"]);
+export const platformAssetKindSchema = z.enum(["runtime", "model", "tool", "skill"]);
 
 export const platformModelAssetSchema = z.object({
   id: z.string(),
@@ -27,6 +27,10 @@ export const platformSkillAssetSchema = z.object({
 });
 
 export const platformAssetListSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("runtime"),
+    items: z.array(workspaceRuntimeSchema)
+  }),
   z.object({
     kind: z.literal("model"),
     items: z.array(platformModelAssetSchema)
@@ -103,3 +107,5 @@ export type UploadWorkspaceRuntimeRequest = z.infer<typeof uploadWorkspaceRuntim
 export type UploadWorkspaceRuntimeResponse = z.infer<typeof uploadWorkspaceRuntimeResponseSchema>;
 export type UpdateWorkspaceRuntimeResponse = z.infer<typeof updateWorkspaceRuntimeResponseSchema>;
 export type UploadPlatformAssetRequest = z.infer<typeof uploadPlatformAssetRequestSchema>;
+
+export type PlatformAssetRecord = WorkspaceRuntime | PlatformModelAsset | PlatformToolAsset | PlatformSkillAsset;

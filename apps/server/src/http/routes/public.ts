@@ -68,6 +68,7 @@ function requirePlatformAssetManagement(dependencies: AppDependencies, options: 
 
 function readPlatformAssetKind(params: unknown): PlatformAssetKind {
   const assetKind = createParamsSchema("assetKind").parse(params).assetKind;
+  if (assetKind === "runtimes") return "runtime";
   if (assetKind === "models") return "model";
   if (assetKind === "tools") return "tool";
   if (assetKind === "skills") return "skill";
@@ -208,8 +209,67 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
   };
 
   const listPlatformAssets = async (request: FastifyRequest, reply: FastifyReply) => {
+    const kind = readPlatformAssetKind(request.params);
+    if (kind === "runtime") {
+      if (options.workspaceMode === "single" || !dependencies.listWorkspaceRuntimes) {
+        throw new AppError(501, "workspace_runtimes_unavailable", "Workspace runtimes are not available on this server.");
+      }
+      return reply.send(platformAssetListSchema.parse({ kind, items: await dependencies.listWorkspaceRuntimes() }));
+    }
     requirePlatformAssetManagement(dependencies, options);
-    return reply.send(platformAssetListSchema.parse(await dependencies.listPlatformAssets!(readPlatformAssetKind(request.params))));
+    return reply.send(platformAssetListSchema.parse(await dependencies.listPlatformAssets!(kind)));
+  };
+
+  const uploadPlatformRuntimeAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadWorkspaceRuntime) {
+      throw new AppError(501, "runtime_upload_unavailable", "Runtime upload is not available on this server.");
+    }
+
+    const zipBuffer = await readRequestBodyBuffer(request.body);
+    if (!zipBuffer) {
+      throw new AppError(415, "invalid_content_type", "Runtime asset upload requires Content-Type: application/octet-stream.");
+    }
+
+    const query = uploadWorkspaceRuntimeRequestSchema.parse(request.query);
+
+    try {
+      const runtime = await dependencies.uploadWorkspaceRuntime({
+        runtimeName: query.name,
+        zipBuffer,
+        overwrite: query.overwrite
+      });
+      return reply.status(201).send(platformAssetMutationResponseSchema.parse({ kind: "runtime", name: runtime.name }));
+    } catch (error) {
+      const appError = runtimeUploadErrorToAppError(error);
+      if (appError) throw appError;
+      throw error;
+    }
+  };
+
+  const updatePlatformRuntimeAsset = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (options.workspaceMode === "single" || !dependencies.uploadWorkspaceRuntime) {
+      throw new AppError(501, "runtime_update_unavailable", "Runtime update is not available on this server.");
+    }
+
+    const params = createParamsSchema("runtimeName").parse(request.params);
+    const zipBuffer = await readRequestBodyBuffer(request.body);
+    if (!zipBuffer) {
+      throw new AppError(415, "invalid_content_type", "Runtime asset update requires Content-Type: application/octet-stream.");
+    }
+
+    try {
+      const runtime = await dependencies.uploadWorkspaceRuntime({
+        runtimeName: params.runtimeName,
+        zipBuffer,
+        overwrite: true,
+        requireExisting: true
+      });
+      return reply.send(platformAssetMutationResponseSchema.parse({ kind: "runtime", name: runtime.name }));
+    } catch (error) {
+      const appError = runtimeUploadErrorToAppError(error);
+      if (appError) throw appError;
+      throw error;
+    }
   };
 
   const uploadPlatformModelAsset = async (request: FastifyRequest, reply: FastifyReply) => {
@@ -481,6 +541,9 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
   app.delete("/api/v1/blueprints/:runtimeName", deleteRuntime);
 
   app.get("/api/v1/assets/:assetKind", listPlatformAssets);
+  app.post("/api/v1/assets/runtimes/upload", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, uploadPlatformRuntimeAsset);
+  app.put("/api/v1/assets/runtimes/:runtimeName", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, updatePlatformRuntimeAsset);
+  app.delete("/api/v1/assets/runtimes/:runtimeName", deleteRuntime);
   app.post(
     "/api/v1/assets/models/upload",
     { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
@@ -516,6 +579,9 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
   app.delete("/api/v1/assets/skills/:assetName", deletePlatformSkillAsset);
   // Keep the longer route name as a compatibility alias for early clients.
   app.get("/api/v1/platform-assets/:assetKind", listPlatformAssets);
+  app.post("/api/v1/platform-assets/runtimes/upload", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, uploadPlatformRuntimeAsset);
+  app.put("/api/v1/platform-assets/runtimes/:runtimeName", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, updatePlatformRuntimeAsset);
+  app.delete("/api/v1/platform-assets/runtimes/:runtimeName", deleteRuntime);
   app.post(
     "/api/v1/platform-assets/models/upload",
     { bodyLimit: PLATFORM_ASSET_UPLOAD_BODY_LIMIT_BYTES },
