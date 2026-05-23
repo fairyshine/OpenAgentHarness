@@ -16,7 +16,6 @@ import type { WorkerRuntimeStatus } from "./bootstrap/worker-runtime.js";
 import { appendEngineLogEvent, buildRuntimeConsoleLogger } from "./engine-console.js";
 import {
   describeObjectStoragePolicy,
-  objectStorageBacksManagedWorkspaces,
   resolveObjectStorageMirrorConfig
 } from "./bootstrap/object-storage-policy.js";
 import {
@@ -49,13 +48,11 @@ import {
   resolveWorkspaceRegistryPollingConfig
 } from "./bootstrap/bootstrap-config.js";
 import { createLocalWorkspaceManagement } from "./bootstrap/local-workspace-management.js";
-import { createLocalWorkspaceInitializer } from "./bootstrap/local-workspace-initializer.js";
 import {
   createPostgresMetadataRetentionService,
   createWorkerRuntimeService
 } from "./bootstrap/runtime-background-services.js";
 import { createRuntimeHealthReports } from "./bootstrap/runtime-health-reports.js";
-import { createWorkspaceDeletionHandler } from "./bootstrap/workspace-deletion-handler.js";
 import { createWorkspaceCoordinationApi } from "./bootstrap/workspace-coordination-api.js";
 import {
   loadAdminCapabilitiesModule,
@@ -93,8 +90,15 @@ import {
 } from "./bootstrap/runtime-assembly-profile.js";
 import { createRuntimeManagement } from "./bootstrap/runtime-management-service.js";
 import { createPlatformAssetManagement } from "./bootstrap/platform-asset-management-service.js";
-import { createWorkspaceLifecycle } from "./bootstrap/workspace-lifecycle-service.js";
 import { createWorkspacePrewarmer } from "./bootstrap/workspace-prewarmer.js";
+import {
+  createConfiguredWorkspaceInitializer,
+  createConfiguredWorkspaceDeletionHandler,
+  createConfiguredWorkspaceLifecycle,
+  createSandboxHostMaintenance,
+  createSandboxWorkspaceActivityTracker,
+  resolveSandboxWorkspaceServicePlan
+} from "./bootstrap/configured-sandbox-services.js";
 import { createObjectStorageWorkspaceEntryLister } from "./object-storage-workspace-list.js";
 import type { BootstrappedRuntime, BootstrapOptions } from "./bootstrap/bootstrap-runtime-types.js";
 import {
@@ -499,32 +503,15 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       ...(redisWorkerRegistry ? { workerRegistry: redisWorkerRegistry } : {})
     });
   }
-  const selfHostedSandboxOptions =
-    sandboxHost?.providerKind === "self_hosted" && config.sandbox?.self_hosted?.base_url?.trim()
-      ? {
-          baseUrl: config.sandbox.self_hosted.base_url.trim(),
-          headers: config.sandbox.self_hosted.headers,
-          maxWorkspacesPerSandbox: config.sandbox.fleet?.max_workspaces_per_sandbox,
-          resourceCpuPressureThreshold: (
-            config.sandbox.fleet as { resource_cpu_pressure_threshold?: number | undefined } | undefined
-          )?.resource_cpu_pressure_threshold,
-          resourceMemoryPressureThreshold: (
-            config.sandbox.fleet as { resource_memory_pressure_threshold?: number | undefined } | undefined
-          )?.resource_memory_pressure_threshold,
-          resourceDiskPressureThreshold: (
-            config.sandbox.fleet as { resource_disk_pressure_threshold?: number | undefined } | undefined
-          )?.resource_disk_pressure_threshold,
-          ...(redisWorkspacePlacementRegistry ? { workspacePlacementRegistry: redisWorkspacePlacementRegistry } : {}),
-          ...(redisWorkerRegistry ? { workerRegistry: redisWorkerRegistry } : {})
-        }
-      : undefined;
-  const useSelfHostedWorkspaceDelegatingInitializer =
-    processKind === "api" && !startWorker && remoteSandboxProvider && Boolean(selfHostedSandboxOptions);
-  const useSandboxBackedWorkspaceInitializer =
-    remoteSandboxProvider &&
-    sandboxHost &&
-    !useSelfHostedWorkspaceDelegatingInitializer &&
-    !objectStorageBacksManagedWorkspaces(config);
+  const sandboxWorkspaceServicePlan = resolveSandboxWorkspaceServicePlan({
+    config,
+    remoteSandboxProvider,
+    sandboxHost,
+    processKind,
+    startWorker,
+    ...(redisWorkspacePlacementRegistry ? { workspacePlacementRegistry: redisWorkspacePlacementRegistry } : {}),
+    ...(redisWorkerRegistry ? { workerRegistry: redisWorkerRegistry } : {})
+  });
   const adminCapabilities = assemblyProfile.enableAdminCapabilities
     ? (await loadAdminCapabilitiesModule()).createEngineAdminCapabilities({
         storageAdmin: createLazyStorageAdmin(async () => {
@@ -642,35 +629,53 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       : {
           kind: "multi" as const
         };
-  if (sandboxHost) {
-    const workspaceMaterializationConfig = resolveWorkspaceMaterializationConfig(config);
-    const runSandboxHostMaintenance = () => {
-      const idleBefore = new Date(
-        Date.now() - workspaceMaterializationConfig.idleTtlMs
-      ).toISOString();
-      void sandboxHost
-        .maintain({ idleBefore })
-        .catch((error: unknown) => {
-          console.warn("Sandbox host maintenance failed.", error);
-        });
-    };
-    runSandboxHostMaintenance();
-    workspaceMaterializationMaintenanceTimer = setInterval(runSandboxHostMaintenance, workspaceMaterializationConfig.maintenanceIntervalMs);
-    workspaceMaterializationMaintenanceTimer.unref?.();
-  }
+  const sandboxWorkspaceActivityTracker = createSandboxWorkspaceActivityTracker({
+    workspaceMaterializationManager,
+    canDeferEmbeddedSandboxMaterialization
+  });
+  workspaceMaterializationMaintenanceTimer = createSandboxHostMaintenance({
+    sandboxHost,
+    ...resolveWorkspaceMaterializationConfig(config)
+  }).start();
+  const workspaceInitializer =
+    singleWorkspace === undefined
+      ? await createConfiguredWorkspaceInitializer({
+          plan: sandboxWorkspaceServicePlan,
+          config,
+          toolDir,
+          useRuntimeObjectStorageManagement,
+          objectStorageModule,
+          loadConfigWorkspaceModule,
+          loadConfigRuntimesModule,
+          loadSandboxBackedWorkspaceInitializerModule,
+          discoverWorkspaceWithEnrichedModels: (rootPath: string, kind: "project") =>
+            discoverWorkspaceWithEnrichedModels(rootPath, kind) as Promise<WorkspaceRecord>,
+          getWorkspaceRecord: async (workspaceId: string) => (await workspaceRepository.getById(workspaceId)) ?? undefined,
+          getPlatformAgents,
+          platformModels: models,
+          ...(sandboxHost ? { sandboxHost } : {})
+        })
+      : undefined;
+  const workspaceDeletionHandler =
+    singleWorkspace === undefined
+      ? createConfiguredWorkspaceDeletionHandler({
+          plan: sandboxWorkspaceServicePlan,
+          config,
+          remoteSandboxProvider,
+          sandboxHost,
+          workspaceMaterializationManager,
+          objectStorageModule,
+          objectStorageMirror,
+          sqliteShadowRoot,
+          clearWorkspaceCoordination,
+          ...(controlPlaneRuntime ? { closeWorkspaceWatcher: controlPlaneRuntime.closeWorkspaceWatcher } : {})
+        })
+      : undefined;
   const runtimeService = new EngineService({
     defaultModel: config.llm.default_model,
     modelGateway: resolvedModelGateway,
     logger: runtimeDebugLogger,
-    ...((workspaceMaterializationManager || canDeferEmbeddedSandboxMaterialization)
-      ? {
-          workspaceActivityTracker: {
-            async touchWorkspace(workspaceId: string) {
-              await workspaceMaterializationManager?.touchWorkspaceActivity(workspaceId);
-            }
-          }
-        }
-      : {}),
+    ...(sandboxWorkspaceActivityTracker ? { workspaceActivityTracker: sandboxWorkspaceActivityTracker } : {}),
     executionServicesMode: assemblyProfile.executionServicesMode,
     runHeartbeatIntervalMs: parsePositiveIntEnvWithMin("OAH_RUN_HEARTBEAT_INTERVAL_MS", 5_000, 50),
     staleRunTimeoutMs: parsePositiveIntEnvWithMin("OAH_STALE_RUN_TIMEOUT_MS", 120_000, 50),
@@ -696,59 +701,17 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
           workspaceFileAccessProvider: sandboxHost.workspaceFileAccessProvider
         }
       : {}),
-    ...(singleWorkspace === undefined
+    ...(workspaceDeletionHandler ? { workspaceDeletionHandler } : {}),
+    ...(singleWorkspace === undefined && workspaceInitializer
       ? {
-          workspaceDeletionHandler: createWorkspaceDeletionHandler({
-            config,
-            remoteSandboxProvider,
-            sandboxHost,
-            useSelfHostedWorkspaceDelegatingInitializer,
-            objectStorageModule,
-            objectStorageMirror,
-            workspaceMaterializationManager,
-            sqliteShadowRoot,
-            clearWorkspaceCoordination,
-            ...(controlPlaneRuntime ? { closeWorkspaceWatcher: controlPlaneRuntime.closeWorkspaceWatcher } : {})
-          })
-        }
-      : {}),
-    ...(singleWorkspace === undefined
-      ? {
-          workspaceInitializer: {
-            initialize: useSelfHostedWorkspaceDelegatingInitializer
-              ? (await loadSandboxBackedWorkspaceInitializerModule()).createSelfHostedWorkspaceDelegatingInitializer({
-                  selfHosted: selfHostedSandboxOptions!,
-                  getWorkspaceRecord: async (workspaceId: string) => (await workspaceRepository.getById(workspaceId)) ?? undefined
-                }).initialize
-              : useSandboxBackedWorkspaceInitializer
-                ? (await loadSandboxBackedWorkspaceInitializerModule()).createSandboxBackedWorkspaceInitializer({
-                    runtimeDir: config.paths.runtime_dir,
-                    platformToolDir: config.paths.tool_dir,
-                    platformSkillDir: config.paths.skill_dir,
-                    toolDir,
-                    platformModels: models,
-                    platformAgents: await getPlatformAgents(),
-                    sandboxHost: sandboxHost!,
-                    ...(selfHostedSandboxOptions ? { selfHosted: selfHostedSandboxOptions } : {})
-                  }).initialize
-                : createLocalWorkspaceInitializer({
-                    config,
-                    toolDir,
-                    useRuntimeObjectStorageManagement,
-                    objectStorageModule,
-                    loadConfigWorkspaceModule,
-                    loadConfigRuntimesModule,
-                    discoverWorkspaceWithEnrichedModels: (rootPath: string, kind: "project") =>
-                      discoverWorkspaceWithEnrichedModels(rootPath, kind) as Promise<WorkspaceRecord>
-                  }).initialize
-          }
+          workspaceInitializer
         }
       : {})
   });
   const workspacePrewarmConfig = resolveWorkspacePrewarmConfig();
-  const touchWorkspaceActivity = workspaceMaterializationManager || canDeferEmbeddedSandboxMaterialization
+  const touchWorkspaceActivity = sandboxWorkspaceActivityTracker
     ? async (workspaceId: string) => {
-        await workspaceMaterializationManager?.touchWorkspaceActivity(workspaceId);
+        await sandboxWorkspaceActivityTracker.touchWorkspace(workspaceId);
       }
     : undefined;
   const workspacePrewarmer = assemblyProfile.enableControlPlaneFacade && sandboxHost
@@ -790,11 +753,11 @@ export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<
       })
     : runtimeService;
   const executionEngineService = new ExecutionEngineService(runtimeService);
-  const workspaceLifecycle = createWorkspaceLifecycle({
+  const workspaceLifecycle = createConfiguredWorkspaceLifecycle({
     sandboxHost,
     runtimeService,
     workspaceMaterializationManager,
-    touchWorkspaceActivity,
+    ...(touchWorkspaceActivity ? { touchWorkspaceActivity } : {}),
     clearWorkspaceCoordination
   });
   const describeQueuedRun = controlPlaneRuntime
