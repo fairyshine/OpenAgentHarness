@@ -1,6 +1,6 @@
 import path from "node:path";
 import { watch, type FSWatcher } from "node:fs";
-import { readdir, rm } from "node:fs/promises";
+import { access, readdir, rm } from "node:fs/promises";
 
 import type { ServerConfig } from "@oah/config";
 import { parseCursor } from "@oah/engine-core";
@@ -238,7 +238,7 @@ export interface OpenFsWatcherOptions {
   onError?: ((details: FsWatcherErrorDetails) => void) | undefined;
 }
 
-const RECOVERABLE_FS_WATCHER_ERROR_CODES = new Set(["ENOENT", "ENOTDIR", "EPERM"]);
+const RECOVERABLE_FS_WATCHER_ERROR_CODES = new Set(["ENOENT", "ENOTDIR", "EPERM", "EACCES", "EBUSY"]);
 
 function fsWatcherErrorCode(error: unknown): string | undefined {
   return typeof error === "object" &&
@@ -307,8 +307,8 @@ export function openFsWatcher(
 ): FSWatcher | undefined {
   const resolvedOptions: OpenFsWatcherOptions = typeof options === "boolean" ? { recursive: options } : options;
   const recursive = resolvedOptions.recursive ?? false;
-  const createWatcher = (watchRecursive: boolean): FSWatcher =>
-    attachFsWatcherSafetyHandlers(
+  const createWatcher = (watchRecursive: boolean): FSWatcher => {
+    const watcher = attachFsWatcherSafetyHandlers(
       watch(
         targetPath,
         {
@@ -322,16 +322,43 @@ export function openFsWatcher(
       resolvedOptions.onError
     );
 
+    void access(targetPath).catch((error) => {
+      if (!isRecoverableFsWatcherError(error)) {
+        return;
+      }
+
+      closeFsWatcher(watcher);
+      try {
+        resolvedOptions.onError?.({
+          targetPath,
+          error,
+          recoverable: true
+        });
+      } catch (handlerError) {
+        console.warn(`[oah-bootstrap] File watcher error handler failed for ${targetPath}.`, handlerError);
+      }
+      notifyFsWatcherChange(targetPath, onChange);
+    });
+
+    return watcher;
+  };
+
   try {
     return createWatcher(recursive);
-  } catch {
+  } catch (error) {
+    if (!isRecoverableFsWatcherError(error)) {
+      console.warn(`[oah-bootstrap] File watcher failed to open for ${targetPath}.`, error);
+    }
     if (!recursive) {
       return undefined;
     }
 
     try {
       return createWatcher(false);
-    } catch {
+    } catch (fallbackError) {
+      if (!isRecoverableFsWatcherError(fallbackError)) {
+        console.warn(`[oah-bootstrap] File watcher failed to open for ${targetPath}.`, fallbackError);
+      }
       return undefined;
     }
   }

@@ -30,6 +30,54 @@ import {
   shouldPersistProjectDbInsideWorkspace
 } from "./shared.js";
 
+const SQLITE_OPEN_RETRYABLE_ERROR_CODES = new Set(["ENOENT", "ENOTDIR", "EAGAIN", "EBUSY"]);
+const SQLITE_OPEN_ATTEMPTS = 3;
+
+function filesystemErrorCode(error: unknown): string | undefined {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string"
+    ? (error as { code: string }).code
+    : undefined;
+}
+
+function isRetryableSqliteOpenError(error: unknown): boolean {
+  const code = filesystemErrorCode(error);
+  return code !== undefined && SQLITE_OPEN_RETRYABLE_ERROR_CODES.has(code);
+}
+
+function waitForRetry(attempt: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, attempt * 25);
+  });
+}
+
+async function createSqliteDatabaseWithParents(dbPath: string, initializer: (db: DatabaseSync) => void): Promise<DatabaseSync> {
+  const parentDir = path.dirname(dbPath);
+
+  for (let attempt = 1; attempt <= SQLITE_OPEN_ATTEMPTS; attempt += 1) {
+    let db: DatabaseSync | undefined;
+    try {
+      await mkdir(parentDir, { recursive: true });
+      db = new DatabaseSync(dbPath);
+      db.exec("pragma journal_mode = wal");
+      db.exec("pragma busy_timeout = 5000");
+      initializer(db);
+      return db;
+    } catch (error) {
+      db?.close();
+      if (attempt === SQLITE_OPEN_ATTEMPTS || !isRetryableSqliteOpenError(error)) {
+        throw error;
+      }
+
+      await waitForRetry(attempt);
+    }
+  }
+
+  throw new Error(`Unable to open SQLite database at ${dbPath}`);
+}
+
 export class SQLiteWorkspaceRepository implements WorkspaceRepository {
   readonly #items = new Map<string, WorkspaceRecord>();
   readonly #onUpsert: (workspace: WorkspaceRecord) => Promise<void>;
@@ -313,13 +361,11 @@ export class SQLitePersistenceCoordinator {
       cached.db.close();
     }
 
-    await mkdir(path.dirname(dbPath), { recursive: true });
-    const db = new DatabaseSync(dbPath);
-    db.exec("pragma journal_mode = wal");
-    db.exec("pragma busy_timeout = 5000");
-    migrateLegacyMirrorSchemaIfNeeded(db);
-    reconcilePersistedWorkspaceScope(db, workspace);
-    normalizePersistedWorkspaceData(db);
+    const db = await createSqliteDatabaseWithParents(dbPath, (database) => {
+      migrateLegacyMirrorSchemaIfNeeded(database);
+      reconcilePersistedWorkspaceScope(database, workspace);
+      normalizePersistedWorkspaceData(database);
+    });
     const handle = { dbPath, db };
     this.#handles.set(workspace.id, handle);
     await this.reindexWorkspace(db, workspace.id);
@@ -335,14 +381,12 @@ export class SQLitePersistenceCoordinator {
       return this.#registryDb;
     }
 
-    await mkdir(path.dirname(this.#registryDbPath), { recursive: true });
-    const db = new DatabaseSync(this.#registryDbPath);
-    db.exec("pragma journal_mode = wal");
-    db.exec("pragma busy_timeout = 5000");
-    for (const statement of registrySchemaStatements) {
-      db.exec(statement);
-    }
-    this.ensureRegistrySchema(db);
+    const db = await createSqliteDatabaseWithParents(this.#registryDbPath, (database) => {
+      for (const statement of registrySchemaStatements) {
+        database.exec(statement);
+      }
+      this.ensureRegistrySchema(database);
+    });
     this.#registryDb = db;
     return db;
   }

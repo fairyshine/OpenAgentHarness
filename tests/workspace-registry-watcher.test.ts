@@ -23,6 +23,9 @@ class FakeWatcher extends EventEmitter {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.doUnmock("node:fs");
+  vi.doUnmock("node:fs/promises");
+  vi.resetModules();
 });
 
 describe("workspace registry fs watchers", () => {
@@ -30,6 +33,8 @@ describe("workspace registry fs watchers", () => {
     expect(isRecoverableFsWatcherError(Object.assign(new Error("missing"), { code: "ENOENT" }))).toBe(true);
     expect(isRecoverableFsWatcherError(Object.assign(new Error("gone"), { code: "ENOTDIR" }))).toBe(true);
     expect(isRecoverableFsWatcherError(Object.assign(new Error("permission"), { code: "EPERM" }))).toBe(true);
+    expect(isRecoverableFsWatcherError(Object.assign(new Error("access denied"), { code: "EACCES" }))).toBe(true);
+    expect(isRecoverableFsWatcherError(Object.assign(new Error("busy"), { code: "EBUSY" }))).toBe(true);
     expect(isRecoverableFsWatcherError(Object.assign(new Error("bad"), { code: "EINVAL" }))).toBe(false);
     expect(isRecoverableFsWatcherError(new Error("plain"))).toBe(false);
   });
@@ -74,5 +79,42 @@ describe("workspace registry fs watchers", () => {
 
     expect(() => closeFsWatcher(watcher as unknown as FSWatcher)).not.toThrow();
     expect(watcher.closeCalls).toBe(1);
+  });
+
+  it("closes a watcher and schedules a resync when the watched path disappears just after opening", async () => {
+    const watcher = new FakeWatcher();
+    const onChange = vi.fn();
+    const onError = vi.fn();
+    const fsPromises = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const missingError = Object.assign(new Error("missing"), { code: "ENOENT" });
+    const accessMock = vi.fn().mockRejectedValue(missingError);
+    const watchMock = vi.fn().mockReturnValue(watcher as unknown as FSWatcher);
+
+    vi.doMock("node:fs/promises", () => ({
+      ...fsPromises,
+      access: accessMock
+    }));
+    vi.doMock("node:fs", () => ({
+      ...fs,
+      watch: watchMock
+    }));
+    vi.resetModules();
+    const { openFsWatcher } = await import("../apps/server/src/bootstrap/workspace-registry.ts");
+
+    const opened = openFsWatcher("/tmp/oah/ws_missing/.openharness/agents", onChange, {
+      recursive: true,
+      onError
+    });
+    await Promise.resolve();
+
+    expect(opened).toBe(watcher);
+    expect(watcher.closeCalls).toBe(1);
+    expect(onError).toHaveBeenCalledWith({
+      targetPath: "/tmp/oah/ws_missing/.openharness/agents",
+      error: missingError,
+      recoverable: true
+    });
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 });

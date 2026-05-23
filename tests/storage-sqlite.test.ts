@@ -3,14 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkspaceRecord } from "@oah/engine-core";
-import { createSQLiteRuntimePersistence } from "../packages/storage-sqlite/src/index.ts";
+import { createSQLiteRuntimePersistence as createSQLiteRuntimePersistenceStatic } from "../packages/storage-sqlite/src/index.ts";
+
+let createSQLiteRuntimePersistence = createSQLiteRuntimePersistenceStatic;
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.doUnmock("node:fs/promises");
+  vi.resetModules();
+  createSQLiteRuntimePersistence = createSQLiteRuntimePersistenceStatic;
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
       await rm(dir, { recursive: true, force: true });
@@ -389,6 +395,40 @@ function seedCurrentSchemaWithLegacyPayloads(dbPath: string, workspaceId: string
 }
 
 describe("storage sqlite", () => {
+  it("retries workspace database initialization when directory creation races with cleanup", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-mkdir-race-"));
+    tempDirs.push(tempRoot);
+
+    const fsPromises = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const actualMkdir = fsPromises.mkdir;
+    const mkdirMock = vi
+      .fn<typeof actualMkdir>()
+      .mockRejectedValueOnce(Object.assign(new Error("parent disappeared"), { code: "ENOENT" }))
+      .mockImplementation(actualMkdir);
+
+    vi.doMock("node:fs/promises", () => ({
+      ...fsPromises,
+      mkdir: mkdirMock
+    }));
+    vi.resetModules();
+    ({ createSQLiteRuntimePersistence } = await import("../packages/storage-sqlite/src/index.ts"));
+
+    const shadowRoot = path.join(tempRoot, "shadow", "data", "workspace-state");
+    const persistence = await createSQLiteRuntimePersistence({ shadowRoot });
+    const workspace = createWorkspace({
+      id: "ws_mkdir_race",
+      kind: "chat",
+      rootPath: path.join(tempRoot, "chat")
+    });
+
+    await persistence.workspaceRepository.upsert(workspace);
+
+    expect(mkdirMock).toHaveBeenCalledTimes(3);
+    expect(await exists(path.join(shadowRoot, workspace.id, "history.db"))).toBe(true);
+
+    await persistence.close();
+  });
+
   it("does not retain a workspace in memory when SQLite upsert fails", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-upsert-fail-"));
     tempDirs.push(tempRoot);

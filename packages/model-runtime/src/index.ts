@@ -37,8 +37,6 @@ import {
 import { prepareToolServers } from "./mcp-tools.js";
 import { formatSupportedModelProviders } from "./providers.js";
 
-const DEFAULT_MAX_TOOL_STEPS = 20;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -143,16 +141,18 @@ export class AiSdkModelRuntime implements ModelGateway {
       parallelToolCalls: options?.parallelToolCalls
     });
 
-    const maxSteps = Math.max(2, options?.maxSteps ?? DEFAULT_MAX_TOOL_STEPS);
-    const maxStepsStopCondition = stepCountIs(maxSteps);
+    const maxSteps = options?.maxSteps !== undefined ? Math.max(2, options.maxSteps) : undefined;
+    const maxStepsStopCondition = maxSteps !== undefined ? stepCountIs(maxSteps) : undefined;
     let maxStepsReached = false;
-    const trackMaxStepsStop: StopCondition<ToolSet> = async (event) => {
-      const shouldStop = await maxStepsStopCondition(event);
-      if (shouldStop) {
-        maxStepsReached = true;
-      }
-      return shouldStop;
-    };
+    const trackMaxStepsStop: StopCondition<ToolSet> | undefined = maxStepsStopCondition
+      ? async (event) => {
+          const shouldStop = await maxStepsStopCondition(event);
+          if (shouldStop) {
+            maxStepsReached = true;
+          }
+          return shouldStop;
+        }
+      : undefined;
     const result = streamText({
       model,
       ...toPrompt(input),
@@ -171,7 +171,7 @@ export class AiSdkModelRuntime implements ModelGateway {
       ...(aiTools
         ? {
             tools: aiTools,
-            stopWhen: trackMaxStepsStop
+            ...(trackMaxStepsStop ? { stopWhen: trackMaxStepsStop } : {})
           }
         : {}),
       ...(options?.prepareStep
