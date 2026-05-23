@@ -202,6 +202,80 @@ describe("prepareControlPlaneRuntime", () => {
     }
   });
 
+  it("keeps registry sync running when one workspace upsert fails", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "oah-control-plane-upsert-fail-"));
+    tempDirs.push(tempDir);
+
+    const workspaceDir = path.join(tempDir, "workspaces");
+    const goodRoot = path.join(workspaceDir, "good");
+    const badRoot = path.join(workspaceDir, "bad");
+    await Promise.all([
+      mkdir(path.join(goodRoot, ".openharness"), { recursive: true }),
+      mkdir(path.join(badRoot, ".openharness"), { recursive: true })
+    ]);
+
+    const goodWorkspace = createWorkspace({
+      id: buildWorkspaceId("project", "good", goodRoot),
+      rootPath: goodRoot,
+      name: "good"
+    });
+    const badWorkspace = createWorkspace({
+      id: buildWorkspaceId("project", "bad", badRoot),
+      rootPath: badRoot,
+      name: "bad"
+    });
+    const workspaceRepository = createWorkspaceRepository();
+    vi.mocked(workspaceRepository.upsert).mockImplementation(async (workspace: WorkspaceRecord) => {
+      if (workspace.id === badWorkspace.id) {
+        throw Object.assign(new Error("shadow directory disappeared"), { code: "ENOENT" });
+      }
+      return goodWorkspace;
+    });
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const runtime = await prepareControlPlaneRuntime({
+      config: {
+        paths: {
+          workspace_dir: workspaceDir
+        }
+      } as ServerConfig,
+      persistence: {
+        workspaceRepository,
+        sessionRepository: {} as SessionRepository,
+        runRepository: {} as RunRepository,
+        listPersistedWorkspaces: vi.fn(async () => [])
+      },
+      discoveredWorkspaces: [goodWorkspace, badWorkspace],
+      managesWorkspaceRegistry: true,
+      enableControlPlaneFacade: true,
+      remoteSandboxProvider: false,
+      singleWorkspaceDefined: false,
+      models: {},
+      toolDir: path.join(tempDir, "tools"),
+      sqliteShadowRoot: path.join(tempDir, ".openharness", "data", "workspace-state"),
+      pollingConfig: { enabled: false, intervalMs: 1_000 },
+      workspaceModelMetadataDiscovery: "eager",
+      getPlatformAgents: vi.fn(async () => ({})),
+      logWorkspaceDiscoveryError: vi.fn(),
+      discoverWorkspaceWithEnrichedModels: vi.fn(),
+      applyManagedWorkspaceExternalRef: (candidate) => candidate,
+      withWorkspaceDefinitionTimestamp: vi.fn(async (candidate) => candidate),
+      listRepositoryWorkspaces: vi.fn(async () => [])
+    });
+
+    try {
+      await runtime.initialize();
+      expect(runtime.visibleWorkspaceIds.has(goodWorkspace.id)).toBe(true);
+      expect(runtime.visibleWorkspaceIds.has(badWorkspace.id)).toBe(false);
+      expect(consoleWarn).toHaveBeenCalledWith(
+        `[oah-bootstrap] Failed to upsert workspace ${badWorkspace.id} during bootstrap.`,
+        expect.objectContaining({ code: "ENOENT" })
+      );
+    } finally {
+      await runtime.close();
+      consoleWarn.mockRestore();
+    }
+  });
+
   it("does not read all persisted workspaces for unscoped api-only control planes", async () => {
     const workspaceRepository = createWorkspaceRepository();
     const sessionRepository = {} as SessionRepository;

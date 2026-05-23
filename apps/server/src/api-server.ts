@@ -1,8 +1,11 @@
 import { createApiApp } from "./api-app.js";
 import { bootstrapRuntime, installSignalHandlers, shouldStartEmbeddedWorker } from "./bootstrap.js";
+import { installProcessSafetyHandlers } from "./bootstrap/process-safety.js";
 import { buildApiAppDependencies } from "./runtime-app-dependencies.js";
 
 export async function startApiServer(argv = process.argv.slice(2)): Promise<void> {
+  installProcessSafetyHandlers();
+
   const runtime = await bootstrapRuntime({
     argv,
     startWorker: shouldStartEmbeddedWorker(argv),

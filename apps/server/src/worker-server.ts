@@ -1,8 +1,11 @@
 import { createInternalWorkerApp } from "./internal-worker-app.js";
 import { bootstrapRuntime, installSignalHandlers } from "./bootstrap.js";
+import { installProcessSafetyHandlers } from "./bootstrap/process-safety.js";
 import { buildWorkerAppDependencies } from "./runtime-app-dependencies.js";
 
 export async function startWorkerServer(argv = process.argv.slice(2)): Promise<void> {
+  installProcessSafetyHandlers();
+
   const runtime = await bootstrapRuntime({
     argv,
     startWorker: true,

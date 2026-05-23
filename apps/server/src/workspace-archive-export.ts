@@ -130,10 +130,10 @@ export class WorkspaceArchiveExporter {
     }
 
     this.#timer = setInterval(() => {
-      void this.exportPending();
+      this.#scheduleBackgroundExport();
     }, this.#pollIntervalMs);
     this.#timer.unref?.();
-    void this.exportPending();
+    this.#scheduleBackgroundExport();
   }
 
   async close(): Promise<void> {
@@ -203,6 +203,12 @@ export class WorkspaceArchiveExporter {
         this.#activeExport = undefined;
       }
     }
+  }
+
+  #scheduleBackgroundExport(): void {
+    void this.exportPending().catch((error: unknown) => {
+      this.#logger.warn?.("Workspace archive export failed.", error);
+    });
   }
 
   async #inspectExportRootIfNeeded(): Promise<void> {

@@ -26,22 +26,32 @@ function isRecoverableNotFoundRace(error: unknown): boolean {
   return typeof code === "string" && code.endsWith("_not_found") && errorStatusCode(error) === 404;
 }
 
+const RECOVERABLE_PROCESS_ERROR_CODES = new Set([
+  "ABORT_ERR",
+  "ECANCELED",
+  "EACCES",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "EIO",
+  "ENOENT",
+  "ENOTDIR",
+  "ENOTFOUND",
+  "ENOTCONN",
+  "EPERM",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ERR_STREAM_PREMATURE_CLOSE",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET"
+]);
+
 export function isRecoverableBackgroundProcessError(error: unknown): boolean {
   const code = errorCode(error);
-  if (
-    code &&
-    [
-      "ABORT_ERR",
-      "ECANCELED",
-      "ECONNABORTED",
-      "ECONNRESET",
-      "EPIPE",
-      "ENOENT",
-      "ENOTDIR",
-      "EPERM",
-      "ERR_STREAM_PREMATURE_CLOSE"
-    ].includes(code)
-  ) {
+  if (code && RECOVERABLE_PROCESS_ERROR_CODES.has(code)) {
     return true;
   }
 
@@ -59,7 +69,9 @@ export function isRecoverableBackgroundProcessError(error: unknown): boolean {
     return true;
   }
 
-  return /aborted|cancelled|canceled|premature close|socket hang up|stream terminated/iu.test(message);
+  return /aborted|cancelled|canceled|connection refused|connection reset|premature close|socket hang up|stream terminated|timed out|timeout/iu.test(
+    message
+  );
 }
 
 export function installProcessSafetyHandlers(): void {

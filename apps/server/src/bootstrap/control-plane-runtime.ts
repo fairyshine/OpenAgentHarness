@@ -262,6 +262,36 @@ export async function prepareControlPlaneRuntime(options: {
     watchedProjectRoots.delete(rootPath);
   }
 
+  async function upsertWorkspaceDuringRegistrySync(workspace: WorkspaceRecord): Promise<WorkspaceRecord | undefined> {
+    try {
+      await options.persistence.workspaceRepository.upsert(workspace);
+      return workspace;
+    } catch (error) {
+      console.warn(`[oah-bootstrap] Failed to upsert workspace ${workspace.id} during workspace registry sync.`, error);
+      return undefined;
+    }
+  }
+
+  async function upsertWorkspaceDuringBootstrap(workspace: WorkspaceRecord): Promise<WorkspaceRecord | undefined> {
+    try {
+      await options.persistence.workspaceRepository.upsert(workspace);
+      return workspace;
+    } catch (error) {
+      console.warn(`[oah-bootstrap] Failed to upsert workspace ${workspace.id} during bootstrap.`, error);
+      return undefined;
+    }
+  }
+
+  async function deleteWorkspaceDuringRegistrySync(workspace: WorkspaceRecord): Promise<boolean> {
+    try {
+      await options.persistence.workspaceRepository.delete(workspace.id);
+      return true;
+    } catch (error) {
+      console.warn(`[oah-bootstrap] Failed to delete workspace ${workspace.id} during workspace registry sync.`, error);
+      return false;
+    }
+  }
+
   async function clearWorkspaceCoordination(workspaceId: string): Promise<void> {
     const normalizedWorkspaceId = workspaceId.trim();
     if (normalizedWorkspaceId.length === 0) {
@@ -546,6 +576,7 @@ export async function prepareControlPlaneRuntime(options: {
         latestDiscoveredWorkspaces.map((workspace) => [path.resolve(workspace.rootPath), workspace.id])
       );
 
+      const deletedStaleWorkspaceIds = new Set<string>();
       await Promise.all(
         staleWorkspaces.map(async (workspace) => {
           const retainedWorkspaceIdForRoot = retainedWorkspaceRoots.get(path.resolve(workspace.rootPath));
@@ -564,12 +595,14 @@ export async function prepareControlPlaneRuntime(options: {
               `[oah-bootstrap] Cleaned local artifacts for stale workspace ${workspace.id} (${cleanup.mode}): ${cleanup.removedPaths.join(", ")}`
             );
           }
-          await options.persistence.workspaceRepository.delete(workspace.id);
+          if (await deleteWorkspaceDuringRegistrySync(workspace)) {
+            deletedStaleWorkspaceIds.add(workspace.id);
+          }
         })
       );
 
       const latestPersistedWorkspaces =
-        staleWorkspaceIds.length > 0
+        deletedStaleWorkspaceIds.size > 0
           ? await options.listRepositoryWorkspaces(options.persistence.workspaceRepository)
           : persistedWorkspaces;
       const latestReconciledWorkspaces = await Promise.all(
@@ -578,16 +611,16 @@ export async function prepareControlPlaneRuntime(options: {
         )
       );
 
-      await Promise.all(
-        latestReconciledWorkspaces.map(async (workspace) => options.persistence.workspaceRepository.upsert(workspace))
-      );
+      const successfullyUpsertedWorkspaces = (
+        await Promise.all(latestReconciledWorkspaces.map(async (workspace) => upsertWorkspaceDuringRegistrySync(workspace)))
+      ).filter((workspace): workspace is WorkspaceRecord => workspace !== undefined);
 
       visibleWorkspaceIds.clear();
-      latestReconciledWorkspaces.forEach((workspace) => {
+      successfullyUpsertedWorkspaces.forEach((workspace) => {
         visibleWorkspaceIds.add(workspace.id);
       });
-      await clearOrphanedWorkspaceCoordination(latestReconciledWorkspaces, "workspace_registry_sync");
-      updateWatchedProjectRoots(latestReconciledWorkspaces);
+      await clearOrphanedWorkspaceCoordination(successfullyUpsertedWorkspaces, "workspace_registry_sync");
+      updateWatchedProjectRoots(successfullyUpsertedWorkspaces);
       scheduleWorkspaceModelMetadataHydration();
       lastWorkspaceRegistrySyncAt = Date.now();
     })().finally(() => {
@@ -674,12 +707,15 @@ export async function prepareControlPlaneRuntime(options: {
     reconciledWorkspaces,
     async initialize() {
       if (useScopedWorkspaceVisibility) {
-        reconciledWorkspaces.forEach((workspace) => {
+        const successfullyUpsertedWorkspaces = (
+          await Promise.all(reconciledWorkspaces.map((workspace) => upsertWorkspaceDuringBootstrap(workspace)))
+        ).filter((workspace): workspace is WorkspaceRecord => workspace !== undefined);
+        visibleWorkspaceIds.clear();
+        successfullyUpsertedWorkspaces.forEach((workspace) => {
           visibleWorkspaceIds.add(workspace.id);
         });
-        await Promise.all(reconciledWorkspaces.map((workspace) => workspaceRepository.upsert(workspace)));
-        await clearOrphanedWorkspaceCoordination(reconciledWorkspaces, "bootstrap");
-        updateWatchedProjectRoots(reconciledWorkspaces);
+        await clearOrphanedWorkspaceCoordination(successfullyUpsertedWorkspaces, "bootstrap");
+        updateWatchedProjectRoots(successfullyUpsertedWorkspaces);
       }
 
       if (options.managesWorkspaceRegistry) {

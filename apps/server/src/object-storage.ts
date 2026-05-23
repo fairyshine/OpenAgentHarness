@@ -450,7 +450,9 @@ export class ObjectStorageMirrorController {
 
         if (this.#syncOnChange && !this.#pollTimer) {
           this.#pollTimer = setInterval(() => {
-            void this.syncChangedMappings();
+            void this.syncChangedMappings().catch((error: unknown) => {
+              this.#logger(`object storage mirror poll sync failed: ${error instanceof Error ? error.message : String(error)}`);
+            });
           }, this.#pollIntervalMs);
           this.#pollTimer.unref();
         }

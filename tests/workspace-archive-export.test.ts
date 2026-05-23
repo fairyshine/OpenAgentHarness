@@ -537,4 +537,50 @@ describe("workspace archive exporter", () => {
     await expect(readFile(path.join(exportRoot, "2026-04-08.sqlite.tmp"), "utf8")).resolves.toBe("temp");
     await expect(readFile(path.join(exportRoot, "notes.txt"), "utf8")).resolves.toBe("note");
   });
+
+  it("logs background export failures started by the poller", async () => {
+    const exportRoot = await mkdtemp(path.join(tmpdir(), "oah-archive-export-bg-fail-"));
+    tempDirs.push(exportRoot);
+
+    const warnings: Array<{ message: string; error: unknown }> = [];
+    const failure = Object.assign(new Error("transient archive store failure"), { code: "EIO" });
+    const repository: WorkspaceArchiveRepository = {
+      async archiveWorkspace() {
+        return createArchiveRecord();
+      },
+      async archiveSessionTree() {
+        return createArchiveRecord();
+      },
+      async listPendingArchiveDates() {
+        throw failure;
+      },
+      async listByArchiveDate() {
+        return [];
+      },
+      async markExported() {},
+      async pruneExportedBefore() {
+        return 0;
+      }
+    };
+
+    const exporter = new WorkspaceArchiveExporter({
+      repository,
+      exportRoot,
+      pollIntervalMs: 60_000,
+      logger: {
+        warn(message, error) {
+          warnings.push({ message, error });
+        }
+      }
+    });
+
+    exporter.start();
+    await vi.runOnlyPendingTimersAsync();
+    await exporter.close();
+
+    expect(warnings).toContainEqual({
+      message: "Workspace archive export failed.",
+      error: failure
+    });
+  });
 });

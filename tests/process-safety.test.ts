@@ -6,6 +6,9 @@ describe("server process safety", () => {
   it("treats known background lifecycle races as recoverable", () => {
     expect(isRecoverableBackgroundProcessError(Object.assign(new Error("missing"), { code: "ENOENT" }))).toBe(true);
     expect(isRecoverableBackgroundProcessError(Object.assign(new Error("reset"), { code: "ECONNRESET" }))).toBe(true);
+    expect(isRecoverableBackgroundProcessError(Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }))).toBe(true);
+    expect(isRecoverableBackgroundProcessError(Object.assign(new Error("temporary io"), { code: "EIO" }))).toBe(true);
+    expect(isRecoverableBackgroundProcessError(Object.assign(new Error("connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }))).toBe(true);
     expect(
       isRecoverableBackgroundProcessError({
         name: "AppError",
@@ -41,6 +44,8 @@ describe("server process safety", () => {
       )
     ).toBe(true);
     expect(isRecoverableBackgroundProcessError(Object.assign(new Error("request aborted"), { code: "ABORT_ERR" }))).toBe(true);
+    expect(isRecoverableBackgroundProcessError(new Error("connection refused"))).toBe(true);
+    expect(isRecoverableBackgroundProcessError(new Error("request timed out"))).toBe(true);
     expect(isRecoverableBackgroundProcessError(new Error("socket hang up"))).toBe(true);
   });
 
