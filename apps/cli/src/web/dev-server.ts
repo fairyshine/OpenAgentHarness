@@ -168,8 +168,11 @@ async function proxyRequest(connection: OahConnection, request: IncomingMessage,
         }
 
         upstreamResponse.on("error", (error) => {
-          if (!response.destroyed) {
-            response.destroy(error);
+          if (!response.destroyed && !response.headersSent) {
+            response.statusCode = 502;
+            response.end("Upstream stream terminated.");
+          } else if (!response.destroyed) {
+            response.end();
           }
           resolve();
         });
@@ -194,7 +197,9 @@ async function proxyRequest(connection: OahConnection, request: IncomingMessage,
         resolve();
         return;
       }
-      reject(error);
+      response.statusCode = 502;
+      response.end(error.message);
+      resolve();
     });
     request.on("aborted", () => {
       upstreamRequest.destroy();
@@ -267,7 +272,22 @@ async function serveStaticFile(staticRoot: string, request: IncomingMessage, res
     return;
   }
 
-  createReadStream(filePath).pipe(response);
+  const stream = createReadStream(filePath);
+  stream.on("error", (error) => {
+    if (response.destroyed) {
+      return;
+    }
+
+    if (!response.headersSent) {
+      response.statusCode = error && typeof error === "object" && "code" in error && error.code === "ENOENT" ? 404 : 500;
+      response.setHeader("content-type", "text/plain; charset=utf-8");
+      response.end(response.statusCode === 404 ? "Not found" : "Failed to read static asset.");
+      return;
+    }
+
+    response.end();
+  });
+  stream.pipe(response);
 }
 
 async function resolveStaticFile(candidatePath: string, staticRoot: string): Promise<string> {

@@ -1,4 +1,5 @@
 ---
+import LinkMatrix from "../components/LinkMatrix.astro";
 import ProductLayout from "../components/ProductLayout.astro";
 import { sitePath } from "../lib/site-paths";
 
@@ -16,6 +17,27 @@ const endpoints = [
   ["POST", "/sessions"],
   ["POST", "/runs"],
   ["GET", "/runs/{id}/events"],
+];
+
+const relatedPaths = [
+  {
+    label: "API design",
+    title: "Read the contract rationale",
+    body: "Use the design notes when adding or changing resource boundaries, naming, or streaming behavior.",
+    href: "/api-design/",
+  },
+  {
+    label: "Schemas",
+    title: "Validate configuration shape",
+    body: "Use schemas when API payloads touch workspace settings, runtime config, hooks, actions, or providers.",
+    href: "/schemas/",
+  },
+  {
+    label: "Engine",
+    title: "Trace runtime consequences",
+    body: "Use engine docs when endpoint behavior changes queue state, run lifecycle, projection, or event output.",
+    href: "/engine/",
+  },
 ];
 ---
 
@@ -74,4 +96,11 @@ const endpoints = [
       </a>
     ))}
   </section>
+
+  <LinkMatrix
+    eyebrow="Contract maintenance"
+    title="Keep API changes connected to runtime behavior."
+    body="The API pages should be the public face of the engine, not a disconnected reference list."
+    items={relatedPaths}
+  />
 </ProductLayout>

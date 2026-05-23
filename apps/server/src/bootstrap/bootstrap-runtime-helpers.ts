@@ -5,14 +5,15 @@ import type { ServerConfig } from "@oah/config";
 import type { WorkspaceRecord } from "@oah/engine-core";
 import type { WorkspaceRepository } from "@oah/engine-core";
 import { AppError } from "@oah/engine-core";
+import { hasErrorCode } from "./error-codes.js";
 import type { SandboxHost } from "./sandbox-host.js";
 import type { WorkerRuntimeStatus } from "./worker-runtime.js";
 import { resolveManagedWorkspaceExternalRef } from "./object-storage-policy.js";
 import { parseBooleanEnv, parseNonNegativeIntEnv, parseOptionalPositiveIntEnv, parsePositiveIntEnv } from "./bootstrap-config.js";
 
 export function hasRemoteErrorCode(error: unknown, code: string): boolean {
-  if (error instanceof AppError) {
-    return error.code === code;
+  if (hasErrorCode(error, code)) {
+    return true;
   }
 
   if (!(error instanceof Error)) {

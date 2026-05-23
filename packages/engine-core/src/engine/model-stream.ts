@@ -425,20 +425,22 @@ export class ModelStreamCoordinator<TModelInput extends ModelExecutionInputSnaps
         }
 
         const latestRun = await this.#planning.getRun(this.#run.id);
+        const shouldUseRebuiltMessages = this.#executionContext.injectSystemReminder;
+        const rebuiltInput = await this.#planning.buildModelInput(
+          this.#workspace,
+          this.#session,
+          latestRun,
+          this.#allMessages,
+          this.#executionContext.currentAgentName,
+          this.#executionContext.injectSystemReminder
+        );
         const nextInput =
-          context?.messages && context.messages.length > 0
+          !shouldUseRebuiltMessages && context?.messages && context.messages.length > 0
             ? {
-                ...this.#latestHookedModelInput,
+                ...rebuiltInput,
                 messages: context.messages
               }
-            : await this.#planning.buildModelInput(
-                this.#workspace,
-                this.#session,
-                latestRun,
-                this.#allMessages,
-                this.#executionContext.currentAgentName,
-                this.#executionContext.injectSystemReminder
-              );
+            : rebuiltInput;
         const pendingModelContextMessages = drainPendingModelContextMessages(this.#executionContext);
         const nextInputWithInjectedContext =
           pendingModelContextMessages.length > 0

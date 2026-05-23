@@ -142,7 +142,8 @@ a {
 .route-grid a,
 .resource-list a,
 .layer-stack a,
-.pill-grid a {
+.pill-grid a,
+.link-matrix a {
   transition:
     background-color 160ms ease,
     border-color 160ms ease,
@@ -156,7 +157,8 @@ a {
 .route-grid a:hover,
 .resource-list a:hover,
 .layer-stack a:hover,
-.pill-grid a:hover {
+.pill-grid a:hover,
+.link-matrix a:hover {
   border-color: var(--line-strong);
   transform: translateY(-1px);
 }
@@ -579,7 +581,8 @@ a {
 .layer-stack,
 .api-panel,
 .split-panel,
-.timeline {
+.timeline,
+.link-matrix {
   margin-inline: auto;
   max-width: 76rem;
   padding-inline: 5vw;
@@ -602,6 +605,7 @@ a {
 
 .link-card,
 .resource-list a,
+.link-matrix a,
 .layer-stack a,
 .api-panel div,
 .timeline div,
@@ -623,6 +627,7 @@ a {
 }
 
 .link-card,
+.link-matrix a,
 .layer-stack a,
 .api-panel div,
 .timeline div,
@@ -632,6 +637,7 @@ a {
 }
 
 .link-card::before,
+.link-matrix a::before,
 .layer-stack a::before,
 .api-panel div::before,
 .route-grid a::before,
@@ -645,6 +651,7 @@ a {
 }
 
 .link-card span,
+.link-matrix span,
 .api-panel span,
 .timeline span {
   color: var(--amber);
@@ -655,6 +662,7 @@ a {
 }
 
 .link-card strong,
+.link-matrix strong,
 .resource-list strong,
 .layer-stack strong,
 .api-panel strong,
@@ -665,6 +673,7 @@ a {
 }
 
 .link-card p,
+.link-matrix a p,
 .resource-list span,
 .layer-stack p,
 .api-panel p,
@@ -675,9 +684,49 @@ a {
 }
 
 .link-card p,
+.link-matrix a p,
 .layer-stack p,
 .api-panel p {
   margin: 0.75rem 0 0;
+}
+
+.link-matrix {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 1.4rem;
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 1fr);
+  padding-block: 0 6rem;
+}
+
+.link-matrix__intro {
+  padding-top: 1.4rem;
+}
+
+.link-matrix__intro h2 {
+  font-size: clamp(1.9rem, 3.7vw, 3.5rem);
+  letter-spacing: 0;
+  line-height: 1.02;
+  margin: 0;
+}
+
+.link-matrix__intro p:not(.section-kicker) {
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  margin: 1rem 0 0;
+}
+
+.link-matrix__grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.link-matrix a {
+  display: block;
+  min-height: 12rem;
+  padding: 1.1rem;
+  position: relative;
 }
 
 .split-panel {
@@ -987,6 +1036,8 @@ a {
   .split-panel,
   .timeline,
   .process-strip,
+  .link-matrix,
+  .link-matrix__grid,
   .page-hero,
   .section,
   .operator-view {

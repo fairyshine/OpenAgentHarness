@@ -139,5 +139,20 @@ export async function sendProxyResponse(reply: FastifyReply, response: Response)
     return;
   }
 
-  await reply.send(Readable.fromWeb(response.body as never));
+  const stream = Readable.fromWeb(response.body as never);
+  stream.on("error", () => {
+    if (reply.raw.destroyed) {
+      return;
+    }
+
+    if (!reply.raw.headersSent) {
+      reply.raw.statusCode = 502;
+      reply.raw.setHeader("content-type", "text/plain; charset=utf-8");
+      reply.raw.end("Upstream stream terminated.");
+      return;
+    }
+
+    reply.raw.end();
+  });
+  await reply.send(stream);
 }

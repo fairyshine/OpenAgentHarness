@@ -15,6 +15,7 @@ import {
 } from "@oah/api-contracts";
 import { AppError } from "@oah/engine-core";
 
+import { hasErrorCode } from "../../bootstrap/error-codes.js";
 import { createParamsSchema } from "../context.js";
 import { readRequestBodyBuffer } from "../proxy-utils.js";
 import type { AppDependencies } from "../types.js";
@@ -227,7 +228,7 @@ export function registerInternalWorkspaceRoutes(app: FastifyInstance, dependenci
     try {
       await dependencies.runtimeService.deleteWorkspace(params.workspaceId);
     } catch (error) {
-      if (!(error instanceof Error) || (error as Error & { code?: string }).code !== "workspace_not_found") {
+      if (!hasErrorCode(error, "workspace_not_found")) {
         throw error;
       }
     }

@@ -16,7 +16,7 @@ import { AppError, nowIso } from "@oah/engine-core";
 
 import type { SQLitePersistenceCoordinator } from "./coordinator.js";
 import type { HistoryEventRow, JsonRow } from "./shared.js";
-import { appendHistoryEvent, coerceRows, parseJson, runInTransaction, serializeJson } from "./shared.js";
+import { appendHistoryEvent, coerceRows, hasErrorCode, parseJson, runInTransaction, serializeJson } from "./shared.js";
 
 export class SQLiteToolCallAuditRepository implements ToolCallAuditRepository {
   readonly #coordinator: SQLitePersistenceCoordinator;
@@ -136,7 +136,7 @@ export class SQLiteAgentTaskRepository implements AgentTaskRepository {
         return parseJson<AgentTaskRecord>(row.payload);
       }
     } catch (error) {
-      if (!(error instanceof AppError) || error.code !== "session_not_found") {
+      if (!hasErrorCode(error, "session_not_found")) {
         throw error;
       }
     }

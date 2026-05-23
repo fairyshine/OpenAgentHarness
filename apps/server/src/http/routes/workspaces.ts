@@ -34,6 +34,7 @@ import {
 } from "@oah/api-contracts";
 import { AppError, createId } from "@oah/engine-core";
 
+import { hasErrorCode } from "../../bootstrap/error-codes.js";
 import { assertWorkspaceAccess, createParamsSchema, sendError, toCallerContext } from "../context.js";
 import {
   buildOwnerProxyUrl,
@@ -456,7 +457,7 @@ async function handleDeleteWorkspace(
   try {
     await dependencies.runtimeService.deleteWorkspace(workspaceId, options);
   } catch (error) {
-    if (!(error instanceof Error) || (error as Error & { code?: string }).code !== "workspace_not_found") {
+    if (!hasErrorCode(error, "workspace_not_found")) {
       throw error;
     }
   }

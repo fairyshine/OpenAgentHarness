@@ -1,4 +1,5 @@
 ---
+import LinkMatrix from "../components/LinkMatrix.astro";
 import ProductLayout from "../components/ProductLayout.astro";
 import { sitePath } from "../lib/site-paths";
 
@@ -19,6 +20,27 @@ const internals = [
 ];
 
 const runtimeFlow = ["Client", "API", "Controller", "Queue", "Worker", "Storage", "Event stream"];
+
+const relatedPaths = [
+  {
+    label: "Workspace",
+    title: "Inspect runtime declarations",
+    body: "Configuration files explain which agents, models, skills, hooks, and MCP servers the engine can see.",
+    href: "/workspace/",
+  },
+  {
+    label: "API",
+    title: "Map boundaries to endpoints",
+    body: "Translate architecture ownership into resources, streaming events, schemas, and client expectations.",
+    href: "/api/",
+  },
+  {
+    label: "Operations",
+    title: "Deploy the planes separately",
+    body: "Move from architecture diagrams into split deployment, queue reliability, storage, and runbook decisions.",
+    href: "/operations/",
+  },
+];
 ---
 
 <ProductLayout
@@ -67,4 +89,11 @@ const runtimeFlow = ["Client", "API", "Controller", "Queue", "Worker", "Storage"
       {internals.map(([label, href]) => <a href={sitePath(href)}>{label}</a>)}
     </div>
   </section>
+
+  <LinkMatrix
+    eyebrow="Related paths"
+    title="Turn architecture into the next maintenance move."
+    body="Architecture is most useful when it points to the exact layer you need to modify, operate, or expose."
+    items={relatedPaths}
+  />
 </ProductLayout>

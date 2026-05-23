@@ -1,4 +1,5 @@
 import type { EngineService } from "@oah/engine-core";
+import { hasErrorCode } from "./error-codes.js";
 import type { SandboxHost } from "./sandbox-host.js";
 import type { WorkspaceMaterializationManager } from "./workspace-materialization.js";
 import type { BootstrappedRuntime } from "./bootstrap-runtime-types.js";
@@ -21,7 +22,7 @@ export function createWorkspaceLifecycle(input: {
         try {
           await input.runtimeService.deleteWorkspace(operationInput.workspaceId);
         } catch (error) {
-          if (!(error instanceof Error) || (error as Error & { code?: string }).code !== "workspace_not_found") {
+          if (!hasErrorCode(error, "workspace_not_found")) {
             throw error;
           }
         }

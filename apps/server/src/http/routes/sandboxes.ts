@@ -32,6 +32,7 @@ import type {
   WorkspaceFileContentResult
 } from "@oah/engine-core";
 import { AppError, createId } from "@oah/engine-core";
+import { hasErrorCode } from "../../bootstrap/error-codes.js";
 
 import { assertWorkspaceAccess, createParamsSchema, sendError, toCallerContext } from "../context.js";
 import {
@@ -663,7 +664,7 @@ export async function dispatchRegisteredSandboxRoute(
           }
           return reply.status(200).send(await buildSandboxResponse(dependencies, existing.id));
         } catch (error) {
-          if (!(error instanceof AppError) || error.code !== "workspace_not_found") {
+          if (!hasErrorCode(error, "workspace_not_found")) {
             throw error;
           }
         }

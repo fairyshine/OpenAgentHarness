@@ -79,6 +79,10 @@ export interface RegistryWorkspaceIdRow {
   workspaceId: string;
 }
 
+export function hasErrorCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
+}
+
 export interface MessageRegistryEntryRow {
   id: string;
 }

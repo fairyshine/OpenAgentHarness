@@ -33,6 +33,7 @@ import {
   appendHistoryDeleteEvents,
   appendHistoryEvent,
   coerceRows,
+  hasErrorCode,
   parseJson,
   runInTransaction,
   serializeJson
@@ -70,7 +71,7 @@ export class SQLiteSessionRepository implements SessionRepository {
       const row = handle.db.prepare("select payload from sessions where id = ? limit 1").get(id) as JsonRow | undefined;
       return row?.payload ? parseJson<Session>(row.payload) : null;
     } catch (error) {
-      if (error instanceof AppError && error.code === "session_not_found") {
+      if (hasErrorCode(error, "session_not_found")) {
         return null;
       }
       throw error;
@@ -228,7 +229,7 @@ export class SQLiteMessageRepository implements MessageRepository {
       }
       return null;
     } catch (error) {
-      if (error instanceof AppError && error.code === "message_not_found") {
+      if (hasErrorCode(error, "message_not_found")) {
         return null;
       }
       throw error;
@@ -471,7 +472,7 @@ export class SQLiteSessionPendingRunQueueRepository implements SessionPendingRun
         createdAt: row.created_at
       };
     } catch (error) {
-      if (error instanceof AppError && error.code === "run_not_found") {
+      if (hasErrorCode(error, "run_not_found")) {
         return null;
       }
       throw error;
@@ -523,7 +524,7 @@ export class SQLiteSessionPendingRunQueueRepository implements SessionPendingRun
       const handle = await this.#coordinator.getRunHandle(runId);
       handle.db.prepare("delete from session_pending_runs where run_id = ?").run(runId);
     } catch (error) {
-      if (error instanceof AppError && error.code === "run_not_found") {
+      if (hasErrorCode(error, "run_not_found")) {
         return;
       }
       throw error;
@@ -565,7 +566,7 @@ export class SQLiteRunRepository implements RunRepository {
       const row = handle.db.prepare("select payload from runs where id = ? limit 1").get(id) as JsonRow | undefined;
       return row?.payload ? parseJson<Run>(row.payload) : null;
     } catch (error) {
-      if (error instanceof AppError && error.code === "run_not_found") {
+      if (hasErrorCode(error, "run_not_found")) {
         return null;
       }
       throw error;
@@ -786,7 +787,7 @@ export class SQLiteSessionEventStore implements SessionEventStore {
       handle.db.prepare("delete from session_events where id = ?").run(eventId);
       await this.#coordinator.deleteRegistryEntry("session_event_registry", eventId);
     } catch (error) {
-      if (error instanceof AppError && error.code === "session_event_not_found") {
+      if (hasErrorCode(error, "session_event_not_found")) {
         return;
       }
       throw error;

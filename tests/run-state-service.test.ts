@@ -65,6 +65,39 @@ describe("RunStateService", () => {
     await expect(service.refreshRunHeartbeat("run_test")).resolves.toBeUndefined();
   });
 
+  it("ignores packaged run-not-found heartbeat errors that do not share the local AppError prototype", async () => {
+    const update = vi.fn(async (run: Run) => run);
+    const { service } = createRunStateService({
+      getRun: async () => {
+        throw {
+          name: "AppError",
+          statusCode: 404,
+          code: "run_not_found",
+          message: "Run run_missing was not found."
+        };
+      },
+      update
+    });
+
+    await expect(service.refreshRunHeartbeat("run_missing")).resolves.toBeUndefined();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("ignores packaged run-not-found heartbeat update races that do not share the local AppError prototype", async () => {
+    const { service } = createRunStateService({
+      update: async () => {
+        throw {
+          name: "AppError",
+          statusCode: 404,
+          code: "run_not_found",
+          message: "Run run_test was not found."
+        };
+      }
+    });
+
+    await expect(service.refreshRunHeartbeat("run_test")).resolves.toBeUndefined();
+  });
+
   it("ignores best-effort status updates for missing runs", async () => {
     const update = vi.fn(async (run: Run) => run);
     const { service } = createRunStateService({

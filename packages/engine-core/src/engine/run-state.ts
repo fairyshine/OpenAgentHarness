@@ -1,6 +1,6 @@
 import type { Run } from "@oah/api-contracts";
 
-import { AppError } from "../errors.js";
+import { AppError, hasAppErrorCode } from "../errors.js";
 import type { RunRepository, SessionEvent } from "../types.js";
 
 export function canTransitionRunStatus(from: Run["status"], to: Run["status"]): boolean {
@@ -21,7 +21,7 @@ export function canTransitionRunStatus(from: Run["status"], to: Run["status"]): 
 }
 
 function isRunNotFoundError(error: unknown): boolean {
-  return error instanceof AppError && error.code === "run_not_found";
+  return hasAppErrorCode(error, "run_not_found", 404);
 }
 
 export interface RunStateServiceDependencies {

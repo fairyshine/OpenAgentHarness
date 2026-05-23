@@ -1,0 +1,37 @@
+---
+import { sitePath } from "../lib/site-paths";
+
+interface LinkItem {
+  body: string;
+  href: string;
+  label: string;
+  title: string;
+}
+
+interface Props {
+  body: string;
+  eyebrow: string;
+  items: LinkItem[];
+  title: string;
+}
+
+const { body, eyebrow, items, title } = Astro.props;
+const headingId = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "related-paths";
+---
+
+<section class="link-matrix" aria-labelledby={headingId}>
+  <div class="link-matrix__intro">
+    <p class="section-kicker">{eyebrow}</p>
+    <h2 id={headingId}>{title}</h2>
+    <p>{body}</p>
+  </div>
+  <div class="link-matrix__grid">
+    {items.map((item) => (
+      <a href={sitePath(item.href)}>
+        <span>{item.label}</span>
+        <strong>{item.title}</strong>
+        <p>{item.body}</p>
+      </a>
+    ))}
+  </div>
+</section>

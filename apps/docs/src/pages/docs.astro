@@ -1,4 +1,5 @@
 ---
+import LinkMatrix from "../components/LinkMatrix.astro";
 import ProductLayout from "../components/ProductLayout.astro";
 import { sitePath } from "../lib/site-paths";
 
@@ -52,6 +53,27 @@ const docSignals = [
   ["Task-first", "Product pages route readers by job before the full sidebar appears."],
   ["Reference-safe", "Existing Starlight URLs stay stable for deep links and edit links."],
   ["Maintainable", "Sidebar sections now reflect ownership boundaries, not historical file order."],
+];
+
+const relatedPaths = [
+  {
+    label: "Architecture",
+    title: "Understand ownership boundaries",
+    body: "Use the architecture map when you need to decide which subsystem owns a change.",
+    href: "/architecture/",
+  },
+  {
+    label: "API",
+    title: "Check client contracts",
+    body: "Use the API entry when a WebUI, TUI, Desktop, or integration behavior depends on the runtime contract.",
+    href: "/api/",
+  },
+  {
+    label: "Operations",
+    title: "Move toward deployment",
+    body: "Use the operations lane when a local behavior needs production, Kubernetes, or runbook treatment.",
+    href: "/operations/",
+  },
 ];
 ---
 
@@ -113,4 +135,11 @@ const docSignals = [
       ))}
     </div>
   </section>
+
+  <LinkMatrix
+    eyebrow="Next paths"
+    title="Leave the hub with a purpose."
+    body="Each product entry leads to a different maintenance question. Use these paths when the current page is too broad."
+    items={relatedPaths}
+  />
 </ProductLayout>

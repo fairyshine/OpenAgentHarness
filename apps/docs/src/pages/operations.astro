@@ -1,4 +1,5 @@
 ---
+import LinkMatrix from "../components/LinkMatrix.astro";
 import ProductLayout from "../components/ProductLayout.astro";
 import { sitePath } from "../lib/site-paths";
 
@@ -28,6 +29,27 @@ const signals = [
   ["Embedded first", "Keep local development simple while preserving the split-deployment path."],
   ["Stateful by design", "Treat PostgreSQL, Redis, and workspace backing store as explicit operational dependencies."],
   ["Runbook owned", "Production docs stay close to rollout checks and failure recovery steps."],
+];
+
+const relatedPaths = [
+  {
+    label: "Architecture",
+    title: "Confirm plane ownership",
+    body: "Use architecture docs to understand what should run in clients, control plane, workers, and storage.",
+    href: "/architecture/",
+  },
+  {
+    label: "API",
+    title: "Check operational endpoints",
+    body: "Use API docs when deployment behavior affects workspace, session, run, storage, model, or stream contracts.",
+    href: "/api/",
+  },
+  {
+    label: "Roadmap",
+    title: "Decide what is ready next",
+    body: "Use roadmap docs to connect operational gaps to worker scale, reliability, and product maturity work.",
+    href: "/roadmap/",
+  },
 ];
 ---
 
@@ -96,4 +118,11 @@ const signals = [
       ))}
     </div>
   </section>
+
+  <LinkMatrix
+    eyebrow="Operational context"
+    title="Tie runbooks back to product ownership."
+    body="Operational docs should stay practical, but they need clear links back to the architecture, API, and roadmap decisions that shape them."
+    items={relatedPaths}
+  />
 </ProductLayout>
