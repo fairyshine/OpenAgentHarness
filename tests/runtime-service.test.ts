@@ -7093,6 +7093,169 @@ describe("runtime service", () => {
     expect(parentRunSteps.items.some((step) => step.stepType === "tool_call" && step.name === "SubAgent")).toBe(true);
   });
 
+  it("keeps the parent run active while background subagent runs are still running", async () => {
+    const gateway = new FakeModelGateway();
+    gateway.streamScenarioFactory = (input) => {
+      const systemMessages = input.messages?.filter((message) => message.role === "system").map((message) => message.content) ?? [];
+      const userMessages = input.messages
+        ?.filter((message) => message.role === "user")
+        .map((message) => (typeof message.content === "string" ? message.content : ""))
+        .join("\n") ?? "";
+
+      if (systemMessages.some((message) => message.includes("You are the background researcher."))) {
+        return {
+          text: "Background result is ready.",
+          reasoningDeltas: [
+            {
+              text: "working",
+              delayMs: 750
+            }
+          ]
+        };
+      }
+
+      if (userMessages.includes("<task-notification")) {
+        return {
+          text: "Parent integrated the background result."
+        };
+      }
+
+      return {
+        text: "Launched background subagent.",
+        toolSteps: [
+          {
+            toolName: "SubAgent",
+            input: {
+              description: "Gather facts",
+              prompt: "Gather facts in the background.",
+              subagent_name: "researcher",
+              run_in_background: true
+            },
+            toolCallId: "call_background_agent"
+          }
+        ]
+      };
+    };
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_background_agent_wait",
+      name: "background-agent-wait",
+      rootPath: "/tmp/background-agent-wait",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "plan",
+      settings: {
+        defaultAgent: "plan",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        plan: {
+          name: "plan",
+          mode: "primary",
+          prompt: "You are the planner agent.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: ["researcher"]
+        },
+        researcher: {
+          name: "researcher",
+          mode: "subagent",
+          prompt: "You are the background researcher.",
+          background: true,
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_background_agent_wait",
+        agents: [
+          { name: "plan", mode: "primary", source: "workspace" },
+          { name: "researcher", mode: "subagent", source: "workspace" }
+        ],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_background_agent_wait",
+      caller,
+      input: {
+        agentName: "plan"
+      }
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "Launch a background subagent and integrate its result." }
+    });
+
+    await waitFor(async () => {
+      const parentRun = await runtimeService.getRun(accepted.runId);
+      return ((parentRun.metadata?.delegatedRuns as Array<{ childRunId: string }> | undefined) ?? []).length === 1;
+    });
+
+    const parentDuringChild = await runtimeService.getRun(accepted.runId);
+    const delegatedRuns =
+      (parentDuringChild.metadata?.delegatedRuns as Array<{ childRunId: string; notifyParentOnCompletion?: boolean }> | undefined) ??
+      [];
+    expect(parentDuringChild.status).toBe("running");
+    expect(delegatedRuns[0]?.notifyParentOnCompletion).toBe(true);
+
+    const childRun = await runtimeService.getRun(delegatedRuns[0]!.childRunId);
+    expect(childRun.status === "queued" || childRun.status === "running").toBe(true);
+
+    await waitFor(async () => {
+      const parentRun = await runtimeService.getRun(accepted.runId);
+      return parentRun.status === "completed";
+    });
+
+    const completedParent = await runtimeService.getRun(accepted.runId);
+    const parentMessages = await runtimeService.listSessionMessages(session.id, 50);
+    expect(completedParent.status).toBe("completed");
+    expect(parentMessages.items.some((message) => messageText(message)?.includes("Parent integrated the background result."))).toBe(true);
+  });
+
   it("asks the subagent for final output instead of returning a raw tool result", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "oah-agent-delegate-fallback-"));
     const gateway = new FakeModelGateway();
@@ -12294,6 +12457,241 @@ describe("runtime service", () => {
 
     const runSteps = await runtimeService.listRunSteps("run_stale");
     expect(runSteps.items.some((step) => step.stepType === "system" && step.name === "run.failed")).toBe(true);
+  });
+
+  it("recovers stale cancellation-requested runs as cancelled", async () => {
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(),
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_run_recovery_cancel",
+      name: "run-recovery-cancel",
+      rootPath: "/tmp/run-recovery-cancel",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Recover stale runs safely.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_run_recovery_cancel",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    await persistence.sessionRepository.create({
+      id: "ses_recovery_cancel",
+      workspaceId: "project_run_recovery_cancel",
+      subjectRef: "dev:test",
+      activeAgentName: "builder",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+
+    await persistence.runRepository.create({
+      id: "run_stale_cancel",
+      workspaceId: "project_run_recovery_cancel",
+      sessionId: "ses_recovery_cancel",
+      initiatorRef: "dev:test",
+      triggerType: "message",
+      triggerRef: "msg_cancel",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "running",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:10.000Z",
+      heartbeatAt: "2026-04-01T00:00:20.000Z",
+      cancelRequestedAt: "2026-04-01T00:00:30.000Z"
+    });
+
+    const recovered = await runtimeService.recoverStaleRuns({
+      staleBefore: "2026-04-01T00:00:40.000Z"
+    });
+
+    expect(recovered.recoveredRunIds).toEqual(["run_stale_cancel"]);
+    const cancelledRun = await runtimeService.getRun("run_stale_cancel");
+    expect(cancelledRun.status).toBe("cancelled");
+    expect(cancelledRun.metadata).toMatchObject({
+      recoveredBy: "worker_startup",
+      recovery: {
+        state: "cancelled",
+        lastOutcome: "cancelled",
+        reason: "cancel_requested"
+      }
+    });
+
+    const events = await runtimeService.listSessionEvents("ses_recovery_cancel", undefined, "run_stale_cancel");
+    expect(events.find((event) => event.event === "run.cancelled")?.data).toMatchObject({
+      status: "cancelled",
+      recoveredBy: "worker_startup",
+      recoveryState: "cancelled",
+      recoveryReason: "cancel_requested"
+    });
+  });
+
+  it("recovers stale child runs as cancelled when the parent is cancelled", async () => {
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: new FakeModelGateway(),
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_run_recovery_child_cancel",
+      name: "run-recovery-child-cancel",
+      rootPath: "/tmp/run-recovery-child-cancel",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Recover stale runs safely.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_run_recovery_child_cancel",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    await persistence.sessionRepository.create({
+      id: "ses_parent_cancelled",
+      workspaceId: "project_run_recovery_child_cancel",
+      subjectRef: "dev:test",
+      activeAgentName: "builder",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+    await persistence.sessionRepository.create({
+      id: "ses_child_orphan",
+      workspaceId: "project_run_recovery_child_cancel",
+      parentSessionId: "ses_parent_cancelled",
+      subjectRef: "dev:test",
+      activeAgentName: "builder",
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-01T00:00:00.000Z"
+    });
+
+    await persistence.runRepository.create({
+      id: "run_parent_cancelled",
+      workspaceId: "project_run_recovery_child_cancel",
+      sessionId: "ses_parent_cancelled",
+      initiatorRef: "dev:test",
+      triggerType: "message",
+      triggerRef: "msg_parent",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "cancelled",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:10.000Z",
+      endedAt: "2026-04-01T00:00:30.000Z",
+      cancelRequestedAt: "2026-04-01T00:00:30.000Z"
+    });
+    await persistence.runRepository.create({
+      id: "run_child_orphan",
+      workspaceId: "project_run_recovery_child_cancel",
+      sessionId: "ses_child_orphan",
+      parentRunId: "run_parent_cancelled",
+      initiatorRef: "dev:test",
+      triggerType: "system",
+      triggerRef: "agent.delegate",
+      agentName: "builder",
+      effectiveAgentName: "builder",
+      switchCount: 0,
+      status: "running",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      startedAt: "2026-04-01T00:00:10.000Z",
+      heartbeatAt: "2026-04-01T00:00:20.000Z"
+    });
+
+    const recovered = await runtimeService.recoverStaleRuns({
+      staleBefore: "2026-04-01T00:00:40.000Z"
+    });
+
+    expect(recovered.recoveredRunIds).toEqual(["run_child_orphan"]);
+    const childRun = await runtimeService.getRun("run_child_orphan");
+    expect(childRun.status).toBe("cancelled");
+    expect(childRun.errorCode).toBe("parent_run_cancelled");
+    expect(childRun.metadata).toMatchObject({
+      recoveredBy: "worker_startup",
+      recovery: {
+        state: "cancelled",
+        lastOutcome: "cancelled",
+        reason: "parent_terminal"
+      }
+    });
   });
 
   it("requeues stale running runs when stale-run recovery is enabled", async () => {

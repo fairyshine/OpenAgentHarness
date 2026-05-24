@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 
 import type { Run } from "@oah/api-contracts";
 import { Bot, FolderPlus, MessageSquareText, RotateCcw, Settings2, Sparkles, Trash2 } from "lucide-react";
@@ -119,59 +119,59 @@ function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeAssets?: () => void
     return false;
   }
 
-  function renderSessionTree(
-    entries: SavedSessionRecord[],
-    options?: {
-      depth?: number;
-      childSessionsByParentId?: Map<string, SavedSessionRecord[]>;
-      workspaceId?: string;
-    }
-  ): ReactNode {
-    const depth = options?.depth ?? 0;
-    const childSessionsByParentId = options?.childSessionsByParentId;
-    const workspaceId = options?.workspaceId ?? "";
+  function flattenChildSessions(
+    sessionId: string,
+    childSessionsByParentId: Map<string, SavedSessionRecord[]>,
+    depth = 1
+  ): Array<{
+    entry: SavedSessionRecord;
+    depth: number;
+    runStatus?: Run["status"] | undefined;
+    active: boolean;
+  }> {
+    return (childSessionsByParentId.get(sessionId) ?? []).flatMap((childSession) => [
+      {
+        entry: childSession,
+        depth,
+        ...(sessionRunStatusById.has(childSession.id)
+          ? { runStatus: sessionRunStatusById.get(childSession.id) as Run["status"] }
+          : {}),
+        active: childSession.id === props.sessionId
+      },
+      ...flattenChildSessions(childSession.id, childSessionsByParentId, depth + 1)
+    ]);
+  }
 
-    return entries.map((sessionEntry) => {
-      const childSessions = childSessionsByParentId?.get(sessionEntry.id) ?? [];
-      const shouldExpand =
-        childSessions.length > 0 &&
-        (expandedSessionIdSet.has(sessionEntry.id) ||
-          (props.sessionId === sessionEntry.id
-            ? true
-            : childSessionsByParentId
-              ? hasActiveDescendant(sessionEntry.id, childSessionsByParentId, props.sessionId)
-              : false));
+  function renderTopLevelSessions(input: {
+    entries: SavedSessionRecord[];
+    childSessionsByParentId: Map<string, SavedSessionRecord[]>;
+    workspaceId: string;
+  }) {
+    return input.entries.map((sessionEntry) => {
+      const childSessions = flattenChildSessions(sessionEntry.id, input.childSessionsByParentId);
+      const active =
+        sessionEntry.id === props.sessionId ||
+        hasActiveDescendant(sessionEntry.id, input.childSessionsByParentId, props.sessionId);
       return (
-        <div key={sessionEntry.id} className={depth === 0 ? "space-y-1" : "space-y-0.5"}>
-          <SessionNavItem
-            entry={sessionEntry}
-            depth={depth}
-            active={sessionEntry.id === props.sessionId}
-            {...(sessionRunStatusById.has(sessionEntry.id)
-              ? { runStatus: sessionRunStatusById.get(sessionEntry.id) as Run["status"] }
-              : {})}
-            expanded={shouldExpand}
-            hasChildren={childSessions.length > 0}
-            onSelect={() => {
-              if (workspaceId.trim()) {
-                props.expandWorkspaceInSidebar(workspaceId);
-              }
-              props.refreshSessionById(sessionEntry.id);
-            }}
-            onToggleExpanded={() => props.toggleSessionExpansion(sessionEntry.id)}
-            onRename={(title) => props.renameSession(sessionEntry.id, title)}
-            onRemove={() => props.removeSavedSession(sessionEntry.id)}
-          />
-          {childSessions.length > 0 && shouldExpand ? (
-            <div className="mt-1 space-y-0.5">
-              {renderSessionTree(childSessions, {
-                depth: depth + 1,
-                ...(childSessionsByParentId ? { childSessionsByParentId } : {}),
-                workspaceId
-              })}
-            </div>
-          ) : null}
-        </div>
+        <SessionNavItem
+          key={sessionEntry.id}
+          entry={sessionEntry}
+          active={active}
+          {...(sessionRunStatusById.has(sessionEntry.id)
+            ? { runStatus: sessionRunStatusById.get(sessionEntry.id) as Run["status"] }
+            : {})}
+          childSessions={childSessions}
+          onSelect={() => {
+            props.expandWorkspaceInSidebar(input.workspaceId);
+            props.refreshSessionById(sessionEntry.id);
+          }}
+          onSelectChild={(sessionId) => {
+            props.expandWorkspaceInSidebar(input.workspaceId);
+            props.refreshSessionById(sessionId);
+          }}
+          onRename={(title) => props.renameSession(sessionEntry.id, title)}
+          onRemove={() => props.removeSavedSession(sessionEntry.id)}
+        />
       );
     });
   }
@@ -359,7 +359,8 @@ function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeAssets?: () => void
                                 Updating sessions
                               </div>
                             ) : null}
-                            {renderSessionTree(topLevelSessions, {
+                            {renderTopLevelSessions({
+                              entries: topLevelSessions,
                               childSessionsByParentId,
                               workspaceId: entry.id
                             })}

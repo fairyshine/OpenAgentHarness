@@ -5,6 +5,10 @@ import type { RequeueRunResult, RunQueue, RunRepository, SessionEvent, SessionRe
 import { nowIso } from "../utils.js";
 import { isRecord, type AutomaticRecoveryStrategy, type RecoveryActor } from "./internal-helpers.js";
 
+function isTerminalParentCancellation(status: Run["status"]): boolean {
+  return status === "cancelled" || status === "timed_out" || status === "failed";
+}
+
 type RecoveryFailureReason =
   | "fail_closed"
   | "requeue_unavailable"
@@ -227,6 +231,27 @@ export class RunRecoveryService {
         continue;
       }
 
+      if (currentRun.cancelRequestedAt) {
+        const cancelledRun = await this.#recoverCancelledRun(currentRun, {
+          recoveredBy: "worker_startup",
+          reason: "cancel_requested"
+        });
+        recoveredRunIds.push(cancelledRun.id);
+        continue;
+      }
+
+      if (currentRun.parentRunId) {
+        const parentRun = await this.#runRepository.getById(currentRun.parentRunId);
+        if (parentRun && isTerminalParentCancellation(parentRun.status)) {
+          const cancelledRun = await this.#recoverCancelledRun(currentRun, {
+            recoveredBy: "worker_startup",
+            reason: "parent_terminal"
+          });
+          recoveredRunIds.push(cancelledRun.id);
+          continue;
+        }
+      }
+
       if (this.#staleRunRecoveryStrategy !== "fail") {
         if (
           await this.#tryRequeueRecoveredRun(currentRun, {
@@ -289,6 +314,63 @@ export class RunRecoveryService {
     }
 
     return { recoveredRunIds, requeuedRunIds };
+  }
+
+  async #recoverCancelledRun(
+    run: Run,
+    input: {
+      recoveredBy: RecoveryActor;
+      reason: "cancel_requested" | "parent_terminal";
+    }
+  ): Promise<Run> {
+    const endedAt = nowIso();
+    const cancelledRun = await this.#updateRun(run, {
+      status: "cancelled",
+      endedAt,
+      cancelRequestedAt: run.cancelRequestedAt ?? endedAt,
+      errorCode: input.reason === "parent_terminal" ? "parent_run_cancelled" : undefined,
+      errorMessage:
+        input.reason === "parent_terminal"
+          ? "Run was cancelled because its parent run reached a terminal state."
+          : undefined,
+      metadata: {
+        ...(isRecord(run.metadata) ? run.metadata : {}),
+        recoveredBy: input.recoveredBy,
+        recoveredAt: endedAt,
+        recovery: {
+          ...(isRecord(run.metadata?.recovery) ? run.metadata.recovery : {}),
+          state: "cancelled",
+          lastOutcome: "cancelled",
+          lastRecoveredBy: input.recoveredBy,
+          lastRecoveredAt: endedAt,
+          reason: input.reason
+        }
+      }
+    });
+
+    if (cancelledRun.sessionId) {
+      await this.#appendEvent({
+        sessionId: cancelledRun.sessionId,
+        runId: cancelledRun.id,
+        event: "run.cancelled",
+        data: {
+          runId: cancelledRun.id,
+          sessionId: cancelledRun.sessionId,
+          status: cancelledRun.status,
+          recoveredBy: input.recoveredBy,
+          recoveryState: "cancelled",
+          recoveryReason: input.reason
+        }
+      });
+    }
+
+    await this.#recordSystemStep(cancelledRun, "run.cancelled", {
+      status: cancelledRun.status,
+      recoveredBy: input.recoveredBy,
+      recoveryState: "cancelled",
+      recoveryReason: input.reason
+    });
+    return cancelledRun;
   }
 
   async #tryRequeueRecoveredRun(

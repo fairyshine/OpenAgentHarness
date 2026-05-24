@@ -84,6 +84,7 @@ import {
   type RunExecutionContext
 } from "./engine/internal-helpers.js";
 import type { EngineRuntimeKernel } from "./engine-runtime-kernel.js";
+import { delegatedRunRecords } from "./engine/agent-coordination-records.js";
 
 export class EngineService {
   readonly #defaultModel: string;
@@ -1034,6 +1035,13 @@ export class EngineService {
 
     if (updated.status === "running" || updated.status === "waiting_tool") {
       this.#runAbortControllers.get(runId)?.abort("interrupt");
+    }
+
+    for (const record of delegatedRunRecords(updated)) {
+      const childRun = await this.#runRepository.getById(record.childRunId);
+      if (childRun?.status === "queued" || childRun?.status === "running" || childRun?.status === "waiting_tool") {
+        await this.#requestRunCancellation(childRun.id);
+      }
     }
   }
 

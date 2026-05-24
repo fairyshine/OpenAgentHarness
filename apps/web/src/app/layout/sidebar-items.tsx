@@ -1,9 +1,17 @@
 import { memo } from "react";
 
-import { AlertCircle, ChevronDown, ChevronRight, Folder, LoaderCircle, PencilLine, Trash2 } from "lucide-react";
+import { AlertCircle, Folder, LoaderCircle, Network, PencilLine, Trash2 } from "lucide-react";
 import type { Run } from "@oah/api-contracts";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { formatTimestamp, pathLeaf, type SavedSessionRecord, type SavedWorkspaceRecord } from "../support";
@@ -152,10 +160,14 @@ type SessionNavItemProps = {
   active: boolean;
   runStatus?: Run["status"];
   depth?: number;
-  expanded?: boolean;
-  hasChildren?: boolean;
+  childSessions?: Array<{
+    entry: SavedSessionRecord;
+    depth: number;
+    runStatus?: Run["status"] | undefined;
+    active: boolean;
+  }>;
   onSelect: () => void;
-  onToggleExpanded?: () => void;
+  onSelectChild?: (sessionId: string) => void;
   onRename: (title: string) => void | Promise<void>;
   onRemove: () => void;
 };
@@ -167,6 +179,9 @@ function SessionNavItemImpl(props: SessionNavItemProps) {
   const hasActiveRunStatus =
     props.runStatus === "queued" || props.runStatus === "running" || props.runStatus === "waiting_tool";
   const hasProblemRunStatus = props.runStatus === "failed" || props.runStatus === "timed_out";
+  const childSessions = props.childSessions ?? [];
+  const hasChildren = childSessions.length > 0;
+  const activeChild = childSessions.find((child) => child.active);
   const isChild = (props.depth ?? 0) > 0;
   const rowSurfaceClass = isChild
     ? props.active
@@ -192,22 +207,6 @@ function SessionNavItemImpl(props: SessionNavItemProps) {
         props.onSelect();
       }}
     >
-      <div className="flex h-5 w-5 shrink-0 items-center justify-center">
-        {props.hasChildren ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="ob-list-item-control h-5 w-5 shrink-0 rounded-md text-muted-foreground/58"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onToggleExpanded?.();
-            }}
-            title={props.expanded ? "Collapse child sessions" : "Expand child sessions"}
-          >
-            {props.expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          </Button>
-        ) : null}
-      </div>
       <Tooltip>
         <TooltipTrigger asChild>
           <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
@@ -218,6 +217,11 @@ function SessionNavItemImpl(props: SessionNavItemProps) {
                 </p>
               </div>
             </div>
+            {hasChildren ? (
+              <span className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full border border-foreground/8 bg-background/50 px-1 text-[10px] font-medium text-muted-foreground/68 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
+                {childSessions.length}
+              </span>
+            ) : null}
             {hasActiveRunStatus ? (
               <LoaderCircle
                 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground/70 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
@@ -245,7 +249,8 @@ function SessionNavItemImpl(props: SessionNavItemProps) {
             <DetailLine label="id" value={props.entry.id} mono />
             {props.entry.parentSessionId ? <DetailLine label="parent" value={props.entry.parentSessionId} mono /> : null}
             {props.entry.parentSessionId ? <DetailLine label="type" value="subagent session" /> : null}
-            {props.hasChildren ? <DetailLine label="children" value={props.expanded ? "expanded" : "collapsed"} /> : null}
+            {hasChildren ? <DetailLine label="children" value={String(childSessions.length)} /> : null}
+            {activeChild ? <DetailLine label="selected child" value={activeChild.entry.title || activeChild.entry.id} /> : null}
             {props.runStatus ? <DetailLine label="status" value={props.runStatus} /> : null}
             <DetailLine label="created" value={formatTimestamp(props.entry.createdAt)} />
             {props.entry.lastRunAt ? <DetailLine label="last run" value={formatTimestamp(props.entry.lastRunAt)} /> : null}
@@ -256,6 +261,69 @@ function SessionNavItemImpl(props: SessionNavItemProps) {
       <div
         className="absolute right-1 top-1/2 flex -translate-y-1/2 translate-x-1 items-center gap-0.5 opacity-0 transition-all pointer-events-none group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100"
       >
+        {hasChildren ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`ob-list-item-control h-4 w-4 shrink-0 rounded-[8px] text-muted-foreground/66 ${activeChild ? "text-foreground/76" : ""}`}
+                title="Open child sessions"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <Network className="h-[11px] w-[11px]" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              side="right"
+              sideOffset={8}
+              className="w-[280px] rounded-2xl p-1.5"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <DropdownMenuLabel className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                Child sessions
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <div className="max-h-[320px] overflow-y-auto">
+                {childSessions.map((child) => {
+                  const childTitle = child.entry.title || "Untitled session";
+                  const childTime = formatRelativeShort(child.entry.lastRunAt || child.entry.createdAt);
+                  const childActiveRun =
+                    child.runStatus === "queued" || child.runStatus === "running" || child.runStatus === "waiting_tool";
+                  const childProblemRun = child.runStatus === "failed" || child.runStatus === "timed_out";
+                  return (
+                    <DropdownMenuItem
+                      key={child.entry.id}
+                      className={`mx-0.5 min-h-10 rounded-xl px-2 py-2 ${child.active ? "bg-accent text-accent-foreground" : ""}`}
+                      onSelect={() => props.onSelectChild?.(child.entry.id)}
+                    >
+                      <div
+                        className="flex min-w-0 flex-1 items-center gap-2"
+                        style={{
+                          paddingLeft: `${Math.max(0, child.depth - 1) * 10}px`
+                        }}
+                      >
+                        <Network className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[13px] font-medium">{childTitle}</div>
+                          <div className="truncate text-[11px] text-muted-foreground">
+                            {[child.entry.agentName, childTime].filter(Boolean).join(" · ")}
+                          </div>
+                        </div>
+                        {childActiveRun ? (
+                          <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground/70" />
+                        ) : childProblemRun ? (
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive/70" />
+                        ) : null}
+                      </div>
+                    </DropdownMenuItem>
+                  );
+                })}
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
         <Button
           variant="ghost"
           size="icon"
@@ -294,8 +362,7 @@ function areSessionNavItemPropsEqual(previous: SessionNavItemProps, next: Sessio
     previous.active === next.active &&
     previous.runStatus === next.runStatus &&
     previous.depth === next.depth &&
-    previous.expanded === next.expanded &&
-    previous.hasChildren === next.hasChildren &&
+    previous.childSessions === next.childSessions &&
     previous.entry.id === next.entry.id &&
     previous.entry.workspaceId === next.entry.workspaceId &&
     previous.entry.parentSessionId === next.entry.parentSessionId &&

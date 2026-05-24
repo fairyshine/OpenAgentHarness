@@ -25,6 +25,7 @@ import type { AgentCoordinationService } from "./agent-coordination.js";
 import type { ToolExecutionService } from "./tool-execution.js";
 
 const DEFAULT_MODEL_STREAM_TIMEOUT_MS = 120_000;
+const DELEGATED_RUN_WAIT_INTERVAL_MS = 100;
 
 function readPositiveNumberEnv(name: string): number | undefined {
   const value = process.env[name]?.trim();
@@ -55,6 +56,37 @@ function isDelegatedTerminalUpdateMessage(message: Message): boolean {
     metadata?.taskNotificationPendingModelDelivery !== true &&
     metadata?.eligibleForModelContext !== false
   );
+}
+
+function isRunActive(status: Run["status"]): boolean {
+  return status === "queued" || status === "running" || status === "waiting_tool";
+}
+
+function sleep(ms: number, signal?: AbortSignal | undefined): Promise<void> {
+  if (!signal) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 interface ModelRunExecutorExecutionServices {
@@ -344,6 +376,35 @@ export class ModelRunExecutor {
       allMessages.push(...latestMessages);
       return drainedNotifications;
     };
+    const waitForActiveDelegatedRuns = async (targetRun: Run): Promise<{ childRunIds: string[] }> => {
+      const childRunIds = new Set(
+        execution.agentCoordination.delegatedRunRecords(targetRun).map((record) => record.childRunId)
+      );
+      if (childRunIds.size === 0) {
+        return { childRunIds: [] };
+      }
+
+      const waitedChildRunIds = new Set<string>();
+      while (true) {
+        if (abortSignal.aborted) {
+          throw new Error("aborted");
+        }
+
+        const childRuns = (
+          await Promise.all([...childRunIds].map(async (childRunId) => this.#getRun(childRunId).catch(() => null)))
+        ).filter((childRun): childRun is Run => childRun !== null);
+        const activeChildRuns = childRuns.filter((childRun) => isRunActive(childRun.status));
+        for (const childRun of activeChildRuns) {
+          waitedChildRunIds.add(childRun.id);
+        }
+
+        if (activeChildRuns.length === 0) {
+          return { childRunIds: [...waitedChildRunIds] };
+        }
+
+        await sleep(DELEGATED_RUN_WAIT_INTERVAL_MS, abortSignal);
+      }
+    };
     await drainPendingTaskNotificationsIntoHistory(run.id);
     let hookedModelInput = await buildInitialHookedModelInput();
     const engineTools = this.#buildEngineTools(workspace, run, session, executionContext);
@@ -534,6 +595,7 @@ export class ModelRunExecutor {
       }
 
       const latestRun = await this.#getRun(run.id);
+      const waitedDelegatedRuns = await waitForActiveDelegatedRuns(latestRun);
       await execution.agentCoordination.persistUnreportedTerminalDelegatedRuns({
         workspace,
         parentSessionId: session.id,
@@ -549,7 +611,7 @@ export class ModelRunExecutor {
       const hasUnseenDelegatedUpdate = latestMessages.some(
         (message) => isDelegatedTerminalUpdateMessage(message) && !knownMessageIds.has(message.id)
       );
-      if (hasUnseenDelegatedUpdate || drainedNotifications.messageIds.length > 0) {
+      if (hasUnseenDelegatedUpdate || drainedNotifications.messageIds.length > 0 || waitedDelegatedRuns.childRunIds.length > 0) {
         continuationCount += 1;
         if (agentPolicy?.maxSteps !== undefined && continuationCount > agentPolicy.maxSteps) {
           throw new AppError(

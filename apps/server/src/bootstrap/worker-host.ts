@@ -216,8 +216,17 @@ export function createWorkerHost(options: {
   poolFactory?: ((options: ConstructorParameters<typeof RedisRunWorkerPool>[0]) => WorkerPoolLike) | undefined;
 }): WorkerHost {
   if (!options.startWorker || !options.redisRunQueue || !options.config.storage.redis_url) {
+    let recoveryStarted = false;
     return {
       start() {
+        if (!options.startWorker || recoveryStarted) {
+          return undefined;
+        }
+
+        recoveryStarted = true;
+        void options.runtimeService
+          .recoverStaleRuns()
+          .catch((error) => options.logger?.warn("Failed to recover stale runs during local worker startup.", error));
         return undefined;
       },
       snapshot() {
