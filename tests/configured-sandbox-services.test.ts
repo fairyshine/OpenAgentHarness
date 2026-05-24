@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ServerConfig } from "@oah/config";
+import type { WorkspaceRecord } from "@oah/engine-core";
 
 import {
+  createConfiguredWorkspaceDeletionHandler,
   createSandboxHostMaintenance,
   createSandboxWorkspaceActivityTracker,
   isRemoteSandboxProvider,
@@ -30,6 +32,37 @@ function buildConfig(overrides?: Partial<ServerConfig>): ServerConfig {
       default_model: "openai-default"
     },
     ...overrides
+  };
+}
+
+function createWorkspaceRecordFixture(input?: Partial<WorkspaceRecord>): WorkspaceRecord {
+  return {
+    id: "ws_delete",
+    kind: "project",
+    readOnly: false,
+    historyMirrorEnabled: true,
+    defaultAgent: "assistant",
+    settings: {
+      defaultAgent: "assistant"
+    },
+    workspaceModels: {},
+    agents: {},
+    actions: {},
+    skills: {},
+    toolServers: {},
+    hooks: {},
+    catalog: {
+      workspaceId: "ws_delete",
+      models: [],
+      actions: []
+    },
+    name: "delete-me",
+    rootPath: "/tmp/workspaces/ws_delete",
+    executionPolicy: "local",
+    status: "active",
+    createdAt: "2026-04-30T00:00:00.000Z",
+    updatedAt: "2026-04-30T00:00:00.000Z",
+    ...input
   };
 }
 
@@ -316,5 +349,41 @@ describe("configured sandbox workspace services", () => {
       maintenanceIntervalMs: 5_000
     });
     expect(maintenance.start()).toBeUndefined();
+  });
+
+  it("closes local workspace watchers before removing workspace roots", async () => {
+    const events: string[] = [];
+    const workspace = createWorkspaceRecordFixture();
+    const sandboxHost = {
+      ...createSandboxHost("embedded"),
+      async deleteWorkspace() {
+        events.push("deleteWorkspace");
+      }
+    } satisfies SandboxHost;
+    const deletionHandler = createConfiguredWorkspaceDeletionHandler({
+      plan: {
+        initializerMode: "local",
+        useSelfHostedWorkspaceDelegatingInitializer: false,
+        useSandboxBackedWorkspaceInitializer: false
+      },
+      config: buildConfig(),
+      remoteSandboxProvider: false,
+      sandboxHost,
+      workspaceMaterializationManager: undefined,
+      objectStorageModule: undefined,
+      objectStorageMirror: undefined,
+      sqliteShadowRoot: "/tmp/sqlite-shadow",
+      async clearWorkspaceCoordination() {
+        events.push("clearCoordination");
+      },
+      closeWorkspaceWatcher() {
+        events.push("closeWatcher");
+      }
+    });
+
+    await deletionHandler.deleteWorkspace(workspace);
+
+    expect(events[0]).toBe("closeWatcher");
+    expect(events).toContain("clearCoordination");
   });
 });

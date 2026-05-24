@@ -39,6 +39,8 @@ export function createWorkspaceDeletionHandler(input: {
         );
       }
 
+      input.closeWorkspaceWatcher?.(workspace);
+
       if (
         shouldCleanupWorkspaceThroughSandboxHost({
           remoteSandboxProvider: input.remoteSandboxProvider,
@@ -78,7 +80,6 @@ export function createWorkspaceDeletionHandler(input: {
         console.info(`[oah-object-storage] No object storage configured; skipping backing-store deletion for ${workspace.id}`);
       }
 
-      input.closeWorkspaceWatcher?.(workspace);
       const deletedCopies = await input.workspaceMaterializationManager?.deleteWorkspaceCopies(workspace.id);
       const cleanup: WorkspaceLocalArtifactCleanupStatus = await cleanupWorkspaceLocalArtifacts({
         workspace,

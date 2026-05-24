@@ -66,6 +66,7 @@ export interface BootstrappedRuntime {
   }) => Promise<{ name: string }>;
   deleteWorkspaceRuntime?: (input: { runtimeName: string }) => Promise<void>;
   listPlatformAssets?: (kind: PlatformAssetKind) => Promise<PlatformAssetList>;
+  getPlatformAssetDetail?: (kind: PlatformAssetKind, name: string) => Promise<import("@oah/api-contracts").PlatformAssetDetail>;
   uploadPlatformModelAsset?: (input: {
     name: string;
     yamlBuffer: Buffer;

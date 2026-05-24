@@ -1,6 +1,7 @@
 import { startTransition, useRef } from "react";
 
 import type {
+  PlatformAssetDetail,
   PlatformAssetKind,
   PlatformAssetList,
   Session,
@@ -68,6 +69,14 @@ async function runLimited<T>(items: T[], limit: number, worker: (item: T) => Pro
   );
 }
 
+function mergeLoadingIds(current: string[], ids: string[]) {
+  return Array.from(new Set([...current, ...ids]));
+}
+
+function removeLoadingIds(current: string[], ids: Set<string>) {
+  return current.filter((entry) => !ids.has(entry));
+}
+
 export function useNavigationActions(params: NavigationActionParams) {
   const workspaceSessionSyncSeqRef = useRef(0);
   const {
@@ -112,13 +121,20 @@ export function useNavigationActions(params: NavigationActionParams) {
     }
 
     try {
-      return await params.request<T>(`/api/v1/platform-assets/${collection}`);
+      return await params.request<T>(`/api/v1/assets/${collection}`);
     } catch (error) {
       if (!isNotFoundError(error)) {
         throw error;
       }
 
-      return params.request<T>(`/api/v1/assets/${collection}`);
+      try {
+        return await params.request<T>(`/api/v1/platform-assets/${collection}`);
+      } catch (fallbackError) {
+        if (!isNotFoundError(fallbackError)) {
+          throw fallbackError;
+        }
+        return { kind, items: [] } as T;
+      }
     }
   }
 
@@ -129,12 +145,12 @@ export function useNavigationActions(params: NavigationActionParams) {
       return fetchWorkspaceRuntimeEndpoint(`/api/v1/${runtimePath}`, `/api/v1/${legacyPath}`, init);
     }
 
-    const compatibilityResponse = await fetch(buildUrl(params.connection.baseUrl, `/api/v1/platform-assets/${path}`), init);
-    if (compatibilityResponse.status !== 404) {
-      return compatibilityResponse;
+    const assetsResponse = await fetch(buildUrl(params.connection.baseUrl, `/api/v1/assets/${path}`), init);
+    if (assetsResponse.status !== 404) {
+      return assetsResponse;
     }
 
-    return fetch(buildUrl(params.connection.baseUrl, `/api/v1/assets/${path}`), init);
+    return fetch(buildUrl(params.connection.baseUrl, `/api/v1/platform-assets/${path}`), init);
   }
 
   async function deleteWorkspace(workspaceToRemoveId: string) {
@@ -521,6 +537,13 @@ export function useNavigationActions(params: NavigationActionParams) {
 
   async function refreshPlatformAssets(kind?: PlatformAssetKind, quiet = false) {
     const kinds: PlatformAssetKind[] = kind ? [kind] : ["runtime", "model", "tool", "skill"];
+    params.navigation.setPlatformAssetLoading((current) => {
+      const next = { ...current };
+      for (const assetKind of kinds) {
+        next[assetKind] = true;
+      }
+      return next;
+    });
     try {
       const lists = await Promise.all(
         kinds.map(async (assetKind) => requestPlatformAssetEndpoint<PlatformAssetList>(assetKind))
@@ -547,6 +570,35 @@ export function useNavigationActions(params: NavigationActionParams) {
     } catch (error) {
       if (!quiet) {
         params.setErrorMessage(toErrorMessage(error));
+      }
+    } finally {
+      params.navigation.setPlatformAssetLoading((current) => {
+        const next = { ...current };
+        for (const assetKind of kinds) {
+          next[assetKind] = false;
+        }
+        return next;
+      });
+    }
+  }
+
+  async function getPlatformAssetDetail(kind: PlatformAssetKind, name: string): Promise<PlatformAssetDetail | null> {
+    if (kind === "runtime") {
+      return null;
+    }
+    const collection = PLATFORM_ASSET_COLLECTIONS[kind];
+    try {
+      return await params.request<PlatformAssetDetail>(`/api/v1/assets/${collection}/${encodeURIComponent(name)}`);
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        params.setErrorMessage(toErrorMessage(error));
+        return null;
+      }
+      try {
+        return await params.request<PlatformAssetDetail>(`/api/v1/platform-assets/${collection}/${encodeURIComponent(name)}`);
+      } catch (fallbackError) {
+        params.setErrorMessage(toErrorMessage(fallbackError));
+        return null;
       }
     }
   }
@@ -773,6 +825,7 @@ export function useNavigationActions(params: NavigationActionParams) {
   }
 
   async function refreshWorkspaceIndex(quiet = false) {
+    params.navigation.setWorkspaceIndexLoading(true);
     try {
       const response = await params.request<{ items: Workspace[]; nextCursor?: string }>("/api/v1/workspaces?pageSize=200");
       const visibleWorkspaceIds = new Set(response.items.map((item) => item.id));
@@ -840,7 +893,8 @@ export function useNavigationActions(params: NavigationActionParams) {
           concurrency: WORKSPACE_SESSION_BACKGROUND_SYNC_CONCURRENCY,
           pageSize: WORKSPACE_SESSION_BACKGROUND_PAGE_SIZE,
           pruneMissingSessions: true,
-          seq: syncSeq
+          seq: syncSeq,
+          showLoading: false
         });
       }, 4_000, 10_000);
 
@@ -873,6 +927,8 @@ export function useNavigationActions(params: NavigationActionParams) {
       if (!quiet) {
         params.setErrorMessage(toErrorMessage(error));
       }
+    } finally {
+      params.navigation.setWorkspaceIndexLoading(false);
     }
   }
 
@@ -886,12 +942,17 @@ export function useNavigationActions(params: NavigationActionParams) {
       pageSize?: number | undefined;
       pruneMissingSessions?: boolean | undefined;
       seq?: number | undefined;
+      showLoading?: boolean | undefined;
     }
   ) {
     if (options?.seq !== undefined && options.seq !== workspaceSessionSyncSeqRef.current) {
       return;
     }
 
+    const loadingWorkspaceIds = workspaces.map((workspace) => workspace.id);
+    if (options?.showLoading !== false) {
+      params.navigation.setWorkspaceSessionLoadingIds((current) => mergeLoadingIds(current, loadingWorkspaceIds));
+    }
     const failedWorkspaceIds = new Set<string>();
     const targetWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
     const syncedWorkspaceIds = new Set<string>();
@@ -899,49 +960,55 @@ export function useNavigationActions(params: NavigationActionParams) {
     const pageSize = String(options?.pageSize ?? WORKSPACE_SESSION_BACKGROUND_PAGE_SIZE);
     const maxPagesPerWorkspace = options?.maxPagesPerWorkspace ?? Number.POSITIVE_INFINITY;
 
-    await runLimited(workspaces, options?.concurrency ?? WORKSPACE_SESSION_BACKGROUND_SYNC_CONCURRENCY, async (workspace) => {
-      if (options?.seq !== undefined && options.seq !== workspaceSessionSyncSeqRef.current) {
-        return;
-      }
+    try {
+      await runLimited(workspaces, options?.concurrency ?? WORKSPACE_SESSION_BACKGROUND_SYNC_CONCURRENCY, async (workspace) => {
+        if (options?.seq !== undefined && options.seq !== workspaceSessionSyncSeqRef.current) {
+          return;
+        }
 
-      const sessions: Session[] = [];
-      try {
-        let cursor: string | undefined;
-        let pageCount = 0;
+        const sessions: Session[] = [];
+        try {
+          let cursor: string | undefined;
+          let pageCount = 0;
 
-        do {
-          const query = new URLSearchParams({
-            pageSize
+          do {
+            const query = new URLSearchParams({
+              pageSize
+            });
+            if (cursor) {
+              query.set("cursor", cursor);
+            }
+            const page = await params.request<SessionPage>(`/api/v1/workspaces/${workspace.id}/sessions?${query.toString()}`);
+            sessions.push(...page.items);
+            cursor = page.nextCursor;
+            pageCount += 1;
+          } while (cursor && pageCount < maxPagesPerWorkspace);
+          syncedWorkspaceIds.add(workspace.id);
+        } catch {
+          failedWorkspaceIds.add(workspace.id);
+          return;
+        }
+
+        for (const session of sessions) {
+          const existing = existingSessionById.get(session.id);
+          syncedSessions.set(session.id, {
+            id: session.id,
+            workspaceId: session.workspaceId,
+            ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
+            title: session.title,
+            modelRef: session.modelRef,
+            agentName: session.activeAgentName,
+            lastRunAt: session.lastRunAt,
+            createdAt: session.createdAt,
+            lastOpenedAt: existing?.lastOpenedAt ?? session.createdAt
           });
-          if (cursor) {
-            query.set("cursor", cursor);
-          }
-          const page = await params.request<SessionPage>(`/api/v1/workspaces/${workspace.id}/sessions?${query.toString()}`);
-          sessions.push(...page.items);
-          cursor = page.nextCursor;
-          pageCount += 1;
-        } while (cursor && pageCount < maxPagesPerWorkspace);
-        syncedWorkspaceIds.add(workspace.id);
-      } catch {
-        failedWorkspaceIds.add(workspace.id);
-        return;
+        }
+      });
+    } finally {
+      if (options?.showLoading !== false) {
+        params.navigation.setWorkspaceSessionLoadingIds((current) => removeLoadingIds(current, targetWorkspaceIds));
       }
-
-      for (const session of sessions) {
-        const existing = existingSessionById.get(session.id);
-        syncedSessions.set(session.id, {
-          id: session.id,
-          workspaceId: session.workspaceId,
-          ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
-          title: session.title,
-          modelRef: session.modelRef,
-          agentName: session.activeAgentName,
-          lastRunAt: session.lastRunAt,
-          createdAt: session.createdAt,
-          lastOpenedAt: existing?.lastOpenedAt ?? session.createdAt
-        });
-      }
-    });
+    }
 
     if (options?.seq !== undefined && options.seq !== workspaceSessionSyncSeqRef.current) {
       return;
@@ -1456,6 +1523,7 @@ export function useNavigationActions(params: NavigationActionParams) {
     updateWorkspaceRuntime,
     deleteWorkspaceRuntime,
     refreshPlatformAssets,
+    getPlatformAssetDetail,
     uploadPlatformRuntimeAsset,
     updatePlatformRuntimeAsset,
     deletePlatformRuntimeAsset: (name: string) => deletePlatformAsset("runtime", name),

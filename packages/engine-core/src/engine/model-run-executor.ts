@@ -24,6 +24,27 @@ import type { ToolErrorContentPart } from "./model-call-serialization.js";
 import type { AgentCoordinationService } from "./agent-coordination.js";
 import type { ToolExecutionService } from "./tool-execution.js";
 
+const DEFAULT_MODEL_STREAM_TIMEOUT_MS = 120_000;
+
+function readPositiveNumberEnv(name: string): number | undefined {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function resolveModelStreamTimeoutMs(runTimeoutMs: number | undefined): number {
+  const configured = readPositiveNumberEnv("OAH_MODEL_STREAM_TIMEOUT_MS");
+  if (configured !== undefined) {
+    return configured;
+  }
+
+  return runTimeoutMs !== undefined ? runTimeoutMs : DEFAULT_MODEL_STREAM_TIMEOUT_MS;
+}
+
 function isDelegatedTerminalUpdateMessage(message: Message): boolean {
   const metadata = message.metadata as
     | { delegatedUpdate?: unknown; taskNotificationPendingModelDelivery?: unknown; eligibleForModelContext?: unknown }
@@ -57,7 +78,8 @@ export interface ModelRunExecutorDependencies {
     session: Session,
     run: Run,
     activeAgentName: string,
-    allMessages: Message[]
+    allMessages: Message[],
+    options?: { abortSignal?: AbortSignal | undefined; modelTimeoutMs?: number | undefined } | undefined
   ) => Promise<Awaited<ReturnType<EngineMessageSyncService["loadSessionEngineMessages"]>>>;
   buildModelInput: (
     workspace: WorkspaceRecord,
@@ -195,6 +217,7 @@ export interface ExecuteModelRunParams {
   session: Session;
   run: Run;
   abortSignal: AbortSignal;
+  runTimeoutMs?: number | undefined;
   shouldSkipCompletion?: ((runId: string) => boolean) | undefined;
   resolveAbortStepStatus?: (() => "failed" | "cancelled") | undefined;
 }
@@ -265,6 +288,7 @@ export class ModelRunExecutor {
     session,
     run,
     abortSignal,
+    runTimeoutMs,
     shouldSkipCompletion,
     resolveAbortStepStatus
   }: ExecuteModelRunParams): Promise<void> {
@@ -279,6 +303,7 @@ export class ModelRunExecutor {
       delegatedRunIds: execution.agentCoordination.delegatedRunRecords(run).map((record) => record.childRunId),
       pendingModelContextMessages: []
     };
+    const modelStreamTimeoutMs = resolveModelStreamTimeoutMs(runTimeoutMs);
     const buildInitialHookedModelInput = async () => {
       const latestRun = await this.#getRun(run.id);
       const engineMessages = await this.#prepareMessagesForModelInput(
@@ -286,7 +311,11 @@ export class ModelRunExecutor {
         session,
         latestRun,
         executionContext.currentAgentName,
-        allMessages
+        allMessages,
+        {
+          abortSignal,
+          modelTimeoutMs: modelStreamTimeoutMs
+        }
       );
       const modelInput = await this.#buildModelInput(
         workspace,
@@ -354,7 +383,11 @@ export class ModelRunExecutor {
                   targetSession,
                   targetRun,
                   activeAgentName,
-                  targetMessages
+                  targetMessages,
+                  {
+                    abortSignal,
+                    modelTimeoutMs: modelStreamTimeoutMs
+                  }
                 ),
                 activeAgentName,
                 injectSystemReminder
@@ -475,6 +508,7 @@ export class ModelRunExecutor {
         },
         {
           signal: abortSignal,
+          timeoutMs: modelStreamTimeoutMs,
           ...(Object.keys(observableEngineTools).length > 0 ? { tools: observableEngineTools } : {}),
           ...(activeToolServers.length > 0 ? { toolServers: activeToolServers } : {}),
           ...(agentPolicy?.maxSteps !== undefined ? { maxSteps: agentPolicy.maxSteps } : {}),

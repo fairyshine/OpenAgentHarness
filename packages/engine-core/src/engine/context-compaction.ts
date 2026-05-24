@@ -7,15 +7,19 @@ import { EngineMessageProjector, type CompactMessage } from "./message-projectio
 import type { ResolvedRunModel } from "./model-resolver.js";
 
 const DEFAULT_CONTEXT_WINDOW_RATIO = 0.7;
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 64_000;
 const DEFAULT_RECENT_GROUP_COUNT = 3;
 const COMPACT_TOOL_RESULT_SOFT_LIMIT_CHARS = 4_000;
 const COMPACT_SUMMARY_MAX_TOKENS = 1_200;
+const COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS = 1_200;
 const COMPACT_ESTIMATION_MIN_RESERVE_TOKENS = 1_024;
 const COMPACT_ESTIMATION_RESERVE_RATIO = 0.05;
 const COMPACT_SYSTEM_PROMPT = [
   "Summarize the earlier conversation context for a coding agent that will continue immediately.",
   "Focus on the user's goal, important findings, files or code touched, key tool results, constraints, and the next useful step.",
-  "Write plain text only. Do not address the user. Do not mention compaction."
+  "Write a concise state handoff in plain text only.",
+  "Do not copy raw logs, tool-call syntax, XML/DSML/protocol tags, JSON payloads, stack traces, or message numbers.",
+  "Do not address the user. Do not mention compaction."
 ].join(" ");
 
 function buildCompactSystemPrompt(customInstructions?: string): string {
@@ -60,6 +64,10 @@ function readContextWindowTokens(model: ResolvedRunModel): number | undefined {
   ]);
 }
 
+function resolveContextWindowTokens(model: ResolvedRunModel): number {
+  return readContextWindowTokens(model) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+}
+
 function readCompactThresholdTokens(model: ResolvedRunModel, contextWindowTokens: number): number {
   const explicitThreshold = readNumericMetadataValue(model.modelDefinition?.metadata, [
     "compactThresholdTokens",
@@ -89,6 +97,23 @@ function readRecentGroupCount(model: ResolvedRunModel): number {
 
 function truncateText(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : `${value.slice(0, maxChars)}...`;
+}
+
+function sanitizeSummaryText(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      return (
+        !trimmed.includes("<｜｜DSML｜｜") &&
+        !trimmed.includes("<｜｜invoke") &&
+        !trimmed.includes("</｜｜invoke>") &&
+        !trimmed.includes("<｜｜parameter") &&
+        !trimmed.includes("</｜｜parameter>")
+      );
+    })
+    .join("\n")
+    .trim();
 }
 
 function stringifyContent(content: Message["content"]): string {
@@ -132,9 +157,66 @@ function stringifyContent(content: Message["content"]): string {
     .join("\n\n");
 }
 
+function stringifyContentForSummary(content: Message["content"]): string {
+  if (typeof content === "string") {
+    return sanitizeSummaryText(content);
+  }
+
+  return content
+    .flatMap((part) => {
+      switch (part.type) {
+        case "text":
+          return [sanitizeSummaryText(part.text)];
+        case "reasoning":
+          return [];
+        case "tool-call":
+          return [`tool-call ${part.toolName}`];
+        case "tool-result":
+          switch (part.output.type) {
+            case "text":
+            case "error-text":
+              return [`tool-result ${part.toolName}: ${truncateText(part.output.value, COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS)}`];
+            case "json":
+            case "error-json":
+              return [`tool-result ${part.toolName}: ${truncateText(JSON.stringify(part.output.value), COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS)}`];
+            case "execution-denied":
+              return [`tool-result ${part.toolName}: ${part.output.reason ?? "Execution denied."}`];
+            case "content":
+              return [`tool-result ${part.toolName}: ${truncateText(JSON.stringify(part.output.value), COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS)}`];
+          }
+        case "tool-approval-request":
+          return [`tool-approval-request ${part.toolCallId}`];
+        case "tool-approval-response":
+          return [`tool-approval-response ${part.approvalId}: ${part.approved ? "approved" : "denied"}`];
+        case "image":
+          return ["[image]"];
+        case "file":
+          return [`[file:${part.filename ?? "unnamed"}]`];
+      }
+    })
+    .join("\n\n");
+}
+
 function renderChatMessages(messages: ChatMessage[]): string {
   return messages
     .map((message, index) => `#${index + 1} ${message.role}\n${stringifyContent(message.content)}`.trim())
+    .join("\n\n");
+}
+
+function renderCompactMessagesForSummary(messages: CompactMessage[]): string {
+  return messages
+    .flatMap((message, index) => {
+      if (message.semanticType === "assistant_reasoning") {
+        return [];
+      }
+
+      const rendered = truncateText(stringifyContentForSummary(message.content), COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS);
+      if (!rendered.trim()) {
+        return [];
+      }
+
+      return [`#${index + 1} ${message.semanticType} (${message.role})\n${rendered}`.trim()];
+    })
     .join("\n\n");
 }
 
@@ -364,6 +446,8 @@ export class ContextCompactionService implements ContextPreparationModule {
     activeAgentName: string;
     messages: Message[];
     engineMessages: EngineMessage[];
+    abortSignal?: AbortSignal | undefined;
+    modelTimeoutMs?: number | undefined;
   }): Promise<EngineMessage[]> {
     const result = await this.#compactContext({
       ...input,
@@ -399,19 +483,15 @@ export class ContextCompactionService implements ContextPreparationModule {
     force: boolean;
     compactionSource: "auto" | "manual";
     instructions?: string | undefined;
+    abortSignal?: AbortSignal | undefined;
+    modelTimeoutMs?: number | undefined;
   }): Promise<ContextCompactionResult> {
     const engineMessages = input.engineMessages;
     const ephemeralNotes = engineMessages.filter((message) => isTransientMemoryContextNote(message));
     const compactionSourceMessages =
       ephemeralNotes.length > 0 ? engineMessages.filter((message) => !isTransientMemoryContextNote(message)) : engineMessages;
     const resolvedModel = this.#resolveRunModel(input.workspace, input.session, input.run, input.activeAgentName);
-    const contextWindowTokens = readContextWindowTokens(resolvedModel);
-    if (!contextWindowTokens && !input.force) {
-      return {
-        engineMessages,
-        compacted: false
-      };
-    }
+    const contextWindowTokens = resolveContextWindowTokens(resolvedModel);
 
     const compactProjection = this.#projector.projectToCompact(compactionSourceMessages, {
       sessionId: input.session.id,
@@ -489,6 +569,7 @@ export class ContextCompactionService implements ContextPreparationModule {
     }
 
     const summarySourceMessages = messagesToSummarize.map(compactMessageToChatMessage);
+    const defaultSummaryInputText = renderCompactMessagesForSummary(messagesToSummarize);
     const compactThroughMessageId = messagesToSummarize.at(-1)?.sourceMessageIds[0];
     const messagesToFlush = messagesToSummarize
       .flatMap((message) => message.sourceMessageIds)
@@ -522,27 +603,33 @@ export class ContextCompactionService implements ContextPreparationModule {
         ...(compactThroughMessageId ? { compactThroughMessageId } : {})
       }
     );
-    const summaryInputMessages = Array.isArray(beforeHookContext.messages)
-      ? beforeHookContext.messages
-      : summarySourceMessages;
+    const hookMessages = Array.isArray(beforeHookContext.messages) ? beforeHookContext.messages : undefined;
+    const hookReplacedSummaryMessages = hookMessages !== undefined && hookMessages !== summarySourceMessages;
+    const summaryInputText = hookReplacedSummaryMessages ? renderChatMessages(hookMessages) : defaultSummaryInputText;
 
     try {
-      const summaryResponse = await this.#modelGateway.generate({
-        model: resolvedModel.model,
-        ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
-        ...(resolvedModel.provider ? { provider: resolvedModel.provider } : {}),
-        maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
-        messages: [
-          {
-            role: "system",
-            content: buildCompactSystemPrompt(input.compactionSource === "manual" ? input.instructions : undefined)
-          },
-          {
-            role: "user",
-            content: renderChatMessages(summaryInputMessages)
-          }
-        ]
-      });
+      const summaryResponse = await this.#modelGateway.generate(
+        {
+          model: resolvedModel.model,
+          ...(resolvedModel.modelDefinition ? { modelDefinition: resolvedModel.modelDefinition } : {}),
+          ...(resolvedModel.provider ? { provider: resolvedModel.provider } : {}),
+          maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
+          messages: [
+            {
+              role: "system",
+              content: buildCompactSystemPrompt(input.compactionSource === "manual" ? input.instructions : undefined)
+            },
+            {
+              role: "user",
+              content: summaryInputText
+            }
+          ]
+        },
+        {
+          signal: input.abortSignal,
+          timeoutMs: input.modelTimeoutMs
+        }
+      );
       const summaryText = summaryResponse.text.trim();
       if (!summaryText) {
         return {
@@ -710,6 +797,7 @@ export class ContextCompactionService implements ContextPreparationModule {
         estimatedInputTokens,
         estimatedPostCompactTokens,
         summarizedMessageCount: messagesToSummarize.length,
+        summaryInputTokens: Math.max(1, Math.ceil(summaryInputText.length / 4)),
         ...(memoryFlush?.captured ? { workspaceMemoryFlushPath: memoryFlush.path } : {}),
         configuredRecentGroupCount,
         keepRecentGroupCount,

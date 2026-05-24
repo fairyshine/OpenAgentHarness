@@ -289,6 +289,7 @@ async function createStartedAppWithEngineService(
     }) => Promise<{ name: string }>;
     deleteWorkspaceRuntime?: (input: { runtimeName: string }) => Promise<void>;
     listPlatformAssets?: Parameters<typeof createApp>[0]["listPlatformAssets"];
+    getPlatformAssetDetail?: Parameters<typeof createApp>[0]["getPlatformAssetDetail"];
     uploadPlatformModelAsset?: Parameters<typeof createApp>[0]["uploadPlatformModelAsset"];
     deletePlatformModelAsset?: Parameters<typeof createApp>[0]["deletePlatformModelAsset"];
     uploadPlatformToolAsset?: Parameters<typeof createApp>[0]["uploadPlatformToolAsset"];
@@ -311,6 +312,7 @@ async function createStartedAppWithEngineService(
     ...(options?.uploadWorkspaceRuntime ? { uploadWorkspaceRuntime: options.uploadWorkspaceRuntime } : {}),
     ...(options?.deleteWorkspaceRuntime ? { deleteWorkspaceRuntime: options.deleteWorkspaceRuntime } : {}),
     ...(options?.listPlatformAssets ? { listPlatformAssets: options.listPlatformAssets } : {}),
+    ...(options?.getPlatformAssetDetail ? { getPlatformAssetDetail: options.getPlatformAssetDetail } : {}),
     ...(options?.uploadPlatformModelAsset ? { uploadPlatformModelAsset: options.uploadPlatformModelAsset } : {}),
     ...(options?.deletePlatformModelAsset ? { deletePlatformModelAsset: options.deletePlatformModelAsset } : {}),
     ...(options?.uploadPlatformToolAsset ? { uploadPlatformToolAsset: options.uploadPlatformToolAsset } : {}),
@@ -1134,7 +1136,15 @@ describe("http api", () => {
     expect(listResponse.status).toBe(200);
     await expect(listResponse.json()).resolves.toEqual({
       kind: "model",
-      items: [{ id: "managed", provider: "openai", modelName: "gpt-5" }]
+      items: [{ id: "managed" }]
+    });
+
+    const detailResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/models/managed`);
+    expect(detailResponse.status).toBe(200);
+    await expect(detailResponse.json()).resolves.toEqual({
+      kind: "model",
+      name: "managed",
+      yaml: "managed:\n  provider: openai\n  name: gpt-5\n"
     });
 
     const updateResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/models/managed`, {
@@ -1200,7 +1210,23 @@ describe("http api", () => {
     expect(listResponse.status).toBe(200);
     await expect(listResponse.json()).resolves.toEqual({
       kind: "tool",
-      items: [{ name: "repo-tools", transportType: "stdio", enabled: true, toolPrefix: "repo" }]
+      items: [{ name: "repo-tools" }]
+    });
+
+    const detailResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/tools/repo-tools`);
+    expect(detailResponse.status).toBe(200);
+    await expect(detailResponse.json()).resolves.toEqual({
+      kind: "tool",
+      name: "repo-tools",
+      definition: {
+        command: "node ./servers/repo-tools/index.js",
+        expose: {
+          tool_prefix: "repo"
+        }
+      },
+      serverFiles: {
+        "index.js": "console.log('ok');\n"
+      }
     });
 
     const deleteResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/tools/repo-tools`, {
@@ -1253,7 +1279,18 @@ describe("http api", () => {
     expect(listResponse.status).toBe(200);
     await expect(listResponse.json()).resolves.toEqual({
       kind: "skill",
-      items: [{ name: "repo-scout", description: "Inspect repositories", exposeToLlm: true }]
+      items: [{ name: "repo-scout" }]
+    });
+
+    const detailResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/skills/repo-scout`);
+    expect(detailResponse.status).toBe(200);
+    await expect(detailResponse.json()).resolves.toEqual({
+      kind: "skill",
+      name: "repo-scout",
+      skillMarkdown: "---\ndescription: Inspect repositories\n---\n# Repo scout\n\nRead the repository and summarize it.\n",
+      files: {
+        "references/checklist.md": "- inspect tree\n"
+      }
     });
 
     const updateResponse = await fetch(`${activeApp.baseUrl}/api/v1/assets/skills/repo-scout`, {

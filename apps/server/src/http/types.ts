@@ -13,6 +13,7 @@ import type {
   DistributedPlatformModelRefreshResult,
   HealthReport,
   PlatformAssetKind,
+  PlatformAssetDetail,
   PlatformAssetList,
   PlatformAssetMutationResponse,
   PlatformModelSnapshot,
@@ -59,6 +60,7 @@ export interface AppDependencies {
     runtimeName: string;
   }) => Promise<void>) | undefined;
   listPlatformAssets?: ((kind: PlatformAssetKind) => Promise<PlatformAssetList>) | undefined;
+  getPlatformAssetDetail?: ((kind: PlatformAssetKind, name: string) => Promise<PlatformAssetDetail>) | undefined;
   uploadPlatformModelAsset?: ((input: {
     name: string;
     yamlBuffer: Buffer;

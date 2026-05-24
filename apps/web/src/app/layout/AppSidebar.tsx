@@ -3,7 +3,6 @@ import { memo, useMemo, useRef, useState } from "react";
 import { formatSystemProfileDisplayName } from "@oah/api-contracts";
 import type { PlatformAssetKind, PlatformAssetRecord } from "@oah/api-contracts";
 import {
-  Boxes,
   Bot,
   ChevronDown,
   ChevronsLeft,
@@ -171,9 +170,15 @@ function assetSubtitle(kind: PlatformAssetKind, asset: PlatformAssetRecord): str
     return "Available for new workspaces";
   }
   if (kind === "model" && "provider" in asset) {
-    return `${asset.provider}/${asset.modelName}${asset.url ? ` · ${asset.url}` : ""}`;
+    if (asset.provider && asset.modelName) {
+      return `${asset.provider}/${asset.modelName}${asset.url ? ` · ${asset.url}` : ""}`;
+    }
+    return "Model asset";
   }
   if (kind === "tool" && "transportType" in asset) {
+    if (!asset.transportType) {
+      return "Tool server asset";
+    }
     return `${asset.transportType}${asset.enabled ? "" : " · disabled"}${asset.toolPrefix ? ` · ${asset.toolPrefix}` : ""}`;
   }
   if (kind === "skill" && "description" in asset && asset.description) {
@@ -185,6 +190,7 @@ function assetSubtitle(kind: PlatformAssetKind, asset: PlatformAssetRecord): str
 function AssetList(props: {
   kind: PlatformAssetKind;
   items: PlatformAssetRecord[];
+  loading: boolean;
   pendingDelete: string;
   busy: boolean;
   onEdit: (asset: PlatformAssetRecord) => void;
@@ -192,6 +198,17 @@ function AssetList(props: {
   onCancelDelete: () => void;
   onConfirmDelete: (name: string) => void;
 }) {
+  if (props.loading && props.items.length === 0) {
+    return (
+      <div className="flex h-[min(48vh,390px)] flex-col items-center justify-center rounded-2xl border border-dashed border-black/12 px-4 py-8 text-center">
+        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl border border-black/8 bg-white/70 shadow-sm">
+          <RefreshCw className="h-5 w-5 animate-spin text-foreground" />
+        </div>
+        <p className="mt-3 text-sm font-medium text-foreground">Loading {ASSET_COLLECTION_LABELS[props.kind].toLowerCase()}</p>
+      </div>
+    );
+  }
+
   if (props.items.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-black/12 px-4 py-8 text-center">
@@ -203,15 +220,21 @@ function AssetList(props: {
 
   return (
     <ScrollArea className="h-[min(48vh,390px)] rounded-2xl border border-black/8">
+      {props.loading ? (
+        <div className="flex items-center gap-2 border-b border-black/8 bg-white/64 px-3 py-2 text-xs font-medium text-muted-foreground">
+          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          Loading {ASSET_COLLECTION_LABELS[props.kind].toLowerCase()}
+        </div>
+      ) : null}
       <div className="divide-y divide-black/8">
         {props.items.map((asset) => {
           const name = assetDisplayName(asset);
           const isDeleting = props.pendingDelete === name;
           return (
             <div key={`${props.kind}-${name}`} className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-foreground">{name}</p>
-                <p className="mt-1 truncate text-xs leading-5 text-muted-foreground">
+                <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
                   {isDeleting ? "Confirm deletion, or cancel to keep this asset." : assetSubtitle(props.kind, asset)}
                 </p>
               </div>
@@ -301,13 +324,18 @@ function AppSidebarImpl(props: SidebarProps) {
   const [showAssetEditorDialog, setShowAssetEditorDialog] = useState(false);
   const [assetManagerTab, setAssetManagerTab] = useState<PlatformAssetKind>("model");
   const [assetManagerSearch, setAssetManagerSearch] = useState("");
+  const [assetManagerLocalLoading, setAssetManagerLocalLoading] = useState<Record<PlatformAssetKind, boolean>>({
+    runtime: false,
+    model: false,
+    tool: false,
+    skill: false
+  });
   const [assetMutationBusy, setAssetMutationBusy] = useState(false);
   const [assetPendingDelete, setAssetPendingDelete] = useState("");
   const [assetEditorDraft, setAssetEditorDraft] = useState<AssetEditorDraft>(() => createDefaultAssetDraft("model"));
   const [assetEditorError, setAssetEditorError] = useState("");
+  const [assetEditorLoading, setAssetEditorLoading] = useState(false);
   const [workspaceCreateBusy, setWorkspaceCreateBusy] = useState(false);
-  const platformAssetManagementEnabled = props.systemProfile?.capabilities.assetManagement ?? false;
-
   const icon = surfaceIcon(surfaceMode);
   const title = surfaceTitle(surfaceMode);
   const currentThemeLabel = appThemeOptions.find((option) => option.value === props.theme)?.label ?? props.theme;
@@ -329,6 +357,12 @@ function AppSidebarImpl(props: SidebarProps) {
     }
     return currentAssetList.filter((asset) => assetDisplayName(asset).toLowerCase().includes(query));
   }, [assetManagerSearch, currentAssetList]);
+  const assetManagerLoading = {
+    runtime: props.platformAssetLoading.runtime || assetManagerLocalLoading.runtime,
+    model: props.platformAssetLoading.model || assetManagerLocalLoading.model,
+    tool: props.platformAssetLoading.tool || assetManagerLocalLoading.tool,
+    skill: props.platformAssetLoading.skill || assetManagerLocalLoading.skill
+  };
   const collapseButton = (
     <Button
       type="button"
@@ -378,15 +412,29 @@ function AppSidebarImpl(props: SidebarProps) {
     openAssetManagerDialog("runtime");
   }
 
+  async function refreshAssetManagerKind(kind: PlatformAssetKind, quiet = true) {
+    setAssetManagerLocalLoading((current) => ({
+      ...current,
+      [kind]: true
+    }));
+    try {
+      await props.refreshPlatformAssets(kind, quiet);
+    } finally {
+      setAssetManagerLocalLoading((current) => ({
+        ...current,
+        [kind]: false
+      }));
+    }
+  }
+
   function openAssetManagerDialog(kind: PlatformAssetKind = "runtime") {
     blurActiveDialogElement();
     props.setShowWorkspaceCreator(false);
     setShowRuntimeUploadDialog(false);
-    const nextKind = kind === "runtime" || platformAssetManagementEnabled ? kind : "runtime";
-    setAssetManagerTab(nextKind);
+    setAssetManagerTab(kind);
     deferDialogOpen(() => {
       setShowAssetManagerDialog(true);
-      void props.refreshPlatformAssets(nextKind, true);
+      void refreshAssetManagerKind(kind, true);
     });
   }
 
@@ -417,6 +465,7 @@ function AppSidebarImpl(props: SidebarProps) {
   function setAssetEditorOpen(open: boolean) {
     if (!open) {
       blurActiveDialogElement();
+      setAssetEditorLoading(false);
     }
     setShowAssetEditorDialog(open);
   }
@@ -429,7 +478,7 @@ function AppSidebarImpl(props: SidebarProps) {
       deferDialogOpen(() => {
         setAssetManagerTab("runtime");
         setShowAssetManagerDialog(true);
-        void props.refreshPlatformAssets("runtime", true);
+        void refreshAssetManagerKind("runtime", true);
       });
     }
   }
@@ -500,11 +549,12 @@ function AppSidebarImpl(props: SidebarProps) {
     blurActiveDialogElement();
     setAssetEditorDraft(createDefaultAssetDraft(kind));
     setAssetEditorError("");
+    setAssetEditorLoading(false);
     setShowAssetManagerDialog(false);
     deferDialogOpen(() => setShowAssetEditorDialog(true));
   }
 
-  function openUpdateAssetEditor(kind: PlatformAssetKind, asset: PlatformAssetRecord) {
+  async function openUpdateAssetEditor(kind: PlatformAssetKind, asset: PlatformAssetRecord) {
     if (kind === "runtime") {
       openRuntimeUpdatePicker(assetDisplayName(asset));
       return;
@@ -516,28 +566,41 @@ function AppSidebarImpl(props: SidebarProps) {
       kind,
       name,
       overwrite: true,
-      primaryText:
-        kind === "model"
-          ? `${name}:\n  provider: ${"provider" in asset ? asset.provider : "openai"}\n  name: ${"modelName" in asset ? asset.modelName : ""}\n${
-              "url" in asset && asset.url ? `  url: ${asset.url}\n` : ""
-            }`
-          : kind === "tool"
-            ? JSON.stringify(
-                {
-                  ...("enabled" in asset && !asset.enabled ? { enabled: false } : {}),
-                  ...("transportType" in asset && asset.transportType === "http"
-                    ? { url: "https://example.internal/mcp" }
-                    : { command: `node ./servers/${name}/index.js` }),
-                  ...("toolPrefix" in asset && asset.toolPrefix ? { expose: { tool_prefix: asset.toolPrefix } } : {})
-                },
-                null,
-                2
-              )
-            : `# ${name}\n\nUpdate this skill's instructions.\n`,
+      primaryText: "",
       secondaryText: "{}"
     });
+    setAssetEditorLoading(true);
     setShowAssetManagerDialog(false);
     deferDialogOpen(() => setShowAssetEditorDialog(true));
+    try {
+      const detail = await props.getPlatformAssetDetail(kind, name);
+      if (!detail) {
+        setAssetEditorError("Failed to load asset details.");
+        return;
+      }
+      setAssetEditorDraft((current) => {
+        if (current.kind !== kind || current.name !== name || current.mode !== "update") {
+          return current;
+        }
+        if (detail.kind === "model") {
+          return { ...current, primaryText: detail.yaml, secondaryText: "{}" };
+        }
+        if (detail.kind === "tool") {
+          return {
+            ...current,
+            primaryText: JSON.stringify(detail.definition, null, 2),
+            secondaryText: JSON.stringify(detail.serverFiles ?? {}, null, 2)
+          };
+        }
+        return {
+          ...current,
+          primaryText: detail.skillMarkdown,
+          secondaryText: JSON.stringify(detail.files ?? {}, null, 2)
+        };
+      });
+    } finally {
+      setAssetEditorLoading(false);
+    }
   }
 
   async function submitAssetEditor() {
@@ -580,7 +643,7 @@ function AppSidebarImpl(props: SidebarProps) {
         setShowAssetEditorDialog(false);
         deferDialogOpen(() => {
           setShowAssetManagerDialog(true);
-          void props.refreshPlatformAssets(assetEditorDraft.kind, true);
+          void refreshAssetManagerKind(assetEditorDraft.kind, true);
         });
       }
     } catch (error) {
@@ -728,17 +791,6 @@ function AppSidebarImpl(props: SidebarProps) {
         </div>
 
         <div className="shrink-0 space-y-2 border-t border-black/8 px-3 py-3">
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="h-10 justify-center rounded-2xl bg-white/52 px-2 text-xs shadow-none col-span-2"
-              onClick={() => openAssetManagerDialog()}
-            >
-              <Boxes className="h-4 w-4" />
-              Assets
-            </Button>
-          </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="info-panel info-panel-hoverable h-auto w-full justify-between rounded-2xl px-3 py-3 text-left">
@@ -969,21 +1021,18 @@ function AppSidebarImpl(props: SidebarProps) {
               value={assetManagerTab}
               onValueChange={(value) => {
                 const next = value as PlatformAssetKind;
-                if (next !== "runtime" && !platformAssetManagementEnabled) {
-                  return;
-                }
                 setAssetManagerTab(next);
                 setAssetPendingDelete("");
-                void props.refreshPlatformAssets(next, true);
+                void refreshAssetManagerKind(next, true);
               }}
               className="min-h-0"
             >
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <TabsList>
+                <TabsList>
                   <TabsTrigger value="runtime">Runtimes</TabsTrigger>
-                  <TabsTrigger value="model" disabled={!platformAssetManagementEnabled}>Models</TabsTrigger>
-                  <TabsTrigger value="tool" disabled={!platformAssetManagementEnabled}>Tools</TabsTrigger>
-                  <TabsTrigger value="skill" disabled={!platformAssetManagementEnabled}>Skills</TabsTrigger>
+                  <TabsTrigger value="model">Models</TabsTrigger>
+                  <TabsTrigger value="tool">Tools</TabsTrigger>
+                  <TabsTrigger value="skill">Skills</TabsTrigger>
                 </TabsList>
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
@@ -998,8 +1047,7 @@ function AppSidebarImpl(props: SidebarProps) {
                     disabled={
                       assetMutationBusy ||
                       runtimeMutationBusy ||
-                      (assetManagerTab === "runtime" && !props.workspaceManagementEnabled) ||
-                      (assetManagerTab !== "runtime" && !platformAssetManagementEnabled)
+                      (assetManagerTab === "runtime" && !props.workspaceManagementEnabled)
                     }
                   >
                     <Upload className="h-4 w-4" />
@@ -1008,11 +1056,11 @@ function AppSidebarImpl(props: SidebarProps) {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => props.refreshPlatformAssets(assetManagerTab)}
-                    disabled={assetMutationBusy || runtimeMutationBusy || (assetManagerTab !== "runtime" && !platformAssetManagementEnabled)}
+                    onClick={() => void refreshAssetManagerKind(assetManagerTab, false)}
+                    disabled={assetMutationBusy || runtimeMutationBusy}
                   >
-                    <RefreshCw className="h-4 w-4" />
-                    Refresh
+                    <RefreshCw className={`h-4 w-4 ${assetManagerLoading[assetManagerTab] ? "animate-spin" : ""}`} />
+                    {assetManagerLoading[assetManagerTab] ? "Loading" : "Refresh"}
                   </Button>
                   <Badge variant="outline">
                     {filteredAssets.length === currentAssetList.length
@@ -1032,29 +1080,23 @@ function AppSidebarImpl(props: SidebarProps) {
               </div>
               {(["runtime", "model", "tool", "skill"] as PlatformAssetKind[]).map((kind) => (
                 <TabsContent key={kind} value={kind} className="mt-0 min-h-0">
-                  {kind !== "runtime" && !platformAssetManagementEnabled ? (
-                    <div className="rounded-2xl border border-dashed border-black/12 px-4 py-8 text-center">
-                      <p className="text-sm font-medium text-foreground">{ASSET_COLLECTION_LABELS[kind]} unavailable</p>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">This server only exposes runtime asset management.</p>
-                    </div>
-                  ) : (
-                    <AssetList
-                      kind={kind}
-                      items={kind === assetManagerTab ? filteredAssets : props.platformAssets[kind].items}
-                      pendingDelete={assetPendingDelete}
-                      busy={assetMutationBusy || runtimeMutationBusy}
-                      onEdit={(asset) => {
-                        if (kind === "runtime") {
-                          openRuntimeUpdatePicker(assetDisplayName(asset));
-                          return;
-                        }
-                        openUpdateAssetEditor(kind, asset);
-                      }}
-                      onCancelDelete={() => setAssetPendingDelete("")}
-                      onAskDelete={(name) => setAssetPendingDelete(name)}
-                      onConfirmDelete={(name) => void deleteAsset(kind, name)}
-                    />
-                  )}
+                  <AssetList
+                    kind={kind}
+                    items={kind === assetManagerTab ? filteredAssets : props.platformAssets[kind].items}
+                    loading={assetManagerLoading[kind]}
+                    pendingDelete={assetPendingDelete}
+                    busy={assetMutationBusy || runtimeMutationBusy}
+                    onEdit={(asset) => {
+                      if (kind === "runtime") {
+                        openRuntimeUpdatePicker(assetDisplayName(asset));
+                        return;
+                      }
+                      void openUpdateAssetEditor(kind, asset);
+                    }}
+                    onCancelDelete={() => setAssetPendingDelete("")}
+                    onAskDelete={(name) => setAssetPendingDelete(name)}
+                    onConfirmDelete={(name) => void deleteAsset(kind, name)}
+                  />
                 </TabsContent>
               ))}
             </Tabs>
@@ -1088,6 +1130,12 @@ function AppSidebarImpl(props: SidebarProps) {
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+            {assetEditorLoading ? (
+              <div className="flex items-center gap-2 rounded-xl border border-black/8 bg-white/64 px-3 py-2 text-sm text-muted-foreground">
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                Loading asset details
+              </div>
+            ) : null}
             <Input
               value={assetEditorDraft.name}
               onChange={(event) =>
@@ -1122,6 +1170,7 @@ function AppSidebarImpl(props: SidebarProps) {
                 value={assetEditorDraft.primaryText}
                 onChange={(event) => setAssetEditorDraft((current) => ({ ...current, primaryText: event.target.value }))}
                 className="min-h-[220px] resize-y rounded-xl border-black/10 bg-white/68 font-mono text-xs shadow-none"
+                disabled={assetEditorLoading}
                 spellCheck={false}
               />
             </div>
@@ -1132,6 +1181,7 @@ function AppSidebarImpl(props: SidebarProps) {
                   value={assetEditorDraft.secondaryText}
                   onChange={(event) => setAssetEditorDraft((current) => ({ ...current, secondaryText: event.target.value }))}
                   className="min-h-[120px] resize-y rounded-xl border-black/10 bg-white/68 font-mono text-xs shadow-none"
+                  disabled={assetEditorLoading}
                   spellCheck={false}
                 />
               </div>
@@ -1148,7 +1198,7 @@ function AppSidebarImpl(props: SidebarProps) {
             >
               Cancel
             </Button>
-            <Button disabled={assetMutationBusy || !assetEditorDraft.name.trim()} onClick={() => void submitAssetEditor()}>
+            <Button disabled={assetMutationBusy || assetEditorLoading || !assetEditorDraft.name.trim()} onClick={() => void submitAssetEditor()}>
               {assetMutationBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
               {assetEditorDraft.mode === "update" ? "Update" : "Save"}
             </Button>

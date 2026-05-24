@@ -15,6 +15,7 @@ import type { PlatformModelDefinition, PlatformModelRegistry } from "@oah/config
 import type { ModelGenerateResponse } from "@oah/api-contracts";
 import type {
   GenerateModelInput,
+  ModelGenerateOptions,
   ModelGateway,
   ModelStreamOptions,
   EngineLogger,
@@ -47,6 +48,43 @@ function readStringField(value: unknown, key: string) {
 
 function toEngineMessages(messages: import("ai").ModelMessage[]): GenerateModelInput["messages"] {
   return messages as GenerateModelInput["messages"];
+}
+
+function combineAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+
+  const controller = new AbortController();
+  const abort = () => {
+    controller.abort();
+  };
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      abort();
+      break;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  }
+
+  return controller.signal;
+}
+
+function createTimeoutSignal(timeoutMs: number | undefined): { signal?: AbortSignal | undefined; cleanup: () => void } {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return { cleanup: () => undefined };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+  timeout.unref?.();
+  return {
+    signal: controller.signal,
+    cleanup: () => clearTimeout(timeout)
+  };
 }
 
 export { prepareToolServers } from "./mcp-tools.js";
@@ -88,33 +126,41 @@ export class AiSdkModelRuntime implements ModelGateway {
     }
   }
 
-  async generate(input: GenerateModelInput, options?: { signal?: AbortSignal }): Promise<ModelGenerateResponse> {
+  async generate(input: GenerateModelInput, options?: ModelGenerateOptions): Promise<ModelGenerateResponse> {
     const modelName = input.model ?? this.#defaultModelName;
     const model = this.#resolveModel(modelName, input.modelDefinition);
+    const timeoutSignal = createTimeoutSignal(options?.timeoutMs);
+    const generateSignal = combineAbortSignals(options?.signal, timeoutSignal.signal);
 
-    const result = await generateText({
-      model,
-      ...toPrompt(input),
-      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-      ...(input.topP !== undefined ? { topP: input.topP } : {}),
-      ...(input.maxTokens !== undefined ? { maxOutputTokens: input.maxTokens } : {}),
-      ...(options?.signal ? { abortSignal: options.signal } : {})
-    });
+    try {
+      const result = await generateText({
+        model,
+        ...toPrompt(input),
+        ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+        ...(input.topP !== undefined ? { topP: input.topP } : {}),
+        ...(input.maxTokens !== undefined ? { maxOutputTokens: input.maxTokens } : {}),
+        ...(generateSignal ? { abortSignal: generateSignal } : {})
+      });
 
-    return {
-      model: modelName,
-      text: result.text,
-      ...(Array.isArray(result.content) ? { content: result.content } : {}),
-      ...(Array.isArray(result.reasoning) ? { reasoning: result.reasoning } : {}),
-      finishReason: result.finishReason,
-      usage: toUsage(result.usage)
-    };
+      return {
+        model: modelName,
+        text: result.text,
+        ...(Array.isArray(result.content) ? { content: result.content } : {}),
+        ...(Array.isArray(result.reasoning) ? { reasoning: result.reasoning } : {}),
+        finishReason: result.finishReason,
+        usage: toUsage(result.usage)
+      };
+    } finally {
+      timeoutSignal.cleanup();
+    }
   }
 
   async stream(input: GenerateModelInput, options?: ModelStreamOptions): Promise<StreamedModelResponse> {
     const modelName = input.model ?? this.#defaultModelName;
     const model = this.#resolveModel(modelName, input.modelDefinition);
-    const engineTools = toAiTools(options?.tools, options?.signal, options?.parallelToolCalls);
+    const timeoutSignal = createTimeoutSignal(options?.timeoutMs);
+    const streamSignal = combineAbortSignals(options?.signal, timeoutSignal.signal);
+    const engineTools = toAiTools(options?.tools, streamSignal, options?.parallelToolCalls);
     const preparedToolServers = await prepareToolServers(
       (options as ModelStreamOptions & { toolServers?: ToolServerDefinition[] | undefined })?.toolServers,
       { logger: this.#logger }
@@ -127,6 +173,7 @@ export class AiSdkModelRuntime implements ModelGateway {
       }
 
       cleanedUp = true;
+      timeoutSignal.cleanup();
       await preparedToolServers.close();
     };
     let observedStreamError: Error | undefined;
@@ -144,7 +191,7 @@ export class AiSdkModelRuntime implements ModelGateway {
     const maxSteps = options?.maxSteps !== undefined ? Math.max(2, options.maxSteps) : undefined;
     const maxStepsStopCondition = maxSteps !== undefined ? stepCountIs(maxSteps) : undefined;
     let maxStepsReached = false;
-    const trackMaxStepsStop: StopCondition<ToolSet> | undefined = maxStepsStopCondition
+    const stopWhen: StopCondition<ToolSet> | undefined = maxStepsStopCondition
       ? async (event) => {
           const shouldStop = await maxStepsStopCondition(event);
           if (shouldStop) {
@@ -152,14 +199,16 @@ export class AiSdkModelRuntime implements ModelGateway {
           }
           return shouldStop;
         }
-      : undefined;
+      : aiTools
+        ? () => false
+        : undefined;
     const result = streamText({
       model,
       ...toPrompt(input),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
       ...(input.topP !== undefined ? { topP: input.topP } : {}),
       ...(input.maxTokens !== undefined ? { maxOutputTokens: input.maxTokens } : {}),
-      ...(options?.signal ? { abortSignal: options.signal } : {}),
+      ...(streamSignal ? { abortSignal: streamSignal } : {}),
       onError: ({ error }) => {
         observedStreamError ??= toError(error);
         this.#logger?.error?.("Model runtime stream error observed.", {
@@ -171,7 +220,7 @@ export class AiSdkModelRuntime implements ModelGateway {
       ...(aiTools
         ? {
             tools: aiTools,
-            ...(trackMaxStepsStop ? { stopWhen: trackMaxStepsStop } : {})
+            ...(stopWhen ? { stopWhen } : {})
           }
         : {}),
       ...(options?.prepareStep

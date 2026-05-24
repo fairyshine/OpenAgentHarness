@@ -395,6 +395,71 @@ function seedCurrentSchemaWithLegacyPayloads(dbPath: string, workspaceId: string
 }
 
 describe("storage sqlite", () => {
+  it("serializes workspace state upsert and deletion for the same workspace", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-workspace-op-"));
+    tempDirs.push(tempRoot);
+
+    const fsPromises = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const actualMkdir = fsPromises.mkdir;
+    const actualRm = fsPromises.rm;
+    const events: string[] = [];
+    let releaseFirstMkdir: (() => void) | undefined;
+    const firstMkdirBlocked = new Promise<void>((resolve) => {
+      releaseFirstMkdir = resolve;
+    });
+    let blockedFirstWorkspaceMkdir = false;
+
+    const mkdirMock = vi.fn<typeof actualMkdir>().mockImplementation(async (targetPath, options) => {
+      if (!blockedFirstWorkspaceMkdir && String(targetPath).includes(`${path.sep}workspace-state${path.sep}ws_serialized`)) {
+        blockedFirstWorkspaceMkdir = true;
+        events.push("mkdir:start");
+        await firstMkdirBlocked;
+        events.push("mkdir:finish");
+      }
+      return actualMkdir(targetPath, options);
+    });
+    const rmMock = vi.fn<typeof actualRm>().mockImplementation(async (targetPath, options) => {
+      if (String(targetPath).includes(`${path.sep}workspace-state${path.sep}ws_serialized`)) {
+        events.push("rm");
+      }
+      return actualRm(targetPath, options);
+    });
+
+    vi.doMock("node:fs/promises", () => ({
+      ...fsPromises,
+      mkdir: mkdirMock,
+      rm: rmMock
+    }));
+    vi.resetModules();
+    ({ createSQLiteRuntimePersistence } = await import("../packages/storage-sqlite/src/index.ts"));
+
+    const shadowRoot = path.join(tempRoot, "shadow", "data", "workspace-state");
+    const persistence = await createSQLiteRuntimePersistence({ shadowRoot });
+    const workspace = createWorkspace({
+      id: "ws_serialized",
+      kind: "chat",
+      rootPath: path.join(tempRoot, "chat")
+    });
+
+    const upsert = persistence.workspaceRepository.upsert(workspace);
+    await vi.waitFor(() => {
+      expect(events).toContain("mkdir:start");
+    });
+    const deletion = persistence.workspaceRepository.delete(workspace.id);
+
+    await Promise.resolve();
+    expect(events).not.toContain("rm");
+    releaseFirstMkdir!();
+
+    await Promise.all([upsert, deletion]);
+
+    expect(events.slice(0, 3)).toEqual(["mkdir:start", "mkdir:finish", "rm"]);
+    expect(events.filter((event) => event === "rm").length).toBeGreaterThanOrEqual(1);
+    expect(await persistence.workspaceRepository.getById(workspace.id)).toBeNull();
+
+    await persistence.close();
+  });
+
   it("retries workspace database initialization when directory creation races with cleanup", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "oah-sqlite-mkdir-race-"));
     tempDirs.push(tempRoot);

@@ -31,6 +31,10 @@ function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeAssets?: () => void
   );
   const expandedWorkspaceIdSet = useMemo(() => new Set(props.expandedWorkspaceIds), [props.expandedWorkspaceIds]);
   const expandedSessionIdSet = useMemo(() => new Set(props.expandedSessionIds), [props.expandedSessionIds]);
+  const loadingSessionWorkspaceIdSet = useMemo(
+    () => new Set(props.workspaceSessionLoadingIds),
+    [props.workspaceSessionLoadingIds]
+  );
   const engineViewLabel = mainViewMode === "inspector" ? "Inspector" : "Conversation";
   const selectedRuntimeWorkspaceIds = useMemo(
     () => (workspaceRuntimeFilter.trim() ? props.filteredSavedWorkspaces.map((entry) => entry.id) : []),
@@ -207,9 +211,10 @@ function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeAssets?: () => void
                   onClick={() => {
                     void props.refreshWorkspaceIndex();
                   }}
+                  disabled={props.workspaceIndexLoading}
                   title="Refresh workspace list"
                 >
-                  <RotateCcw className="h-3.5 w-3.5" />
+                  <RotateCcw className={`h-3.5 w-3.5 ${props.workspaceIndexLoading ? "animate-spin-reverse" : ""}`} />
                 </Button>
                 {props.workspaceManagementEnabled ? (
                   <>
@@ -299,7 +304,14 @@ function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeAssets?: () => void
               ) : null}
             </div>
           </div>
-          {props.filteredSavedWorkspaces.length === 0 ? (
+          {props.workspaceIndexLoading && props.filteredSavedWorkspaces.length === 0 ? (
+            <div className="sidebar-empty-state rounded-xl border border-dashed border-black/12 bg-white/32 px-4 py-8 text-center">
+              <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-xl border border-black/8 bg-white/60 shadow-sm">
+                <RotateCcw className="h-4 w-4 animate-spin-reverse text-muted-foreground" />
+              </div>
+              <p className="mt-3 text-sm font-medium text-foreground">Loading workspaces</p>
+            </div>
+          ) : props.filteredSavedWorkspaces.length === 0 ? (
             <div className="sidebar-empty-state rounded-xl border border-dashed border-black/12 bg-white/32 px-4 py-8 text-center">
               <p className="text-sm font-medium text-foreground">
                 {workspaceRuntimeFilter ? "No matching workspaces" : "No workspaces"}
@@ -316,6 +328,7 @@ function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeAssets?: () => void
             <div className="space-y-0.5">
               {workspaceSessionGroups.map(({ entry, workspaceSessions, childSessionsByParentId, topLevelSessions, lastEditedAt }) => {
                 const isExpanded = expandedWorkspaceIdSet.has(entry.id);
+                const sessionsLoading = loadingSessionWorkspaceIdSet.has(entry.id);
                 return (
                   <div key={entry.id} className="runtime-workspace-group space-y-1">
                     <WorkspaceNavItem
@@ -331,13 +344,26 @@ function RuntimeSidebar(props: SidebarProps & { onOpenRuntimeAssets?: () => void
                     />
                     {isExpanded ? (
                       <div className="runtime-session-tree space-y-1.5">
-                        {topLevelSessions.length === 0 ? (
+                        {sessionsLoading && topLevelSessions.length === 0 ? (
+                          <div className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-xs text-muted-foreground">
+                            <RotateCcw className="h-3.5 w-3.5 animate-spin-reverse" />
+                            Loading sessions
+                          </div>
+                        ) : topLevelSessions.length === 0 ? (
                           <div className="rounded-lg px-3 py-2.5 text-xs text-muted-foreground">No sessions yet.</div>
                         ) : (
-                          renderSessionTree(topLevelSessions, {
-                            childSessionsByParentId,
-                            workspaceId: entry.id
-                          })
+                          <>
+                            {sessionsLoading ? (
+                              <div className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-[11px] text-muted-foreground">
+                                <RotateCcw className="h-3 w-3 animate-spin-reverse" />
+                                Updating sessions
+                              </div>
+                            ) : null}
+                            {renderSessionTree(topLevelSessions, {
+                              childSessionsByParentId,
+                              workspaceId: entry.id
+                            })}
+                          </>
                         )}
                       </div>
                     ) : null}

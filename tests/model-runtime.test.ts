@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createNativeToolSet } from "@oah/engine-core";
 import { AiSdkModelRuntime, prepareToolServers } from "@oah/model-runtime";
 import { normalizeMessages } from "../packages/model-runtime/src/runtime-helpers.ts";
 import { normalizeRemoteMcpUrl } from "../packages/model-runtime/src/mcp-endpoint-utils.ts";
@@ -572,6 +573,100 @@ describe("model runtime mcp tools", () => {
 });
 
 describe("AiSdkModelRuntime openai-compatible provider", () => {
+  it("continues tool calls without a default max steps cap", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+    globalThis.fetch = (async (input, init) => {
+      const url = typeof input === "string" ? input : input.url;
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requests.push({ url, body });
+
+      const responseChunks =
+        requests.length === 1
+          ? [
+              'data: {"id":"chatcmpl_tool_1","object":"chat.completion.chunk","created":1,"model":"mock-model","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_lookup","type":"function","function":{"name":"Read","arguments":"{\\"file_path\\":\\"runtime.txt\\"}"}}]},"finish_reason":null}]}',
+              'data: {"id":"chatcmpl_tool_1","object":"chat.completion.chunk","created":1,"model":"mock-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":2,"total_tokens":14}}',
+              "data: [DONE]",
+              ""
+            ]
+          : [
+              'data: {"id":"chatcmpl_tool_2","object":"chat.completion.chunk","created":1,"model":"mock-model","choices":[{"index":0,"delta":{"role":"assistant","content":"done after tool"},"finish_reason":null}]}',
+              'data: {"id":"chatcmpl_tool_2","object":"chat.completion.chunk","created":1,"model":"mock-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":18,"completion_tokens":3,"total_tokens":21}}',
+              "data: [DONE]",
+              ""
+            ];
+
+      return new Response(responseChunks.join("\n\n"), {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream"
+        }
+      });
+    }) as typeof fetch;
+
+    try {
+      const runtime = new AiSdkModelRuntime({
+        defaultModelName: "mock-entry",
+        models: {
+          "mock-entry": {
+            provider: "openai-compatible",
+            key: "test-key",
+            url: "http://mock.local/v1",
+            name: "mock-model"
+          }
+        }
+      });
+
+      const response = await runtime.stream(
+        {
+          model: "mock-entry",
+          messages: [{ role: "user", content: "lookup runtime" }]
+        },
+        {
+          tools: {
+            Read: createNativeToolSet("/tmp/mock-runtime", () => ["Read"], {
+              readVirtualFile: async ({ filePath }) => ({
+                filePath,
+                content: `lookup result: ${filePath}`
+              })
+            }).Read
+          }
+        }
+      );
+
+      let streamed = "";
+      for await (const chunk of response.chunks) {
+        streamed += chunk;
+      }
+
+      await expect(response.completed).resolves.toMatchObject({
+        model: "mock-entry",
+        text: "done after tool",
+        finishReason: "stop"
+      });
+      expect(streamed).toBe("done after tool");
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.body.tools).toEqual([
+        expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({ name: "Read" })
+        })
+      ]);
+      expect(requests[1]?.body.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "tool",
+            tool_call_id: "call_lookup",
+            content: expect.stringContaining("lookup result")
+          })
+        ])
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("streams multi-turn chat through chat completions for openai-compatible models", async () => {
     const originalFetch = globalThis.fetch;
     const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -683,6 +778,45 @@ describe("AiSdkModelRuntime openai-compatible provider", () => {
       }
 
       await expect(response.completed).rejects.toThrow("assistant messages are not supported");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("aborts non-streaming generation when timeoutMs elapses", async () => {
+    const originalFetch = globalThis.fetch;
+    const startedAt = Date.now();
+
+    globalThis.fetch = (async (_input, init) => {
+      await new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("request aborted")), { once: true });
+      });
+      throw new Error("unreachable");
+    }) as typeof fetch;
+
+    try {
+      const runtime = new AiSdkModelRuntime({
+        defaultModelName: "mock-entry",
+        models: {
+          "mock-entry": {
+            provider: "openai-compatible",
+            key: "test-key",
+            url: "http://mock.local/v1",
+            name: "mock-model"
+          }
+        }
+      });
+
+      await expect(
+        runtime.generate(
+          {
+            model: "mock-entry",
+            messages: [{ role: "user", content: "hang" }]
+          },
+          { timeoutMs: 20 }
+        )
+      ).rejects.toThrow();
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
     } finally {
       globalThis.fetch = originalFetch;
     }

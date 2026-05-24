@@ -126,6 +126,7 @@ export class SQLitePersistenceCoordinator {
   readonly #handles = new Map<string, DatabaseHandle>();
   readonly #sessionIndex = new Map<string, string>();
   readonly #runIndex = new Map<string, string>();
+  readonly #workspaceOperations = new Map<string, Promise<void>>();
   #registryDb: DatabaseSync | undefined;
 
   constructor(shadowRoot: string, options: { projectDbLocation?: "shadow" | "workspace" | undefined } = {}) {
@@ -135,6 +136,12 @@ export class SQLitePersistenceCoordinator {
   }
 
   async upsertWorkspace(workspace: WorkspaceRecord): Promise<void> {
+    await this.runWorkspaceOperation(workspace.id, async () => {
+      await this.upsertWorkspaceNow(workspace);
+    });
+  }
+
+  private async upsertWorkspaceNow(workspace: WorkspaceRecord): Promise<void> {
     const existing = this.#handles.get(workspace.id);
     const nextDbPath = this.dbPathForWorkspace(workspace);
     if (existing && existing.dbPath !== nextDbPath) {
@@ -177,6 +184,12 @@ export class SQLitePersistenceCoordinator {
   }
 
   async deleteWorkspace(workspaceId: string): Promise<void> {
+    await this.runWorkspaceOperation(workspaceId, async () => {
+      await this.deleteWorkspaceNow(workspaceId);
+    });
+  }
+
+  private async deleteWorkspaceNow(workspaceId: string): Promise<void> {
     const workspace = this.#workspaceRecords.get(workspaceId);
     this.#workspaceRecords.delete(workspaceId);
     this.deleteWorkspaceIndexes(workspaceId);
@@ -207,6 +220,24 @@ export class SQLitePersistenceCoordinator {
         rm(`${dbPath}-shm`, { force: true }),
         rm(`${dbPath}-wal`, { force: true })
       ]);
+    }
+  }
+
+  private async runWorkspaceOperation<T>(workspaceId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.#workspaceOperations.get(workspaceId) ?? Promise.resolve();
+    const operationPromise = previous.catch(() => undefined).then(operation);
+    const completion = operationPromise.then(
+      () => undefined,
+      () => undefined
+    );
+    this.#workspaceOperations.set(workspaceId, completion);
+
+    try {
+      return await operationPromise;
+    } finally {
+      if (this.#workspaceOperations.get(workspaceId) === completion) {
+        this.#workspaceOperations.delete(workspaceId);
+      }
     }
   }
 

@@ -925,6 +925,10 @@ body {
   display: none;
 }
 
+.animate-spin-reverse {
+  animation: spin 1s linear infinite reverse;
+}
+
 /* Streaming border animation */
 @keyframes border-rotate {
   from {

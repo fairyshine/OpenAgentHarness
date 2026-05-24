@@ -24,6 +24,8 @@ export function useNavigationState() {
   const [sessionId, setSessionId] = usePersistentState(storageKeys.sessionId, "");
   const [savedWorkspaces, setSavedWorkspaces] = useState<SavedWorkspaceRecord[]>([]);
   const [savedSessions, setSavedSessions] = useState<SavedSessionRecord[]>([]);
+  const [workspaceIndexLoading, setWorkspaceIndexLoading] = useState(false);
+  const [workspaceSessionLoadingIds, setWorkspaceSessionLoadingIds] = useState<string[]>([]);
   const [recentWorkspaces, setRecentWorkspaces] = usePersistentState<string[]>(storageKeys.recentWorkspaces, []);
   const [recentSessions, setRecentSessions] = usePersistentState<string[]>(storageKeys.recentSessions, []);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = usePersistentState<string[]>(storageKeys.expandedWorkspaces, []);
@@ -35,6 +37,12 @@ export function useNavigationState() {
     model: { kind: "model", items: [] },
     tool: { kind: "tool", items: [] },
     skill: { kind: "skill", items: [] }
+  });
+  const [platformAssetLoading, setPlatformAssetLoading] = useState<Record<PlatformAssetKind, boolean>>({
+    runtime: false,
+    model: false,
+    tool: false,
+    skill: false
   });
   const [catalog, setCatalog] = useState<WorkspaceCatalog | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -88,6 +96,10 @@ export function useNavigationState() {
     setSavedWorkspaces,
     savedSessions,
     setSavedSessions,
+    workspaceIndexLoading,
+    setWorkspaceIndexLoading,
+    workspaceSessionLoadingIds,
+    setWorkspaceSessionLoadingIds,
     recentWorkspaces,
     setRecentWorkspaces,
     recentSessions,
@@ -102,6 +114,8 @@ export function useNavigationState() {
     setWorkspaceRuntimes,
     platformAssets,
     setPlatformAssets,
+    platformAssetLoading,
+    setPlatformAssetLoading,
     catalog,
     setCatalog,
     session,

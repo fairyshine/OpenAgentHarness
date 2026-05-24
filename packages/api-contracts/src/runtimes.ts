@@ -8,22 +8,22 @@ export const platformAssetKindSchema = z.enum(["runtime", "model", "tool", "skil
 
 export const platformModelAssetSchema = z.object({
   id: z.string(),
-  provider: z.string(),
-  modelName: z.string(),
+  provider: z.string().optional(),
+  modelName: z.string().optional(),
   url: z.string().optional()
 });
 
 export const platformToolAssetSchema = z.object({
   name: z.string(),
-  transportType: z.enum(["stdio", "http"]),
-  enabled: z.boolean(),
+  transportType: z.enum(["stdio", "http"]).optional(),
+  enabled: z.boolean().optional(),
   toolPrefix: z.string().optional()
 });
 
 export const platformSkillAssetSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
-  exposeToLlm: z.boolean()
+  exposeToLlm: z.boolean().optional()
 });
 
 export const platformAssetListSchema = z.discriminatedUnion("kind", [
@@ -49,6 +49,26 @@ export const platformAssetMutationResponseSchema = z.object({
   kind: platformAssetKindSchema,
   name: z.string()
 });
+
+export const platformAssetDetailSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("model"),
+    name: z.string(),
+    yaml: z.string()
+  }),
+  z.object({
+    kind: z.literal("tool"),
+    name: z.string(),
+    definition: z.record(z.string(), z.unknown()),
+    serverFiles: z.record(z.string(), z.string()).optional()
+  }),
+  z.object({
+    kind: z.literal("skill"),
+    name: z.string(),
+    skillMarkdown: z.string(),
+    files: z.record(z.string(), z.string()).optional()
+  })
+]);
 
 export const workspaceRuntimeListSchema = z.object({
   items: z.array(workspaceRuntimeSchema)
@@ -102,6 +122,7 @@ export type PlatformModelAsset = z.infer<typeof platformModelAssetSchema>;
 export type PlatformToolAsset = z.infer<typeof platformToolAssetSchema>;
 export type PlatformSkillAsset = z.infer<typeof platformSkillAssetSchema>;
 export type PlatformAssetList = z.infer<typeof platformAssetListSchema>;
+export type PlatformAssetDetail = z.infer<typeof platformAssetDetailSchema>;
 export type PlatformAssetMutationResponse = z.infer<typeof platformAssetMutationResponseSchema>;
 export type UploadWorkspaceRuntimeRequest = z.infer<typeof uploadWorkspaceRuntimeRequestSchema>;
 export type UploadWorkspaceRuntimeResponse = z.infer<typeof uploadWorkspaceRuntimeResponseSchema>;

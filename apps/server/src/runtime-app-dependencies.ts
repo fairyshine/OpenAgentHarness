@@ -71,6 +71,7 @@ export function buildApiAppDependencies(runtime: BootstrappedRuntime): AppDepend
     ...(runtime.uploadWorkspaceRuntime ? { uploadWorkspaceRuntime: runtime.uploadWorkspaceRuntime } : {}),
     ...(runtime.deleteWorkspaceRuntime ? { deleteWorkspaceRuntime: runtime.deleteWorkspaceRuntime } : {}),
     ...(runtime.listPlatformAssets ? { listPlatformAssets: runtime.listPlatformAssets } : {}),
+    ...(runtime.getPlatformAssetDetail ? { getPlatformAssetDetail: runtime.getPlatformAssetDetail } : {}),
     ...(runtime.uploadPlatformModelAsset ? { uploadPlatformModelAsset: runtime.uploadPlatformModelAsset } : {}),
     ...(runtime.deletePlatformModelAsset ? { deletePlatformModelAsset: runtime.deletePlatformModelAsset } : {}),
     ...(runtime.uploadPlatformToolAsset ? { uploadPlatformToolAsset: runtime.uploadPlatformToolAsset } : {}),

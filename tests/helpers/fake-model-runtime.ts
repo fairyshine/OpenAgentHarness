@@ -1,6 +1,7 @@
 import type { ModelGenerateResponse } from "@oah/api-contracts";
 import type {
   GenerateModelInput,
+  ModelGenerateOptions,
   ModelGateway,
   ModelStepPreparation,
   ModelStreamOptions,
@@ -123,7 +124,7 @@ export class FakeModelGateway implements ModelGateway {
     this.delayMs = delayMs;
   }
 
-  async generate(input: GenerateModelInput, options?: { signal?: AbortSignal }): Promise<ModelGenerateResponse> {
+  async generate(input: GenerateModelInput, options?: ModelGenerateOptions): Promise<ModelGenerateResponse> {
     const modelName = input.model ?? "openai-default";
     this.invocations.push({ model: modelName, input });
     if (this.generateDelayMs > 0) {

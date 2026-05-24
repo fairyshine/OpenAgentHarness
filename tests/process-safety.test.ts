@@ -1,6 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
 
-import { isRecoverableBackgroundProcessError } from "../apps/server/src/bootstrap/process-safety.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  installProcessSafetyHandlers,
+  isRecoverableBackgroundProcessError,
+  isRecoverableUnhandledWatcherError
+} from "../apps/server/src/bootstrap/process-safety.ts";
+
+class FakeFsWatcher extends EventEmitter {
+  closeCalls = 0;
+
+  close(): void {
+    this.closeCalls += 1;
+  }
+
+  ref(): this {
+    return this;
+  }
+
+  unref(): this {
+    return this;
+  }
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("server process safety", () => {
   it("treats known background lifecycle races as recoverable", () => {
@@ -60,5 +86,32 @@ describe("server process safety", () => {
         message: "Recovery failed."
       })
     ).toBe(false);
+  });
+
+  it("recognizes recursive fs.watch directory deletion races", () => {
+    const error = Object.assign(new Error("ENOENT: no such file or directory, scandir '/tmp/ws_1/assistant_artifacts'"), {
+      code: "ENOENT",
+      syscall: "scandir",
+      path: "/tmp/ws_1/assistant_artifacts",
+      stack: "Error: ENOENT\n    at #watchFolder (node:internal/fs/recursive_watch:115:21)"
+    });
+
+    expect(isRecoverableUnhandledWatcherError(error)).toBe(true);
+    expect(isRecoverableUnhandledWatcherError(Object.assign(new Error("bad argument"), { code: "EINVAL" }))).toBe(false);
+  });
+
+  it("consumes unhandled recoverable FSWatcher error events", () => {
+    installProcessSafetyHandlers();
+    const watcher = new FakeFsWatcher();
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = Object.assign(new Error("missing artifacts directory"), {
+      code: "ENOENT",
+      syscall: "scandir",
+      path: "/tmp/ws_1/assistant_artifacts"
+    });
+
+    expect(() => watcher.emit("error", error)).not.toThrow();
+    expect(watcher.closeCalls).toBe(1);
+    expect(consoleWarn).toHaveBeenCalledWith("[oah-bootstrap] Recovered from unhandled file watcher error.", error);
   });
 });

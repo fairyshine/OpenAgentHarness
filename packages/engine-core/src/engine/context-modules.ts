@@ -10,6 +10,8 @@ export interface ContextPreparationModuleInput {
   activeAgentName: string;
   messages: Message[];
   engineMessages: EngineMessage[];
+  abortSignal?: AbortSignal | undefined;
+  modelTimeoutMs?: number | undefined;
 }
 
 export interface ContextPreparationModule {
@@ -38,6 +40,8 @@ export class ContextPreparationPipeline {
     run: Run;
     activeAgentName: string;
     messages: Message[];
+    abortSignal?: AbortSignal | undefined;
+    modelTimeoutMs?: number | undefined;
   }): Promise<EngineMessage[]> {
     let engineMessages = await this.#buildEngineMessagesForSession(input.session.id, input.messages);
 

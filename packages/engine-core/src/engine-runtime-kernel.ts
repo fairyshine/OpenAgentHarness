@@ -216,13 +216,15 @@ export function createEngineRuntimeKernel(
     getRun: (runId) => dependencies.getRun(runId),
     repairSessionHistoryIfNeeded: (sessionId, messages) =>
       dependencies.sessionHistory.repairSessionHistoryIfNeeded(sessionId, messages),
-    prepareMessagesForModelInput: (workspace, session, run, activeAgentName, allMessages) =>
+    prepareMessagesForModelInput: (workspace, session, run, activeAgentName, allMessages, options) =>
       contextPreparation.prepareMessagesForModelInput({
         workspace,
         session,
         run,
         activeAgentName,
-        messages: allMessages
+        messages: allMessages,
+        abortSignal: options?.abortSignal,
+        modelTimeoutMs: options?.modelTimeoutMs
       }),
     buildModelInput: (workspace, session, run, engineMessages, activeAgentName, forceSystemReminder) =>
       modelInputs.buildModelInput(workspace, session, run, engineMessages, activeAgentName, forceSystemReminder),

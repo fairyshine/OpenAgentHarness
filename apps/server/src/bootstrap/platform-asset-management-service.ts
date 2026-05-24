@@ -1,8 +1,9 @@
-import { cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import type {
+  PlatformAssetDetail,
   PlatformAssetList,
   PlatformAssetKind,
   PlatformModelAsset,
@@ -98,6 +99,66 @@ function toSkillAssets(skills: Record<string, DiscoveredSkill>): PlatformSkillAs
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
+async function listModelAssetSummaries(modelDir: string): Promise<PlatformModelAsset[]> {
+  const entries = await readdir(modelDir, { withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.isFile() && /\.(ya?ml)$/iu.test(entry.name))
+    .map((entry) => ({ id: entry.name.replace(/\.(ya?ml)$/iu, "") }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+async function listToolAssetSummaries(toolDir: string): Promise<PlatformToolAsset[]> {
+  const settingsPath = path.join(toolDir, "settings.yaml");
+  const settings = await readFile(settingsPath, "utf8").catch(() => "");
+  if (!settings.trim()) {
+    return [];
+  }
+  const parsed = YAML.parse(settings) ?? {};
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new AppError(400, "invalid_tool_settings", `Invalid tool settings in ${settingsPath}.`);
+  }
+  return Object.keys(parsed as Record<string, unknown>)
+    .map((name) => ({ name }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function listSkillAssetSummaries(skillDir: string): Promise<PlatformSkillAsset[]> {
+  const entries = await readdir(skillDir, { withFileTypes: true }).catch(() => []);
+  const skills: PlatformSkillAsset[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (await pathExists(path.join(skillDir, entry.name, "SKILL.md"))) {
+      skills.push({ name: entry.name });
+    }
+  }
+  return skills.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function collectTextFiles(rootDir: string, options?: { exclude?: Set<string> | undefined }): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  async function visit(currentDir: string) {
+    const entries = await readdir(currentDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      const relativePath = path.relative(rootDir, fullPath);
+      if (options?.exclude?.has(relativePath)) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        await visit(fullPath);
+        continue;
+      }
+      if (entry.isFile()) {
+        files[relativePath] = await readFile(fullPath, "utf8");
+      }
+    }
+  }
+  await visit(rootDir);
+  return files;
+}
+
 function serializeToolDefinition(tool: DiscoveredToolServer): Record<string, unknown> {
   return {
     ...(tool.enabled !== true ? { enabled: tool.enabled } : {}),
@@ -182,6 +243,7 @@ export function createPlatformAssetManagement(input: {
 }): Pick<
   BootstrappedRuntime,
   | "listPlatformAssets"
+  | "getPlatformAssetDetail"
   | "uploadPlatformModelAsset"
   | "deletePlatformModelAsset"
   | "uploadPlatformToolAsset"
@@ -191,17 +253,59 @@ export function createPlatformAssetManagement(input: {
 > {
   return {
     listPlatformAssets: async (kind): Promise<PlatformAssetList> => {
-      const { loadPlatformModels, loadPlatformToolServers, loadPlatformSkills } = await input.loadConfigWorkspaceModule();
       switch (kind) {
         case "runtime":
           throw new AppError(501, "workspace_runtimes_unavailable", "Workspace runtimes are managed by the runtime asset service.");
         case "model":
-          return { kind, items: toModelAssets(await loadPlatformModels(input.config.paths.model_dir)) };
+          return { kind, items: await listModelAssetSummaries(input.config.paths.model_dir) };
         case "tool":
-          return { kind, items: toToolAssets(await loadPlatformToolServers(input.config.paths.tool_dir)) };
+          return { kind, items: await listToolAssetSummaries(input.config.paths.tool_dir) };
         case "skill":
-          return { kind, items: toSkillAssets(await loadPlatformSkills(input.config.paths.skill_dir)) };
+          return { kind, items: await listSkillAssetSummaries(input.config.paths.skill_dir) };
       }
+    },
+
+    getPlatformAssetDetail: async (kind, name): Promise<PlatformAssetDetail> => {
+      assertAssetName(name, kind);
+      if (kind === "runtime") {
+        throw new AppError(501, "workspace_runtime_detail_unavailable", "Workspace runtime details are managed by the runtime asset service.");
+      }
+      if (kind === "model") {
+        const targetPath = resolveAssetPath(input.config.paths.model_dir, `${name}.yaml`, "model asset name");
+        if (!(await pathExists(targetPath))) {
+          throw new AppError(404, "model_asset_not_found", `Model asset "${name}" does not exist.`);
+        }
+        return { kind, name, yaml: await readFile(targetPath, "utf8") };
+      }
+      if (kind === "tool") {
+        const { loadPlatformToolServers } = await input.loadConfigWorkspaceModule();
+        const tools = await loadPlatformToolServers(input.config.paths.tool_dir);
+        const tool = tools[name];
+        if (!tool) {
+          throw new AppError(404, "tool_asset_not_found", `Tool asset "${name}" does not exist.`);
+        }
+        const serverRoot = path.join(input.config.paths.tool_dir, "servers", name);
+        const serverFiles = (await pathExists(serverRoot)) ? await collectTextFiles(serverRoot) : {};
+        return {
+          kind,
+          name,
+          definition: serializeToolDefinition(tool),
+          ...(Object.keys(serverFiles).length > 0 ? { serverFiles } : {})
+        };
+      }
+
+      const targetDir = resolveAssetPath(input.config.paths.skill_dir, name, "skill asset name");
+      const skillPath = path.join(targetDir, "SKILL.md");
+      if (!(await pathExists(skillPath))) {
+        throw new AppError(404, "skill_asset_not_found", `Skill asset "${name}" does not exist.`);
+      }
+      const files = await collectTextFiles(targetDir, { exclude: new Set(["SKILL.md"]) });
+      return {
+        kind,
+        name,
+        skillMarkdown: await readFile(skillPath, "utf8"),
+        ...(Object.keys(files).length > 0 ? { files } : {})
+      };
     },
 
     uploadPlatformModelAsset: async (uploadInput) => {

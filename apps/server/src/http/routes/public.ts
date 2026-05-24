@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   distributedPlatformModelRefreshResultSchema,
   healthReportSchema,
+  platformAssetDetailSchema,
   modelProviderListSchema,
   platformAssetListSchema,
   platformAssetMutationResponseSchema,
@@ -218,6 +219,18 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
     }
     requirePlatformAssetManagement(dependencies, options);
     return reply.send(platformAssetListSchema.parse(await dependencies.listPlatformAssets!(kind)));
+  };
+
+  const getPlatformAssetDetail = async (request: FastifyRequest, reply: FastifyReply) => {
+    const kind = readPlatformAssetKind(request.params);
+    if (kind === "runtime") {
+      throw new AppError(501, "workspace_runtime_detail_unavailable", "Workspace runtime details are not available on this server.");
+    }
+    if (options.workspaceMode === "single" || !dependencies.getPlatformAssetDetail) {
+      throw new AppError(501, "platform_assets_unavailable", "Platform asset details are not available on this server.");
+    }
+    const params = createParamsSchema("assetName").parse(request.params);
+    return reply.send(platformAssetDetailSchema.parse(await dependencies.getPlatformAssetDetail(kind, params.assetName)));
   };
 
   const uploadPlatformRuntimeAsset = async (request: FastifyRequest, reply: FastifyReply) => {
@@ -551,6 +564,7 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
   app.delete("/api/v1/blueprints/:runtimeName", deleteRuntime);
 
   app.get("/api/v1/assets/:assetKind", listPlatformAssets);
+  app.get("/api/v1/assets/:assetKind/:assetName", getPlatformAssetDetail);
   app.post("/api/v1/assets/runtimes/upload", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, uploadPlatformRuntimeAsset);
   app.put("/api/v1/assets/runtimes/:runtimeName", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, updatePlatformRuntimeAsset);
   app.delete("/api/v1/assets/runtimes/:runtimeName", deleteRuntime);
@@ -589,6 +603,7 @@ export function registerPublicRoutes(app: FastifyInstance, dependencies: AppDepe
   app.delete("/api/v1/assets/skills/:assetName", deletePlatformSkillAsset);
   // Keep the longer route name as a compatibility alias for early clients.
   app.get("/api/v1/platform-assets/:assetKind", listPlatformAssets);
+  app.get("/api/v1/platform-assets/:assetKind/:assetName", getPlatformAssetDetail);
   app.post("/api/v1/platform-assets/runtimes/upload", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, uploadPlatformRuntimeAsset);
   app.put("/api/v1/platform-assets/runtimes/:runtimeName", { bodyLimit: RUNTIME_UPLOAD_BODY_LIMIT_BYTES }, updatePlatformRuntimeAsset);
   app.delete("/api/v1/platform-assets/runtimes/:runtimeName", deleteRuntime);

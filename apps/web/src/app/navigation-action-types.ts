@@ -42,6 +42,8 @@ interface NavigationActionParams {
     setSavedWorkspaces: Dispatch<SetStateAction<SavedWorkspaceRecord[]>>;
     savedSessions: SavedSessionRecord[];
     setSavedSessions: Dispatch<SetStateAction<SavedSessionRecord[]>>;
+    setWorkspaceIndexLoading: Dispatch<SetStateAction<boolean>>;
+    setWorkspaceSessionLoadingIds: Dispatch<SetStateAction<string[]>>;
     recentWorkspaces: string[];
     setRecentWorkspaces: Dispatch<SetStateAction<string[]>>;
     recentSessions: string[];
@@ -54,6 +56,7 @@ interface NavigationActionParams {
     setWorkspace: Dispatch<SetStateAction<Workspace | null>>;
     setWorkspaceRuntimes: Dispatch<SetStateAction<string[]>>;
     setPlatformAssets: Dispatch<SetStateAction<Record<PlatformAssetKind, PlatformAssetList>>>;
+    setPlatformAssetLoading: Dispatch<SetStateAction<Record<PlatformAssetKind, boolean>>>;
     setCatalog: Dispatch<SetStateAction<WorkspaceCatalog | null>>;
     session: Session | null;
     setSession: Dispatch<SetStateAction<Session | null>>;

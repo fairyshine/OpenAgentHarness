@@ -22,6 +22,7 @@ import {
   createPlatformModelCatalogService,
   type PlatformModelSnapshot
 } from "./bootstrap/platform-model-service.js";
+import { installProcessSafetyHandlers } from "./bootstrap/process-safety.js";
 import { refreshDistributedPlatformModels } from "./bootstrap/platform-model-distributed-refresh.js";
 import {
   buildSingleWorkspaceConfig,
@@ -160,6 +161,8 @@ async function runRuntimeCloseTasks(tasks: Array<{ label: string; run: () => Pro
 }
 
 export async function bootstrapRuntime(options: BootstrapOptions = {}): Promise<BootstrappedRuntime> {
+  installProcessSafetyHandlers();
+
   const argv = options.argv ?? process.argv.slice(2);
   const startWorker = options.startWorker ?? false;
   const processKind = options.processKind ?? "api";

@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import type { Run, SystemProfile } from "@oah/api-contracts";
-import type { PlatformAssetKind, PlatformAssetList } from "@oah/api-contracts";
+import type { PlatformAssetDetail, PlatformAssetKind, PlatformAssetList } from "@oah/api-contracts";
 
 import type { SavedSessionRecord, SavedWorkspaceRecord, WorkspaceDraft } from "../support";
 import type { AppThemeName } from "../theme";
@@ -51,6 +51,8 @@ type SidebarProps = SidebarStorageProps & {
   orderedSavedWorkspaces: SavedWorkspaceRecord[];
   savedSessionsCount: number;
   totalSavedSessionsCount: number;
+  workspaceIndexLoading: boolean;
+  workspaceSessionLoadingIds: string[];
   workspaceManagementEnabled: boolean;
   showWorkspaceCreator: boolean;
   setShowWorkspaceCreator: Dispatch<SetStateAction<boolean>>;
@@ -60,9 +62,11 @@ type SidebarProps = SidebarStorageProps & {
   setWorkspaceDraft: Dispatch<SetStateAction<WorkspaceDraft>>;
   workspaceRuntimes: string[];
   platformAssets: Record<PlatformAssetKind, PlatformAssetList>;
+  platformAssetLoading: Record<PlatformAssetKind, boolean>;
   createWorkspace: () => Promise<void> | void;
   refreshWorkspaceRuntimes: (quiet?: boolean) => Promise<void> | void;
   refreshPlatformAssets: (kind?: PlatformAssetKind, quiet?: boolean) => Promise<void> | void;
+  getPlatformAssetDetail: (kind: PlatformAssetKind, name: string) => Promise<PlatformAssetDetail | null>;
   uploadPlatformRuntimeAsset: (file: File, name: string, overwrite: boolean) => Promise<boolean>;
   updatePlatformRuntimeAsset: (name: string, file: File) => Promise<boolean>;
   deletePlatformRuntimeAsset: (name: string) => Promise<boolean>;

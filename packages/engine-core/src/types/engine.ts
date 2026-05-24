@@ -155,6 +155,7 @@ export type ModelStreamChunk =
 
 export interface ModelStreamOptions {
   signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
   tools?: EngineToolSet | undefined;
   toolServers?: import("./workspace.js").ToolServerDefinition[] | undefined;
   maxSteps?: number | undefined;
@@ -171,13 +172,18 @@ export interface ModelStreamOptions {
   onChunk?: ((chunk: ModelStreamChunk) => Promise<void> | void) | undefined;
 }
 
+export interface ModelGenerateOptions {
+  signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
+}
+
 export interface StreamedModelResponse {
   readonly chunks: AsyncIterable<string>;
   readonly completed: Promise<ModelGenerateResponse>;
 }
 
 export interface ModelGateway {
-  generate(input: GenerateModelInput, options?: { signal?: AbortSignal }): Promise<ModelGenerateResponse>;
+  generate(input: GenerateModelInput, options?: ModelGenerateOptions): Promise<ModelGenerateResponse>;
   stream(input: GenerateModelInput, options?: ModelStreamOptions): Promise<StreamedModelResponse>;
 }
 

@@ -161,6 +161,7 @@ export class RunProcessorService {
         session,
         run,
         abortSignal: abortController.signal,
+        runTimeoutMs,
         shouldSkipCompletion: (targetRunId) => this.#drainTimeoutRecoveredRuns.has(targetRunId),
         resolveAbortStepStatus: () => (runTimedOut ? "failed" : "cancelled")
       });

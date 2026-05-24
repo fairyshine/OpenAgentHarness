@@ -2791,14 +2791,16 @@ describe("runtime service", () => {
     const summaryCompletedEvent = events.find(
       (event) => event.event === "message.completed" && event.data.messageId === summaryMessage?.id
     );
-    const compactInvocation = gateway.invocations.find((invocation) =>
-      invocation.input.messages?.some(
-        (message) =>
-          message.role === "system" &&
-          typeof message.content === "string" &&
-          message.content.includes("Summarize the earlier conversation context")
+    const compactInvocation = gateway.invocations
+      .filter((invocation) =>
+        invocation.input.messages?.some(
+          (message) =>
+            message.role === "system" &&
+            typeof message.content === "string" &&
+            message.content.includes("Summarize the earlier conversation context")
+        )
       )
-    );
+      .at(-1);
     const finalInvocation = gateway.invocations
       .filter(
         (invocation) =>
@@ -2828,6 +2830,132 @@ describe("runtime service", () => {
     expect(finalInvocationText).toContain("Compacted summary of prior work");
     expect(finalInvocationText).toContain(thirdContent);
     expect(finalInvocationText).not.toContain(firstContent);
+  });
+
+  it("renders compact summary input without reasoning or raw tool protocol noise", async () => {
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      platformModels: {
+        "openai-default": {
+          provider: "openai",
+          name: "gpt-5",
+          metadata: {
+            contextWindowTokens: 80,
+            compactThresholdTokens: 20,
+            compactRecentGroupCount: 1
+          }
+        }
+      },
+      workspaceSettings: {
+        engine: {
+          compact: {
+            enabled: false
+          }
+        }
+      }
+    });
+    gateway.streamScenarioFactory = (input) => {
+      const text = input.messages?.some(
+        (message) => typeof message.content === "string" && message.content.includes("SECOND-CONTENT")
+      )
+        ? ""
+        : "regular reply";
+      return {
+        text,
+        reasoning: [
+          {
+            type: "reasoning",
+            text: "<｜｜DSML｜｜tool_calls><｜｜invoke name=\"TodoWrite\">secret reasoning protocol</｜｜invoke>"
+          }
+        ],
+        toolSteps: input.messages?.some(
+          (message) => typeof message.content === "string" && message.content.includes("SECOND-CONTENT")
+        )
+          ? [
+              {
+                toolName: "Bash",
+                input: { command: "printf ok" },
+                toolCallId: "call_compact_noise",
+                output: "tool output\n" + "very noisy output ".repeat(200)
+              }
+            ]
+          : undefined
+      };
+    };
+    gateway.generateResponseFactory = (input) => {
+      const systemPrompt = input.messages?.find((message) => message.role === "system");
+      if (typeof systemPrompt?.content === "string" && systemPrompt.content.includes("Summarize the earlier conversation context")) {
+        return {
+          model: input.model ?? "openai-default",
+          text: "Clean summary",
+          finishReason: "stop",
+          usage: {
+            inputTokens: 20,
+            outputTokens: 3,
+            totalTokens: 23
+          }
+        };
+      }
+
+      return undefined;
+    };
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "FIRST-CONTENT ".repeat(12).trim() }
+    });
+    await waitFor(async () => (await runtimeService.getRun(firstAccepted.runId)).status === "completed");
+
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "SECOND-CONTENT ".repeat(12).trim() }
+    });
+    await waitFor(async () => (await runtimeService.getRun(secondAccepted.runId)).status === "completed");
+
+    const thirdAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "THIRD-CONTENT ".repeat(12).trim() }
+    });
+    await waitFor(async () => (await runtimeService.getRun(thirdAccepted.runId)).status === "completed");
+
+    const compacted = await runtimeService.compactSession({
+      sessionId: session.id,
+      caller,
+      input: {}
+    });
+    expect(compacted.compacted).toBe(true);
+    await waitFor(() => gateway.invocations.length >= 3);
+
+    const compactInvocation = gateway.invocations
+      .filter((invocation) =>
+        invocation.input.messages?.some(
+          (message) =>
+            message.role === "system" &&
+            typeof message.content === "string" &&
+            message.content.includes("Summarize the earlier conversation context")
+        )
+      )
+      .at(-1);
+    const compactInputText = String(compactInvocation?.input.messages?.find((message) => message.role === "user")?.content ?? "");
+
+    expect(compactInputText).toContain("tool-call Bash");
+    expect(compactInputText).toContain("tool-result Bash:");
+    expect(compactInputText).not.toContain("secret reasoning protocol");
+    expect(compactInputText).not.toContain("<｜｜DSML｜｜tool_calls>");
+    expect(compactInputText.length).toBeLessThan(8_000);
   });
 
   it("skips auto compaction when compact is disabled in workspace engine settings", async () => {
@@ -3564,6 +3692,101 @@ describe("runtime service", () => {
 
     expect(compactKinds).not.toContain("compact_boundary");
     expect(compactKinds).not.toContain("compact_summary");
+  });
+
+  it("auto compacts using a default context window when model metadata omits one", async () => {
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      platformModels: {
+        "openai-default": {
+          provider: "openai",
+          name: "gpt-5",
+          metadata: {
+            compactThresholdTokens: 20,
+            compactRecentGroupCount: 3
+          }
+        }
+      }
+    });
+    gateway.generateResponseFactory = (input) => {
+      const systemPrompt = input.messages?.find((message) => message.role === "system");
+      if (typeof systemPrompt?.content === "string" && systemPrompt.content.includes("Summarize the earlier conversation context")) {
+        return {
+          model: input.model ?? "openai-default",
+          text: "Default-window compact summary",
+          finishReason: "stop",
+          usage: {
+            inputTokens: 12,
+            outputTokens: 6,
+            totalTokens: 18
+          }
+        };
+      }
+
+      return undefined;
+    };
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+    const firstContent = "FIRST-CONTENT ".repeat(12).trim();
+    const secondContent = "SECOND-CONTENT ".repeat(12).trim();
+    const thirdContent = "THIRD-CONTENT ".repeat(12).trim();
+
+    const firstAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: firstContent }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(firstAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const secondAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: secondContent }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(secondAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const thirdAccepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: thirdContent }
+    });
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(thirdAccepted.runId);
+      return run.status === "completed";
+    });
+
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    const summaryMessage = messages.items.find(
+      (message) =>
+        message.role === "system" &&
+        ((message.metadata as { runtimeKind?: string } | undefined)?.runtimeKind ?? "") === "compact_summary"
+    );
+    const boundaryMessage = messages.items.find(
+      (message) =>
+        message.role === "system" &&
+        ((message.metadata as { runtimeKind?: string } | undefined)?.runtimeKind ?? "") === "compact_boundary"
+    );
+
+    expect(summaryMessage).toBeDefined();
+    expect(messageText(summaryMessage)).toBe("Default-window compact summary");
+    expect((boundaryMessage?.metadata as { extra?: { contextWindowTokens?: number } } | undefined)?.extra?.contextWindowTokens).toBe(
+      64_000
+    );
   });
 
   it("reduces kept recent groups when the configured compact window is still too large", async () => {
@@ -13455,6 +13678,141 @@ describe("runtime service", () => {
         (step) => (step.output as { response?: { text?: string } } | undefined)?.response?.text === "I loaded the repo-explorer skill and its guide."
       )
     ).toBe(true);
+  });
+
+  it("continues after failed tool calls when the agent has no explicit max steps policy", async () => {
+    const gateway = new FakeModelGateway();
+    const observedMaxSteps: Array<number | undefined> = [];
+    gateway.streamScenarioFactory = (_input, options) => {
+      observedMaxSteps.push(options?.maxSteps);
+      return {
+        text: "I handled the missing task and will continue with the project scan.",
+        toolSteps: [
+          {
+            toolName: "TaskOutput",
+            input: { task_id: "ses_24d597101392408f96b0811b6cf526e4", block: false },
+            toolCallId: "call_missing_task",
+            error: new Error("Agent task ses_24d597101392408f96b0811b6cf526e4 was not found."),
+            continueOnError: true
+          }
+        ]
+      };
+    };
+
+    const persistence = createMemoryRuntimePersistence();
+    const runtimeService = new EngineService({
+      defaultModel: "openai-default",
+      modelGateway: gateway,
+      ...persistence
+    });
+
+    await persistence.workspaceRepository.upsert({
+      id: "project_tool_error_continuation",
+      name: "tool-error-continuation",
+      rootPath: "/tmp/tool-error-continuation",
+      executionPolicy: "local",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      kind: "project",
+      readOnly: false,
+      historyMirrorEnabled: false,
+      defaultAgent: "builder",
+      settings: {
+        defaultAgent: "builder",
+        skillDirs: []
+      },
+      workspaceModels: {},
+      agents: {
+        builder: {
+          name: "builder",
+          mode: "primary",
+          prompt: "Continue after recoverable tool failures.",
+          tools: {
+            native: [],
+            actions: [],
+            skills: [],
+            external: []
+          },
+          switch: [],
+          subagents: []
+        }
+      },
+      actions: {},
+      skills: {},
+      toolServers: {},
+      hooks: {},
+      catalog: {
+        workspaceId: "project_tool_error_continuation",
+        agents: [{ name: "builder", mode: "primary", source: "workspace" }],
+        models: [],
+        actions: [],
+        skills: [],
+        tools: [],
+        hooks: [],
+        nativeTools: []
+      }
+    });
+
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: "project_tool_error_continuation",
+      caller,
+      input: {}
+    });
+
+    const accepted = await runtimeService.createSessionMessage({
+      sessionId: session.id,
+      caller,
+      input: { content: "继续" }
+    });
+
+    await waitFor(async () => {
+      const run = await runtimeService.getRun(accepted.runId);
+      return run.status === "completed";
+    });
+
+    expect(gateway.invocations).toHaveLength(2);
+    expect(observedMaxSteps).toEqual([undefined]);
+
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    expect(messages.items.map((message) => message.role)).toEqual(["user", "assistant", "tool", "assistant"]);
+    expect(hasToolCallPart(messages.items[1], "TaskOutput", "call_missing_task")).toBe(true);
+    expect(hasToolResultPart(messages.items[2], "TaskOutput", "call_missing_task")).toBe(true);
+    expect(messageText(messages.items[2])).toContain("Agent task ses_24d597101392408f96b0811b6cf526e4 was not found.");
+    expect(messageText(messages.items[3])).toBe("I handled the missing task and will continue with the project scan.");
+
+    const runSteps = await runtimeService.listRunSteps(accepted.runId);
+    const modelCallSteps = runSteps.items.filter((step) => step.stepType === "model_call");
+    expect(modelCallSteps).toHaveLength(2);
+    expect(modelCallSteps[0]?.output).toMatchObject({
+      response: {
+        finishReason: "tool-calls",
+        toolErrors: [
+          expect.objectContaining({
+            toolCallId: "call_missing_task",
+            toolName: "TaskOutput"
+          })
+        ]
+      },
+      runtime: {
+        toolCallsCount: 1,
+        toolResultsCount: 0,
+        toolErrorsCount: 1
+      }
+    });
+    expect(modelCallSteps[1]?.output).toMatchObject({
+      response: {
+        finishReason: "stop",
+        text: "I handled the missing task and will continue with the project scan."
+      }
+    });
   });
 
   it("fails with a clear message when max steps are exhausted", async () => {
