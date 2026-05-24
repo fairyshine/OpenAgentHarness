@@ -116,6 +116,68 @@ function hasDisplayableConversationMessage(message: Message) {
   return hasDisplayableConversationContent(message.content);
 }
 
+function assistantNarrativeParts(content: Message["content"]) {
+  if (typeof content === "string") {
+    return content.trim().length > 0
+      ? [
+          {
+            type: "text" as const,
+            text: content
+          }
+        ]
+      : [];
+  }
+
+  return content.filter(
+    (part): part is Extract<(typeof content)[number], { type: "text" | "reasoning" | "file" }> =>
+      part.type === "text" || part.type === "reasoning" || part.type === "file"
+  );
+}
+
+function assistantNarrativeSignature(content: Message["content"]) {
+  const parts = assistantNarrativeParts(content).filter((part) =>
+    part.type === "file" ? true : part.text.trim().length > 0
+  );
+  return parts.length > 0 ? JSON.stringify(parts) : "";
+}
+
+function assistantHasToolOrApprovalContent(content: Message["content"]) {
+  return (
+    Array.isArray(content) &&
+    content.some(
+      (part) =>
+        part.type === "tool-call" ||
+        part.type === "tool-result" ||
+        part.type === "tool-approval-request" ||
+        part.type === "tool-approval-response"
+    )
+  );
+}
+
+function isSupersededAssistantNarrativeSnapshot(current: Message, next: Message) {
+  if (current.role !== "assistant" || next.role !== "assistant" || !current.runId || current.runId !== next.runId) {
+    return false;
+  }
+
+  if (assistantHasToolOrApprovalContent(current.content) || !assistantHasToolOrApprovalContent(next.content)) {
+    return false;
+  }
+
+  const currentSignature = assistantNarrativeSignature(current.content);
+  return currentSignature.length > 0 && currentSignature === assistantNarrativeSignature(next.content);
+}
+
+function compactSupersededAssistantNarrativeSnapshots(messages: Message[]) {
+  if (messages.length < 2) {
+    return messages;
+  }
+
+  return messages.filter((message, index) => {
+    const nextMessage = messages[index + 1];
+    return !nextMessage || !isSupersededAssistantNarrativeSnapshot(message, nextMessage);
+  });
+}
+
 function readStructuredEventContent(event: SessionEventContract): AssistantMessageContent | null {
   const content = event.data.content;
   return Array.isArray(content) ? (content as AssistantMessageContent) : null;
@@ -620,6 +682,7 @@ export function buildRuntimeViewModel(params: {
     deferredEvents: params.deferredEvents,
     liveMessages
   }).filter(hasDisplayableConversationMessage);
+  const compactedMessageFeed = compactSupersededAssistantNarrativeSnapshots(messageFeed);
 
   return {
     modelCallTraces,
@@ -639,7 +702,7 @@ export function buildRuntimeViewModel(params: {
     allToolServers,
     resolvedModelNames,
     resolvedModelRefs,
-    messageFeed
+    messageFeed: compactedMessageFeed
   };
 }
 

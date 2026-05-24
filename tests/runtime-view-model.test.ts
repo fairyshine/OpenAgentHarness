@@ -1364,6 +1364,81 @@ describe("buildRuntimeViewModel", () => {
     expect(viewModel.messageFeed[1]?.content).toEqual(assistantMessage.content);
   });
 
+  it("drops an assistant reasoning snapshot when the next snapshot repeats it with tool calls", () => {
+    const userMessage: Message = {
+      id: "msg_user",
+      sessionId: "ses_1",
+      role: "user",
+      content: "inspect the project",
+      createdAt: "2026-04-07T00:00:00.000Z"
+    };
+    const reasoningOnlyMessage = createAssistantMessage({
+      id: "msg_reasoning_only",
+      content: [
+        {
+          type: "reasoning",
+          text: "Now let me read the NN-related files too."
+        }
+      ],
+      createdAt: "2026-04-07T00:00:01.000Z"
+    });
+    const reasoningWithToolCallMessage = createAssistantMessage({
+      id: "msg_reasoning_with_tool_call",
+      content: [
+        {
+          type: "reasoning",
+          text: "Now let me read the NN-related files too."
+        },
+        {
+          type: "tool-call",
+          toolCallId: "call_read_nn",
+          toolName: "Read",
+          input: {
+            file_path: "gomoku/scripts/neural_network.gd"
+          }
+        }
+      ],
+      createdAt: "2026-04-07T00:00:02.000Z"
+    });
+
+    const viewModel = buildRuntimeViewModel({
+      messages: [userMessage, reasoningOnlyMessage, reasoningWithToolCallMessage],
+      queuedMessageIds: new Set(),
+      runSteps: [createModelCallStep()],
+      deferredEvents: [
+        createEvent({
+          cursor: "1",
+          runId: "run_1",
+          event: "message.completed",
+          data: {
+            messageId: reasoningOnlyMessage.id,
+            content: reasoningOnlyMessage.content
+          }
+        }),
+        createEvent({
+          cursor: "2",
+          runId: "run_1",
+          event: "message.completed",
+          data: {
+            messageId: reasoningWithToolCallMessage.id,
+            content: reasoningWithToolCallMessage.content
+          }
+        })
+      ],
+      liveMessagesByKey: {},
+      selectedTraceId: "",
+      selectedMessageId: "",
+      selectedStepId: "",
+      selectedEventId: "",
+      sessionId: "ses_1"
+    });
+
+    expect(viewModel.messageFeed.map((message) => message.id)).toEqual([
+      "msg_user",
+      "msg_reasoning_with_tool_call"
+    ]);
+  });
+
   it("keeps queued user messages out of the main conversation feed until they leave the queue", () => {
     const queuedUserMessage: Message = {
       id: "msg_queued_user",
