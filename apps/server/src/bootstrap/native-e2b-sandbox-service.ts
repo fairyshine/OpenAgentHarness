@@ -261,6 +261,21 @@ function toCommandResult(
   };
 }
 
+function isE2BSandboxUnavailableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("sandbox timeout") ||
+    message.includes("http 502") ||
+    message.includes("[unavailable]") ||
+    message.includes("sandbox not found") ||
+    message.includes("not found")
+  );
+}
+
 export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOptions): E2BCompatibleSandboxService {
   const sdk = options.sdk ?? (E2BSandbox as unknown as NativeE2BSandboxSdk);
   const templateSdk = options.templateSdk ?? Template;
@@ -564,7 +579,25 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
   async function resolveSandbox(workspace: WorkspaceRecord): Promise<{ sandbox: NativeE2BSandboxInstance; rootPath: string }> {
     const groupKey = resolveSandboxGroupKey(workspace);
     const sandbox = await loadOrCreateSandbox(groupKey, workspace);
-    const rootPath = await ensureWorkspaceRoot(sandbox, workspace);
+    let rootPath: string;
+    try {
+      rootPath = await ensureWorkspaceRoot(sandbox, workspace);
+    } catch (error) {
+      if (!isE2BSandboxUnavailableError(error)) {
+        throw error;
+      }
+
+      await forgetUnavailableSandbox(groupKey, sandbox.sandboxId);
+      const replacement = await createSandbox(groupKey, workspace);
+      rootPath = await ensureWorkspaceRoot(replacement, workspace);
+      if (!buildOwnerSandboxGroupKey(workspace) && ownerlessPool === "shared") {
+        void ensureWarmOwnerlessSandboxes().catch(() => undefined);
+      }
+      return {
+        sandbox: replacement,
+        rootPath
+      };
+    }
     if (!buildOwnerSandboxGroupKey(workspace) && ownerlessPool === "shared") {
       void ensureWarmOwnerlessSandboxes().catch(() => undefined);
     }
@@ -572,6 +605,19 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
       sandbox,
       rootPath
     };
+  }
+
+  async function forgetUnavailableSandbox(groupKey: string, sandboxId: string): Promise<void> {
+    const rememberedSandboxId = sandboxIdsByGroupKey.get(groupKey);
+    if (rememberedSandboxId === sandboxId) {
+      sandboxIdsByGroupKey.delete(groupKey);
+    }
+    sandboxesById.delete(sandboxId);
+    warmOwnerlessGroupKeys.delete(groupKey);
+    sandboxCreationByGroupKey.delete(groupKey);
+    if (sdk.kill) {
+      await sdk.kill(sandboxId, connectionOpts).catch(() => false);
+    }
   }
 
   function getConnectedSandbox(sandboxId: string): NativeE2BSandboxInstance {

@@ -223,5 +223,13 @@ describe("sandbox capabilities", () => {
         selfHostedWorkerProcess: false
       })
     ).toBe(false);
+    expect(
+      shouldUseWorkspaceMaterialization({
+        provider: "e2b",
+        objectStorageConfigured: true,
+        remoteSandboxProvider: true,
+        selfHostedWorkerProcess: false
+      })
+    ).toBe(true);
   });
 });

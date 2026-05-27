@@ -137,24 +137,33 @@ export async function createConfiguredSandboxHost(options: {
     });
   }
 
-  const [{ createE2BCompatibleSandboxHost }, { createNativeE2BSandboxService, normalizeE2BApiUrl }] = await Promise.all([
+  const [{ createE2BCompatibleSandboxHost, createMaterializedE2BCompatibleSandboxService }, { createNativeE2BSandboxService, normalizeE2BApiUrl }] = await Promise.all([
     loadE2BCompatibleSandboxHostModule(),
     loadNativeE2BSandboxServiceModule()
   ]);
+  const nativeService = createNativeE2BSandboxService({
+    apiKey: trimToUndefined(options.config.sandbox?.e2b?.api_key),
+    apiUrl: normalizeE2BApiUrl(options.config.sandbox?.e2b?.base_url),
+    domain: trimToUndefined(options.config.sandbox?.e2b?.domain),
+    headers: options.config.sandbox?.e2b?.headers,
+    template: trimToUndefined(options.config.sandbox?.e2b?.template),
+    timeoutMs: options.config.sandbox?.e2b?.timeout_ms,
+    requestTimeoutMs: options.config.sandbox?.e2b?.request_timeout_ms,
+    maxWorkspacesPerSandbox: options.config.sandbox?.fleet?.max_workspaces_per_sandbox,
+    ownerlessPool: options.config.sandbox?.fleet?.ownerless_pool,
+    warmEmptyCount: options.config.sandbox?.fleet?.warm_empty_count
+  });
 
   return createE2BCompatibleSandboxHost({
     providerKind: "e2b",
-    service: createNativeE2BSandboxService({
-      apiKey: trimToUndefined(options.config.sandbox?.e2b?.api_key),
-      apiUrl: normalizeE2BApiUrl(options.config.sandbox?.e2b?.base_url),
-      domain: trimToUndefined(options.config.sandbox?.e2b?.domain),
-      headers: options.config.sandbox?.e2b?.headers,
-      template: trimToUndefined(options.config.sandbox?.e2b?.template),
-      timeoutMs: options.config.sandbox?.e2b?.timeout_ms,
-      requestTimeoutMs: options.config.sandbox?.e2b?.request_timeout_ms,
-      maxWorkspacesPerSandbox: options.config.sandbox?.fleet?.max_workspaces_per_sandbox,
-      ownerlessPool: options.config.sandbox?.fleet?.ownerless_pool,
-      warmEmptyCount: options.config.sandbox?.fleet?.warm_empty_count
-    })
+    service: options.workspaceMaterializationManager
+      ? createMaterializedE2BCompatibleSandboxService({
+          service: nativeService,
+          materializationManager: options.workspaceMaterializationManager,
+          logger: (message) => {
+            console.info(message);
+          }
+        })
+      : nativeService
   });
 }

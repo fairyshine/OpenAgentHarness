@@ -1,13 +1,19 @@
 import { Readable } from "node:stream";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkspaceRecord } from "@oah/engine-core";
+import type { DirectoryObjectStore } from "../apps/server/src/object-storage.ts";
 
+import { createMaterializedE2BCompatibleSandboxService } from "../apps/server/src/bootstrap/e2b-compatible-sandbox-host.ts";
 import {
   createNativeE2BSandboxService,
   normalizeE2BApiUrl
 } from "../apps/server/src/bootstrap/native-e2b-sandbox-service.ts";
+import { WorkspaceMaterializationManager } from "../apps/server/src/bootstrap/workspace-materialization.ts";
 
 function buildWorkspace(overrides?: Partial<WorkspaceRecord>): WorkspaceRecord {
   return {
@@ -44,6 +50,61 @@ function buildWorkspace(overrides?: Partial<WorkspaceRecord>): WorkspaceRecord {
     createdAt: "2026-04-16T00:00:00.000Z",
     updatedAt: "2026-04-16T00:00:00.000Z",
     ...overrides
+  };
+}
+
+function createMemoryObjectStore(initialObjects?: Record<string, Buffer | string>): DirectoryObjectStore & {
+  getStoredText(key: string): string | undefined;
+} {
+  const objects = new Map<string, { body: Buffer; lastModified: Date; metadata?: Record<string, string> | undefined }>();
+  for (const [key, value] of Object.entries(initialObjects ?? {})) {
+    objects.set(key, {
+      body: Buffer.isBuffer(value) ? value : Buffer.from(value),
+      lastModified: new Date("2026-04-16T00:00:00.000Z")
+    });
+  }
+
+  return {
+    bucket: "bucket",
+    async listEntries(prefix) {
+      const normalizedPrefix = prefix.replace(/^\/+|\/+$/gu, "");
+      return [...objects.entries()]
+        .filter(([key]) => key === normalizedPrefix || key.startsWith(`${normalizedPrefix}/`))
+        .map(([key, value]) => ({
+          key,
+          size: value.body.byteLength,
+          lastModified: value.lastModified
+        }))
+        .sort((left, right) => left.key.localeCompare(right.key));
+    },
+    async getObject(key) {
+      const object = objects.get(key);
+      if (!object) {
+        const error = new Error(`Object not found: ${key}`) as Error & { code?: string };
+        error.code = "ENOENT";
+        throw error;
+      }
+
+      return {
+        body: object.body,
+        metadata: object.metadata
+      };
+    },
+    async putObject(key, body, options) {
+      objects.set(key, {
+        body,
+        lastModified: options?.mtimeMs ? new Date(options.mtimeMs) : new Date("2026-04-16T00:00:00.000Z"),
+        ...(options?.mtimeMs ? { metadata: { "oah-mtime-ms": String(options.mtimeMs) } } : {})
+      });
+    },
+    async deleteObjects(keys) {
+      for (const key of keys) {
+        objects.delete(key);
+      }
+    },
+    getStoredText(key) {
+      return objects.get(key)?.body.toString("utf8");
+    }
   };
 }
 
@@ -741,6 +802,238 @@ describe("native e2b sandbox service", () => {
         timeoutMs: 300000
       })
     );
+  });
+
+  it("replaces a cached sandbox when the remote sandbox becomes unavailable", async () => {
+    const expiredSandbox = {
+      sandboxId: "sb-expired",
+      files: {
+        makeDir: vi.fn(async () => {
+          throw new Error("[unavailable] HTTP 502: This error is likely due to sandbox timeout.");
+        }),
+        write: vi.fn(),
+        read: vi.fn(),
+        getInfo: vi.fn(),
+        list: vi.fn(),
+        remove: vi.fn(),
+        rename: vi.fn()
+      },
+      commands: {
+        run: vi.fn()
+      }
+    };
+    const replacementSandbox = {
+      sandboxId: "sb-replacement",
+      files: {
+        makeDir: vi.fn(async () => true),
+        write: vi.fn(),
+        read: vi.fn(),
+        getInfo: vi.fn(),
+        list: vi.fn(),
+        remove: vi.fn(),
+        rename: vi.fn()
+      },
+      commands: {
+        run: vi.fn()
+      }
+    };
+    const create = vi.fn(async () => (create.mock.calls.length === 1 ? expiredSandbox : replacementSandbox));
+    const kill = vi.fn(async () => true);
+    const service = createNativeE2BSandboxService({
+      ensureTemplate: false,
+      apiKey: "secret",
+      sdk: {
+        connect: vi.fn(),
+        create,
+        kill,
+        list: vi.fn(() => ({
+          hasNext: false,
+          async nextItems() {
+            return [];
+          }
+        }))
+      } as never
+    });
+
+    const lease = await service.acquireFileAccess({
+      workspace: buildWorkspace({
+        id: "ws_public_1"
+      }),
+      access: "write"
+    });
+
+    expect(lease.sandboxId).toBe("sb-replacement");
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(kill).toHaveBeenCalledWith(
+      "sb-expired",
+      expect.objectContaining({
+        apiKey: "secret"
+      })
+    );
+    expect(replacementSandbox.files.makeDir).toHaveBeenCalledWith("/workspace");
+    expect(replacementSandbox.files.makeDir).toHaveBeenCalledWith("/workspace/ws_public_1");
+  });
+
+  it("hydrates native E2B sandboxes from materialized object storage and flushes dirty releases back", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "oah-e2b-materialized-"));
+    const remoteFiles = new Map<string, { data: Buffer; mtimeMs: number }>();
+    const sandbox = {
+      sandboxId: "sb-materialized",
+      files: {
+        makeDir: vi.fn(async () => true),
+        write: vi.fn(async (targetPath: string, data: ArrayBuffer) => {
+          remoteFiles.set(targetPath, {
+            data: Buffer.from(data),
+            mtimeMs: Date.parse("2026-04-16T00:00:00.000Z")
+          });
+          return { name: path.posix.basename(targetPath), path: targetPath };
+        }),
+        read: vi.fn(async (targetPath: string, opts?: { format?: string }) => {
+          const file = remoteFiles.get(targetPath);
+          if (!file) {
+            throw new Error(`not found: ${targetPath}`);
+          }
+          if (opts?.format === "bytes") {
+            return file.data;
+          }
+          return file.data.toString("utf8");
+        }),
+        getInfo: vi.fn(async (targetPath: string) => ({
+          name: path.posix.basename(targetPath),
+          path: targetPath,
+          type: "file",
+          size: remoteFiles.get(targetPath)?.data.byteLength ?? 0,
+          mode: 0o644,
+          permissions: "rw-r--r--",
+          owner: "user",
+          group: "group",
+          modifiedTime: new Date(remoteFiles.get(targetPath)?.mtimeMs ?? Date.parse("2026-04-16T00:00:00.000Z"))
+        })),
+        list: vi.fn(async (targetPath: string) => {
+          const childNames = new Set<string>();
+          const files = [];
+          for (const [filePath, file] of remoteFiles) {
+            if (!filePath.startsWith(`${targetPath}/`)) {
+              continue;
+            }
+            const relativePath = filePath.slice(targetPath.length + 1);
+            const [name, ...rest] = relativePath.split("/");
+            if (!name || childNames.has(name)) {
+              continue;
+            }
+            childNames.add(name);
+            if (rest.length > 0) {
+              files.push({
+                name,
+                path: path.posix.join(targetPath, name),
+                type: "dir",
+                size: 0,
+                mode: 0o755,
+                permissions: "rwxr-xr-x",
+                owner: "user",
+                group: "group",
+                modifiedTime: new Date("2026-04-16T00:00:00.000Z")
+              });
+              continue;
+            }
+            files.push({
+              name,
+              path: filePath,
+              type: "file",
+              size: file.data.byteLength,
+              mode: 0o644,
+              permissions: "rw-r--r--",
+              owner: "user",
+              group: "group",
+              modifiedTime: new Date(file.mtimeMs)
+            });
+          }
+          return files;
+        }),
+        remove: vi.fn(async (targetPath: string) => {
+          remoteFiles.delete(targetPath);
+        }),
+        rename: vi.fn(async (sourcePath: string, targetPath: string) => {
+          const file = remoteFiles.get(sourcePath);
+          if (file) {
+            remoteFiles.set(targetPath, file);
+            remoteFiles.delete(sourcePath);
+          }
+          return { name: path.posix.basename(targetPath), path: targetPath, type: "file" };
+        })
+      },
+      commands: {
+        run: vi.fn(async (command: string) => {
+          const touchMatch = /touch -m -d '([^']+)' -- '([^']+)'/u.exec(command);
+          if (touchMatch) {
+            const file = remoteFiles.get(touchMatch[2]!);
+            if (file) {
+              file.mtimeMs = Date.parse(touchMatch[1]!);
+            }
+          }
+          return {
+            stdout: "",
+            stderr: "",
+            exitCode: 0
+          };
+        })
+      }
+    };
+    const store = createMemoryObjectStore({
+      "workspace/ws_materialized/README.md": "from-oss"
+    });
+    const materializationManager = new WorkspaceMaterializationManager({
+      cacheRoot: path.join(tempRoot, ".openharness", "__materialized__"),
+      workspaceRoot: path.join(tempRoot, "workspaces"),
+      workerId: "worker-test",
+      store
+    });
+    const service = createMaterializedE2BCompatibleSandboxService({
+      service: createNativeE2BSandboxService({
+        ensureTemplate: false,
+        sdk: {
+          connect: vi.fn(async () => sandbox),
+          create: vi.fn(async () => sandbox),
+          list: vi.fn(() => ({
+            hasNext: false,
+            async nextItems() {
+              return [];
+            }
+          }))
+        } as never
+      }),
+      materializationManager
+    });
+    const workspace = buildWorkspace({
+      id: "ws_materialized",
+      rootPath: path.join(tempRoot, "workspaces", "ws_materialized"),
+      externalRef: "s3://bucket/workspace/ws_materialized"
+    });
+
+    try {
+      const lease = await service.acquireFileAccess({
+        workspace,
+        access: "write"
+      });
+
+      expect(remoteFiles.get("/workspace/ws_materialized/README.md")?.data.toString("utf8")).toBe("from-oss");
+
+      await service.writeFile({
+        sandboxId: lease.sandboxId,
+        path: `${lease.rootPath}/README.md`,
+        data: Buffer.from("changed-in-e2b")
+      });
+      await lease.release({ dirty: true });
+
+      expect(await readFile(path.join(tempRoot, "workspaces", "ws_materialized", "README.md"), "utf8")).toBe("changed-in-e2b");
+      expect(store.getStoredText("workspace/ws_materialized/README.md")).toBe("changed-in-e2b");
+      const cleanLease = await materializationManager.acquireWorkspace({ workspace });
+      await cleanLease.release({ dirty: false });
+      expect(cleanLease.localPath).toBe(path.join(tempRoot, "workspaces", "ws_materialized"));
+    } finally {
+      await service.close().catch(() => undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("opens a new ownerless shared sandbox bucket when the current bucket is full", async () => {

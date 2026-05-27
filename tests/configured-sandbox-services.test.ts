@@ -216,8 +216,8 @@ describe("configured sandbox workspace services", () => {
     ).toMatchObject({
       provider: "e2b",
       remoteSandboxProvider: true,
-      materializationMode: "none",
-      shouldUseWorkspaceMaterialization: false
+      materializationMode: "eager",
+      shouldUseWorkspaceMaterialization: true
     });
   });
 

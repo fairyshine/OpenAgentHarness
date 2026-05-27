@@ -1,5 +1,6 @@
 import path from "node:path";
 import { Readable } from "node:stream";
+import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 
 import {
   SANDBOX_ROOT_PATH,
@@ -23,10 +24,13 @@ import type {
 } from "@oah/engine-core";
 
 import type { SandboxHost } from "./sandbox-host.js";
+import type { WorkspaceMaterializationManager, WorkspaceMaterializationLease } from "./workspace-materialization.js";
 import { describeSandboxTopology } from "../sandbox-capabilities.js";
+import { shouldExcludeWorkspaceBackingStoreRelativePath } from "../object-storage.js";
 
 const VIRTUAL_SANDBOX_ROOT = "/__oah_sandbox__";
 const SANDBOX_LIST_PAGE_SIZE = 200;
+const MATERIALIZED_SANDBOX_SYNC_CONCURRENCY = 8;
 
 export interface E2BCompatibleSandboxLease {
   sandboxId: string;
@@ -104,6 +108,546 @@ export interface E2BCompatibleSandboxService {
   maintain?(options: { idleBefore: string }): Promise<void>;
   beginDrain?(): Promise<void>;
   close(): Promise<void>;
+}
+
+interface LocalToSandboxSyncFile {
+  localPath: string;
+  remotePath: string;
+  size: number;
+  mtimeMs: number;
+}
+
+interface SandboxToLocalSyncFile {
+  remotePath: string;
+  localPath: string;
+  size?: number | undefined;
+  mtimeMs?: number | undefined;
+}
+
+function normalizeSyncRelativePath(relativePath: string): string {
+  return relativePath.split(path.sep).join("/").replace(/^\/+|\/+$/gu, "");
+}
+
+function remoteChildPath(parent: string, name: string): string {
+  return path.posix.join(parent, name);
+}
+
+async function runWithSyncConcurrency<T>(items: readonly T[], worker: (item: T) => Promise<void>): Promise<void> {
+  if (items.length === 0) {
+    return;
+  }
+
+  const concurrency = Math.max(1, Math.min(MATERIALIZED_SANDBOX_SYNC_CONCURRENCY, items.length));
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: concurrency }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= items.length) {
+          return;
+        }
+        await worker(items[index]!);
+      }
+    })
+  );
+}
+
+async function collectLocalToSandboxSyncPlan(input: {
+  localRoot: string;
+  remoteRoot: string;
+  currentLocalPath?: string | undefined;
+  currentRemotePath?: string | undefined;
+}): Promise<{ directories: string[]; files: LocalToSandboxSyncFile[] }> {
+  const currentLocalPath = input.currentLocalPath ?? input.localRoot;
+  const currentRemotePath = input.currentRemotePath ?? input.remoteRoot;
+  const directories: string[] = [];
+  const files: LocalToSandboxSyncFile[] = [];
+  const entries = await readdir(currentLocalPath, { withFileTypes: true }).catch(() => []);
+
+  for (const entry of entries) {
+    const localPath = path.join(currentLocalPath, entry.name);
+    const relativePath = normalizeSyncRelativePath(path.relative(input.localRoot, localPath));
+    if (shouldExcludeWorkspaceBackingStoreRelativePath(relativePath)) {
+      continue;
+    }
+
+    const remotePath = remoteChildPath(currentRemotePath, entry.name);
+    if (entry.isDirectory()) {
+      directories.push(remotePath);
+      const nested = await collectLocalToSandboxSyncPlan({
+        ...input,
+        currentLocalPath: localPath,
+        currentRemotePath: remotePath
+      });
+      directories.push(...nested.directories);
+      files.push(...nested.files);
+      continue;
+    }
+
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    const fileStat = await stat(localPath);
+    files.push({
+      localPath,
+      remotePath,
+      size: fileStat.size,
+      mtimeMs: Math.trunc(fileStat.mtimeMs)
+    });
+  }
+
+  return { directories, files };
+}
+
+async function collectSandboxEntries(input: {
+  service: E2BCompatibleSandboxService;
+  sandboxId: string;
+  remoteRoot: string;
+  currentRemotePath?: string | undefined;
+}): Promise<Map<string, WorkspaceFileSystemEntry>> {
+  const currentRemotePath = input.currentRemotePath ?? input.remoteRoot;
+  const entriesByPath = new Map<string, WorkspaceFileSystemEntry>();
+  const entries = await input.service.readdir({
+    sandboxId: input.sandboxId,
+    path: currentRemotePath
+  });
+
+  for (const entry of entries) {
+    const childPath = remoteChildPath(currentRemotePath, entry.name);
+    const relativePath = path.posix.relative(input.remoteRoot, childPath);
+    if (shouldExcludeWorkspaceBackingStoreRelativePath(relativePath)) {
+      continue;
+    }
+
+    entriesByPath.set(childPath, entry);
+    if (entry.kind === "directory") {
+      const nested = await collectSandboxEntries({
+        ...input,
+        currentRemotePath: childPath
+      });
+      for (const [nestedPath, nestedEntry] of nested) {
+        entriesByPath.set(nestedPath, nestedEntry);
+      }
+    }
+  }
+
+  return entriesByPath;
+}
+
+function parseEntryMtimeMs(entry: WorkspaceFileSystemEntry | undefined): number | undefined {
+  if (!entry?.updatedAt) {
+    return undefined;
+  }
+
+  const parsed = Date.parse(entry.updatedAt);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isMtimeClose(left: number | undefined, right: number | undefined): boolean {
+  if (left === undefined || right === undefined) {
+    return false;
+  }
+
+  return Math.abs(left - right) < 1_000;
+}
+
+async function syncLocalDirectoryToSandbox(input: {
+  service: E2BCompatibleSandboxService;
+  sandboxId: string;
+  localRoot: string;
+  remoteRoot: string;
+  logger?: ((message: string) => void) | undefined;
+  label?: string | undefined;
+}): Promise<void> {
+  input.logger?.(`[sandbox-materialization] hydrating ${input.label ?? input.remoteRoot} into sandbox ${input.sandboxId}`);
+  await input.service.mkdir({
+    sandboxId: input.sandboxId,
+    path: input.remoteRoot,
+    recursive: true
+  });
+
+  const [plan, remoteEntries] = await Promise.all([
+    collectLocalToSandboxSyncPlan({
+      localRoot: input.localRoot,
+      remoteRoot: input.remoteRoot
+    }),
+    collectSandboxEntries({
+      service: input.service,
+      sandboxId: input.sandboxId,
+      remoteRoot: input.remoteRoot
+    })
+  ]);
+  const expectedRemotePaths = new Set<string>([...plan.directories, ...plan.files.map((file) => file.remotePath)]);
+  const unexpectedRemotePaths = [...remoteEntries.entries()]
+    .filter(([remotePath]) => !expectedRemotePaths.has(remotePath))
+    .sort((left, right) => right[0].length - left[0].length);
+
+  await runWithSyncConcurrency(unexpectedRemotePaths, async ([remotePath, entry]) => {
+    await input.service.rm({
+      sandboxId: input.sandboxId,
+      path: remotePath,
+      recursive: entry.kind === "directory",
+      force: true
+    });
+  });
+
+  await runWithSyncConcurrency(plan.directories, async (remotePath) => {
+    await input.service.mkdir({
+      sandboxId: input.sandboxId,
+      path: remotePath,
+      recursive: true
+    });
+  });
+
+  await runWithSyncConcurrency(plan.files, async (file) => {
+    const remoteEntry = remoteEntries.get(file.remotePath);
+    if (
+      remoteEntry?.kind === "file" &&
+      remoteEntry.sizeBytes === file.size &&
+      isMtimeClose(parseEntryMtimeMs(remoteEntry), file.mtimeMs)
+    ) {
+      return;
+    }
+
+    await input.service.writeFile({
+      sandboxId: input.sandboxId,
+      path: file.remotePath,
+      data: await readFile(file.localPath),
+      mtimeMs: file.mtimeMs
+    });
+  });
+}
+
+async function collectLocalEntries(input: {
+  localRoot: string;
+  currentLocalPath?: string | undefined;
+}): Promise<Map<string, { kind: "file" | "directory"; size?: number | undefined; mtimeMs?: number | undefined }>> {
+  const currentLocalPath = input.currentLocalPath ?? input.localRoot;
+  const entriesByRelativePath = new Map<string, { kind: "file" | "directory"; size?: number | undefined; mtimeMs?: number | undefined }>();
+  const entries = await readdir(currentLocalPath, { withFileTypes: true }).catch(() => []);
+
+  for (const entry of entries) {
+    const localPath = path.join(currentLocalPath, entry.name);
+    const relativePath = normalizeSyncRelativePath(path.relative(input.localRoot, localPath));
+    if (shouldExcludeWorkspaceBackingStoreRelativePath(relativePath)) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      entriesByRelativePath.set(relativePath, { kind: "directory" });
+      const nested = await collectLocalEntries({
+        ...input,
+        currentLocalPath: localPath
+      });
+      for (const [nestedPath, nestedEntry] of nested) {
+        entriesByRelativePath.set(nestedPath, nestedEntry);
+      }
+      continue;
+    }
+
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    const fileStat = await stat(localPath);
+    entriesByRelativePath.set(relativePath, {
+      kind: "file",
+      size: fileStat.size,
+      mtimeMs: Math.trunc(fileStat.mtimeMs)
+    });
+  }
+
+  return entriesByRelativePath;
+}
+
+function sandboxEntriesToLocalPlan(input: {
+  remoteRoot: string;
+  localRoot: string;
+  entries: Map<string, WorkspaceFileSystemEntry>;
+}): { directories: string[]; files: SandboxToLocalSyncFile[]; expectedRelativePaths: Set<string> } {
+  const directories: string[] = [];
+  const files: SandboxToLocalSyncFile[] = [];
+  const expectedRelativePaths = new Set<string>();
+
+  for (const [remotePath, entry] of input.entries) {
+    const relativePath = path.posix.relative(input.remoteRoot, remotePath);
+    if (!relativePath || shouldExcludeWorkspaceBackingStoreRelativePath(relativePath)) {
+      continue;
+    }
+
+    expectedRelativePaths.add(relativePath);
+    const localPath = path.join(input.localRoot, ...relativePath.split("/"));
+    if (entry.kind === "directory") {
+      directories.push(localPath);
+      continue;
+    }
+
+    files.push({
+      remotePath,
+      localPath,
+      size: entry.sizeBytes,
+      mtimeMs: parseEntryMtimeMs(entry)
+    });
+  }
+
+  return { directories, files, expectedRelativePaths };
+}
+
+async function syncSandboxDirectoryToLocal(input: {
+  service: E2BCompatibleSandboxService;
+  sandboxId: string;
+  remoteRoot: string;
+  localRoot: string;
+  logger?: ((message: string) => void) | undefined;
+  label?: string | undefined;
+}): Promise<void> {
+  input.logger?.(`[sandbox-materialization] flushing ${input.label ?? input.remoteRoot} from sandbox ${input.sandboxId}`);
+  await mkdir(input.localRoot, { recursive: true });
+  const [remoteEntries, localEntries] = await Promise.all([
+    collectSandboxEntries({
+      service: input.service,
+      sandboxId: input.sandboxId,
+      remoteRoot: input.remoteRoot
+    }),
+    collectLocalEntries({
+      localRoot: input.localRoot
+    })
+  ]);
+  const plan = sandboxEntriesToLocalPlan({
+    remoteRoot: input.remoteRoot,
+    localRoot: input.localRoot,
+    entries: remoteEntries
+  });
+  const unexpectedLocalEntries = [...localEntries.keys()]
+    .filter((relativePath) => !plan.expectedRelativePaths.has(relativePath))
+    .sort((left, right) => right.length - left.length);
+
+  await runWithSyncConcurrency(unexpectedLocalEntries, async (relativePath) => {
+    await rm(path.join(input.localRoot, ...relativePath.split("/")), { recursive: true, force: true });
+  });
+
+  await runWithSyncConcurrency(plan.directories, async (localPath) => {
+    await mkdir(localPath, { recursive: true });
+  });
+
+  await runWithSyncConcurrency(plan.files, async (file) => {
+    const relativePath = normalizeSyncRelativePath(path.relative(input.localRoot, file.localPath));
+    const localEntry = localEntries.get(relativePath);
+    if (
+      localEntry?.kind === "file" &&
+      localEntry.size === file.size &&
+      isMtimeClose(localEntry.mtimeMs, file.mtimeMs)
+    ) {
+      return;
+    }
+
+    await mkdir(path.dirname(file.localPath), { recursive: true });
+    await writeFile(file.localPath, await input.service.readFile({
+      sandboxId: input.sandboxId,
+      path: file.remotePath
+    }));
+    if (file.mtimeMs !== undefined) {
+      const mtime = new Date(file.mtimeMs);
+      await utimes(file.localPath, mtime, mtime).catch(() => undefined);
+    }
+  });
+}
+
+export function createMaterializedE2BCompatibleSandboxService(options: {
+  service: E2BCompatibleSandboxService;
+  materializationManager: WorkspaceMaterializationManager;
+  logger?: ((message: string) => void) | undefined;
+}): E2BCompatibleSandboxService {
+  const hydratedSandboxWorkspaceKeys = new Set<string>();
+  const hydrationInFlightByKey = new Map<string, Promise<void>>();
+
+  const hydrationKey = (sandboxId: string, workspaceId: string) => `${encodeURIComponent(sandboxId)}:${encodeURIComponent(workspaceId)}`;
+
+  const ensureSandboxHydrated = async (input: {
+    sandboxLease: E2BCompatibleSandboxLease;
+    materializedLease: WorkspaceMaterializationLease;
+    workspace: WorkspaceRecord;
+  }): Promise<void> => {
+    const key = hydrationKey(input.sandboxLease.sandboxId, input.workspace.id);
+    if (hydratedSandboxWorkspaceKeys.has(key)) {
+      return;
+    }
+
+    let inFlight = hydrationInFlightByKey.get(key);
+    if (!inFlight) {
+      inFlight = syncLocalDirectoryToSandbox({
+        service: options.service,
+        sandboxId: input.sandboxLease.sandboxId,
+        localRoot: input.materializedLease.localPath,
+        remoteRoot: input.sandboxLease.rootPath,
+        logger: options.logger,
+        label: input.workspace.id
+      })
+        .then(() => {
+          hydratedSandboxWorkspaceKeys.add(key);
+        })
+        .finally(() => {
+          hydrationInFlightByKey.delete(key);
+        });
+      hydrationInFlightByKey.set(key, inFlight);
+    }
+
+    await inFlight;
+  };
+
+  const wrapAcquire = async <T extends E2BCompatibleSandboxLease>(
+    workspace: WorkspaceRecord,
+    acquire: () => Promise<T>
+  ): Promise<E2BCompatibleSandboxLease> => {
+    const materializedLease = await options.materializationManager.acquireWorkspace({
+      workspace
+    });
+    let sandboxLease: T | undefined;
+
+    try {
+      sandboxLease = await acquire();
+      await ensureSandboxHydrated({
+        sandboxLease,
+        materializedLease,
+        workspace
+      });
+    } catch (error) {
+      await Promise.allSettled([
+        sandboxLease?.release({ dirty: false }) ?? Promise.resolve(),
+        materializedLease.release({ dirty: false })
+      ]);
+      throw error;
+    }
+
+    let released = false;
+    const releaseMaterializedLease = async (lease: WorkspaceMaterializationLease, dirty: boolean | undefined) => {
+      await lease.release({ dirty });
+      if (dirty) {
+        await options.materializationManager.flushWorkspaceCopies(workspace.id);
+      }
+    };
+
+    return {
+      sandboxId: sandboxLease.sandboxId,
+      rootPath: sandboxLease.rootPath,
+      async release(releaseOptions?: { dirty?: boolean | undefined }) {
+        if (released) {
+          return;
+        }
+
+        released = true;
+        const dirty = releaseOptions?.dirty === true;
+        let materializedReleased = false;
+        try {
+          if (dirty) {
+            await syncSandboxDirectoryToLocal({
+              service: options.service,
+              sandboxId: sandboxLease!.sandboxId,
+              remoteRoot: sandboxLease!.rootPath,
+              localRoot: materializedLease.localPath,
+              logger: options.logger,
+              label: workspace.id
+            });
+          }
+
+          await releaseMaterializedLease(materializedLease, dirty);
+          materializedReleased = true;
+        } finally {
+          if (!materializedReleased) {
+            await materializedLease.release({ dirty: false }).catch(() => undefined);
+          }
+          await sandboxLease!.release(releaseOptions);
+        }
+      }
+    };
+  };
+
+  const wrapped: E2BCompatibleSandboxService = {
+    acquireExecution(input) {
+      return wrapAcquire(input.workspace, () => options.service.acquireExecution(input));
+    },
+    acquireFileAccess(input) {
+      return wrapAcquire(input.workspace, () => options.service.acquireFileAccess(input));
+    },
+    runCommand(input) {
+      return options.service.runCommand(input);
+    },
+    runProcess(input) {
+      return options.service.runProcess(input);
+    },
+    runBackground(input) {
+      return options.service.runBackground(input);
+    },
+    stat(input) {
+      return options.service.stat(input);
+    },
+    readFile(input) {
+      return options.service.readFile(input);
+    },
+    readdir(input) {
+      return options.service.readdir(input);
+    },
+    mkdir(input) {
+      return options.service.mkdir(input);
+    },
+    writeFile(input) {
+      return options.service.writeFile(input);
+    },
+    rm(input) {
+      return options.service.rm(input);
+    },
+    rename(input) {
+      return options.service.rename(input);
+    },
+    diagnostics() {
+      return {
+        ...(options.service.diagnostics?.() ?? {}),
+        materialization: options.materializationManager.diagnostics()
+      };
+    },
+    async maintain(input) {
+      await options.service.maintain?.(input);
+      await options.materializationManager.refreshLeases();
+      await options.materializationManager.flushIdleCopies(input);
+      await options.materializationManager.evictIdleCopies(input);
+    },
+    async beginDrain() {
+      await options.materializationManager.beginDrain();
+      await options.service.beginDrain?.();
+    },
+    async close() {
+      try {
+        await options.materializationManager.close();
+      } finally {
+        hydratedSandboxWorkspaceKeys.clear();
+        hydrationInFlightByKey.clear();
+        await options.service.close();
+      }
+    }
+  };
+
+  if (options.service.openReadStream) {
+    wrapped.openReadStream = (input) => options.service.openReadStream!(input);
+  }
+  if (options.service.readdirPage) {
+    wrapped.readdirPage = (input) => options.service.readdirPage!(input);
+  }
+  if (options.service.realpath) {
+    wrapped.realpath = (input) => options.service.realpath!(input);
+  }
+  wrapped.deleteWorkspace = async (workspace) => {
+    await options.service.deleteWorkspace?.(workspace);
+    for (const key of [...hydratedSandboxWorkspaceKeys]) {
+      if (key.endsWith(`:${encodeURIComponent(workspace.id)}`)) {
+        hydratedSandboxWorkspaceKeys.delete(key);
+      }
+    }
+    await options.materializationManager.deleteWorkspaceCopies(workspace.id);
+  };
+
+  return wrapped;
 }
 
 export interface HttpE2BCompatibleSandboxServiceOptions {

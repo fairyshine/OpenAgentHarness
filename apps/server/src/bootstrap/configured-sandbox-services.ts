@@ -65,6 +65,7 @@ export function resolveSandboxBootstrapPlan(input: {
     hasSandboxHostFactory: input.hasSandboxHostFactory
   });
   const useWorkspaceMaterialization = shouldUseWorkspaceMaterialization({
+    provider,
     objectStorageConfigured,
     remoteSandboxProvider,
     selfHostedWorkerProcess

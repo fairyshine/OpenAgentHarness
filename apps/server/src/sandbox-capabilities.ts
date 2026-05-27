@@ -134,11 +134,15 @@ export function shouldDeferEmbeddedSandboxMaterialization(input: {
 }
 
 export function shouldUseWorkspaceMaterialization(input: {
+  provider?: SandboxHostProviderKind | undefined;
   objectStorageConfigured: boolean;
   remoteSandboxProvider: boolean;
   selfHostedWorkerProcess: boolean;
 }): boolean {
-  return input.objectStorageConfigured && (!input.remoteSandboxProvider || input.selfHostedWorkerProcess);
+  return (
+    input.objectStorageConfigured &&
+    (!input.remoteSandboxProvider || input.selfHostedWorkerProcess || input.provider === "e2b")
+  );
 }
 
 export function shouldUseSelfHostedSeedTransfer(provider: SandboxHostProviderKind | undefined): boolean {
