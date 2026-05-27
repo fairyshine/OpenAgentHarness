@@ -68,7 +68,7 @@ export interface ServerConfig {
       | undefined;
   };
   sandbox?: {
-    provider?: "embedded" | "self_hosted" | "e2b" | undefined;
+    provider?: "embedded" | "self_hosted" | "e2b" | "e2b-aliyun" | undefined;
     fleet?:
       | {
           min_count?: number | undefined;

@@ -1214,7 +1214,7 @@ function createE2BCompatibleWorkspaceFileSystem(service: E2BCompatibleSandboxSer
 export function createE2BCompatibleSandboxHost(options: {
   service: E2BCompatibleSandboxService;
   diagnostics?: Record<string, unknown> | undefined;
-  providerKind?: "self_hosted" | "e2b" | undefined;
+  providerKind?: "self_hosted" | "e2b" | "e2b-aliyun" | undefined;
 }): SandboxHost {
   const workspaceCommandExecutor = createE2BCompatibleWorkspaceCommandExecutor(options.service);
   const workspaceFileSystem = createE2BCompatibleWorkspaceFileSystem(options.service);

@@ -43,6 +43,7 @@ describe("sandbox capabilities", () => {
         }
       })
     ).toBe("e2b");
+    expect(resolveConfiguredSandboxProvider({ sandbox: { provider: "e2b-aliyun" } })).toBe("e2b-aliyun");
     expect(isRemoteSandboxProviderConfig({})).toBe(false);
     expect(isRemoteSandboxProviderConfig({ sandbox: { provider: "self_hosted" } })).toBe(true);
   });
@@ -52,11 +53,13 @@ describe("sandbox capabilities", () => {
     expect(isRemoteSandboxProviderKind("embedded")).toBe(false);
     expect(isRemoteSandboxProviderKind("self_hosted")).toBe(true);
     expect(isRemoteSandboxProviderKind("e2b")).toBe(true);
+    expect(isRemoteSandboxProviderKind("e2b-aliyun")).toBe(true);
 
     expect(shouldProjectWorkspaceRootPath("embedded")).toBe(false);
     expect(shouldProjectWorkspaceRootPath("self_hosted")).toBe(true);
     expect(projectWorkspaceRootPathForPublicApi("embedded", "/data/workspaces/ws_1")).toBe("/data/workspaces/ws_1");
     expect(projectWorkspaceRootPathForPublicApi("e2b", "/data/workspaces/ws_1")).toBe("/workspace");
+    expect(projectWorkspaceRootPathForPublicApi("e2b-aliyun", "/data/workspaces/ws_1")).toBe("/workspace");
   });
 
   it("limits owner-scoped placement reservations to self-hosted sandbox workspaces", () => {
@@ -226,6 +229,14 @@ describe("sandbox capabilities", () => {
     expect(
       shouldUseWorkspaceMaterialization({
         provider: "e2b",
+        objectStorageConfigured: true,
+        remoteSandboxProvider: true,
+        selfHostedWorkerProcess: false
+      })
+    ).toBe(true);
+    expect(
+      shouldUseWorkspaceMaterialization({
+        provider: "e2b-aliyun",
         objectStorageConfigured: true,
         remoteSandboxProvider: true,
         selfHostedWorkerProcess: false

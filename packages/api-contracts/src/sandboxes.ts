@@ -51,7 +51,7 @@ function jsonRequestInit(method: "POST" | "PUT" | "PATCH", body: unknown): Reque
   };
 }
 
-export const sandboxProviderKindSchema = z.enum(["embedded", "self_hosted", "e2b"]);
+export const sandboxProviderKindSchema = z.enum(["embedded", "self_hosted", "e2b", "e2b-aliyun"]);
 export const sandboxExecutionModelSchema = z.enum(["local_embedded", "sandbox_hosted"]);
 export const sandboxWorkerPlacementSchema = z.enum(["api_process", "inside_sandbox"]);
 export const sandboxTopologySchema = z.object({

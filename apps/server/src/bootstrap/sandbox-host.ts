@@ -16,7 +16,7 @@ import type {
 import { WorkspaceMaterializationDrainingError } from "./workspace-materialization.js";
 
 export interface SandboxHostDiagnostics {
-  provider?: "embedded" | "self_hosted" | "e2b" | undefined;
+  provider?: "embedded" | "self_hosted" | "e2b" | "e2b-aliyun" | undefined;
   executionModel?: "local_embedded" | "sandbox_hosted" | undefined;
   workerPlacement?: "api_process" | "inside_sandbox" | undefined;
   materialization?: WorkspaceMaterializationDiagnostics | undefined;

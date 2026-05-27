@@ -116,6 +116,7 @@ describe("configured sandbox workspace services", () => {
         })
       )
     ).toBe("e2b");
+    expect(resolveConfiguredSandboxProvider(buildConfig({ sandbox: { provider: "e2b-aliyun" } }))).toBe("e2b-aliyun");
     expect(isRemoteSandboxProvider(buildConfig())).toBe(false);
     expect(
       isRemoteSandboxProvider(
@@ -215,6 +216,29 @@ describe("configured sandbox workspace services", () => {
       })
     ).toMatchObject({
       provider: "e2b",
+      remoteSandboxProvider: true,
+      materializationMode: "eager",
+      shouldUseWorkspaceMaterialization: true
+    });
+
+    expect(
+      resolveSandboxBootstrapPlan({
+        config: buildConfig({
+          object_storage: {
+            provider: "s3",
+            bucket: "bucket",
+            region: "us-east-1"
+          },
+          sandbox: {
+            provider: "e2b-aliyun"
+          }
+        }),
+        processKind: "api",
+        startWorker: false,
+        hasSandboxHostFactory: false
+      })
+    ).toMatchObject({
+      provider: "e2b-aliyun",
       remoteSandboxProvider: true,
       materializationMode: "eager",
       shouldUseWorkspaceMaterialization: true

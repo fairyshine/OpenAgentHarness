@@ -197,4 +197,30 @@ describe("configured sandbox host", () => {
       domain: "e2b.dev"
     });
   });
+
+  it("can create an Aliyun E2B-compatible sandbox host without standard E2B template ensure", async () => {
+    const host = await createConfiguredSandboxHost({
+      config: buildConfig({
+        sandbox: {
+          provider: "e2b-aliyun",
+          e2b: {
+            base_url: "https://api.aliyun-sandbox.example.com",
+            api_key: "secret",
+            template: "oah-worker"
+          }
+        }
+      })
+    });
+
+    expect(host?.providerKind).toBe("e2b-aliyun");
+    expect(host?.diagnostics()).toMatchObject({
+      provider: "e2b-aliyun",
+      transport: "native_e2b",
+      executionModel: "sandbox_hosted",
+      workerPlacement: "inside_sandbox",
+      apiUrl: "https://api.aliyun-sandbox.example.com",
+      template: "oah-worker",
+      ensureTemplate: false
+    });
+  });
 });

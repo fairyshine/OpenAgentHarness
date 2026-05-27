@@ -45,7 +45,7 @@ export function describeSandboxTopology(provider: SandboxProviderKind | undefine
 }
 
 export function isRemoteSandboxProviderKind(provider: SandboxHostProviderKind | undefined): boolean {
-  return provider === "self_hosted" || provider === "e2b";
+  return provider === "self_hosted" || provider === "e2b" || provider === "e2b-aliyun";
 }
 
 export function isSelfHostedSandboxProviderKind(provider: SandboxHostProviderKind | undefined): boolean {
@@ -141,7 +141,7 @@ export function shouldUseWorkspaceMaterialization(input: {
 }): boolean {
   return (
     input.objectStorageConfigured &&
-    (!input.remoteSandboxProvider || input.selfHostedWorkerProcess || input.provider === "e2b")
+    (!input.remoteSandboxProvider || input.selfHostedWorkerProcess || input.provider === "e2b" || input.provider === "e2b-aliyun")
   );
 }
 

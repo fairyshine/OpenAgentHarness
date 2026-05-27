@@ -241,7 +241,7 @@ export interface WorkspaceFileAccessProvider {
   }): Promise<WorkspaceFileAccessLease>;
 }
 
-export type SandboxHostProviderKind = "embedded" | "self_hosted" | "e2b";
+export type SandboxHostProviderKind = "embedded" | "self_hosted" | "e2b" | "e2b-aliyun";
 
 export interface SandboxHostDiagnostics {
   materialization?: Record<string, unknown> | undefined;

@@ -137,6 +137,7 @@ export async function createConfiguredSandboxHost(options: {
     });
   }
 
+  const e2bCompatibleProvider = provider === "e2b-aliyun" ? "e2b-aliyun" : "e2b";
   const [{ createE2BCompatibleSandboxHost, createMaterializedE2BCompatibleSandboxService }, { createNativeE2BSandboxService, normalizeE2BApiUrl }] = await Promise.all([
     loadE2BCompatibleSandboxHostModule(),
     loadNativeE2BSandboxServiceModule()
@@ -149,13 +150,15 @@ export async function createConfiguredSandboxHost(options: {
     template: trimToUndefined(options.config.sandbox?.e2b?.template),
     timeoutMs: options.config.sandbox?.e2b?.timeout_ms,
     requestTimeoutMs: options.config.sandbox?.e2b?.request_timeout_ms,
+    providerKind: e2bCompatibleProvider,
+    ensureTemplate: e2bCompatibleProvider === "e2b-aliyun" ? false : undefined,
     maxWorkspacesPerSandbox: options.config.sandbox?.fleet?.max_workspaces_per_sandbox,
     ownerlessPool: options.config.sandbox?.fleet?.ownerless_pool,
     warmEmptyCount: options.config.sandbox?.fleet?.warm_empty_count
   });
 
   return createE2BCompatibleSandboxHost({
-    providerKind: "e2b",
+    providerKind: e2bCompatibleProvider,
     service: options.workspaceMaterializationManager
       ? createMaterializedE2BCompatibleSandboxService({
           service: nativeService,

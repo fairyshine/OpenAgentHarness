@@ -192,14 +192,20 @@ RUN --mount=type=cache,id=oah-native-compose-scaler-cargo-registry,target=/usr/l
 
 FROM ${BASE_BUILD_IMAGE} AS node-runtime-binary
 
-RUN apk add --no-cache binutils \
+ARG ALPINE_REPOSITORY_MIRROR
+
+RUN if [ -n "${ALPINE_REPOSITORY_MIRROR:-}" ]; then sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_REPOSITORY_MIRROR}|g" /etc/apk/repositories; fi \
+  && apk add --no-cache binutils \
   && cp /usr/local/bin/node /tmp/node \
   && strip /tmp/node \
   && mv /tmp/node /usr/local/bin/node
 
 FROM ${BASE_DOCKER_CLI_IMAGE} AS docker-cli-build
 
-RUN apk add --no-cache binutils \
+ARG ALPINE_REPOSITORY_MIRROR
+
+RUN if [ -n "${ALPINE_REPOSITORY_MIRROR:-}" ]; then sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_REPOSITORY_MIRROR}|g" /etc/apk/repositories; fi \
+  && apk add --no-cache binutils \
   && cp /usr/local/bin/docker /tmp/docker \
   && cp /usr/local/libexec/docker/cli-plugins/docker-compose /tmp/docker-compose \
   && strip /tmp/docker /tmp/docker-compose \
@@ -210,7 +216,10 @@ FROM ${BASE_RUNTIME_IMAGE} AS runtime-common
 
 ENV NODE_ENV=production
 
-RUN apk add --no-cache ca-certificates libgcc libstdc++ \
+ARG ALPINE_REPOSITORY_MIRROR
+
+RUN if [ -n "${ALPINE_REPOSITORY_MIRROR:-}" ]; then sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_REPOSITORY_MIRROR}|g" /etc/apk/repositories; fi \
+  && apk add --no-cache ca-certificates libgcc libstdc++ \
   && mkdir -p /etc/oah \
   && mkdir -p /usr/libexec/docker/cli-plugins
 
@@ -256,6 +265,42 @@ COPY --from=native-workspace-sync-build /usr/local/bin/oah-workspace-sync /app/n
 EXPOSE 8787
 
 CMD ["node", "dist/worker.js", "--config", "/etc/oah/server.yaml"]
+
+FROM runtime-execution-base AS oah-worker-e2b-lite
+
+ENV OAH_NATIVE_WORKSPACE_SYNC=0
+ENV OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT=0
+
+ARG ALPINE_REPOSITORY_MIRROR
+
+COPY --from=server-runtime-bundles /opt/oah/runtime-bundles/worker /app/dist
+COPY docs/schemas /app/docs/schemas
+
+RUN if [ -n "${ALPINE_REPOSITORY_MIRROR:-}" ]; then sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_REPOSITORY_MIRROR}|g" /etc/apk/repositories; fi \
+  && apk add --no-cache bash coreutils curl git openssh-client tar gzip xz \
+  && printf '%s\n' \
+    '#!/usr/bin/env sh' \
+    'exec node /app/dist/worker.js "$@"' \
+    > /usr/local/bin/oah-worker \
+  && chmod +x /usr/local/bin/oah-worker
+
+EXPOSE 8787
+
+CMD ["sh", "-lc", "if [ -f /etc/oah/server.yaml ]; then exec oah-worker --config /etc/oah/server.yaml; else exec sleep infinity; fi"]
+
+FROM worker-runtime AS oah-worker-e2b
+
+ARG ALPINE_REPOSITORY_MIRROR
+
+RUN if [ -n "${ALPINE_REPOSITORY_MIRROR:-}" ]; then sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_REPOSITORY_MIRROR}|g" /etc/apk/repositories; fi \
+  && apk add --no-cache bash coreutils curl git openssh-client tar gzip xz \
+  && printf '%s\n' \
+    '#!/usr/bin/env sh' \
+    'exec node /app/dist/worker.js "$@"' \
+    > /usr/local/bin/oah-worker \
+  && chmod +x /usr/local/bin/oah-worker
+
+CMD ["sh", "-lc", "if [ -f /etc/oah/server.yaml ]; then exec oah-worker --config /etc/oah/server.yaml; else exec sleep infinity; fi"]
 
 FROM runtime-common AS controller-runtime
 

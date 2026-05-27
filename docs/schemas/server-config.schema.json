@@ -241,7 +241,8 @@
           "enum": [
             "embedded",
             "self_hosted",
-            "e2b"
+            "e2b",
+            "e2b-aliyun"
           ]
         },
         "self_hosted": {

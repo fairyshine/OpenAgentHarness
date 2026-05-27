@@ -30,7 +30,7 @@ export type SandboxWorkspaceInitializerMode = "self_hosted_delegated" | "sandbox
 export type SandboxMaterializationMode = "none" | "eager" | "lazy";
 
 export interface SandboxBootstrapPlan {
-  provider: "embedded" | "self_hosted" | "e2b";
+  provider: "embedded" | "self_hosted" | "e2b" | "e2b-aliyun";
   remoteSandboxProvider: boolean;
   selfHostedWorkerProcess: boolean;
   materializationMode: SandboxMaterializationMode;

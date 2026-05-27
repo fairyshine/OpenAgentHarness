@@ -64,6 +64,7 @@ export interface NativeE2BSandboxServiceOptions {
   domain?: string | undefined;
   headers?: Record<string, string> | undefined;
   ensureTemplate?: boolean | undefined;
+  providerKind?: "e2b" | "e2b-aliyun" | undefined;
   requestTimeoutMs?: number | undefined;
   template?: string | undefined;
   templateSdk?: NativeE2BTemplateSdk | undefined;
@@ -786,7 +787,7 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
       }
     },
     diagnostics() {
-      const topology = describeSandboxTopology("e2b");
+      const topology = describeSandboxTopology(options.providerKind ?? "e2b");
       return {
         provider: topology.provider,
         transport: "native_e2b",
