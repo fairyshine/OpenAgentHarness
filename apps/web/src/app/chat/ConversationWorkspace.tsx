@@ -648,6 +648,7 @@ function ConversationWorkspaceImpl(props: RuntimeProps) {
             currentWorkspaceName={props.currentWorkspaceName}
             messagesTotalCount={props.messagesTotalCount}
             messagesLoading={props.messagesLoading}
+            messagesReady={props.messagesReady}
             messageFeed={props.messageFeed}
             conversationTailRef={props.conversationTailRef}
             catalog={props.catalog}

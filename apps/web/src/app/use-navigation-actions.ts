@@ -1276,6 +1276,7 @@ export function useNavigationActions(params: NavigationActionParams) {
         params.navigation.setWorkspaceId(nextWorkspaceId);
         params.runtime.setMessages(snapshotResponse.messages.items);
         params.runtime.mergeMessagePageCursor(snapshotResponse.messages.nextCursor, snapshotResponse.messages.totalCount);
+        params.runtime.markMessagesReady(nextSessionId);
         params.runtime.setSessionQueuedRuns(snapshotResponse.queue.items);
         params.runtime.setSessionRuns(snapshotResponse.runs.items);
         params.runtime.setSelectedRunId(selectedSnapshotRun?.id ?? "");
@@ -1314,6 +1315,7 @@ export function useNavigationActions(params: NavigationActionParams) {
             params.navigation.setSessionId(nextSessionId);
             params.navigation.setWorkspaceId(nextWorkspaceId);
             params.runtime.setMessagesLoading(false);
+            params.runtime.markMessagesReady(nextSessionId);
             params.navigation.setRecentSessions((current) => addRecentId(current, nextSessionId));
             if (workspaceChanged) {
               params.navigation.setWorkspace(null);

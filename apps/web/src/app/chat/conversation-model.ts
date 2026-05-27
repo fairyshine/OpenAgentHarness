@@ -48,6 +48,7 @@ export type RuntimeProps = RuntimeViewModel & {
   hasNewerMessages: boolean;
   messagesTotalCount: number | undefined;
   messagesLoading: boolean;
+  messagesReady: boolean;
   loadingOlderMessages: boolean;
   loadingNewerMessages: boolean;
   queuedSessionRuns: SessionQueuedRun[];

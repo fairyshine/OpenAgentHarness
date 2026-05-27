@@ -18,6 +18,7 @@ type ConversationFeedProps = Pick<
   | "currentWorkspaceName"
   | "messagesTotalCount"
   | "messagesLoading"
+  | "messagesReady"
   | "messageFeed"
   | "conversationTailRef"
   | "hasNewerMessages"
@@ -460,7 +461,7 @@ export const ConversationFeed = memo(function ConversationFeed(props: Conversati
     [messagesForAgentInfo, props.catalog, props.session, props.sessionEvents, run, runSteps]
   );
 
-  if (props.messagesLoading && props.messageFeed.length === 0) {
+  if (props.hasActiveSession && props.messageFeed.length === 0 && (!props.messagesReady || props.messagesLoading)) {
     return (
       <SessionLoadingState
         sessionId={props.sessionId}

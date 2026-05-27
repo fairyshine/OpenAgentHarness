@@ -76,6 +76,7 @@ export function useSessionMessages(input: {
   const [newerMessagesCursor, setNewerMessagesCursor] = useState<string | null>(null);
   const [messagesTotalCount, setMessagesTotalCount] = useState<number | null>(null);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesReadySessionId, setMessagesReadySessionId] = useState<string | null>(null);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [loadingNewerMessages, setLoadingNewerMessages] = useState(false);
   const messageRefreshSeqRef = useRef(0);
@@ -97,6 +98,7 @@ export function useSessionMessages(input: {
           input.setMessages([]);
           setMessagesNextCursor(null);
           setMessagesTotalCount(null);
+          setMessagesReadySessionId(null);
         });
         return;
       }
@@ -150,11 +152,15 @@ export function useSessionMessages(input: {
               })
             )
           );
+          setMessagesReadySessionId(targetSessionId);
         });
         if (!quiet) {
           input.clearActiveError();
         }
       } catch (error) {
+        if (input.activeSessionIdRef.current === targetSessionId && messageRefreshSeqRef.current === refreshSeq) {
+          setMessagesReadySessionId(targetSessionId);
+        }
         if (!quiet) {
           input.reportError(error);
         }
@@ -258,10 +264,16 @@ export function useSessionMessages(input: {
     setMessagesNextCursor(null);
     setNewerMessagesCursor(null);
     setMessagesTotalCount(null);
+    setMessagesReadySessionId(null);
     setLoadingOlderMessages(false);
     setLoadingNewerMessages(false);
     olderMessagesSeqRef.current = 0;
     newerMessagesSeqRef.current = 0;
+  });
+
+  const markMessagesReady = useEffectEvent((targetSessionId?: string | undefined) => {
+    const normalizedSessionId = (targetSessionId ?? input.sessionId).trim();
+    setMessagesReadySessionId(normalizedSessionId || null);
   });
 
   const mergeMessagePageCursor = useEffectEvent((incoming: string | undefined, totalCount?: number | undefined) => {
@@ -276,9 +288,11 @@ export function useSessionMessages(input: {
     newerMessagesCursor,
     messagesTotalCount,
     messagesLoading,
+    messagesReady: input.sessionId.trim() ? messagesReadySessionId === input.sessionId.trim() : true,
     loadingOlderMessages,
     loadingNewerMessages,
     setMessagesLoading,
+    markMessagesReady,
     refreshMessages,
     loadOlderMessages,
     loadNewerMessages,

@@ -82,6 +82,7 @@ interface NavigationActionParams {
     sessionSnapshotHydrationRef: MutableRefObject<{ sessionId: string; at: number } | null>;
     newEmptySessionIdRef: MutableRefObject<string | null>;
     mergeMessagePageCursor: (cursor: string | undefined, totalCount?: number | undefined) => void;
+    markMessagesReady: (sessionId?: string | undefined) => void;
     refreshMessages: (quiet?: boolean, options?: { pageSize?: number | undefined; reset?: boolean | undefined }) => Promise<void>;
     refreshSessionQueue: (quiet?: boolean) => Promise<void>;
     refreshSessionRuns: (quiet?: boolean, options?: { includeSteps?: boolean | "selected" }) => Promise<void>;

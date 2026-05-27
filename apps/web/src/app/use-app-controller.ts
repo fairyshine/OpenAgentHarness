@@ -309,9 +309,11 @@ export function useAppController() {
     newerMessagesCursor,
     messagesTotalCount,
     messagesLoading,
+    messagesReady,
     loadingOlderMessages,
     loadingNewerMessages,
     setMessagesLoading,
+    markMessagesReady,
     refreshMessages,
     loadOlderMessages,
     loadNewerMessages,
@@ -509,6 +511,7 @@ export function useAppController() {
       lastExplicitSessionRefreshRef,
       sessionSnapshotHydrationRef,
       mergeMessagePageCursor,
+      markMessagesReady,
       newEmptySessionIdRef,
       refreshMessages,
       refreshSessionQueue,
@@ -790,6 +793,7 @@ export function useAppController() {
         setSessionQueuedRuns([]);
       });
       setMessagesLoading(false);
+      markMessagesReady(sessionId);
       window.clearTimeout(sessionQueueRefreshTimerRef.current);
       return;
     }
@@ -1040,6 +1044,7 @@ export function useAppController() {
     mainViewMode,
     messageFeed,
     messagesLoading,
+    messagesReady,
     messagesNextCursor,
     newerMessagesCursor,
     messagesTotalCount,
