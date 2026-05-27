@@ -34,6 +34,7 @@ function createModelCallStep(input: Partial<RunStep> = {}): RunStep {
       },
       runtime: {
         messageCount: 2,
+        maxRetries: 5,
         activeToolNames: [],
         engineToolNames: []
       }
@@ -189,6 +190,7 @@ describe("buildRuntimeViewModel", () => {
     });
 
     expect(viewModel.composedSystemMessages.map((entry) => entry.content)).toEqual(["trace system prompt"]);
+    expect(viewModel.latestModelCallTrace?.input.maxRetries).toBe(5);
     expect(viewModel.selectedMessageSystemMessages.map((entry) => entry.content)).toEqual(["persisted message prompt"]);
   });
 

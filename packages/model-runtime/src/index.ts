@@ -50,6 +50,8 @@ function toEngineMessages(messages: import("ai").ModelMessage[]): GenerateModelI
   return messages as GenerateModelInput["messages"];
 }
 
+const MODEL_REQUEST_MAX_RETRIES = 5;
+
 function combineAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
   const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
   if (activeSignals.length === 0) {
@@ -135,6 +137,7 @@ export class AiSdkModelRuntime implements ModelGateway {
     try {
       const result = await generateText({
         model,
+        maxRetries: MODEL_REQUEST_MAX_RETRIES,
         ...toPrompt(input),
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
         ...(input.topP !== undefined ? { topP: input.topP } : {}),
@@ -185,6 +188,7 @@ export class AiSdkModelRuntime implements ModelGateway {
       toolNames: options?.tools ? Object.keys(options.tools) : [],
       toolServerNames: options?.toolServers?.map((server) => server.name) ?? [],
       maxSteps: options?.maxSteps,
+      maxRetries: MODEL_REQUEST_MAX_RETRIES,
       parallelToolCalls: options?.parallelToolCalls
     });
 
@@ -204,6 +208,7 @@ export class AiSdkModelRuntime implements ModelGateway {
         : undefined;
     const result = streamText({
       model,
+      maxRetries: MODEL_REQUEST_MAX_RETRIES,
       ...toPrompt(input),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
       ...(input.topP !== undefined ? { topP: input.topP } : {}),

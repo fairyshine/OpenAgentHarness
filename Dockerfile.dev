@@ -1,4 +1,5 @@
-FROM node:24-alpine
+ARG BASE_DEV_IMAGE=public.ecr.aws/docker/library/node:24-alpine
+FROM ${BASE_DEV_IMAGE}
 
 LABEL org.opencontainers.image.title="Open Agent Harness" \
       org.opencontainers.image.description="Dockerized local development image for Open Agent Harness." \
@@ -25,25 +26,33 @@ RUN printf '%s\n' \
   '  "type": "module"' \
   '}' > package.json
 COPY apps/server/package.json ./apps/server/package.json
+COPY apps/controller/package.json ./apps/controller/package.json
 COPY packages/api-contracts/package.json ./packages/api-contracts/package.json
+COPY packages/config-server-control/package.json ./packages/config-server-control/package.json
 COPY packages/config/package.json ./packages/config/package.json
 COPY packages/engine-core/package.json ./packages/engine-core/package.json
 COPY packages/model-runtime/package.json ./packages/model-runtime/package.json
 COPY packages/native-bridge/package.json ./packages/native-bridge/package.json
+COPY packages/scale-target-control/package.json ./packages/scale-target-control/package.json
 COPY packages/storage-memory/package.json ./packages/storage-memory/package.json
 COPY packages/storage-postgres/package.json ./packages/storage-postgres/package.json
 COPY packages/storage-redis/package.json ./packages/storage-redis/package.json
+COPY packages/storage-redis-control/package.json ./packages/storage-redis-control/package.json
 COPY packages/storage-sqlite/package.json ./packages/storage-sqlite/package.json
 
 COPY apps/server ./apps/server
+COPY apps/controller ./apps/controller
 COPY packages/api-contracts ./packages/api-contracts
+COPY packages/config-server-control ./packages/config-server-control
 COPY packages/config ./packages/config
 COPY packages/engine-core ./packages/engine-core
 COPY packages/model-runtime ./packages/model-runtime
 COPY packages/native-bridge ./packages/native-bridge
+COPY packages/scale-target-control ./packages/scale-target-control
 COPY packages/storage-memory ./packages/storage-memory
 COPY packages/storage-postgres ./packages/storage-postgres
 COPY packages/storage-redis ./packages/storage-redis
+COPY packages/storage-redis-control ./packages/storage-redis-control
 COPY packages/storage-sqlite ./packages/storage-sqlite
 COPY docs/openapi ./docs/openapi
 COPY docs/schemas ./docs/schemas
@@ -52,7 +61,7 @@ COPY assets/logo-readme.png ./assets/logo-readme.png
 
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
   pnpm config set store-dir /pnpm/store \
-  && pnpm install --filter @oah/server... --no-frozen-lockfile
+  && pnpm install --filter @oah/server... --filter @oah/controller... --no-frozen-lockfile
 
 EXPOSE 8787
 

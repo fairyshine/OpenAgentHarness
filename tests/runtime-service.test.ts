@@ -2951,11 +2951,86 @@ describe("runtime service", () => {
       .at(-1);
     const compactInputText = String(compactInvocation?.input.messages?.find((message) => message.role === "user")?.content ?? "");
 
-    expect(compactInputText).toContain("tool-call Bash");
-    expect(compactInputText).toContain("tool-result Bash:");
+    expect(compactInputText).toContain("Tool call requested: Bash");
+    expect(compactInputText).toContain("Tool result from Bash:");
     expect(compactInputText).not.toContain("secret reasoning protocol");
     expect(compactInputText).not.toContain("<｜｜DSML｜｜tool_calls>");
     expect(compactInputText.length).toBeLessThan(8_000);
+  });
+
+  it("sanitizes compact summary output that looks like assistant continuation or pseudo tool calls", async () => {
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      platformModels: {
+        "openai-default": {
+          provider: "openai",
+          name: "gpt-5",
+          metadata: {
+            contextWindowTokens: 80,
+            compactThresholdTokens: 20,
+            compactRecentGroupCount: 3
+          }
+        }
+      }
+    });
+    gateway.generateResponseFactory = (input) => {
+      const systemPrompt = input.messages?.find((message) => message.role === "system");
+      if (typeof systemPrompt?.content === "string" && systemPrompt.content.includes("durable handoff summary")) {
+        expect(systemPrompt.content).toContain("Do not write as the assistant currently speaking");
+        expect(systemPrompt.content).toContain("Do not emit tool calls");
+        return {
+          model: input.model ?? "openai-default",
+          text: [
+            "I'll continue working on the Gomoku project. Let me check on the launched subagents and then tackle the remaining tasks.",
+            "",
+            "<read file_path=\"gomoku/scripts/analyzer.gd\" limit=\"30\" />",
+            "<read file_path=\"gomoku/scripts/board_renderer.gd\" limit=\"30\" />",
+            "Known facts: Gomoku analyzer and renderer work remained relevant."
+          ].join("\n"),
+          finishReason: "stop",
+          usage: {
+            inputTokens: 20,
+            outputTokens: 8,
+            totalTokens: 28
+          }
+        };
+      }
+
+      return undefined;
+    };
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+    for (const content of ["FIRST-CONTENT ".repeat(12), "SECOND-CONTENT ".repeat(12), "THIRD-CONTENT ".repeat(12)]) {
+      const accepted = await runtimeService.createSessionMessage({
+        sessionId: session.id,
+        caller,
+        input: { content: content.trim() }
+      });
+      await waitFor(async () => (await runtimeService.getRun(accepted.runId)).status === "completed");
+    }
+
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    const summaryMessage = messages.items.find(
+      (message) =>
+        message.role === "system" &&
+        ((message.metadata as { runtimeKind?: string } | undefined)?.runtimeKind ?? "") === "compact_summary"
+    );
+    const summaryText = messageText(summaryMessage) ?? "";
+
+    expect(summaryMessage).toBeDefined();
+    expect(summaryText).toContain("Known facts: Gomoku analyzer and renderer work remained relevant.");
+    expect(summaryText).not.toContain("<read");
+    expect(summaryText).not.toContain("file_path=");
+    expect(summaryText).not.toContain("Let me check");
   });
 
   it("skips auto compaction when compact is disabled in workspace engine settings", async () => {
@@ -3694,7 +3769,7 @@ describe("runtime service", () => {
     expect(compactKinds).not.toContain("compact_summary");
   });
 
-  it("auto compacts using a default context window when model metadata omits one", async () => {
+  it("auto compacts using a default unknown-model threshold when model metadata omits a context window", async () => {
     const { gateway, runtimeService, workspace } = await createRuntime(0, {
       platformModels: {
         "openai-default": {
@@ -3784,9 +3859,65 @@ describe("runtime service", () => {
 
     expect(summaryMessage).toBeDefined();
     expect(messageText(summaryMessage)).toBe("Default-window compact summary");
-    expect((boundaryMessage?.metadata as { extra?: { contextWindowTokens?: number } } | undefined)?.extra?.contextWindowTokens).toBe(
-      64_000
+    expect((boundaryMessage?.metadata as { extra?: { contextWindowTokens?: number; compactThresholdTokens?: number } } | undefined)?.extra).toMatchObject({
+      contextWindowTokens: 250_000,
+      compactThresholdTokens: 20
+    });
+  });
+
+  it("does not auto compact unknown-model context before the 200k fallback threshold", async () => {
+    const { gateway, runtimeService, workspace } = await createRuntime(0, {
+      platformModels: {
+        "openai-default": {
+          provider: "openai",
+          name: "gpt-5",
+          metadata: {
+            compactRecentGroupCount: 3
+          }
+        }
+      }
+    });
+    const caller = {
+      subjectRef: "dev:test",
+      authSource: "standalone_server",
+      scopes: [],
+      workspaceAccess: []
+    };
+
+    const session = await runtimeService.createSession({
+      workspaceId: workspace.id,
+      caller,
+      input: {}
+    });
+
+    for (const content of ["FIRST-CONTENT ".repeat(1_000), "SECOND-CONTENT ".repeat(1_000), "THIRD-CONTENT ".repeat(1_000)]) {
+      const accepted = await runtimeService.createSessionMessage({
+        sessionId: session.id,
+        caller,
+        input: { content }
+      });
+      await waitFor(async () => {
+        const run = await runtimeService.getRun(accepted.runId);
+        return run.status === "completed";
+      });
+    }
+
+    const compactInvocations = gateway.invocations.filter((invocation) =>
+      invocation.input.messages?.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Summarize the earlier conversation context")
+      )
     );
+    const messages = await runtimeService.listSessionMessages(session.id, 20);
+    const compactKinds = messages.items
+      .map((message) => (message.metadata as { runtimeKind?: string } | undefined)?.runtimeKind)
+      .filter((kind): kind is string => typeof kind === "string");
+
+    expect(compactInvocations).toHaveLength(0);
+    expect(compactKinds).not.toContain("compact_boundary");
+    expect(compactKinds).not.toContain("compact_summary");
   });
 
   it("reduces kept recent groups when the configured compact window is still too large", async () => {

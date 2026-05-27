@@ -48,6 +48,215 @@ function buildWorkspace(overrides?: Partial<WorkspaceRecord>): WorkspaceRecord {
 }
 
 describe("native e2b sandbox service", () => {
+  it("uses the template list API before falling back to SDK template existence checks", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify([
+          {
+            templateID: "tpl-1",
+            aliases: ["oah-worker"],
+            names: ["oah-worker"]
+          }
+        ]),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
+    try {
+      const sandbox = {
+        sandboxId: "sb-created",
+        files: {
+          makeDir: vi.fn(async () => true),
+          write: vi.fn(async () => ({ name: "README.md", path: "/workspace/README.md" })),
+          read: vi.fn(async () => new Uint8Array()),
+          getInfo: vi.fn(async () => ({
+            name: "README.md",
+            path: "/workspace/README.md",
+            type: "file",
+            size: 0,
+            mode: 0o644,
+            permissions: "rw-r--r--",
+            owner: "user",
+            group: "group"
+          })),
+          list: vi.fn(async () => []),
+          remove: vi.fn(async () => undefined),
+          rename: vi.fn(async () => ({ name: "README.md", path: "/workspace/README.md", type: "file" }))
+        },
+        commands: {
+          run: vi.fn(async () => ({
+            stdout: "",
+            stderr: "",
+            exitCode: 0
+          }))
+        }
+      };
+      const exists = vi.fn(async () => false);
+      const build = vi.fn(async () => ({
+        alias: "oah-worker",
+        name: "oah-worker",
+        templateId: "tpl-oah-worker",
+        buildId: "build-oah-worker"
+      }));
+
+      const service = createNativeE2BSandboxService({
+        apiKey: "secret",
+        apiUrl: "https://api.e2b.example",
+        template: "oah-worker",
+        sdk: {
+          connect: vi.fn(async () => sandbox),
+          create: vi.fn(async () => sandbox),
+          list: vi.fn(() => ({
+            hasNext: false,
+            async nextItems() {
+              return [];
+            }
+          }))
+        } as never,
+        templateSdk: {
+          exists,
+          build
+        } as never
+      });
+
+      await service.acquireFileAccess({
+        workspace: buildWorkspace(),
+        access: "write"
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.e2b.example/templates",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            "X-API-KEY": "secret"
+          })
+        })
+      );
+      expect(exists).not.toHaveBeenCalled();
+      expect(build).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("ensures the configured worker template exists before creating a sandbox", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response("not found", { status: 404 })) as typeof fetch;
+    const sandbox = {
+      sandboxId: "sb-created",
+      files: {
+        makeDir: vi.fn(async () => true),
+        write: vi.fn(async () => ({ name: "README.md", path: "/workspace/README.md" })),
+        read: vi.fn(async () => new Uint8Array()),
+        getInfo: vi.fn(async () => ({
+          name: "README.md",
+          path: "/workspace/README.md",
+          type: "file",
+          size: 0,
+          mode: 0o644,
+          permissions: "rw-r--r--",
+          owner: "user",
+          group: "group"
+        })),
+        list: vi.fn(async () => []),
+        remove: vi.fn(async () => undefined),
+        rename: vi.fn(async () => ({ name: "README.md", path: "/workspace/README.md", type: "file" }))
+      },
+      commands: {
+        run: vi.fn(async () => ({
+          stdout: "",
+          stderr: "",
+          exitCode: 0
+        }))
+      }
+    };
+    const create = vi.fn(async () => sandbox);
+    const exists = vi.fn(async () => false);
+    const build = vi.fn(async () => ({
+      alias: "oah-worker",
+      name: "oah-worker",
+      templateId: "tpl-oah-worker",
+      buildId: "build-oah-worker"
+    }));
+
+    try {
+      const service = createNativeE2BSandboxService({
+        apiKey: "secret",
+        apiUrl: "https://api.e2b.example",
+        template: "oah-worker",
+        sdk: {
+          connect: vi.fn(async () => sandbox),
+          create,
+          list: vi.fn(() => ({
+            hasNext: false,
+            async nextItems() {
+              return [];
+            }
+          }))
+        } as never,
+        templateSdk: {
+          exists,
+          build
+        } as never
+      });
+
+      await service.acquireFileAccess({
+        workspace: buildWorkspace(),
+        access: "write"
+      });
+      await service.acquireExecution({
+        workspace: buildWorkspace(),
+        run: {
+          id: "run_1",
+          sessionId: "ses_1",
+          workspaceId: "ws_test",
+          status: "queued",
+          triggerType: "message",
+          effectiveAgentName: "assistant",
+          createdAt: "2026-04-16T00:00:00.000Z",
+          updatedAt: "2026-04-16T00:00:00.000Z"
+        }
+      });
+
+      expect(exists).toHaveBeenCalledTimes(1);
+      expect(exists).toHaveBeenCalledWith(
+        "oah-worker",
+        expect.objectContaining({
+          apiKey: "secret",
+          apiUrl: "https://api.e2b.example"
+        })
+      );
+      expect(build).toHaveBeenCalledTimes(1);
+      expect(build).toHaveBeenCalledWith(
+        expect.anything(),
+        "oah-worker",
+        expect.objectContaining({
+          apiKey: "secret",
+          apiUrl: "https://api.e2b.example",
+          cpuCount: 2,
+          memoryMB: 2048
+        })
+      );
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(create).toHaveBeenCalledWith(
+        "oah-worker",
+        expect.objectContaining({
+          metadata: {
+            oahSandboxGroup: "shared"
+          }
+        })
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("creates sandboxes through the native E2B SDK and maps commands/filesystem operations", async () => {
     const operations: Array<Record<string, unknown>> = [];
     const sandbox = {
@@ -158,6 +367,7 @@ describe("native e2b sandbox service", () => {
     };
 
     const service = createNativeE2BSandboxService({
+      ensureTemplate: false,
       apiKey: "secret",
       apiUrl: "https://api.e2b.example",
       template: "oah-template",
@@ -329,6 +539,7 @@ describe("native e2b sandbox service", () => {
     }));
 
     const service = createNativeE2BSandboxService({
+      ensureTemplate: false,
       apiKey: "secret",
       sdk: {
         connect,
@@ -405,6 +616,7 @@ describe("native e2b sandbox service", () => {
     const create = vi.fn(async () => sandbox);
 
     const service = createNativeE2BSandboxService({
+      ensureTemplate: false,
       apiKey: "secret",
       sdk: {
         connect: vi.fn(async () => sandbox),
@@ -441,6 +653,7 @@ describe("native e2b sandbox service", () => {
     expect(secondLease.rootPath).toBe("/workspace/ws_beta");
     expect(create).toHaveBeenCalledTimes(1);
     expect(create).toHaveBeenCalledWith(
+      "oah-worker",
       expect.objectContaining({
         apiKey: "secret",
         metadata: {
@@ -485,6 +698,7 @@ describe("native e2b sandbox service", () => {
     const create = vi.fn(async () => sandbox);
 
     const service = createNativeE2BSandboxService({
+      ensureTemplate: false,
       apiKey: "secret",
       sdk: {
         connect: vi.fn(async () => sandbox),
@@ -518,6 +732,7 @@ describe("native e2b sandbox service", () => {
     expect(secondLease.rootPath).toBe("/workspace/ws_public_2");
     expect(create).toHaveBeenCalledTimes(1);
     expect(create).toHaveBeenCalledWith(
+      "oah-worker",
       expect.objectContaining({
         apiKey: "secret",
         metadata: {
@@ -561,6 +776,7 @@ describe("native e2b sandbox service", () => {
     const create = vi.fn(async () => sandboxes[create.mock.calls.length - 1] ?? sandboxes[0]);
 
     const service = createNativeE2BSandboxService({
+      ensureTemplate: false,
       apiKey: "secret",
       maxWorkspacesPerSandbox: 1,
       sdk: {
@@ -593,6 +809,7 @@ describe("native e2b sandbox service", () => {
     expect(create).toHaveBeenCalledTimes(2);
     expect(create).toHaveBeenNthCalledWith(
       1,
+      "oah-worker",
       expect.objectContaining({
         metadata: {
           oahSandboxGroup: "shared"
@@ -601,6 +818,7 @@ describe("native e2b sandbox service", () => {
     );
     expect(create).toHaveBeenNthCalledWith(
       2,
+      "oah-worker",
       expect.objectContaining({
         metadata: {
           oahSandboxGroup: "shared:2"
@@ -641,6 +859,7 @@ describe("native e2b sandbox service", () => {
 
     const create = vi.fn(async () => sandboxes[create.mock.calls.length - 1] ?? sandboxes[0]);
     const service = createNativeE2BSandboxService({
+      ensureTemplate: false,
       apiKey: "secret",
       maxWorkspacesPerSandbox: 1,
       sdk: {
@@ -703,6 +922,7 @@ describe("native e2b sandbox service", () => {
     };
     const kill = vi.fn(async () => true);
     const service = createNativeE2BSandboxService({
+      ensureTemplate: false,
       apiKey: "secret",
       ownerlessPool: "dedicated",
       sdk: {
@@ -761,6 +981,7 @@ describe("native e2b sandbox service", () => {
     const create = vi.fn(async () => sandboxes[create.mock.calls.length - 1] ?? sandboxes.at(-1)!);
 
     const service = createNativeE2BSandboxService({
+      ensureTemplate: false,
       apiKey: "secret",
       maxWorkspacesPerSandbox: 1,
       warmEmptyCount: 1,
@@ -795,6 +1016,7 @@ describe("native e2b sandbox service", () => {
     expect(secondLease.sandboxId).toBe("sb-warm-2");
     expect(create).toHaveBeenNthCalledWith(
       1,
+      "oah-worker",
       expect.objectContaining({
         metadata: {
           oahSandboxGroup: "shared"
@@ -803,6 +1025,7 @@ describe("native e2b sandbox service", () => {
     );
     expect(create).toHaveBeenNthCalledWith(
       2,
+      "oah-worker",
       expect.objectContaining({
         metadata: {
           oahSandboxGroup: "shared:2"

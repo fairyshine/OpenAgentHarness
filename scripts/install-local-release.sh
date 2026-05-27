@@ -7,7 +7,7 @@ RELEASE_DIR="${OAH_LOCAL_RELEASE_DIR:-$REPO_ROOT/release}"
 INSTALL_ROOT="${OAH_HOME:-${OAH_INSTALL_ROOT:-$HOME/.openagentharness}}"
 VERSION="${OAH_LOCAL_RELEASE_VERSION:-}"
 ASSET="${OAH_LOCAL_RELEASE_ASSET:-}"
-FORCE="${OAH_LOCAL_RELEASE_FORCE:-0}"
+FORCE="${OAH_LOCAL_RELEASE_FORCE:-1}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -180,7 +180,7 @@ mkdir -p "$INSTALL_ROOT/versions"
 TARGET="$INSTALL_ROOT/versions/$VERSION"
 TMP_TARGET="$INSTALL_ROOT/versions/.$VERSION.$$"
 
-if [ -e "$TARGET" ] && [ "$FORCE" != "1" ] && [ "$FORCE" != "true" ]; then
+if [ -e "$TARGET" ] && { [ "$FORCE" = "0" ] || [ "$FORCE" = "false" ]; }; then
   echo "OpenAgentHarness $VERSION is already installed at $TARGET."
   echo "Set OAH_LOCAL_RELEASE_FORCE=1 to replace it."
 else

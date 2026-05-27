@@ -7,7 +7,8 @@ import { EngineMessageProjector, type CompactMessage } from "./message-projectio
 import type { ResolvedRunModel } from "./model-resolver.js";
 
 const DEFAULT_CONTEXT_WINDOW_RATIO = 0.7;
-const DEFAULT_CONTEXT_WINDOW_TOKENS = 64_000;
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 250_000;
+const DEFAULT_UNKNOWN_MODEL_COMPACT_THRESHOLD_TOKENS = 200_000;
 const DEFAULT_RECENT_GROUP_COUNT = 3;
 const COMPACT_TOOL_RESULT_SOFT_LIMIT_CHARS = 4_000;
 const COMPACT_SUMMARY_MAX_TOKENS = 1_200;
@@ -15,10 +16,12 @@ const COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS = 1_200;
 const COMPACT_ESTIMATION_MIN_RESERVE_TOKENS = 1_024;
 const COMPACT_ESTIMATION_RESERVE_RATIO = 0.05;
 const COMPACT_SYSTEM_PROMPT = [
-  "Summarize the earlier conversation context for a coding agent that will continue immediately.",
-  "Focus on the user's goal, important findings, files or code touched, key tool results, constraints, and the next useful step.",
-  "Write a concise state handoff in plain text only.",
-  "Do not copy raw logs, tool-call syntax, XML/DSML/protocol tags, JSON payloads, stack traces, or message numbers.",
+  "Summarize the earlier conversation context as a durable handoff summary for a coding agent that will continue immediately.",
+  "Summarize only stable facts from the earlier conversation: the user's goal, decisions made, files or code touched, important findings, constraints, completed work, unresolved issues, and the next useful step.",
+  "Write in concise plain text with short section labels when useful.",
+  "Do not write as the assistant currently speaking. Do not say you will continue, check, inspect, read, run, or tackle anything.",
+  "Do not emit tool calls, pseudo tool calls, XML/HTML/DSML/protocol tags, JSON payloads, stack traces, message numbers, or raw logs.",
+  "When a tool call matters, describe its result as a fact instead of copying invocation syntax.",
   "Do not address the user. Do not mention compaction."
 ].join(" ");
 
@@ -64,11 +67,25 @@ function readContextWindowTokens(model: ResolvedRunModel): number | undefined {
   ]);
 }
 
-function resolveContextWindowTokens(model: ResolvedRunModel): number {
-  return readContextWindowTokens(model) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+type ContextWindowResolution = {
+  tokens: number;
+  source: "model_metadata" | "default";
+};
+
+function resolveContextWindowTokens(model: ResolvedRunModel): ContextWindowResolution {
+  const metadataTokens = readContextWindowTokens(model);
+  return metadataTokens
+    ? {
+        tokens: metadataTokens,
+        source: "model_metadata"
+      }
+    : {
+        tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+        source: "default"
+      };
 }
 
-function readCompactThresholdTokens(model: ResolvedRunModel, contextWindowTokens: number): number {
+function readCompactThresholdTokens(model: ResolvedRunModel, contextWindow: ContextWindowResolution): number {
   const explicitThreshold = readNumericMetadataValue(model.modelDefinition?.metadata, [
     "compactThresholdTokens",
     "compact_threshold_tokens"
@@ -81,10 +98,14 @@ function readCompactThresholdTokens(model: ResolvedRunModel, contextWindowTokens
     "compactThresholdRatio",
     "compact_threshold_ratio"
   ]);
+  if (!explicitRatio && contextWindow.source === "default") {
+    return DEFAULT_UNKNOWN_MODEL_COMPACT_THRESHOLD_TOKENS;
+  }
+
   const ratio =
     explicitRatio && explicitRatio > 0 && explicitRatio < 1 ? explicitRatio : DEFAULT_CONTEXT_WINDOW_RATIO;
 
-  return Math.max(1, Math.floor(contextWindowTokens * ratio));
+  return Math.max(1, Math.floor(contextWindow.tokens * ratio));
 }
 
 function readRecentGroupCount(model: ResolvedRunModel): number {
@@ -109,10 +130,45 @@ function sanitizeSummaryText(value: string): string {
         !trimmed.includes("<｜｜invoke") &&
         !trimmed.includes("</｜｜invoke>") &&
         !trimmed.includes("<｜｜parameter") &&
-        !trimmed.includes("</｜｜parameter>")
+        !trimmed.includes("</｜｜parameter>") &&
+        !looksLikeToolInvocationLine(trimmed)
       );
     })
     .join("\n")
+    .trim();
+}
+
+function looksLikeToolInvocationLine(value: string): boolean {
+  return (
+    /^<\s*[a-z][\w:-]*(?:\s+[^<>]*)?\/?\s*>$/iu.test(value) ||
+    /^<\s*\/\s*[a-z][\w:-]*\s*>$/iu.test(value) ||
+    /^\s*(?:read|write|edit|bash|grep|glob|ls|python|node|apply_patch)\s*\(/iu.test(value) ||
+    /^\s*(?:read|write|edit|bash|grep|glob|ls|python|node|apply_patch)\s+[\w.-]+\s*=/iu.test(value)
+  );
+}
+
+function sanitizeCompactSummaryOutput(value: string): string {
+  const sanitized = sanitizeSummaryText(value)
+    .replace(/<\s*[a-z][\w:-]*(?:\s+[^<>]*)?\/\s*>/giu, "")
+    .replace(/<\s*[a-z][\w:-]*(?:\s+[^<>]*)?>/giu, "")
+    .replace(/<\s*\/\s*[a-z][\w:-]*\s*>/giu, "")
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line, index, lines) => {
+      if (looksLikeToolInvocationLine(line.trim())) {
+        return false;
+      }
+      return line.trim().length > 0 || (index > 0 && lines[index - 1]?.trim().length !== 0);
+    })
+    .join("\n")
+    .trim();
+
+  if (!sanitized) {
+    return "";
+  }
+
+  return sanitized
+    .replace(/\b(?:I'll|I will|I'm going to|Let me)\s+(?:continue|check|inspect|read|run|tackle|look)\b/giu, "Next step: review")
     .trim();
 }
 
@@ -170,24 +226,24 @@ function stringifyContentForSummary(content: Message["content"]): string {
         case "reasoning":
           return [];
         case "tool-call":
-          return [`tool-call ${part.toolName}`];
+          return [`Tool call requested: ${part.toolName}. Do not copy invocation syntax into the summary.`];
         case "tool-result":
           switch (part.output.type) {
             case "text":
             case "error-text":
-              return [`tool-result ${part.toolName}: ${truncateText(part.output.value, COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS)}`];
+              return [`Tool result from ${part.toolName}: ${truncateText(sanitizeSummaryText(part.output.value), COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS)}`];
             case "json":
             case "error-json":
-              return [`tool-result ${part.toolName}: ${truncateText(JSON.stringify(part.output.value), COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS)}`];
+              return [`Tool result from ${part.toolName}: ${truncateText(JSON.stringify(part.output.value), COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS)}`];
             case "execution-denied":
-              return [`tool-result ${part.toolName}: ${part.output.reason ?? "Execution denied."}`];
+              return [`Tool result from ${part.toolName}: ${part.output.reason ?? "Execution denied."}`];
             case "content":
-              return [`tool-result ${part.toolName}: ${truncateText(JSON.stringify(part.output.value), COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS)}`];
+              return [`Tool result from ${part.toolName}: ${truncateText(JSON.stringify(part.output.value), COMPACT_SUMMARY_MESSAGE_SOFT_LIMIT_CHARS)}`];
           }
         case "tool-approval-request":
-          return [`tool-approval-request ${part.toolCallId}`];
+          return [`Tool approval requested for ${part.toolCallId}`];
         case "tool-approval-response":
-          return [`tool-approval-response ${part.approvalId}: ${part.approved ? "approved" : "denied"}`];
+          return [`Tool approval ${part.approvalId}: ${part.approved ? "approved" : "denied"}`];
         case "image":
           return ["[image]"];
         case "file":
@@ -491,7 +547,8 @@ export class ContextCompactionService implements ContextPreparationModule {
     const compactionSourceMessages =
       ephemeralNotes.length > 0 ? engineMessages.filter((message) => !isTransientMemoryContextNote(message)) : engineMessages;
     const resolvedModel = this.#resolveRunModel(input.workspace, input.session, input.run, input.activeAgentName);
-    const contextWindowTokens = resolveContextWindowTokens(resolvedModel);
+    const contextWindow = resolveContextWindowTokens(resolvedModel);
+    const contextWindowTokens = contextWindow.tokens;
 
     const compactProjection = this.#projector.projectToCompact(compactionSourceMessages, {
       sessionId: input.session.id,
@@ -515,9 +572,7 @@ export class ContextCompactionService implements ContextPreparationModule {
       estimateCompactTokenUsage(compactProjection.messages),
       estimateChatMessageTokenUsage(estimatedModelContextMessages)
     );
-    const compactThresholdTokens = contextWindowTokens
-      ? readCompactThresholdTokens(resolvedModel, contextWindowTokens)
-      : undefined;
+    const compactThresholdTokens = readCompactThresholdTokens(resolvedModel, contextWindow);
     if (!input.force && compactThresholdTokens && estimatedInputTokens < compactThresholdTokens) {
       return {
         engineMessages,
@@ -630,7 +685,7 @@ export class ContextCompactionService implements ContextPreparationModule {
           timeoutMs: input.modelTimeoutMs
         }
       );
-      const summaryText = summaryResponse.text.trim();
+      const summaryText = sanitizeCompactSummaryOutput(summaryResponse.text);
       if (!summaryText) {
         return {
           engineMessages,

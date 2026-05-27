@@ -740,6 +740,151 @@ describe("AiSdkModelRuntime openai-compatible provider", () => {
     }
   });
 
+  it("retries non-streaming model requests up to five times before succeeding", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestCount = 0;
+
+    globalThis.fetch = (async () => {
+      requestCount += 1;
+
+      if (requestCount <= 5) {
+        return new Response(JSON.stringify({ error: { message: "temporary provider failure" } }), {
+          status: 500,
+          headers: {
+            "content-type": "application/json",
+            "retry-after-ms": "0"
+          }
+        });
+      }
+
+      return new Response(
+        JSON.stringify({
+          id: "chatcmpl_retry_generate",
+          object: "chat.completion",
+          created: 1,
+          model: "mock-model",
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: "recovered"
+              },
+              finish_reason: "stop"
+            }
+          ],
+          usage: {
+            prompt_tokens: 3,
+            completion_tokens: 1,
+            total_tokens: 4
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    }) as typeof fetch;
+
+    try {
+      const runtime = new AiSdkModelRuntime({
+        defaultModelName: "mock-entry",
+        models: {
+          "mock-entry": {
+            provider: "openai-compatible",
+            key: "test-key",
+            url: "http://mock.local/v1",
+            name: "mock-model"
+          }
+        }
+      });
+
+      await expect(
+        runtime.generate({
+          model: "mock-entry",
+          messages: [{ role: "user", content: "ping" }]
+        })
+      ).resolves.toMatchObject({
+        model: "mock-entry",
+        text: "recovered",
+        finishReason: "stop"
+      });
+      expect(requestCount).toBe(6);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("retries stream setup up to five times before yielding chunks", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestCount = 0;
+
+    globalThis.fetch = (async () => {
+      requestCount += 1;
+
+      if (requestCount <= 5) {
+        return new Response(JSON.stringify({ error: { message: "temporary provider failure" } }), {
+          status: 500,
+          headers: {
+            "content-type": "application/json",
+            "retry-after-ms": "0"
+          }
+        });
+      }
+
+      return new Response(
+        [
+          'data: {"id":"chatcmpl_retry_stream","object":"chat.completion.chunk","created":1,"model":"mock-model","choices":[{"index":0,"delta":{"role":"assistant","content":"recovered stream"},"finish_reason":null}]}',
+          'data: {"id":"chatcmpl_retry_stream","object":"chat.completion.chunk","created":1,"model":"mock-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}',
+          "data: [DONE]",
+          ""
+        ].join("\n\n"),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream"
+          }
+        }
+      );
+    }) as typeof fetch;
+
+    try {
+      const runtime = new AiSdkModelRuntime({
+        defaultModelName: "mock-entry",
+        models: {
+          "mock-entry": {
+            provider: "openai-compatible",
+            key: "test-key",
+            url: "http://mock.local/v1",
+            name: "mock-model"
+          }
+        }
+      });
+
+      const response = await runtime.stream({
+        model: "mock-entry",
+        messages: [{ role: "user", content: "ping" }]
+      });
+
+      let streamed = "";
+      for await (const chunk of response.chunks) {
+        streamed += chunk;
+      }
+
+      await expect(response.completed).resolves.toMatchObject({
+        model: "mock-entry",
+        text: "recovered stream",
+        finishReason: "stop"
+      });
+      expect(streamed).toBe("recovered stream");
+      expect(requestCount).toBe(6);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("preserves provider error details instead of masking them as no output", async () => {
     const originalFetch = globalThis.fetch;
 

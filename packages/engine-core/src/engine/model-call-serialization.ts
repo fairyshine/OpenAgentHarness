@@ -8,7 +8,7 @@ import {
   isMessageRole,
   normalizeToolErrorOutput
 } from "../execution-message-content.js";
-import type { ModelDefinition, ModelStepResult, EngineToolSet, WorkspaceRecord } from "../types.js";
+import { MODEL_REQUEST_MAX_RETRIES, type ModelDefinition, type ModelStepResult, type EngineToolSet, type WorkspaceRecord } from "../types.js";
 
 const MODEL_CALL_SNAPSHOT_MAX_CHARS = 128 * 1024;
 const MODEL_CALL_SNAPSHOT_HEAD_MESSAGES = 4;
@@ -220,6 +220,7 @@ export function serializeModelCallRuntimeSnapshot(
 ): Record<string, unknown> {
   return {
     messageCount: modelInput.messages.length,
+    maxRetries: MODEL_REQUEST_MAX_RETRIES,
     engineToolNames,
     ...(engineTools ? { engineTools: serializeEngineTools(engineTools) } : {}),
     ...(activeToolNames ? { activeToolNames } : {}),

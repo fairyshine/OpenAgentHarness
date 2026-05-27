@@ -16,6 +16,7 @@ export type RunStepType = RunStep["stepType"];
 export type RunStepStatus = RunStep["status"];
 export type ActionRetryPolicy = "manual" | "safe";
 export type EngineWorkspaceCatalog = WorkspaceCatalog;
+export const MODEL_REQUEST_MAX_RETRIES = 5;
 export type SessionEventName =
   | "run.queued"
   | "queue.updated"

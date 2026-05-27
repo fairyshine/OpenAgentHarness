@@ -147,6 +147,7 @@ function toModelCallTrace(step: RunStep): ModelCallTrace | null {
       ...(typeof request.temperature === "number" ? { temperature: request.temperature } : {}),
       ...(typeof request.maxTokens === "number" ? { maxTokens: request.maxTokens } : {}),
       ...(typeof inputRuntime.messageCount === "number" ? { messageCount: inputRuntime.messageCount } : {}),
+      ...(typeof inputRuntime.maxRetries === "number" ? { maxRetries: inputRuntime.maxRetries } : {}),
       activeToolNames: readStringArray(inputRuntime.activeToolNames),
       engineToolNames: readStringArray(inputRuntime.engineToolNames),
       engineTools: readModelCallTraceEngineTools(inputRuntime.engineTools),

@@ -1,0 +1,227 @@
+services:
+  postgres:
+    image: ${OAH_POSTGRES_IMAGE:-public.ecr.aws/docker/library/postgres:16-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: open_agent_harness
+      POSTGRES_USER: oah
+      POSTGRES_PASSWORD: oah
+    ports:
+      - "5432:5432"
+    volumes:
+      - e2b-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oah -d open_agent_harness"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: ${OAH_REDIS_IMAGE:-public.ecr.aws/docker/library/redis:7-alpine}
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - ${OAH_REDIS_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - e2b-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: ${OAH_MINIO_IMAGE:-quay.io/minio/minio:latest}
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: oahadmin
+      MINIO_ROOT_PASSWORD: oahadmin123
+      MINIO_REGION_NAME: us-east-1
+    command:
+      - server
+      - /data
+      - --address
+      - :9000
+      - --console-address
+      - :9001
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - e2b-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  oah-api:
+    image: openagentharness-oah-api:e2b
+    build:
+      context: .
+      dockerfile: ${OAH_E2B_DOCKERFILE:-Dockerfile.dev}
+      target: ${OAH_E2B_API_TARGET:-}
+      args:
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-public.ecr.aws/docker/library/node:24-alpine}
+        BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-public.ecr.aws/docker/library/alpine:3.22}
+        BASE_DOCKER_CLI_IMAGE: ${OAH_DOCKER_CLI_BASE_IMAGE:-public.ecr.aws/docker/library/docker:cli}
+        BASE_RUST_IMAGE: ${OAH_DOCKER_RUST_BASE_IMAGE:-public.ecr.aws/docker/library/rust:1.95-alpine}
+    restart: unless-stopped
+    command:
+      - pnpm
+      - exec
+      - tsx
+      - --tsconfig
+      - ./apps/server/tsconfig.json
+      - ./apps/server/src/index.ts
+      - --config
+      - /config/server.e2b.yaml
+    environment:
+      NODE_OPTIONS: ${OAH_API_NODE_OPTIONS:---max-old-space-size=2048 --max-semi-space-size=32}
+      NODE_EXTRA_CA_CERTS: /certs/e2b-ca.crt
+      E2B_API_URL: ${E2B_API_URL:?set E2B_API_URL}
+      E2B_DOMAIN: ${E2B_DOMAIN:?set E2B_DOMAIN}
+      E2B_API_KEY: ${E2B_API_KEY:?set E2B_API_KEY}
+      OAH_E2B_TEMPLATE: ${OAH_E2B_TEMPLATE:-code-interpreter}
+      OAH_E2B_TEMPLATE_CONTEXT_DIR: /template-src
+      OAH_ALLOW_PRIVATE_INTERNAL_MODEL_ROUTES: "true"
+      OAH_INTERNAL_BASE_URL: "http://oah-api:8787"
+      OAH_NATIVE_WORKSPACE_SYNC: ${OAH_NATIVE_WORKSPACE_SYNC:-0}
+      OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT: ${OAH_NATIVE_WORKSPACE_SYNC_PERSISTENT:-0}
+      OAH_OBJECT_STORAGE_SYNC_BUNDLE_LAYOUT: ${OAH_OBJECT_STORAGE_SYNC_BUNDLE_LAYOUT:-primary}
+      OAH_OBJECT_STORAGE_SYNC_TRUST_MANAGED_PREFIXES: ${OAH_OBJECT_STORAGE_SYNC_TRUST_MANAGED_PREFIXES:-1}
+      OAH_DEPLOY_ROOT: /home/oah
+      OAH_LOCAL_API_TOKEN: ${OAH_LOCAL_API_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8787:8787"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${OAH_E2B_SERVER_CONFIG:-/Users/wumengsong/.openagentharness/config/server.e2b.yaml}:/config/server.e2b.yaml:ro
+      - ${OAH_HOME:-/Users/wumengsong/.openagentharness}:/home/oah:ro
+      - .:/template-src:ro
+      - ${E2B_CA_CERT_PATH:-/Users/wumengsong/Code/e2b-test/ca.crt}:/certs/e2b-ca.crt:ro
+      - e2b-runtime-state:/data/runtime-state
+      - e2b-workspaces:/data/workspaces
+      - e2b-runtimes:/data/runtimes:ro
+      - e2b-models:/data/models:ro
+      - e2b-tools:/data/tools:ro
+      - e2b-skills:/data/skills:ro
+
+  oah-controller:
+    image: openagentharness-oah-controller:e2b
+    build:
+      context: .
+      dockerfile: ${OAH_E2B_DOCKERFILE:-Dockerfile.dev}
+      target: ${OAH_E2B_CONTROLLER_TARGET:-}
+      args:
+        BASE_BUILD_IMAGE: ${OAH_DOCKER_BUILD_BASE_IMAGE:-public.ecr.aws/docker/library/node:24-alpine}
+        BASE_RUNTIME_IMAGE: ${OAH_DOCKER_RUNTIME_BASE_IMAGE:-public.ecr.aws/docker/library/alpine:3.22}
+        BASE_DOCKER_CLI_IMAGE: ${OAH_DOCKER_CLI_BASE_IMAGE:-public.ecr.aws/docker/library/docker:cli}
+        BASE_RUST_IMAGE: ${OAH_DOCKER_RUST_BASE_IMAGE:-public.ecr.aws/docker/library/rust:1.95-alpine}
+    restart: unless-stopped
+    command:
+      - pnpm
+      - exec
+      - tsx
+      - --tsconfig
+      - ./apps/controller/tsconfig.json
+      - ./apps/controller/src/index.ts
+      - --config
+      - /config/server.e2b.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_OPTIONS: ${OAH_CONTROLLER_NODE_OPTIONS:---max-old-space-size=128 --max-semi-space-size=4}
+      NODE_EXTRA_CA_CERTS: /certs/e2b-ca.crt
+      OAH_PROCESS_ROLE: "controller"
+      E2B_API_URL: ${E2B_API_URL:?set E2B_API_URL}
+      E2B_DOMAIN: ${E2B_DOMAIN:?set E2B_DOMAIN}
+      E2B_API_KEY: ${E2B_API_KEY:?set E2B_API_KEY}
+      OAH_E2B_TEMPLATE: ${OAH_E2B_TEMPLATE:-code-interpreter}
+      OAH_METADATA_RETENTION_ROLE: ${OAH_METADATA_RETENTION_ROLE:-auto}
+    ports:
+      - "8789:8788"
+    volumes:
+      - ${OAH_E2B_SERVER_CONFIG:-/Users/wumengsong/.openagentharness/config/server.e2b.yaml}:/config/server.e2b.yaml:ro
+      - ${E2B_CA_CERT_PATH:-/Users/wumengsong/Code/e2b-test/ca.crt}:/certs/e2b-ca.crt:ro
+
+volumes:
+  e2b-pgdata:
+  e2b-redisdata:
+  e2b-minio-data:
+  e2b-runtime-state:
+  e2b-workspaces:
+  e2b-runtimes:
+    driver: rclone
+    driver_opts:
+      type: s3
+      path: test-oah-server/runtime
+      s3_provider: Minio
+      s3_access_key_id: oahadmin
+      s3_secret_access_key: oahadmin123
+      s3_region: us-east-1
+      s3_endpoint: http://host.docker.internal:9000
+      s3_force_path_style: "true"
+      vfs_cache_mode: "off"
+      poll_interval: 0
+  e2b-models:
+    driver: rclone
+    driver_opts:
+      type: s3
+      path: test-oah-server/model
+      s3_provider: Minio
+      s3_access_key_id: oahadmin
+      s3_secret_access_key: oahadmin123
+      s3_region: us-east-1
+      s3_endpoint: http://host.docker.internal:9000
+      s3_force_path_style: "true"
+      vfs_cache_mode: "off"
+      poll_interval: 0
+  e2b-tools:
+    driver: rclone
+    driver_opts:
+      type: s3
+      path: test-oah-server/tool
+      s3_provider: Minio
+      s3_access_key_id: oahadmin
+      s3_secret_access_key: oahadmin123
+      s3_region: us-east-1
+      s3_endpoint: http://host.docker.internal:9000
+      s3_force_path_style: "true"
+      vfs_cache_mode: "off"
+      poll_interval: 0
+  e2b-skills:
+    driver: rclone
+    driver_opts:
+      type: s3
+      path: test-oah-server/skill
+      s3_provider: Minio
+      s3_access_key_id: oahadmin
+      s3_secret_access_key: oahadmin123
+      s3_region: us-east-1
+      s3_endpoint: http://host.docker.internal:9000
+      s3_force_path_style: "true"
+      vfs_cache_mode: "off"
+      poll_interval: 0

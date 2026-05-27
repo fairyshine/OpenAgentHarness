@@ -40,6 +40,7 @@ export interface ModelCallTraceInput {
   temperature?: number;
   maxTokens?: number;
   messageCount?: number;
+  maxRetries?: number;
   activeToolNames: string[];
   engineToolNames: string[];
   engineTools: ModelCallTraceEngineTool[];

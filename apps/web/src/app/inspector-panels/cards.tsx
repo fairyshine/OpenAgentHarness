@@ -126,6 +126,10 @@ function LlmSummaryCard(props: {
         <InsightRow label="Canonical Ref" value={props.latestTrace?.input.canonicalModelRef ?? "n/a"} />
         <InsightRow label="Provider" value={props.latestTrace?.input.provider ?? "n/a"} />
         <InsightRow label="Latest Finish" value={props.latestTrace?.output.finishReason ?? "n/a"} />
+        <InsightRow
+          label="Reconnect Retries"
+          value={props.latestTrace?.input.maxRetries !== undefined ? String(props.latestTrace.input.maxRetries) : "n/a"}
+        />
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
@@ -292,6 +296,7 @@ function ModelCallTraceCard(props: { trace: ModelCallTrace }) {
         <Badge className={statusTone(trace.status)}>{trace.status}</Badge>
         {trace.agentName ? <Badge>{trace.agentName}</Badge> : null}
         {trace.input.provider ? <Badge>{trace.input.provider}</Badge> : null}
+        {trace.input.maxRetries !== undefined ? <Badge>{`reconnect ${trace.input.maxRetries}`}</Badge> : null}
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
@@ -299,6 +304,10 @@ function ModelCallTraceCard(props: { trace: ModelCallTrace }) {
         <InsightRow label="Canonical Ref" value={trace.input.canonicalModelRef ?? "n/a"} />
         <InsightRow label="Messages" value={String(trace.input.messageCount ?? trace.input.messages.length)} />
         <InsightRow label="Finish" value={trace.output.finishReason ?? "n/a"} />
+        <InsightRow
+          label="Reconnect Retries"
+          value={trace.input.maxRetries !== undefined ? String(trace.input.maxRetries) : "n/a"}
+        />
       </div>
 
       <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">

@@ -293,6 +293,7 @@ function buildAiSdkLikeRequest(trace: ModelCallTrace | null) {
     provider: trace.input.provider ?? null,
     ...(trace.input.temperature !== undefined ? { temperature: trace.input.temperature } : {}),
     ...(trace.input.maxTokens !== undefined ? { maxTokens: trace.input.maxTokens } : {}),
+    ...(trace.input.maxRetries !== undefined ? { maxRetries: trace.input.maxRetries } : {}),
     messages: trace.input.messages,
     tools: buildAiSdkToolsObject(trace.input.engineTools),
     activeTools: trace.input.activeToolNames,

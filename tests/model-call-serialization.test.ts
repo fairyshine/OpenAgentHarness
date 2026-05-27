@@ -23,7 +23,8 @@ describe("model call serialization", () => {
         messages: [{ role: "user", content: "hello" }]
       },
       runtime: {
-        messageCount: 1
+        messageCount: 1,
+        maxRetries: 5
       }
     });
   });
@@ -58,7 +59,8 @@ describe("model call serialization", () => {
       ])
     );
     expect(input.runtime).toMatchObject({
-      messageCount: 24
+      messageCount: 24,
+      maxRetries: 5
     });
   });
 

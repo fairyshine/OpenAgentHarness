@@ -1,15 +1,22 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 
 import {
   Sandbox as E2BSandbox,
   CommandExitError,
   FileType,
+  Template,
+  waitForTimeout,
+  type BuildInfo,
+  type BuildOptions,
   type ConnectionOpts,
   type SandboxConnectOpts,
   type SandboxInfo,
   type SandboxListOpts,
-  type SandboxOpts
+  type SandboxOpts,
+  type TemplateClass
 } from "e2b";
 
 import type {
@@ -26,6 +33,7 @@ import { trimToUndefined } from "./string-utils.js";
 
 const DEFAULT_E2B_TIMEOUT_MS = 300_000;
 const DEFAULT_E2B_WORKSPACE_ROOT = "/workspace";
+const DEFAULT_E2B_OAH_WORKER_TEMPLATE = "oah-worker";
 const SANDBOX_GROUP_METADATA_KEY = "oahSandboxGroup";
 const OWNER_METADATA_KEY = "oahOwnerId";
 
@@ -45,13 +53,20 @@ interface NativeE2BSandboxSdk {
   kill?(sandboxId: string, opts?: ConnectionOpts): Promise<boolean>;
 }
 
+interface NativeE2BTemplateSdk {
+  exists(name: string, opts?: ConnectionOpts): Promise<boolean>;
+  build(template: TemplateClass, name: string, opts?: Omit<BuildOptions, "alias">): Promise<BuildInfo>;
+}
+
 export interface NativeE2BSandboxServiceOptions {
   apiKey?: string | undefined;
   apiUrl?: string | undefined;
   domain?: string | undefined;
   headers?: Record<string, string> | undefined;
+  ensureTemplate?: boolean | undefined;
   requestTimeoutMs?: number | undefined;
   template?: string | undefined;
+  templateSdk?: NativeE2BTemplateSdk | undefined;
   timeoutMs?: number | undefined;
   maxWorkspacesPerSandbox?: number | undefined;
   ownerlessPool?: "shared" | "dedicated" | undefined;
@@ -66,6 +81,99 @@ function buildOwnerSandboxGroupKey(workspace: WorkspaceRecord): string | undefin
 
 function buildWorkspaceSandboxRoot(workspace: WorkspaceRecord): string {
   return path.posix.join(DEFAULT_E2B_WORKSPACE_ROOT, workspace.id);
+}
+
+function findOahWorkerTemplateContextRoot(): string {
+  const candidates = [
+    trimToUndefined(process.env.OAH_E2B_TEMPLATE_CONTEXT_DIR),
+    process.cwd(),
+    path.resolve(process.cwd(), ".."),
+    path.resolve(process.cwd(), "../.."),
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..")
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  const contextRoot = candidates.find(
+    (candidate) =>
+      existsSync(path.join(candidate, "package.json")) &&
+      existsSync(path.join(candidate, "pnpm-lock.yaml")) &&
+      existsSync(path.join(candidate, "apps/server/src/worker.ts")) &&
+      existsSync(path.join(candidate, "scripts/build-runtime-bundles.mjs"))
+  );
+  if (!contextRoot) {
+    throw new Error(
+      "Unable to find an Open Agent Harness source tree for building the E2B oah-worker template. " +
+        "Set OAH_E2B_TEMPLATE_CONTEXT_DIR to the repository root, or pre-create the oah-worker template."
+    );
+  }
+
+  return contextRoot;
+}
+
+function createOahWorkerTemplate(): TemplateClass {
+  const contextRoot = findOahWorkerTemplateContextRoot();
+  return Template({
+    fileContextPath: contextRoot,
+    fileIgnorePatterns: [
+      ".git",
+      ".turbo",
+      ".vite",
+      "**/.DS_Store",
+      "**/node_modules",
+      "**/dist",
+      "release",
+      "tmp",
+      ".oah-runtime-bundles"
+    ]
+  })
+    .fromNodeImage("24")
+    .setWorkdir("/app")
+    .copy(["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json", "tsconfig.base.json"], "/app/")
+    .copy("apps/server", "/app/apps/server")
+    .copy("apps/worker", "/app/apps/worker")
+    .copy("packages", "/app/packages")
+    .copy("scripts", "/app/scripts")
+    .copy("docs/schemas", "/app/docs/schemas")
+    .runCmd("corepack enable", { user: "root" })
+    .runCmd("pnpm install --frozen-lockfile")
+    .runCmd("node ./scripts/build-runtime-bundles.mjs /opt/oah/runtime-bundles")
+    .runCmd("mkdir -p /app/dist /etc/oah /var/lib/oah/workspaces /var/lib/oah/runtimes /var/lib/oah/models /var/lib/oah/tools /var/lib/oah/skills")
+    .runCmd("cp -R /opt/oah/runtime-bundles/worker/. /app/dist/")
+    .runCmd(
+      "printf '%s\\n' '#!/usr/bin/env sh' 'exec node /app/dist/worker.js \"$@\"' > /usr/local/bin/oah-worker && chmod +x /usr/local/bin/oah-worker",
+      {
+        user: "root"
+      }
+    )
+    .setStartCmd("sh -lc 'if [ -f /etc/oah/server.yaml ]; then oah-worker --config /etc/oah/server.yaml; else sleep infinity; fi'", waitForTimeout(1000));
+}
+
+function resolveE2BApiUrl(input: { apiUrl?: string | undefined; domain?: string | undefined }): string | undefined {
+  const apiUrl = trimToUndefined(input.apiUrl);
+  if (apiUrl) {
+    return apiUrl;
+  }
+
+  const domain = trimToUndefined(input.domain);
+  return domain ? `https://api.${domain}` : undefined;
+}
+
+function listedTemplateMatchesName(template: unknown, name: string): boolean {
+  if (!template || typeof template !== "object") {
+    return false;
+  }
+
+  const record = template as Record<string, unknown>;
+  if (record.templateID === name || record.name === name) {
+    return true;
+  }
+
+  for (const key of ["aliases", "names"]) {
+    const values = record[key];
+    if (Array.isArray(values) && values.some((value) => value === name)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function normalizeE2BApiUrl(baseUrl: string | undefined): string | undefined {
@@ -155,6 +263,7 @@ function toCommandResult(
 
 export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOptions): E2BCompatibleSandboxService {
   const sdk = options.sdk ?? (E2BSandbox as unknown as NativeE2BSandboxSdk);
+  const templateSdk = options.templateSdk ?? Template;
   const sandboxIdsByGroupKey = new Map<string, string>();
   const sandboxesById = new Map<string, NativeE2BSandboxInstance>();
   const ownerlessWorkspaceGroups = new Map<string, string>();
@@ -171,9 +280,55 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
     ...(options.requestTimeoutMs !== undefined ? { requestTimeoutMs: options.requestTimeoutMs } : {})
   };
   const sandboxTimeoutMs = options.timeoutMs ?? DEFAULT_E2B_TIMEOUT_MS;
+  const templateName = trimToUndefined(options.template) ?? DEFAULT_E2B_OAH_WORKER_TEMPLATE;
+  const shouldEnsureTemplate = options.ensureTemplate ?? true;
   const maxWorkspacesPerSandbox = Math.max(1, Math.floor(options.maxWorkspacesPerSandbox ?? 32));
   const ownerlessPool = options.ownerlessPool ?? "shared";
   const warmEmptyCount = Math.max(0, Math.floor(options.warmEmptyCount ?? 0));
+  let templateEnsurePromise: Promise<void> | undefined;
+
+  async function templateExistsByListApi(): Promise<boolean | undefined> {
+    const apiUrl = resolveE2BApiUrl(options);
+    if (!apiUrl) {
+      return undefined;
+    }
+
+    const response = await fetch(`${apiUrl.replace(/\/+$/u, "")}/templates`, {
+      headers: {
+        ...(options.apiKey ? { "X-API-KEY": options.apiKey } : {}),
+        ...(options.headers ?? {})
+      },
+      ...(options.requestTimeoutMs !== undefined ? { signal: AbortSignal.timeout(options.requestTimeoutMs) } : {})
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const templates = await response.json();
+    return Array.isArray(templates) ? templates.some((template) => listedTemplateMatchesName(template, templateName)) : undefined;
+  }
+
+  async function ensureTemplate(): Promise<void> {
+    if (!shouldEnsureTemplate) {
+      return;
+    }
+
+    templateEnsurePromise ??= (async () => {
+      const listedExists = await templateExistsByListApi();
+      const exists = listedExists ?? (await templateSdk.exists(templateName, connectionOpts));
+      if (exists) {
+        return;
+      }
+
+      await templateSdk.build(createOahWorkerTemplate(), templateName, {
+        ...connectionOpts,
+        cpuCount: 2,
+        memoryMB: 2048
+      });
+    })();
+
+    return templateEnsurePromise;
+  }
 
   function rememberSandbox(groupKey: string, sandbox: NativeE2BSandboxInstance): NativeE2BSandboxInstance {
     sandboxIdsByGroupKey.set(groupKey, sandbox.sandboxId);
@@ -338,6 +493,7 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
   }
 
   async function createSandbox(groupKey: string, workspace?: WorkspaceRecord | undefined): Promise<NativeE2BSandboxInstance> {
+    await ensureTemplate();
     const metadata: Record<string, string> = {
       [SANDBOX_GROUP_METADATA_KEY]: groupKey
     };
@@ -351,9 +507,7 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
       timeoutMs: sandboxTimeoutMs,
       metadata
     };
-    const sandbox = options.template
-      ? await sdk.create(options.template, sandboxOpts)
-      : await sdk.create(sandboxOpts);
+    const sandbox = await sdk.create(templateName, sandboxOpts);
     return rememberSandbox(groupKey, sandbox);
   }
 
@@ -595,7 +749,8 @@ export function createNativeE2BSandboxService(options: NativeE2BSandboxServiceOp
         workerPlacement: topology.workerPlacement,
         ...(options.apiUrl ? { apiUrl: options.apiUrl } : {}),
         ...(options.domain ? { domain: options.domain } : {}),
-        ...(options.template ? { template: options.template } : {}),
+        template: templateName,
+        ensureTemplate: shouldEnsureTemplate,
         timeoutMs: sandboxTimeoutMs,
         warmEmptyCount,
         warmOwnerlessSandboxes: warmOwnerlessGroupKeys.size
