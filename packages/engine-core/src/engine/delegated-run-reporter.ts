@@ -33,7 +33,6 @@ export class DelegatedRunReporter {
   readonly #helpers: AgentCoordinationHelpers;
   readonly #taskOutputStore: AgentTaskOutputStore;
   readonly #collectAwaitedRunSummary: (runId: string) => Promise<AwaitedRunSummary>;
-  readonly #serializeDelegation: <T>(parentRunId: string, operation: () => Promise<T>) => Promise<T>;
 
   constructor(dependencies: {
     persistence: AgentCoordinationPersistence;
@@ -41,14 +40,12 @@ export class DelegatedRunReporter {
     helpers: AgentCoordinationHelpers;
     taskOutputStore: AgentTaskOutputStore;
     collectAwaitedRunSummary: (runId: string) => Promise<AwaitedRunSummary>;
-    serializeDelegation: <T>(parentRunId: string, operation: () => Promise<T>) => Promise<T>;
   }) {
     this.#persistence = dependencies.persistence;
     this.#lifecycle = dependencies.lifecycle;
     this.#helpers = dependencies.helpers;
     this.#taskOutputStore = dependencies.taskOutputStore;
     this.#collectAwaitedRunSummary = dependencies.collectAwaitedRunSummary;
-    this.#serializeDelegation = dependencies.serializeDelegation;
   }
 
   async drainPendingTaskNotifications(input: {
@@ -256,7 +253,7 @@ export class DelegatedRunReporter {
       return;
     }
 
-    await this.#enqueueParentContinuationIfReady({
+    await this.enqueueParentContinuationIfReady({
       workspaceId: input.childSummary.run.workspaceId,
       parentSessionId: input.parentSessionId,
       parentRunId: input.parentRunId,
@@ -335,7 +332,7 @@ export class DelegatedRunReporter {
       return;
     }
 
-    await this.#enqueueParentContinuationIfReady({
+    await this.enqueueParentContinuationIfReady({
       workspaceId: input.childRun.workspaceId,
       parentSessionId: input.parentSessionId,
       parentRunId: input.parentRunId,
@@ -537,84 +534,130 @@ export class DelegatedRunReporter {
     return drainable.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
   }
 
-  async #enqueueParentContinuationIfReady(input: {
+  async enqueueParentContinuationIfReady(input: {
     workspaceId: string;
     parentSessionId: string;
     parentRunId: string;
     parentAgentName: string;
     initiatorRef?: string | undefined;
   }): Promise<void> {
-    return this.#serializeDelegation(input.parentRunId, async () => {
-      const repository = this.#persistence.agentTaskNotifications;
-      if (!repository) {
-        return;
-      }
+    const repository = this.#persistence.agentTaskNotifications;
+    if (!repository) {
+      return;
+    }
 
-      const pending = (await repository.listPendingBySessionId(input.parentSessionId)).filter(
-        (notification) => notification.parentRunId === input.parentRunId
-      );
-      if (pending.length === 0) {
-        return;
-      }
+    const pending = (await repository.listPendingBySessionId(input.parentSessionId)).filter(
+      (notification) => notification.parentRunId === input.parentRunId
+    );
+    if (pending.length === 0) {
+      return;
+    }
 
-      const batchState = await this.#delegatedNotificationBatchState(input.parentSessionId, input.parentRunId, pending);
-      if (!batchState.ready || hasQueuedTaskNotificationContinuation(batchState.parentRun)) {
-        return;
-      }
+    const batchState = await this.#delegatedNotificationBatchState(input.parentSessionId, input.parentRunId, pending);
+    if (!batchState.ready || hasQueuedTaskNotificationContinuation(batchState.parentRun)) {
+      return;
+    }
 
-      const createdAt = this.#helpers.nowIso();
-      const continuationRunId = taskNotificationContinuationRunId(input.parentRunId);
-      if (await this.#persistence.runs.getById(continuationRunId)) {
-        return;
-      }
+    const createdAt = this.#helpers.nowIso();
+    const continuationRunId = taskNotificationContinuationRunId(input.parentRunId);
+    if (await this.#persistence.runs.getById(continuationRunId)) {
+      return;
+    }
 
-      const triggerRef = `task-notification:${input.parentRunId}`;
-      const continuationRun = await this.#persistence.runs.create({
-        id: continuationRunId,
-        workspaceId: input.workspaceId,
+    const triggerRef = `task-notification:${input.parentRunId}`;
+    const continuationRun = await this.#persistence.runs.create({
+      id: continuationRunId,
+      workspaceId: input.workspaceId,
+      sessionId: input.parentSessionId,
+      parentRunId: input.parentRunId,
+      initiatorRef: input.initiatorRef,
+      triggerType: "system",
+      triggerRef,
+      agentName: input.parentAgentName,
+      effectiveAgentName: input.parentAgentName,
+      switchCount: batchState.parentRun.switchCount,
+      status: "queued",
+      createdAt,
+      metadata: {
+        synthetic: true,
+        taskNotificationContinuation: true,
+        taskNotificationBatchParentRunId: input.parentRunId,
+        delegatedTaskIds: batchState.pendingNotifications.map((notification) => notification.taskId),
+        delegatedChildRunIds: batchState.pendingNotifications.map((notification) => notification.childRunId),
+        origin: "engine",
+        mode: "task-notification",
+        runtimeKind: "task_notification"
+      }
+    });
+
+    await this.#lifecycle.updateRun(batchState.parentRun, {
+      metadata: {
+        ...(batchState.parentRun.metadata ?? {}),
+        taskNotificationContinuationRunId: continuationRun.id
+      }
+    });
+
+    await this.#lifecycle.appendEvent({
+      sessionId: input.parentSessionId,
+      runId: continuationRun.id,
+      event: "run.queued",
+      data: {
+        runId: continuationRun.id,
         sessionId: input.parentSessionId,
         parentRunId: input.parentRunId,
-        initiatorRef: input.initiatorRef,
-        triggerType: "system",
-        triggerRef,
-        agentName: input.parentAgentName,
-        effectiveAgentName: input.parentAgentName,
-        switchCount: batchState.parentRun.switchCount,
-        status: "queued",
-        createdAt,
-        metadata: {
-          synthetic: true,
-          taskNotificationContinuation: true,
-          taskNotificationBatchParentRunId: input.parentRunId,
-          delegatedTaskIds: batchState.pendingNotifications.map((notification) => notification.taskId),
-          delegatedChildRunIds: batchState.pendingNotifications.map((notification) => notification.childRunId),
-          origin: "engine",
-          mode: "task-notification",
-          runtimeKind: "task_notification"
-        }
-      });
+        status: continuationRun.status,
+        taskNotificationCount: batchState.pendingNotifications.length,
+        metadata: continuationRun.metadata
+      }
+    });
+    await this.#enqueueRunRespectingSessionQueue({
+      sessionId: input.parentSessionId,
+      runId: continuationRun.id,
+      createdAt
+    });
+  }
 
-      await this.#lifecycle.updateRun(batchState.parentRun, {
-        metadata: {
-          ...(batchState.parentRun.metadata ?? {}),
-          taskNotificationContinuationRunId: continuationRun.id
-        }
-      });
+  async #enqueueRunRespectingSessionQueue(input: {
+    sessionId: string;
+    runId: string;
+    createdAt: string;
+  }): Promise<void> {
+    if (!this.#persistence.sessionPendingRuns) {
+      await this.#lifecycle.enqueueRun(input.sessionId, input.runId);
+      return;
+    }
 
-      await this.#lifecycle.appendEvent({
-        sessionId: input.parentSessionId,
-        runId: continuationRun.id,
-        event: "run.queued",
-        data: {
-          runId: continuationRun.id,
-          sessionId: input.parentSessionId,
-          parentRunId: input.parentRunId,
-          status: continuationRun.status,
-          taskNotificationCount: batchState.pendingNotifications.length,
-          metadata: continuationRun.metadata
-        }
-      });
-      await this.#lifecycle.enqueueRun(input.parentSessionId, continuationRun.id);
+    const pendingRuns = await this.#persistence.sessionPendingRuns.listBySessionId(input.sessionId);
+    const pendingRunIds = new Set(pendingRuns.map((entry) => entry.runId));
+    const runs = await this.#persistence.runs.listBySessionId(input.sessionId).catch(() => []);
+    const hasActiveRun = runs.some(
+      (run) =>
+        (run.status === "queued" || run.status === "running" || run.status === "waiting_tool") &&
+        run.id !== input.runId &&
+        !pendingRunIds.has(run.id) &&
+        !run.cancelRequestedAt
+    );
+
+    if (!hasActiveRun && pendingRuns.length === 0) {
+      await this.#lifecycle.enqueueRun(input.sessionId, input.runId);
+      return;
+    }
+
+    const queuedEntry = await this.#persistence.sessionPendingRuns.enqueue({
+      sessionId: input.sessionId,
+      runId: input.runId,
+      createdAt: input.createdAt
+    });
+    await this.#lifecycle.appendEvent({
+      sessionId: input.sessionId,
+      runId: input.runId,
+      event: "queue.updated",
+      data: {
+        runId: input.runId,
+        action: "enqueued",
+        source: "task_notification_continuation",
+        queuedPosition: queuedEntry.position
+      }
     });
   }
 

@@ -10,7 +10,6 @@ import {
 } from "./agent-delegation-messages.js";
 import { extractRunOutputContent } from "./agent-output-content.js";
 import type { WorkspaceRecord } from "../types.js";
-import { activeRunForSession } from "./agent-coordination-sessions.js";
 import {
   delegatedOutputFollowUpPrompt,
   delegatedRunRecords
@@ -72,8 +71,7 @@ export class AgentCoordinationService {
       lifecycle: dependencies.lifecycle,
       helpers: dependencies.helpers,
       taskOutputStore: this.#taskOutputStore,
-      collectAwaitedRunSummary: async (runId) => this.#collectAwaitedRunSummary(runId),
-      serializeDelegation: async (parentRunId, operation) => this.#serializeDelegation(parentRunId, operation)
+      collectAwaitedRunSummary: async (runId) => this.#collectAwaitedRunSummary(runId)
     });
   }
 
@@ -223,10 +221,22 @@ export class AgentCoordinationService {
       );
     }
 
-    return this.#serializeDelegation(input.parentRun.id, async () => {
+    let childSessionId = "";
+    let childRunId = "";
+    let targetAgentName = resolvedTargetAgentName;
+    let outputRef = "";
+    let outputFile = "";
+    let canReadOutputFile = input.canReadOutputFile ?? false;
+    let shouldQueueChildRun = false;
+    let createdAt = "";
+
+    await this.#serializeDelegation(input.parentRun.id, async () => {
       const latestParentRun = await this.#lifecycle.getRun(input.parentRun.id);
       await this.#enforceSubagentConcurrencyLimit(input.workspace, latestParentRun, input.currentAgentName);
-      const resumedActiveRun = resumedSession ? await activeRunForSession(this.#persistence, resumedSession.id) : null;
+      const resumedSessionQueueState = resumedSession
+        ? await this.#sessionQueueState(resumedSession.id)
+        : { hasActiveRun: false, hasPendingRuns: false };
+      shouldQueueChildRun = resumedSessionQueueState.hasActiveRun || resumedSessionQueueState.hasPendingRuns;
 
       const delegateStep = await this.#lifecycle.startRunStep({
         runId: input.parentRun.id,
@@ -243,8 +253,9 @@ export class AgentCoordinationService {
       });
 
       const now = this.#helpers.nowIso();
-      const childSessionId = resumedSession?.id ?? this.#helpers.createId("ses");
-      const childRunId = this.#helpers.createId("run");
+      createdAt = now;
+      childSessionId = resumedSession?.id ?? this.#helpers.createId("ses");
+      childRunId = this.#helpers.createId("run");
       const parentModelRef = this.#helpers.resolveModelForRun(
         input.workspace,
         input.parentSession.modelRef ?? input.workspace.agents[input.currentAgentName]?.modelRef
@@ -320,8 +331,8 @@ export class AgentCoordinationService {
       await this.#persistence.messages.create(childMessage);
       await this.#persistence.runs.create(childRun);
 
-      const outputRef = taskOutputRef(childSessionId);
-      const outputFile = taskOutputPath(input.parentSession.id, childSessionId);
+      outputRef = taskOutputRef(childSessionId);
+      outputFile = taskOutputPath(input.parentSession.id, childSessionId);
       const existingAgentTask = input.taskId ? await this.#persistence.agentTasks?.getByTaskId(input.taskId) : null;
       await this.#persistence.agentTasks?.upsert({
         taskId: childSessionId,
@@ -344,7 +355,7 @@ export class AgentCoordinationService {
           agentType: resolvedTargetAgentName,
           model: targetAgent.modelRef ?? parentModelRef,
           existing: existingAgentTask?.taskState,
-          pendingMessage: resumedActiveRun ? input.task : undefined,
+          pendingMessage: shouldQueueChildRun ? input.task : undefined,
           status: "queued",
           isBackgrounded: input.notifyParentOnCompletion ?? existingAgentTask?.taskState?.isBackgrounded ?? false,
           notified: false
@@ -385,41 +396,43 @@ export class AgentCoordinationService {
         ...(input.taskId ? { taskId: input.taskId, resumed: true } : {})
       });
 
-      const delivery = await this.#enqueueChildRunRespectingSessionQueue({
-        childSessionId,
-        childRunId,
-        createdAt: now,
-        hasActiveRun: resumedActiveRun !== null
-      });
-      void this.#startDelegatedRunMonitor({
-        parentSessionId: input.parentSession.id,
-        parentRunId: input.parentRun.id,
-        parentAgentName: input.currentAgentName,
-        targetAgentName: resolvedTargetAgentName,
-        childRunId,
-        ...(input.toolUseId ? { toolUseId: input.toolUseId } : {}),
-        notifyParentOnCompletion: input.notifyParentOnCompletion ?? false
-      });
-
-      return {
-        childSessionId,
-        childRunId,
-        targetAgentName: resolvedTargetAgentName,
-        outputRef,
-        outputFile,
-        canReadOutputFile: input.canReadOutputFile ?? false
-      };
+      return undefined;
     });
+
+    await this.#enqueueChildRunRespectingSessionQueue({
+      childSessionId,
+      childRunId,
+      createdAt,
+      shouldQueue: shouldQueueChildRun
+    });
+    void this.#startDelegatedRunMonitor({
+      parentSessionId: input.parentSession.id,
+      parentRunId: input.parentRun.id,
+      parentAgentName: input.currentAgentName,
+      targetAgentName,
+      childRunId,
+      ...(input.toolUseId ? { toolUseId: input.toolUseId } : {}),
+      notifyParentOnCompletion: input.notifyParentOnCompletion ?? false
+    });
+
+    return {
+      childSessionId,
+      childRunId,
+      targetAgentName,
+      outputRef,
+      outputFile,
+      canReadOutputFile
+    };
   }
 
   async #enqueueChildRunRespectingSessionQueue(input: {
     childSessionId: string;
     childRunId: string;
     createdAt: string;
-    hasActiveRun: boolean;
+    shouldQueue: boolean;
   }): Promise<"active_run" | "session_queue"> {
-    if (input.hasActiveRun && this.#persistence.sessionPendingRuns) {
-      await this.#persistence.sessionPendingRuns.enqueue({
+    if (input.shouldQueue && this.#persistence.sessionPendingRuns) {
+      const queuedEntry = await this.#persistence.sessionPendingRuns.enqueue({
         sessionId: input.childSessionId,
         runId: input.childRunId,
         createdAt: input.createdAt
@@ -431,7 +444,8 @@ export class AgentCoordinationService {
         data: {
           runId: input.childRunId,
           action: "enqueued",
-          source: "subagent_pending_message"
+          source: "subagent_pending_message",
+          queuedPosition: queuedEntry.position
         }
       });
       return "session_queue";
@@ -482,6 +496,16 @@ export class AgentCoordinationService {
     parentAgentName: string;
   }): Promise<{ childRunIds: string[] }> {
     return this.#delegatedRunReporter.persistUnreportedTerminalDelegatedRuns(input);
+  }
+
+  async enqueueParentTaskNotificationContinuationIfReady(input: {
+    workspaceId: string;
+    parentSessionId: string;
+    parentRunId: string;
+    parentAgentName: string;
+    initiatorRef?: string | undefined;
+  }): Promise<void> {
+    return this.#delegatedRunReporter.enqueueParentContinuationIfReady(input);
   }
 
   async #enforceSubagentConcurrencyLimit(
@@ -576,6 +600,7 @@ export class AgentCoordinationService {
       childSessionId: childRun.sessionId
     });
     if (alreadyReported) {
+      await this.#dispatchNextQueuedChildRun(childRun.sessionId);
       return;
     }
 
@@ -603,6 +628,7 @@ export class AgentCoordinationService {
           output: childSummary.outputContent ?? ""
         }
       });
+      await this.#dispatchNextQueuedChildRun(childRun.sessionId);
       return;
     }
 
@@ -630,6 +656,60 @@ export class AgentCoordinationService {
         errorMessage: childRun.errorMessage
       }
     });
+    await this.#dispatchNextQueuedChildRun(childRun.sessionId);
+  }
+
+  async #dispatchNextQueuedChildRun(sessionId: string | undefined): Promise<void> {
+    if (!sessionId || !this.#persistence.sessionPendingRuns) {
+      return;
+    }
+
+    const queueState = await this.#sessionQueueState(sessionId);
+    if (queueState.hasActiveRun) {
+      return;
+    }
+
+    const nextQueuedRun = await this.#persistence.sessionPendingRuns.dequeueNext(sessionId);
+    if (!nextQueuedRun) {
+      return;
+    }
+
+    await this.#lifecycle.appendEvent({
+      sessionId,
+      runId: nextQueuedRun.runId,
+      event: "queue.updated",
+      data: {
+        runId: nextQueuedRun.runId,
+        action: "dequeued",
+        source: "subagent_pending_message",
+        queuedPosition: nextQueuedRun.position
+      }
+    });
+    await this.#lifecycle.enqueueRun(sessionId, nextQueuedRun.runId, {
+      priority: "subagent"
+    });
+  }
+
+  async #sessionQueueState(
+    sessionId: string,
+    options?: { excludeRunIds?: string[] | undefined }
+  ): Promise<{ hasActiveRun: boolean; hasPendingRuns: boolean }> {
+    const excludedRunIds = new Set(options?.excludeRunIds ?? []);
+    const pendingRuns = this.#persistence.sessionPendingRuns
+      ? await this.#persistence.sessionPendingRuns.listBySessionId(sessionId)
+      : [];
+    const pendingRunIds = new Set(pendingRuns.map((entry) => entry.runId));
+    const runs = await this.#persistence.runs.listBySessionId(sessionId).catch(() => []);
+    const hasActiveRun = runs.some(
+      (run) =>
+        (run.status === "queued" || run.status === "running" || run.status === "waiting_tool") &&
+        !excludedRunIds.has(run.id) &&
+        !pendingRunIds.has(run.id) &&
+        !run.cancelRequestedAt
+    );
+    const hasPendingRuns = pendingRuns.some((entry) => !excludedRunIds.has(entry.runId));
+
+    return { hasActiveRun, hasPendingRuns };
   }
 
   async #collectAwaitedRunSummary(

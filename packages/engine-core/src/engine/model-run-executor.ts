@@ -92,7 +92,10 @@ function sleep(ms: number, signal?: AbortSignal | undefined): Promise<void> {
 interface ModelRunExecutorExecutionServices {
   agentCoordination: Pick<
     AgentCoordinationService,
-    "delegatedRunRecords" | "persistUnreportedTerminalDelegatedRuns" | "drainPendingTaskNotifications"
+    | "delegatedRunRecords"
+    | "persistUnreportedTerminalDelegatedRuns"
+    | "drainPendingTaskNotifications"
+    | "enqueueParentTaskNotificationContinuationIfReady"
   >;
   toolExecution: Pick<ToolExecutionService, "runStepRetryPolicy" | "wrapEngineToolsForEvents">;
 }
@@ -378,7 +381,10 @@ export class ModelRunExecutor {
     };
     const waitForActiveDelegatedRuns = async (targetRun: Run): Promise<{ childRunIds: string[] }> => {
       const childRunIds = new Set(
-        execution.agentCoordination.delegatedRunRecords(targetRun).map((record) => record.childRunId)
+        execution.agentCoordination
+          .delegatedRunRecords(targetRun)
+          .filter((record) => record.notifyParentOnCompletion !== true)
+          .map((record) => record.childRunId)
       );
       if (childRunIds.size === 0) {
         return { childRunIds: [] };
@@ -627,6 +633,14 @@ export class ModelRunExecutor {
         hookedModelInput = await buildInitialHookedModelInput();
         continue;
       }
+
+      await execution.agentCoordination.enqueueParentTaskNotificationContinuationIfReady({
+        workspaceId: workspace.id,
+        parentSessionId: session.id,
+        parentRunId: latestRun.id,
+        parentAgentName: executionContext.currentAgentName,
+        initiatorRef: latestRun.initiatorRef
+      });
 
       const hookedCompleted = await this.#applyAfterModelHooks(
         workspace,

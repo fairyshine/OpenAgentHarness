@@ -7224,7 +7224,7 @@ describe("runtime service", () => {
     expect(parentRunSteps.items.some((step) => step.stepType === "tool_call" && step.name === "SubAgent")).toBe(true);
   });
 
-  it("keeps the parent run active while background subagent runs are still running", async () => {
+  it("continues the parent session after background subagent completion", async () => {
     const gateway = new FakeModelGateway();
     gateway.streamScenarioFactory = (input) => {
       const systemMessages = input.messages?.filter((message) => message.role === "system").map((message) => message.content) ?? [];
@@ -7366,24 +7366,28 @@ describe("runtime service", () => {
       return ((parentRun.metadata?.delegatedRuns as Array<{ childRunId: string }> | undefined) ?? []).length === 1;
     });
 
-    const parentDuringChild = await runtimeService.getRun(accepted.runId);
-    const delegatedRuns =
-      (parentDuringChild.metadata?.delegatedRuns as Array<{ childRunId: string; notifyParentOnCompletion?: boolean }> | undefined) ??
-      [];
-    expect(parentDuringChild.status).toBe("running");
-    expect(delegatedRuns[0]?.notifyParentOnCompletion).toBe(true);
-
-    const childRun = await runtimeService.getRun(delegatedRuns[0]!.childRunId);
-    expect(childRun.status === "queued" || childRun.status === "running").toBe(true);
-
     await waitFor(async () => {
       const parentRun = await runtimeService.getRun(accepted.runId);
       return parentRun.status === "completed";
     });
 
-    const completedParent = await runtimeService.getRun(accepted.runId);
+    const parentDuringChild = await runtimeService.getRun(accepted.runId);
+    const delegatedRuns =
+      (parentDuringChild.metadata?.delegatedRuns as Array<{ childRunId: string; notifyParentOnCompletion?: boolean }> | undefined) ??
+      [];
+    expect(parentDuringChild.status).toBe("completed");
+    expect(delegatedRuns[0]?.notifyParentOnCompletion).toBe(true);
+
+    await waitFor(async () => {
+      const parentMessages = await runtimeService.listSessionMessages(session.id, 50);
+      return parentMessages.items.some((message) => messageText(message)?.includes("Parent integrated the background result."));
+    });
+
+    const runs = await runtimeService.listSessionRuns(session.id, 20);
+    const notificationRun = runs.items.find((run) => run.metadata?.taskNotificationContinuation === true);
     const parentMessages = await runtimeService.listSessionMessages(session.id, 50);
-    expect(completedParent.status).toBe("completed");
+    expect(notificationRun?.id).not.toBe(accepted.runId);
+    expect(notificationRun?.status).toBe("completed");
     expect(parentMessages.items.some((message) => messageText(message)?.includes("Parent integrated the background result."))).toBe(true);
   });
 
@@ -8709,12 +8713,7 @@ describe("runtime service", () => {
     await waitFor(async () => {
       const messages = await runtimeService.listSessionMessages(session.id, 100);
       const notifications = taskNotifications(messages.items);
-      return notifications.some(
-        (message) =>
-          messageText(message)?.includes("Fast review result is ready.") &&
-          message.metadata?.eligibleForModelContext === false &&
-          message.metadata?.taskNotificationPendingModelDelivery === true
-      );
+      return notifications.some((message) => messageText(message)?.includes("Fast review result is ready."));
     }, 10_000);
     expect(
       gateway.invocations.some((invocation) => {
