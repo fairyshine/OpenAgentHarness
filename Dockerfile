@@ -34,6 +34,7 @@ COPY packages/engine-core/package.json ./packages/engine-core/package.json
 COPY packages/model-runtime/package.json ./packages/model-runtime/package.json
 COPY packages/native-bridge/package.json ./packages/native-bridge/package.json
 COPY packages/scale-target-control/package.json ./packages/scale-target-control/package.json
+COPY packages/schema-tools/package.json ./packages/schema-tools/package.json
 COPY packages/storage-memory/package.json ./packages/storage-memory/package.json
 COPY packages/storage-postgres/package.json ./packages/storage-postgres/package.json
 COPY packages/storage-redis/package.json ./packages/storage-redis/package.json
