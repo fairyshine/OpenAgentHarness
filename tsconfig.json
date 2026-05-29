@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/api-contracts" },
+    { "path": "./packages/schema-tools" },
     { "path": "./packages/engine-core" },
     { "path": "./packages/native-bridge" },
     { "path": "./packages/config" },

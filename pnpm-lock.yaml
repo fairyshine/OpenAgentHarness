@@ -248,12 +248,12 @@ importers:
       '@oah/native-bridge':
         specifier: workspace:*
         version: link:../native-bridge
+      '@oah/schema-tools':
+        specifier: workspace:*
+        version: link:../schema-tools
       ajv:
         specifier: 8.18.0
         version: 8.18.0
-      ajv-formats:
-        specifier: 3.0.1
-        version: 3.0.1(ajv@8.18.0)
       gray-matter:
         specifier: 4.0.3
         version: 4.0.3
@@ -270,12 +270,12 @@ importers:
 
   packages/config-server-control:
     dependencies:
+      '@oah/schema-tools':
+        specifier: workspace:*
+        version: link:../schema-tools
       ajv:
         specifier: 8.18.0
         version: 8.18.0
-      ajv-formats:
-        specifier: 3.0.1
-        version: 3.0.1(ajv@8.18.0)
       yaml:
         specifier: 2.8.3
         version: 2.8.3
@@ -335,6 +335,15 @@ importers:
       '@oah/config-server-control':
         specifier: workspace:*
         version: link:../config-server-control
+
+  packages/schema-tools:
+    dependencies:
+      ajv:
+        specifier: 8.18.0
+        version: 8.18.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.18.0)
 
   packages/storage-memory:
     dependencies:

@@ -6,5 +6,5 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../api-contracts" }, { "path": "../native-bridge" }]
+  "references": [{ "path": "../api-contracts" }, { "path": "../native-bridge" }, { "path": "../schema-tools" }]
 }

@@ -34,8 +34,8 @@
   "dependencies": {
     "@oah/api-contracts": "workspace:*",
     "@oah/native-bridge": "workspace:*",
+    "@oah/schema-tools": "workspace:*",
     "ajv": "8.18.0",
-    "ajv-formats": "3.0.1",
     "gray-matter": "4.0.3",
     "yauzl": "^3.2.0",
     "yaml": "2.8.3"

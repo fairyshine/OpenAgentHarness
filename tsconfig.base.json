@@ -19,6 +19,7 @@
       "@oah/config": ["./packages/config/src/index.ts"],
       "@oah/config/*": ["./packages/config/src/*"],
       "@oah/api-contracts": ["./packages/api-contracts/src/index.ts"],
+      "@oah/schema-tools": ["./packages/schema-tools/src/index.ts"],
       "@oah/engine-core": ["./packages/engine-core/src/index.ts"],
       "@oah/engine-core/types": ["./packages/engine-core/src/types.ts"],
       "@oah/engine-core/engine/engine-messages": ["./packages/engine-core/src/engine/engine-messages.ts"],

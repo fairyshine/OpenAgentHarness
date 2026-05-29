@@ -10,6 +10,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@oah/api-contracts": workspacePath("./packages/api-contracts/src/index.ts"),
+      "@oah/schema-tools": workspacePath("./packages/schema-tools/src/index.ts"),
       "@oah/config": workspacePath("./packages/config/src/index.ts"),
       "@oah/config/object-storage": workspacePath("./packages/config/src/object-storage.ts"),
       "@oah/config/platform-models": workspacePath("./packages/config/src/platform-models.ts"),
